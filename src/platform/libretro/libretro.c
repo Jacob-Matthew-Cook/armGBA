@@ -1233,6 +1233,12 @@ static void _reloadSettings(void) {
 	_loadAudioLowPassFilterSettings();
 	_loadFrameskipSettings(&opts);
 
+	var.key = "mgba_jit";
+	var.value = 0;
+	if (environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+		mCoreConfigSetDefaultIntValue(&core->config, "jit", strcmp(var.value, "enabled") == 0);
+	}
+
 	var.key = "mgba_idle_optimization";
 	var.value = 0;
 	if (environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {

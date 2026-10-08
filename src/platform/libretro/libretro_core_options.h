@@ -305,6 +305,22 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       },
       "OFF"
    },
+#if defined(__aarch64__) && !defined(__APPLE__)
+   {
+      "mgba_jit",
+      "Recompiler (IWRAM ARM code)",
+      NULL,
+      "Recompile ARM code that runs from IWRAM. Timing matches the interpreter.",
+      NULL,
+      "performance",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled"
+   },
+#endif
    {
       "mgba_idle_optimization",
       "Idle Loop Removal",

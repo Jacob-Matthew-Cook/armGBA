@@ -193,6 +193,8 @@ struct ARMCore {
 
 	size_t numComponents;
 	struct mCPUComponent** components;
+
+	struct ARMJit* jit;
 };
 #undef ARM_REGISTER_FILE
 

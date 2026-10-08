@@ -6,6 +6,7 @@
 #include <mgba/internal/gba/bios.h>
 
 #include <mgba/internal/arm/isa-inlines.h>
+#include <mgba/internal/arm/jit.h>
 #include <mgba/internal/arm/macros.h>
 #include <mgba/internal/gba/gba.h>
 #include <mgba/internal/gba/io.h>
@@ -41,6 +42,11 @@ static void _RegisterRamReset(struct GBA* gba) {
 	}
 	if (registers & 0x02) {
 		memset(gba->memory.iwram, 0, GBA_SIZE_IWRAM - 0x200);
+#ifdef M_ARM_JIT
+		if (cpu->jit) {
+			ARMJitFlush(cpu->jit);
+		}
+#endif
 	}
 	if (registers & 0x04) {
 		memset(gba->video.palette, 0, GBA_SIZE_PALETTE_RAM);

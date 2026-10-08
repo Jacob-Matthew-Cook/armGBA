@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include <mgba/internal/gba/serialize.h>
 
+#include <mgba/internal/arm/jit.h>
 #include <mgba/internal/arm/macros.h>
 #include <mgba/internal/gba/bios.h>
 #include <mgba/internal/gba/io.h>
@@ -229,6 +230,11 @@ bool GBADeserialize(struct GBA* gba, const struct GBASerializedState* state) {
 
 	GBAVideoDeserialize(&gba->video, state);
 	GBAMemoryDeserialize(&gba->memory, state);
+#ifdef M_ARM_JIT
+	if (gba->cpu->jit) {
+		ARMJitFlush(gba->cpu->jit);
+	}
+#endif
 	GBAIODeserialize(gba, state);
 	GBAAudioDeserialize(&gba->audio, state);
 	GBASavedataDeserialize(&gba->memory.savedata, state);

@@ -10,6 +10,7 @@
 #include <mgba/core/serialize.h>
 #include <mgba/internal/arm/debugger/debugger.h>
 #include <mgba/internal/arm/isa-inlines.h>
+#include <mgba/internal/arm/jit.h>
 #include <mgba/internal/debugger/symbols.h>
 #include <mgba/internal/gba/cheats.h>
 #include <mgba/internal/gba/gba.h>
@@ -307,6 +308,13 @@ static bool _GBACoreInit(struct mCore* core) {
 }
 
 static void _GBACoreDeinit(struct mCore* core) {
+#ifdef M_ARM_JIT
+	struct ARMCore* cpu = core->cpu;
+	if (cpu->jit) {
+		ARMJitDestroy(cpu->jit);
+		cpu->jit = NULL;
+	}
+#endif
 	ARMDeinit(core->cpu);
 	GBADestroy(core->board);
 	mappedMemoryFree(core->cpu, sizeof(struct ARMCore));
@@ -383,6 +391,18 @@ static void _GBACoreLoadConfig(struct mCore* core, const struct mCoreConfig* con
 	}
 
 	mCoreConfigGetBoolValue(config, "allowOpposingDirections", &gba->allowOpposingDirections);
+
+#ifdef M_ARM_JIT
+	struct ARMCore* cpu = core->cpu;
+	bool jit = false;
+	mCoreConfigGetBoolValue(config, "jit", &jit);
+	if (jit && !cpu->jit) {
+		cpu->jit = ARMJitCreate();
+	} else if (!jit && cpu->jit) {
+		ARMJitDestroy(cpu->jit);
+		cpu->jit = NULL;
+	}
+#endif
 
 	mCoreConfigCopyValue(&core->config, config, "allowOpposingDirections");
 	mCoreConfigCopyValue(&core->config, config, "gba.bios");

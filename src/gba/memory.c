@@ -6,6 +6,7 @@
 #include <mgba/internal/gba/memory.h>
 
 #include <mgba/internal/arm/decoder.h>
+#include <mgba/internal/arm/jit.h>
 #include <mgba/internal/arm/macros.h>
 #include <mgba/internal/defines.h>
 #include <mgba/internal/gba/gba.h>
@@ -124,6 +125,11 @@ void GBAMemoryReset(struct GBA* gba) {
 	if (gba->memory.iwram) {
 		memset(gba->memory.iwram, 0, GBA_SIZE_IWRAM);
 	}
+#ifdef M_ARM_JIT
+	if (gba->cpu->jit) {
+		ARMJitFlush(gba->cpu->jit);
+	}
+#endif
 
 	memset(gba->memory.io, 0, sizeof(gba->memory.io));
 	GBAAdjustWaitstates(gba, 0);
@@ -760,8 +766,18 @@ uint32_t GBALoad8(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
 	STORE_32(value, address & (GBA_SIZE_EWRAM - 4), memory->wram); \
 	wait += waitstatesRegion[GBA_REGION_EWRAM];
 
+#ifdef M_ARM_JIT
+#define JIT_NOTIFY_WRITE(ADDRESS) \
+	if (cpu->jit) { \
+		ARMJitNotifyWrite(cpu->jit, ADDRESS); \
+	}
+#else
+#define JIT_NOTIFY_WRITE(ADDRESS)
+#endif
+
 #define STORE_IWRAM \
-	STORE_32(value, address & (GBA_SIZE_IWRAM - 4), memory->iwram);
+	STORE_32(value, address & (GBA_SIZE_IWRAM - 4), memory->iwram); \
+	JIT_NOTIFY_WRITE(address);
 
 #define STORE_IO \
 	GBAIOWrite32(gba, address & (OFFSET_MASK - 3), value);
@@ -887,6 +903,7 @@ void GBAStore16(struct ARMCore* cpu, uint32_t address, int16_t value, int* cycle
 		break;
 	case GBA_REGION_IWRAM:
 		STORE_16(value, address & (GBA_SIZE_IWRAM - 2), memory->iwram);
+		JIT_NOTIFY_WRITE(address);
 		break;
 	case GBA_REGION_IO:
 		GBAIOWrite(gba, address & (OFFSET_MASK - 1), value);
@@ -1032,6 +1049,7 @@ void GBAStore8(struct ARMCore* cpu, uint32_t address, int8_t value, int* cycleCo
 		break;
 	case GBA_REGION_IWRAM:
 		((int8_t*) memory->iwram)[address & (GBA_SIZE_IWRAM - 1)] = value;
+		JIT_NOTIFY_WRITE(address);
 		break;
 	case GBA_REGION_IO:
 		GBAIOWrite8(gba, address & OFFSET_MASK, value);
@@ -1230,6 +1248,7 @@ void GBAPatch32(struct ARMCore* cpu, uint32_t address, int32_t value, int32_t* o
 	case GBA_REGION_IWRAM:
 		LOAD_32(oldValue, address & (GBA_SIZE_IWRAM - 4), memory->iwram);
 		STORE_32(value, address & (GBA_SIZE_IWRAM - 4), memory->iwram);
+		JIT_NOTIFY_WRITE(address);
 		break;
 	case GBA_REGION_IO:
 		mLOG(GBA_MEM, STUB, "Unimplemented memory Patch32: 0x%08X", address);
@@ -1304,6 +1323,7 @@ void GBAPatch16(struct ARMCore* cpu, uint32_t address, int16_t value, int16_t* o
 	case GBA_REGION_IWRAM:
 		LOAD_16(oldValue, address & (GBA_SIZE_IWRAM - 2), memory->iwram);
 		STORE_16(value, address & (GBA_SIZE_IWRAM - 2), memory->iwram);
+		JIT_NOTIFY_WRITE(address);
 		break;
 	case GBA_REGION_IO:
 		mLOG(GBA_MEM, STUB, "Unimplemented memory Patch16: 0x%08X", address);
@@ -1386,6 +1406,7 @@ void GBAPatch8(struct ARMCore* cpu, uint32_t address, int8_t value, int8_t* old)
 	case GBA_REGION_IWRAM:
 		oldValue = ((int8_t*) memory->iwram)[address & (GBA_SIZE_IWRAM - 1)];
 		((int8_t*) memory->iwram)[address & (GBA_SIZE_IWRAM - 1)] = value;
+		JIT_NOTIFY_WRITE(address);
 		break;
 	case GBA_REGION_IO:
 		mLOG(GBA_MEM, STUB, "Unimplemented memory Patch8: 0x%08X", address);

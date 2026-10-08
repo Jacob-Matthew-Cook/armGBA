@@ -5,7 +5,8 @@ set(SOURCE_FILES
 	decoder.c
 	decoder-thumb.c
 	isa-arm.c
-	isa-thumb.c)
+	isa-thumb.c
+	jit-arm64.c)
 
 set(DEBUGGER_FILES
 	debugger/cli-debugger.c

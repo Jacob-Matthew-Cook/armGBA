@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include <mgba/internal/arm/arm.h>
+#include <mgba/internal/arm/jit.h>
 
 #include <mgba/internal/arm/isa-arm.h>
 #include <mgba/internal/arm/isa-inlines.h>
@@ -247,6 +248,11 @@ void ARMRunLoop(struct ARMCore* cpu) {
 		}
 	} else {
 		while (cpu->cycles < cpu->nextEvent) {
+#ifdef M_ARM_JIT
+			if (cpu->jit && ARMJitRun(cpu)) {
+				continue;
+			}
+#endif
 			ARMStep(cpu);
 		}
 	}
