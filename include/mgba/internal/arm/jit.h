@@ -16,36 +16,62 @@ CXX_GUARD_START
 
 #ifdef M_ARM_JIT
 
+// RAM that code can run from, as one run of words: IWRAM, then EWRAM
 #define ARM_JIT_IWRAM_WORDS 0x2000
+#define ARM_JIT_EWRAM_WORDS 0x10000
+#define ARM_JIT_RAM_WORDS (ARM_JIT_IWRAM_WORDS + ARM_JIT_EWRAM_WORDS)
+#define ARM_JIT_PAGES 0x10000
+#define ARM_JIT_MAX_SPAN 66
 
 struct ARMCore;
 struct ARMJitBlock;
+struct ARMJitPage;
 
 struct ARMJit {
-	// Number of compiled blocks whose code (or baked-in prefetch) covers each IWRAM word
-	uint8_t cover[ARM_JIT_IWRAM_WORDS];
-	struct ARMJitBlock* blocks[ARM_JIT_IWRAM_WORDS];
-	uint8_t hits[ARM_JIT_IWRAM_WORDS];
-	// Writes into compiled code, by the word written
-	uint8_t patched[ARM_JIT_IWRAM_WORDS];
-
 	struct ARMJitBlock* current;
 	uint8_t smcHit;
 
 	uint8_t* code;
 	size_t codeSize;
 	size_t codeUsed;
+	// Generated once: enter(cpu, block) runs blocks until an event is due or the next block
+	// isn't compiled; blocks exit to dispatch, and toC returns to the caller
+	size_t codeStart;
+	void (*enter)(struct ARMCore*, void*);
+	uint8_t* dispatch;
+	uint8_t* toC;
+	// Runtime copies of patched words, taken when the GBA's pipeline would fetch them
+	uint32_t fetched[ARM_JIT_MAX_SPAN];
+
+	// Blocks by address, in 4 KiB pages of the bus
+	struct ARMJitPage* pages[ARM_JIT_PAGES];
+	// Number of compiled blocks whose code (or baked-in prefetch) covers each RAM word
+	uint8_t cover[ARM_JIT_RAM_WORDS];
+	// Writes into compiled code, by the word written
+	uint8_t patched[ARM_JIT_RAM_WORDS];
 };
 
 struct ARMJit* ARMJitCreate(void);
 void ARMJitDestroy(struct ARMJit* jit);
 void ARMJitFlush(struct ARMJit* jit);
+void ARMJitDropBlocks(struct ARMJit* jit);
 void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word);
 bool ARMJitRun(struct ARMCore* cpu);
 
+static inline int ARMJitRamWord(uint32_t address) {
+	switch (address >> 24) {
+	case 2:
+		return ARM_JIT_IWRAM_WORDS + ((address & 0x3FFFF) >> 2);
+	case 3:
+		return (address & 0x7FFF) >> 2;
+	default:
+		return -1;
+	}
+}
+
 static inline void ARMJitNotifyWrite(struct ARMJit* jit, uint32_t address) {
-	unsigned word = (address & 0x7FFF) >> 2;
-	if (jit->cover[word]) {
+	int word = ARMJitRamWord(address);
+	if (word >= 0 && jit->cover[word]) {
 		ARMJitInvalidateWord(jit, word);
 	}
 }

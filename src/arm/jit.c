@@ -9,6 +9,7 @@
 
 #include <mgba/internal/arm/arm.h>
 #include <mgba/internal/arm/isa-arm.h>
+#include <mgba/internal/arm/isa-thumb.h>
 #include <mgba/internal/arm/macros.h>
 #include <mgba/internal/gba/gba.h>
 #include <mgba-util/memory.h>
@@ -17,25 +18,35 @@
 #include <stdio.h>
 #include <sys/mman.h>
 
-// Blocks run ARM code from GBA IWRAM. Every guest instruction keeps the interpreter's
+// Blocks run ARM and Thumb code from BIOS, EWRAM, IWRAM and the cartridge. Every guest
+// instruction keeps the interpreter's
 // exact state: PC, the two prefetched words, cycles, and an event check afterwards.
 
 #define MAX_BLOCK 64
-#define MAX_SPAN (MAX_BLOCK + 2)
+#define MAX_SPAN ARM_JIT_MAX_SPAN
 #define HOT_THRESHOLD 2
 #define PATCH_LIMIT 4
-#define CODE_SIZE (8 * 1024 * 1024)
+#define CODE_SIZE (32 * 1024 * 1024)
 #define MAX_INSN_BYTES 640
 #define EXIT_DIRECT -1
+#define EXIT_TO_C -2
 #define MAX_EXITS (MAX_BLOCK * 6)
 
 struct ARMJitBlock {
-	void (*entry)(struct ARMCore*);
+	void* entry;
 	uint32_t pc;
 	uint32_t op0;
 	uint32_t op1;
-	unsigned start;
-	unsigned span;
+	bool thumb;
+	int coverStart;
+	unsigned coverWords;
+	// Patched words are read at runtime, so writes to them leave the block alone
+	uint32_t coverMask[3];
+};
+
+struct ARMJitPage {
+	struct ARMJitBlock* blocks[0x800];
+	uint8_t hits[0x800];
 };
 
 static const uint16_t _conditionLut[16] = {
@@ -52,6 +63,16 @@ enum {
 	OFF_PREFETCH1 = offsetof(struct ARMCore, prefetch) + 4,
 	OFF_SHIFTER_CARRY = offsetof(struct ARMCore, shifterCarryOut),
 	OFF_MEMORY = offsetof(struct ARMCore, memory),
+	OFF_EXECUTION_MODE = offsetof(struct ARMCore, executionMode),
+	JIT_CURRENT = offsetof(struct ARMJit, current),
+	JIT_SMC_HIT = offsetof(struct ARMJit, smcHit),
+	JIT_PAGES = offsetof(struct ARMJit, pages),
+	JIT_FETCHED = offsetof(struct ARMJit, fetched),
+	BLOCK_ENTRY = offsetof(struct ARMJitBlock, entry),
+	BLOCK_PC = offsetof(struct ARMJitBlock, pc),
+	BLOCK_OP0 = offsetof(struct ARMJitBlock, op0),
+	BLOCK_OP1 = offsetof(struct ARMJitBlock, op1),
+	BLOCK_THUMB = offsetof(struct ARMJitBlock, thumb),
 };
 
 enum {
@@ -70,7 +91,13 @@ struct Compiler {
 	struct GBA* gba;
 	uint32_t pc;
 	const uint32_t* ops;
+	// Patched instructions and prefetch words, decoded at runtime from jit->fetched
+	const bool* hot;
 	unsigned count;
+	bool thumb;
+	unsigned width;
+	// Data accesses from cartridge code go through the memory handlers for the prefetch buffer
+	bool romCode;
 	uint8_t* body;
 	uint32_t aluCycles;
 	uint32_t memCycles;
@@ -130,6 +157,42 @@ static bool _isInlineMem(uint32_t op) {
 	return false;
 }
 
+static void* _handler(struct Compiler* c, uint32_t op) {
+	if (c->thumb) {
+		return (void*) _thumbTable[op >> 6];
+	}
+	return (void*) _armTable[((op >> 16) & 0xFF0) | ((op >> 4) & 0x00F)];
+}
+
+// Whether a taken branch at ops[i] goes back to the start of this block
+static bool _loopsToStart(struct Compiler* c, unsigned i) {
+	uint32_t op = c->ops[i];
+	uint32_t address = c->pc + c->width * i;
+	int32_t offset;
+	if (c->thumb) {
+		if ((op & 0xF000) == 0xD000 && (op & 0x0F00) < 0x0E00) {
+			offset = (int8_t) op << 1;
+		} else if ((op & 0xF800) == 0xE000) {
+			offset = (int32_t) (op << 21) >> 20;
+		} else {
+			return false;
+		}
+	} else if ((op & 0x0E000000) == 0x0A000000) {
+		offset = (int32_t) (op << 8) >> 6;
+	} else {
+		return false;
+	}
+	return address + 2 * c->width + offset == c->pc;
+}
+
+// Host address of a RAM word compiled from, for reading patched words at runtime
+static void* _hostAddress(struct Compiler* c, uint32_t address) {
+	if ((address >> 24) == GBA_REGION_IWRAM) {
+		return (uint8_t*) c->gba->memory.iwram + (address & (GBA_SIZE_IWRAM - 1));
+	}
+	return (uint8_t*) c->gba->memory.wram + (address & (GBA_SIZE_EWRAM - 1));
+}
+
 // Each backend provides _prologue, _epilogue, _storeState, _addCycles, _segmentCheck,
 // _eventCheck, _exitJump, _patch, _emitAlu, _emitMem and _emitFallback
 #if defined(__aarch64__)
@@ -138,7 +201,16 @@ static bool _isInlineMem(uint32_t op) {
 #include "jit-x64.h"
 #endif
 
-static bool _endsBlock(uint32_t op) {
+static bool _endsBlock(uint32_t op, bool thumb) {
+	if (thumb) {
+		if ((op & 0xF000) == 0xD000 || (op & 0xF000) == 0xE000 || (op & 0xF800) == 0xF800) {
+			return true; // B, conditional B, SWI, BL suffix, undefined
+		}
+		if ((op & 0xFF00) == 0x4700 || (op & 0xFF00) == 0xBD00 || (op & 0xFF00) == 0xBE00) {
+			return true; // BX, POP with PC, BKPT
+		}
+		return ((op & 0xFF00) == 0x4400 || (op & 0xFF00) == 0x4600) && (op & 0x87) == 0x87; // ADD or MOV to PC
+	}
 	if ((op & 0x0E000000) == 0x0A000000) {
 		return true; // B, BL
 	}
@@ -160,11 +232,27 @@ static bool _endsBlock(uint32_t op) {
 	return false;
 }
 
+static struct ARMJitPage* _page(struct ARMJit* jit, uint32_t address, bool create) {
+	struct ARMJitPage** page = &jit->pages[(address >> 12) & (ARM_JIT_PAGES - 1)];
+	if (!*page && create) {
+		*page = calloc(1, sizeof(**page));
+	}
+	return *page;
+}
+
+static bool _covers(const struct ARMJitBlock* block, unsigned word) {
+	unsigned i = word - block->coverStart;
+	return i < block->coverWords && (block->coverMask[i / 32] & (1u << (i & 31)));
+}
+
 static void _removeBlock(struct ARMJit* jit, struct ARMJitBlock* block) {
-	jit->blocks[block->start] = NULL;
+	struct ARMJitPage* page = _page(jit, block->pc, false);
+	page->blocks[(block->pc & 0xFFF) >> 1] = NULL;
 	unsigned i;
-	for (i = 0; i < block->span; ++i) {
-		--jit->cover[(block->start + i) & (ARM_JIT_IWRAM_WORDS - 1)];
+	for (i = 0; i < block->coverWords; ++i) {
+		if (block->coverMask[i / 32] & (1u << (i & 31))) {
+			--jit->cover[block->coverStart + i];
+		}
 	}
 	if (block == jit->current) {
 		jit->smcHit = 1;
@@ -194,80 +282,147 @@ struct ARMJit* ARMJitCreate(void) {
 
 void ARMJitDestroy(struct ARMJit* jit) {
 	ARMJitFlush(jit);
+	unsigned i;
+	for (i = 0; i < ARM_JIT_PAGES; ++i) {
+		free(jit->pages[i]);
+	}
 	munmap(jit->code, jit->codeSize);
 	free(jit);
 }
 
-static void _dropBlocks(struct ARMJit* jit) {
-	unsigned i;
-	for (i = 0; i < ARM_JIT_IWRAM_WORDS; ++i) {
-		if (jit->blocks[i]) {
-			if (jit->blocks[i] == jit->current) {
-				jit->smcHit = 1;
-				jit->current = NULL;
+// Waitstate changes and a full code buffer drop every block but keep the patch history
+void ARMJitDropBlocks(struct ARMJit* jit) {
+	unsigned i, j;
+	for (i = 0; i < ARM_JIT_PAGES; ++i) {
+		struct ARMJitPage* page = jit->pages[i];
+		if (!page) {
+			continue;
+		}
+		for (j = 0; j < 0x800; ++j) {
+			if (page->blocks[j]) {
+				if (page->blocks[j] == jit->current) {
+					jit->smcHit = 1;
+					jit->current = NULL;
+				}
+				free(page->blocks[j]);
+				page->blocks[j] = NULL;
 			}
-			free(jit->blocks[i]);
 		}
 	}
 	memset(jit->cover, 0, sizeof(jit->cover));
-	memset(jit->blocks, 0, sizeof(jit->blocks));
-	jit->codeUsed = 0;
+	jit->codeUsed = jit->codeStart;
 }
 
 void ARMJitFlush(struct ARMJit* jit) {
-	_dropBlocks(jit);
-	memset(jit->hits, 0, sizeof(jit->hits));
+	ARMJitDropBlocks(jit);
+	unsigned i;
+	for (i = 0; i < ARM_JIT_PAGES; ++i) {
+		if (jit->pages[i]) {
+			memset(jit->pages[i]->hits, 0, sizeof(jit->pages[i]->hits));
+		}
+	}
 	memset(jit->patched, 0, sizeof(jit->patched));
+}
+
+static uint32_t _ramWordAddress(unsigned word) {
+	if (word < ARM_JIT_IWRAM_WORDS) {
+		return GBA_BASE_IWRAM + 4 * word;
+	}
+	return GBA_BASE_EWRAM + 4 * (word - ARM_JIT_IWRAM_WORDS);
 }
 
 void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word) {
 	if (jit->patched[word] < 255) {
 		++jit->patched[word];
 	}
-	unsigned i;
-	for (i = 0; i < MAX_SPAN && jit->cover[word]; ++i) {
-		unsigned start = (word - i) & (ARM_JIT_IWRAM_WORDS - 1);
-		struct ARMJitBlock* block = jit->blocks[start];
-		if (block && i < block->span) {
+	// A block can start up to MAX_SPAN ARM words before the word it covers
+	uint32_t address = _ramWordAddress(word);
+	unsigned back;
+	for (back = 0; back < 4 * MAX_SPAN + 4 && jit->cover[word]; back += 2) {
+		uint32_t start = address + 2 - back;
+		struct ARMJitPage* page = _page(jit, start, false);
+		struct ARMJitBlock* block = page ? page->blocks[(start & 0xFFF) >> 1] : NULL;
+		if (block && block->pc == start && _covers(block, word)) {
 			_removeBlock(jit, block);
 		}
 	}
 }
 
-// Words that keep getting patched stay out of blocks, along with the two words before
-// them, whose prefetch would bake in the patched word
-static bool _isPatched(struct ARMJit* jit, unsigned word) {
-	return jit->patched[word & (ARM_JIT_IWRAM_WORDS - 1)] >= PATCH_LIMIT;
+// Words that keep getting patched are read when the pipeline fetches them instead of being
+// compiled in
+static bool _isPatched(struct ARMJit* jit, uint32_t address) {
+	int word = ARMJitRamWord(address);
+	return word >= 0 && jit->patched[word] >= PATCH_LIMIT;
 }
 
-static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uint32_t pc) {
+// End of the region a block at this address may run through, or 0 if it can't be compiled
+static uint32_t _regionEnd(struct ARMCore* cpu, uint32_t pc) {
+	struct GBA* gba = (struct GBA*) cpu->master;
+	switch (pc >> 24) {
+	case GBA_REGION_BIOS:
+		return pc < GBA_SIZE_BIOS ? GBA_SIZE_BIOS : 0;
+	case GBA_REGION_EWRAM:
+		return pc < GBA_BASE_EWRAM + GBA_SIZE_EWRAM ? GBA_BASE_EWRAM + GBA_SIZE_EWRAM : 0;
+	case GBA_REGION_IWRAM:
+		return pc < GBA_BASE_IWRAM + GBA_SIZE_IWRAM ? GBA_BASE_IWRAM + GBA_SIZE_IWRAM : 0;
+	case GBA_REGION_ROM0:
+	case GBA_REGION_ROM0_EX:
+	case GBA_REGION_ROM1:
+	case GBA_REGION_ROM1_EX:
+	case GBA_REGION_ROM2:
+	case GBA_REGION_ROM2_EX:
+		if ((pc & (GBA_SIZE_ROM0 - 1)) < gba->memory.romSize) {
+			return (pc & ~(GBA_SIZE_ROM0 - 1)) + gba->memory.romSize;
+		}
+		return 0;
+	default:
+		return 0;
+	}
+}
+
+static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uint32_t pc, bool thumb) {
 	const uint32_t* region = cpu->memory.activeRegion;
 	uint32_t mask = cpu->memory.activeMask;
+	unsigned width = thumb ? WORD_SIZE_THUMB : WORD_SIZE_ARM;
+	uint32_t end = _regionEnd(cpu, pc);
 	uint32_t ops[MAX_SPAN];
-	unsigned start = (pc & 0x7FFF) >> 2;
+	bool hot[MAX_SPAN];
 	unsigned count = 0;
-	while (count < MAX_BLOCK) {
-		if (_isPatched(jit, start + count) || _isPatched(jit, start + count + 1) || _isPatched(jit, start + count + 2)) {
-			break;
+	// The dispatcher checks the first two words against the pipeline, so they can't be patched
+	if (_isPatched(jit, pc) || _isPatched(jit, pc + width)) {
+		return NULL;
+	}
+	while (count < MAX_BLOCK && pc + width * (count + 3) <= end) {
+		uint32_t address = pc + width * count;
+		hot[count] = _isPatched(jit, address);
+		if (thumb) {
+			LOAD_16(ops[count], address & mask, region);
+		} else {
+			LOAD_32(ops[count], address & mask, region);
 		}
-		LOAD_32(ops[count], (pc + 4 * count) & mask, region);
 		++count;
-		if (_endsBlock(ops[count - 1])) {
+		if (!hot[count - 1] && _endsBlock(ops[count - 1], thumb)) {
 			break;
 		}
 	}
 	if (!count) {
 		return NULL;
 	}
-	LOAD_32(ops[count], (pc + 4 * count) & mask, region);
-	LOAD_32(ops[count + 1], (pc + 4 * (count + 1)) & mask, region);
+	hot[count] = _isPatched(jit, pc + width * count);
+	hot[count + 1] = _isPatched(jit, pc + width * (count + 1));
+	if (thumb) {
+		LOAD_16(ops[count], (pc + width * count) & mask, region);
+		LOAD_16(ops[count + 1], (pc + width * (count + 1)) & mask, region);
+	} else {
+		LOAD_32(ops[count], (pc + width * count) & mask, region);
+		LOAD_32(ops[count + 1], (pc + width * (count + 1)) & mask, region);
+	}
 	if (ops[0] != cpu->prefetch[0] || ops[1] != cpu->prefetch[1]) {
 		return NULL;
 	}
 
-	if (jit->codeUsed + count * MAX_INSN_BYTES + 512 > jit->codeSize) {
-		// Keep the self-modification history so hot patched code stays interpreted
-		_dropBlocks(jit);
+	if (jit->codeUsed + count * MAX_INSN_BYTES + 1024 > jit->codeSize) {
+		ARMJitDropBlocks(jit);
 	}
 
 	struct ARMJitBlock* block = malloc(sizeof(*block));
@@ -283,19 +438,31 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	c->gba = (struct GBA*) cpu->master;
 	c->pc = pc;
 	c->ops = ops;
+	c->hot = hot;
 	c->count = count;
+	c->thumb = thumb;
+	c->width = width;
+	c->romCode = (pc >> 24) >= GBA_REGION_ROM0;
 	c->nExits = 0;
-	c->aluCycles = 1 + cpu->memory.activeSeqCycles32;
-	c->memCycles = 1 + cpu->memory.activeNonseqCycles32;
+	if (thumb) {
+		c->aluCycles = 1 + cpu->memory.activeSeqCycles16;
+		c->memCycles = 1 + cpu->memory.activeNonseqCycles16;
+	} else {
+		c->aluCycles = 1 + cpu->memory.activeSeqCycles32;
+		c->memCycles = 1 + cpu->memory.activeNonseqCycles32;
+	}
 
-	_prologue(c);
 	c->body = c->e.p;
 
 	unsigned i = 0;
 	while (i < count) {
-		if (_isInlineAlu(ops[i])) {
+		if (hot[i]) {
+			_fetchAhead(c, i);
+			_emitDynamic(c, i);
+			++i;
+		} else if (!thumb && _isInlineAlu(ops[i])) {
 			unsigned run = 1;
-			while (i + run < count && _isInlineAlu(ops[i + run])) {
+			while (i + run < count && !hot[i + run] && _isInlineAlu(ops[i + run])) {
 				++run;
 			}
 			// The interpreter checks for events after every instruction, so only run the
@@ -311,53 +478,67 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 				}
 			}
 			for (j = 0; j < run; ++j) {
+				_fetchAhead(c, i + j);
 				_emitAlu(c, i + j, j >= lastAlways);
 			}
 			_addCycles(c, c->aluCycles * run);
 			i += run;
 			_eventCheck(c, i);
-		} else if (_isInlineMem(ops[i])) {
+		} else if (!thumb && _isInlineMem(ops[i])) {
+			_fetchAhead(c, i);
 			_emitMem(c, i);
 			++i;
 		} else {
+			_fetchAhead(c, i);
 			_emitFallback(c, i);
 			++i;
 		}
 	}
 	_exitJump(c, count);
 
-	// Exit stubs set the interpreter state for the next instruction
+	// Exit stubs set the interpreter state for the next instruction, then go to the
+	// dispatcher. Leaving before the first instruction goes back to C, which steps it.
 	uint8_t* stubs[MAX_SPAN];
 	memset(stubs, 0, sizeof(stubs));
 	unsigned x;
 	for (x = 0; x < c->nExits; ++x) {
 		int index = c->exits[x].index;
-		if (index != EXIT_DIRECT && !stubs[index]) {
+		if (index >= 0 && !stubs[index]) {
 			stubs[index] = c->e.p;
 			_storeState(c, index);
-			_exitJump(c, EXIT_DIRECT);
+			_exitJump(c, index ? EXIT_DIRECT : EXIT_TO_C);
 		}
 	}
-	uint8_t* epilogue = c->e.p;
-	_epilogue(c);
+	uint8_t* direct = c->e.p;
+	_jumpTo(c, jit->dispatch);
+	uint8_t* toC = c->e.p;
+	_jumpTo(c, jit->toC);
 	for (x = 0; x < c->nExits; ++x) {
 		int index = c->exits[x].index;
-		_patch(c->exits[x].at, index == EXIT_DIRECT ? epilogue : stubs[index]);
+		_patch(c->exits[x].at, index == EXIT_DIRECT ? direct : index == EXIT_TO_C ? toC : stubs[index]);
 	}
 
 	__builtin___clear_cache((char*) code, (char*) c->e.p);
 	jit->codeUsed += c->e.p - code;
 
-	block->entry = (void (*)(struct ARMCore*)) code;
+	block->entry = code;
 	block->pc = pc;
 	block->op0 = ops[0];
 	block->op1 = ops[1];
-	block->start = start;
-	block->span = count + 2;
-	jit->blocks[block->start] = block;
-	for (i = 0; i < block->span; ++i) {
-		++jit->cover[(block->start + i) & (ARM_JIT_IWRAM_WORDS - 1)];
+	block->thumb = thumb;
+	block->coverStart = ARMJitRamWord(pc);
+	block->coverWords = 0;
+	memset(block->coverMask, 0, sizeof(block->coverMask));
+	if (block->coverStart >= 0) {
+		block->coverWords = ARMJitRamWord(pc + width * (count + 2) - 1) - block->coverStart + 1;
+		for (i = 0; i < block->coverWords; ++i) {
+			if (jit->patched[block->coverStart + i] < PATCH_LIMIT) {
+				block->coverMask[i / 32] |= 1u << (i & 31);
+				++jit->cover[block->coverStart + i];
+			}
+		}
 	}
+	_page(jit, pc, true)->blocks[(pc & 0xFFF) >> 1] = block;
 	return block;
 }
 
@@ -409,8 +590,13 @@ static void _selfTestAlu(struct ARMJit* jit, unsigned iterations) {
 		c->jit = jit;
 		c->gba = NULL;
 		c->pc = address;
+		static const bool cold[3];
 		c->ops = ops;
+		c->hot = cold;
 		c->count = 1;
+		c->thumb = false;
+		c->width = WORD_SIZE_ARM;
+		c->romCode = false;
 		c->nExits = 0;
 		c->aluCycles = 1;
 		c->memCycles = 1;
@@ -440,25 +626,47 @@ static void _selfTestAlu(struct ARMJit* jit, unsigned iterations) {
 	fprintf(stderr, "ALU self-test: %u tested, %u failures\n", tested, failures);
 }
 
+static void _buildTrampoline(struct ARMJit* jit, struct ARMCore* cpu) {
+	static struct Compiler compiler;
+	struct Compiler* c = &compiler;
+	uint8_t* code = jit->code;
+	c->e.p = code;
+	c->jit = jit;
+	c->cpu = cpu;
+	c->gba = (struct GBA*) cpu->master;
+	_emitTrampoline(c);
+	__builtin___clear_cache((char*) code, (char*) c->e.p);
+	jit->codeStart = c->e.p - code;
+	jit->codeUsed = jit->codeStart;
+}
+
 bool ARMJitRun(struct ARMCore* cpu) {
 	struct ARMJit* jit = cpu->jit;
-	uint32_t pc = cpu->gprs[ARM_PC] - WORD_SIZE_ARM;
-	if ((pc >> 24) != 3) {
-		return false;
+	if (!jit->enter) {
+		_buildTrampoline(jit, cpu);
 	}
-	unsigned word = (pc & 0x7FFF) >> 2;
-	struct ARMJitBlock* block = jit->blocks[word];
-	if (!block || block->pc != pc) {
-		if (jit->hits[word] < HOT_THRESHOLD) {
-			++jit->hits[word];
+	bool thumb = cpu->executionMode == MODE_THUMB;
+	uint32_t pc = cpu->gprs[ARM_PC] - (thumb ? WORD_SIZE_THUMB : WORD_SIZE_ARM);
+	struct ARMJitPage* page = _page(jit, pc, false);
+	unsigned index = (pc & 0xFFF) >> 1;
+	struct ARMJitBlock* block = page ? page->blocks[index] : NULL;
+	if (!block || block->pc != pc || block->thumb != thumb) {
+		if (!_regionEnd(cpu, pc)) {
+			return false;
+		}
+		if (!page) {
+			page = _page(jit, pc, true);
+		}
+		if (page->hits[index] < HOT_THRESHOLD) {
+			++page->hits[index];
 			return false;
 		}
 		if (block) {
 			_removeBlock(jit, block);
 		}
-		block = _compile(jit, cpu, pc);
+		block = _compile(jit, cpu, pc, thumb);
 		if (!block) {
-			jit->hits[word] = 0;
+			page->hits[index] = 0;
 			return false;
 		}
 	}
@@ -468,7 +676,7 @@ bool ARMJitRun(struct ARMCore* cpu) {
 	jit->current = block;
 	jit->smcHit = 0;
 	int32_t cycles = cpu->cycles;
-	block->entry(cpu);
+	jit->enter(cpu, block->entry);
 	jit->current = NULL;
 	// A block exits before its first segment when an event is due inside it
 	return cpu->cycles != cycles;

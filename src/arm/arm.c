@@ -244,12 +244,17 @@ void ARMRun(struct ARMCore* cpu) {
 void ARMRunLoop(struct ARMCore* cpu) {
 	if (cpu->executionMode == MODE_THUMB) {
 		while (cpu->cycles < cpu->nextEvent) {
+#ifdef M_ARM_JIT
+			if (cpu->jit && ARMJitRun(cpu)) {
+				continue;
+			}
+#endif
 			ThumbStep(cpu);
 		}
 	} else {
 		while (cpu->cycles < cpu->nextEvent) {
 #ifdef M_ARM_JIT
-			if (cpu->jit && ((uint32_t) cpu->gprs[ARM_PC] >> 24) == 3 && ARMJitRun(cpu)) {
+			if (cpu->jit && ARMJitRun(cpu)) {
 				continue;
 			}
 #endif

@@ -7,7 +7,7 @@
 // AArch64 backend for jit.c
 
 #define R_CPU 19
-#define R_SMC 20
+#define R_JIT 20
 #define R_IWRAM 21
 #define R_EWRAM 22
 #define R_WB 23
@@ -177,7 +177,7 @@ static void _prologue(struct Compiler* c) {
 	_stpX(e, 23, 24, 48);
 	_movX(e, R_CPU, 0);
 	if (c->gba) {
-		_movImm64(e, R_SMC, (uintptr_t) &c->jit->smcHit);
+		_movImm64(e, R_JIT, (uintptr_t) c->jit);
 		_movImm64(e, R_IWRAM, (uintptr_t) c->gba->memory.iwram);
 		_movImm64(e, R_EWRAM, (uintptr_t) c->gba->memory.wram);
 		_movImm64(e, R_COVER, (uintptr_t) c->jit->cover);
@@ -193,19 +193,98 @@ static void _epilogue(struct Compiler* c) {
 	_emit(e, 0xD65F03C0); // ret
 }
 
+static void _jumpTo(struct Compiler* c, const uint8_t* target) {
+	_patch(_b(&c->e), target);
+}
+
+static void _emitTrampoline(struct Compiler* c) {
+	struct Emitter* e = &c->e;
+	c->jit->enter = (void (*)(struct ARMCore*, void*)) e->p;
+	_prologue(c);
+	_emit(e, 0xD61F0000 | (1 << 5)); // br x1
+
+	// Next block for the PC and mode in the CPU state, if it is compiled and nothing is due
+	c->jit->dispatch = e->p;
+	uint8_t* toC[8];
+	_ldrW(e, 0, R_CPU, OFF_CYCLES);
+	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
+	_cmpW(e, 0, 1);
+	toC[0] = _bCond(e, A64_GE);
+	_ldrW(e, 2, R_CPU, OFF_EXECUTION_MODE);
+	_ldrW(e, 3, R_CPU, OFF_PC);
+	_emit(e, 0x51001000 | (3 << 5) | 3); // sub w3, w3, #4
+	_emit(e, 0x0B000000 | (2 << 16) | (1 << 10) | (3 << 5) | 3); // add w3, w3, w2, lsl #1
+	_ubfx(e, 4, 3, 12, 16);
+	_addXImm(e, 5, R_JIT, JIT_PAGES);
+	_emit(e, 0xF8607800 | (4 << 16) | (5 << 5) | 5); // ldr x5, [x5, x4, lsl #3]
+	toC[1] = _emitSite(e, 0xB4000000 | 5); // cbz x5
+	_ubfx(e, 6, 3, 1, 11);
+	_emit(e, 0xF8607800 | (6 << 16) | (5 << 5) | 5); // ldr x5, [x5, x6, lsl #3]
+	toC[2] = _emitSite(e, 0xB4000000 | 5); // cbz x5
+	_ldrW(e, 7, 5, BLOCK_PC);
+	_cmpW(e, 7, 3);
+	toC[3] = _bCond(e, A64_NE);
+	_ldrbW(e, 7, 5, BLOCK_THUMB);
+	_cmpW(e, 7, 2);
+	toC[4] = _bCond(e, A64_NE);
+	_ldrW(e, 7, R_CPU, OFF_PREFETCH0);
+	_ldrW(e, 8, 5, BLOCK_OP0);
+	_cmpW(e, 7, 8);
+	toC[5] = _bCond(e, A64_NE);
+	_ldrW(e, 7, R_CPU, OFF_PREFETCH1);
+	_ldrW(e, 8, 5, BLOCK_OP1);
+	_cmpW(e, 7, 8);
+	toC[6] = _bCond(e, A64_NE);
+	_emit(e, 0xF9000000 | ((JIT_CURRENT / 8) << 10) | (R_JIT << 5) | 5); // str x5, [x20, #current]
+	_emit(e, 0x39000000 | (JIT_SMC_HIT << 10) | (R_JIT << 5) | 31); // strb wzr, [x20, #smcHit]
+	_ldrX(e, 16, 5, BLOCK_ENTRY);
+	_emit(e, 0xD61F0000 | (16 << 5)); // br x16
+
+	c->jit->toC = e->p;
+	unsigned i;
+	for (i = 0; i < 7; ++i) {
+		_patch(toC[i], e->p);
+	}
+	_epilogue(c);
+}
+
 static void _exitJump(struct Compiler* c, int index) {
 	_exitAt(c, _b(&c->e), index);
+}
+
+static void _storePrefetch(struct Compiler* c, unsigned offset, unsigned index) {
+	struct Emitter* e = &c->e;
+	if (c->hot[index]) {
+		_ldrW(e, 0, R_JIT, JIT_FETCHED + 4 * index);
+	} else {
+		_movImm32(e, 0, c->ops[index]);
+	}
+	_strW(e, 0, R_CPU, offset);
 }
 
 // Interpreter state just before ops[index] runs
 static void _storeState(struct Compiler* c, unsigned index) {
 	struct Emitter* e = &c->e;
-	_movImm32(e, 0, c->pc + 4 * index + 4);
+	_movImm32(e, 0, c->pc + c->width * (index + 1));
 	_strW(e, 0, R_CPU, OFF_PC);
-	_movImm32(e, 0, c->ops[index]);
-	_strW(e, 0, R_CPU, OFF_PREFETCH0);
-	_movImm32(e, 0, c->ops[index + 1]);
-	_strW(e, 0, R_CPU, OFF_PREFETCH1);
+	_storePrefetch(c, OFF_PREFETCH0, index);
+	_storePrefetch(c, OFF_PREFETCH1, index + 1);
+}
+
+// Copy a patched word two instructions ahead, when the GBA's pipeline would fetch it
+static void _fetchAhead(struct Compiler* c, unsigned i) {
+	struct Emitter* e = &c->e;
+	unsigned index = i + 2;
+	if (index > c->count + 1 || !c->hot[index]) {
+		return;
+	}
+	_movImm64(e, 0, (uintptr_t) _hostAddress(c, c->pc + c->width * index));
+	if (c->thumb) {
+		_emit(e, 0x79400000 | (0 << 5) | 0); // ldrh w0, [x0]
+	} else {
+		_ldrW(e, 0, 0, 0);
+	}
+	_strW(e, 0, R_JIT, JIT_FETCHED + 4 * index);
 }
 
 static void _addCyclesReg(struct Compiler* c, int reg, uint32_t constant) {
@@ -243,7 +322,7 @@ static void _segmentCheck(struct Compiler* c, unsigned index, uint32_t cycles) {
 
 static void _smcCheck(struct Compiler* c, int index) {
 	struct Emitter* e = &c->e;
-	_ldrbW(e, 0, R_SMC, 0);
+	_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
 	_exitAt(c, _cbnzW(e, 0), index);
 }
 
@@ -515,7 +594,11 @@ static void _emitMem(struct Compiler* c, unsigned i) {
 		_strW(e, R_WB, R_CPU, 4 * rn);
 	}
 
-	uint8_t* done[2];
+	uint8_t* done[2] = { NULL, NULL };
+	uint8_t* toSlow = NULL;
+	if (c->romCode) {
+		goto slow;
+	}
 	_lsrWImm(e, 7, 4, 24);
 	_emit(e, 0x7100001F | (3 << 10) | (7 << 5)); // cmp w7, #3
 	uint8_t* toEwram = _bCond(e, A64_NE);
@@ -537,9 +620,21 @@ static void _emitMem(struct Compiler* c, unsigned i) {
 
 	_patch(toEwram, e->p);
 	_emit(e, 0x7100001F | (2 << 10) | (7 << 5)); // cmp w7, #2
-	uint8_t* toSlow = _bCond(e, A64_NE);
+	toSlow = _bCond(e, A64_NE);
 	_andImm(e, 8, 4, size == 4 ? 2 : size == 2 ? 1 : 0, size == 4 ? 16 : size == 2 ? 17 : 18);
 	_memAccess(e, load, size, R_EWRAM);
+	if (!load) {
+		_lsrWImm(e, 9, 8, 2);
+		_movImm32(e, 10, ARM_JIT_IWRAM_WORDS);
+		_addW(e, 9, 9, 10);
+		_emit(e, 0x38604800 | (9 << 16) | (R_COVER << 5) | 10); // ldrb w10, [x24, w9, uxtw]
+		uint8_t* noCode = _cbzW(e, 10);
+		_movImm64(e, 0, (uintptr_t) c->jit);
+		_movW(e, 1, 9);
+		_movImm64(e, 16, (uintptr_t) ARMJitInvalidateWord);
+		_blr(e, 16);
+		_patch(noCode, e->p);
+	}
 	char* waits = size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16;
 	_movImm64(e, 9, (uintptr_t) &waits[GBA_REGION_EWRAM]);
 	_ldrbW(e, 3, 9, 0);
@@ -547,6 +642,7 @@ static void _emitMem(struct Compiler* c, unsigned i) {
 	done[1] = _b(e);
 
 	_patch(toSlow, e->p);
+slow:
 	_storeState(c, i + 1);
 	_strW(e, 31, 31, CYCLE_SLOT); // str wzr, [sp, #CYCLE_SLOT]
 	_movX(e, 0, R_CPU);
@@ -564,8 +660,10 @@ static void _emitMem(struct Compiler* c, unsigned i) {
 	_blr(e, 16);
 	_ldrW(e, 3, 31, CYCLE_SLOT);
 
-	_patch(done[0], e->p);
-	_patch(done[1], e->p);
+	if (done[0]) {
+		_patch(done[0], e->p);
+		_patch(done[1], e->p);
+	}
 	if (load) {
 		_strW(e, 0, R_CPU, 4 * rd);
 	} else if (writeback) {
@@ -584,11 +682,57 @@ static void _emitMem(struct Compiler* c, unsigned i) {
 	_eventCheck(c, i + 1);
 }
 
+static const uint32_t _conditionLut32[16] = {
+	0xF0F0, 0x0F0F, 0xCCCC, 0x3333, 0xFF00, 0x00FF, 0xAAAA, 0x5555,
+	0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
+};
+
+// A patched instruction: run its handler with the opcode the pipeline fetched
+static void _emitDynamic(struct Compiler* c, unsigned i) {
+	struct Emitter* e = &c->e;
+	uint32_t address = c->pc + c->width * i;
+
+	_storeState(c, i + 1);
+	_ldrW(e, 1, R_JIT, JIT_FETCHED + 4 * i);
+	uint8_t* toCheck = NULL;
+	if (c->thumb) {
+		_lsrWImm(e, 12, 1, 6);
+		_movImm64(e, 14, (uintptr_t) _thumbTable);
+	} else {
+		_ldrW(e, 9, R_CPU, OFF_CPSR);
+		_lsrWImm(e, 9, 9, 28);
+		_lsrWImm(e, 10, 1, 28);
+		_movImm64(e, 11, (uintptr_t) _conditionLut32);
+		_emit(e, 0xB8605800 | (10 << 16) | (11 << 5) | 11); // ldr w11, [x11, w10, uxtw #2]
+		_lsrvW(e, 11, 11, 9);
+		uint8_t* toExec = _tbnz(e, 11, 0);
+		_addCycles(c, c->aluCycles);
+		toCheck = _b(e);
+		_patch(toExec, e->p);
+		_ubfx(e, 12, 1, 20, 8);
+		_ubfx(e, 13, 1, 4, 4);
+		_orrWShift(e, 12, 13, 12, 4);
+		_movImm64(e, 14, (uintptr_t) _armTable);
+	}
+	_emit(e, 0xF8605800 | (12 << 16) | (14 << 5) | 16); // ldr x16, [x14, w12, uxtw #3]
+	_movX(e, 0, R_CPU);
+	_blr(e, 16);
+	_ldrW(e, 0, R_CPU, OFF_PC);
+	_movImm32(e, 1, address + 2 * c->width);
+	_cmpW(e, 0, 1);
+	_exitAt(c, _bCond(e, A64_NE), EXIT_DIRECT);
+	if (toCheck) {
+		_patch(toCheck, e->p);
+	}
+	_smcCheck(c, i + 1);
+	_eventCheck(c, i + 1);
+}
+
 static void _emitFallback(struct Compiler* c, unsigned i) {
 	struct Emitter* e = &c->e;
 	uint32_t op = c->ops[i];
-	uint32_t address = c->pc + 4 * i;
-	unsigned cond = op >> 28;
+	uint32_t address = c->pc + c->width * i;
+	unsigned cond = c->thumb ? 0xE : op >> 28;
 
 	_storeState(c, i + 1);
 	uint8_t* toCheck = NULL;
@@ -605,26 +749,21 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 
 	_movX(e, 0, R_CPU);
 	_movImm32(e, 1, op);
-	_movImm64(e, 16, (uintptr_t) _armTable[((op >> 16) & 0xFF0) | ((op >> 4) & 0x00F)]);
+	_movImm64(e, 16, (uintptr_t) _handler(c, op));
 	_blr(e, 16);
 	_ldrW(e, 0, R_CPU, OFF_PC);
-	_movImm32(e, 1, address + 8);
+	_movImm32(e, 1, address + 2 * c->width);
 	_cmpW(e, 0, 1);
 	uint8_t* branched = _bCond(e, A64_NE);
 	uint8_t* sequential = _b(e);
 
 	// A taken branch back to the start of this block keeps running here
 	_patch(branched, e->p);
-	bool loops = false;
-	if ((op & 0x0E000000) == 0x0A000000) {
-		int32_t offset = (int32_t) (op << 8) >> 6;
-		loops = address + 8 + offset == c->pc;
-	}
-	if (loops) {
-		_movImm32(e, 1, c->pc + 4);
+	if (_loopsToStart(c, i)) {
+		_movImm32(e, 1, c->pc + c->width);
 		_cmpW(e, 0, 1);
 		_exitAt(c, _bCond(e, A64_NE), EXIT_DIRECT);
-		_ldrbW(e, 0, R_SMC, 0);
+		_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
 		_exitAt(c, _cbnzW(e, 0), EXIT_DIRECT);
 		_ldrW(e, 0, R_CPU, OFF_CYCLES);
 		_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);

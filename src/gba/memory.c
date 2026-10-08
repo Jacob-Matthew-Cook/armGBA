@@ -762,10 +762,6 @@ uint32_t GBALoad8(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
 	return value;
 }
 
-#define STORE_EWRAM \
-	STORE_32(value, address & (GBA_SIZE_EWRAM - 4), memory->wram); \
-	wait += waitstatesRegion[GBA_REGION_EWRAM];
-
 #ifdef M_ARM_JIT
 #define JIT_NOTIFY_WRITE(ADDRESS) \
 	if (cpu->jit) { \
@@ -774,6 +770,12 @@ uint32_t GBALoad8(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
 #else
 #define JIT_NOTIFY_WRITE(ADDRESS)
 #endif
+
+#define STORE_EWRAM \
+	STORE_32(value, address & (GBA_SIZE_EWRAM - 4), memory->wram); \
+	JIT_NOTIFY_WRITE(address); \
+	wait += waitstatesRegion[GBA_REGION_EWRAM];
+
 
 #define STORE_IWRAM \
 	STORE_32(value, address & (GBA_SIZE_IWRAM - 4), memory->iwram); \
@@ -899,6 +901,7 @@ void GBAStore16(struct ARMCore* cpu, uint32_t address, int16_t value, int* cycle
 	switch (address >> BASE_OFFSET) {
 	case GBA_REGION_EWRAM:
 		STORE_16(value, address & (GBA_SIZE_EWRAM - 2), memory->wram);
+		JIT_NOTIFY_WRITE(address);
 		wait = memory->waitstatesNonseq16[GBA_REGION_EWRAM];
 		break;
 	case GBA_REGION_IWRAM:
@@ -1045,6 +1048,7 @@ void GBAStore8(struct ARMCore* cpu, uint32_t address, int8_t value, int* cycleCo
 	switch (address >> BASE_OFFSET) {
 	case GBA_REGION_EWRAM:
 		((int8_t*) memory->wram)[address & (GBA_SIZE_EWRAM - 1)] = value;
+		JIT_NOTIFY_WRITE(address);
 		wait = memory->waitstatesNonseq16[GBA_REGION_EWRAM];
 		break;
 	case GBA_REGION_IWRAM:
@@ -1244,6 +1248,7 @@ void GBAPatch32(struct ARMCore* cpu, uint32_t address, int32_t value, int32_t* o
 	case GBA_REGION_EWRAM:
 		LOAD_32(oldValue, address & (GBA_SIZE_EWRAM - 4), memory->wram);
 		STORE_32(value, address & (GBA_SIZE_EWRAM - 4), memory->wram);
+		JIT_NOTIFY_WRITE(address);
 		break;
 	case GBA_REGION_IWRAM:
 		LOAD_32(oldValue, address & (GBA_SIZE_IWRAM - 4), memory->iwram);
@@ -1319,6 +1324,7 @@ void GBAPatch16(struct ARMCore* cpu, uint32_t address, int16_t value, int16_t* o
 	case GBA_REGION_EWRAM:
 		LOAD_16(oldValue, address & (GBA_SIZE_EWRAM - 2), memory->wram);
 		STORE_16(value, address & (GBA_SIZE_EWRAM - 2), memory->wram);
+		JIT_NOTIFY_WRITE(address);
 		break;
 	case GBA_REGION_IWRAM:
 		LOAD_16(oldValue, address & (GBA_SIZE_IWRAM - 2), memory->iwram);
@@ -1402,6 +1408,7 @@ void GBAPatch8(struct ARMCore* cpu, uint32_t address, int8_t value, int8_t* old)
 	case GBA_REGION_EWRAM:
 		oldValue = ((int8_t*) memory->wram)[address & (GBA_SIZE_EWRAM - 1)];
 		((int8_t*) memory->wram)[address & (GBA_SIZE_EWRAM - 1)] = value;
+		JIT_NOTIFY_WRITE(address);
 		break;
 	case GBA_REGION_IWRAM:
 		oldValue = ((int8_t*) memory->iwram)[address & (GBA_SIZE_IWRAM - 1)];
@@ -1707,6 +1714,11 @@ uint32_t GBAStoreMultiple(struct ARMCore* cpu, uint32_t address, int mask, enum 
 void GBAAdjustWaitstates(struct GBA* gba, uint16_t parameters) {
 	struct GBAMemory* memory = &gba->memory;
 	struct ARMCore* cpu = gba->cpu;
+#ifdef M_ARM_JIT
+	if (cpu->jit) {
+		ARMJitDropBlocks(cpu->jit);
+	}
+#endif
 	int sram = parameters & 0x0003;
 	int ws0 = (parameters & 0x000C) >> 2;
 	int ws0seq = (parameters & 0x0010) >> 4;
@@ -1776,6 +1788,11 @@ void GBAAdjustWaitstates(struct GBA* gba, uint16_t parameters) {
 void GBAAdjustEWRAMWaitstates(struct GBA* gba, uint16_t parameters) {
 	struct GBAMemory* memory = &gba->memory;
 	struct ARMCore* cpu = gba->cpu;
+#ifdef M_ARM_JIT
+	if (cpu->jit) {
+		ARMJitDropBlocks(cpu->jit);
+	}
+#endif
 
 	int wait = 15 - ((parameters >> 8) & 0xF);
 	if (wait) {
