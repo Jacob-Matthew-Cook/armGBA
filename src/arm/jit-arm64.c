@@ -27,22 +27,6 @@
 #define MAX_INSN_BYTES 640
 
 #include <stdio.h>
-static struct {
-	uint64_t runs, compiles, compileFails, flushes, invalidations, prefetchMisses, interp;
-} _stats;
-static int _statsEnabled = -1;
-
-static void _statsTick(void) {
-	if (_statsEnabled < 0) {
-		_statsEnabled = getenv("MGBA_JIT_STATS") != NULL;
-	}
-	if (_statsEnabled && !(_stats.runs & 0xFFFFF)) {
-		fprintf(stderr, "jit: runs %llu compiles %llu fails %llu flushes %llu inval %llu pfmiss %llu interp %llu\n",
-		        (unsigned long long) _stats.runs, (unsigned long long) _stats.compiles, (unsigned long long) _stats.compileFails,
-		        (unsigned long long) _stats.flushes, (unsigned long long) _stats.invalidations, (unsigned long long) _stats.prefetchMisses,
-		        (unsigned long long) _stats.interp);
-	}
-}
 
 struct ARMJitBlock {
 	void (*entry)(struct ARMCore*);
@@ -318,7 +302,6 @@ static void _dropBlocks(struct ARMJit* jit) {
 	memset(jit->cover, 0, sizeof(jit->cover));
 	memset(jit->blocks, 0, sizeof(jit->blocks));
 	jit->codeUsed = 0;
-	++_stats.flushes;
 }
 
 void ARMJitFlush(struct ARMJit* jit) {
@@ -334,7 +317,6 @@ void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word) {
 		struct ARMJitBlock* block = jit->blocks[start];
 		if (block && i < block->span) {
 			_removeBlock(jit, block);
-			++_stats.invalidations;
 			if (jit->invalidations[start] < 255) {
 				++jit->invalidations[start];
 			}
@@ -512,13 +494,6 @@ static bool _isInlineAlu(uint32_t op) {
 	unsigned opcode = (op >> 21) & 0xF;
 	if (opcode >= ALU_TST && opcode <= ALU_CMN && !(op & 0x00100000)) {
 		return false; // MRS, MSR
-	}
-	static int mask = -2;
-	if (mask == -2) {
-		mask = getenv("MGBA_JIT_ALUMASK") ? (int) strtol(getenv("MGBA_JIT_ALUMASK"), NULL, 16) : 0xFFFF;
-	}
-	if (!(mask & (1 << opcode))) {
-		return false;
 	}
 	return ((op >> 12) & 0xF) != ARM_PC;
 }
@@ -827,9 +802,6 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		int32_t offset = (int32_t) (op << 8) >> 6;
 		loops = address + 8 + offset == c->pc;
 	}
-	if (loops && getenv("MGBA_JIT_NOLOOP")) {
-		loops = false;
-	}
 	if (loops) {
 		_movImm32(e, 1, c->pc + 4);
 		_cmpW(e, 0, 1);
@@ -906,16 +878,11 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	_movImm64(e, R_COVER, (uintptr_t) jit->cover);
 	c->body = e->p;
 
-	static int noAlu = -1, noMem = -1;
-	if (noAlu < 0) {
-		noAlu = getenv("MGBA_JIT_NOALU") != NULL;
-		noMem = getenv("MGBA_JIT_NOMEM") != NULL;
-	}
 	unsigned i = 0;
 	while (i < count) {
-		if (!noAlu && _isInlineAlu(ops[i])) {
+		if (_isInlineAlu(ops[i])) {
 			unsigned run = 1;
-			while (i + run < count && !noAlu && !getenv("MGBA_JIT_RUN1") && _isInlineAlu(ops[i + run])) {
+			while (i + run < count && _isInlineAlu(ops[i + run])) {
 				++run;
 			}
 			// The interpreter checks for events after every instruction, so only run the
@@ -940,7 +907,7 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 			_addCycles(c, -1, c->aluCycles * run);
 			i += run;
 			_eventCheck(c, i);
-		} else if (!noMem && _isInlineMem(ops[i])) {
+		} else if (_isInlineMem(ops[i])) {
 			_emitMem(c, i);
 			++i;
 		} else {
@@ -974,16 +941,6 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		_patch(c->exits[x].at, index == EXIT_DIRECT ? epilogue : stubs[index]);
 	}
 
-	if (getenv("MGBA_JIT_DUMP")) {
-		static int dumped;
-		if (dumped++ < 4) {
-			char name[64];
-			snprintf(name, sizeof(name), "%s/block%d-%08x.bin", getenv("MGBA_JIT_DUMP"), dumped, pc);
-			FILE* f = fopen(name, "wb");
-			fwrite(code, 1, (uint8_t*) e->p - (uint8_t*) code, f);
-			fclose(f);
-		}
-	}
 	__builtin___clear_cache((char*) code, (char*) e->p);
 	jit->codeUsed += (uint8_t*) e->p - (uint8_t*) code;
 
@@ -1082,39 +1039,6 @@ static void _selfTestAlu(struct ARMJit* jit, unsigned iterations) {
 	fprintf(stderr, "ALU self-test: %u tested, %u failures\n", tested, failures);
 }
 
-void ARMJitTrace(struct ARMCore* cpu, int kind) {
-	static FILE* trace = NULL;
-	static int64_t from = -1;
-	static unsigned lines = 0;
-	if (from == -1) {
-		const char* env = getenv("MGBA_JIT_TRACE");
-		from = env ? strtoll(env, NULL, 10) : -2;
-		if (env) {
-			trace = fopen(getenv("MGBA_JIT_TRACE_FILE"), "w");
-		}
-	}
-	if (!trace || lines > 2000000) {
-		return;
-	}
-	struct GBA* gba = (struct GBA*) cpu->master;
-	int64_t now = (int64_t) gba->timing.masterCycles + cpu->cycles;
-	if (now < from) {
-		return;
-	}
-	uint32_t hash = 2166136261u;
-	unsigned r;
-	for (r = 0; r < 16; ++r) {
-		hash = (hash ^ (uint32_t) cpu->gprs[r]) * 16777619u;
-	}
-	hash = (hash ^ (uint32_t) cpu->cpsr.packed) * 16777619u;
-	fprintf(trace, "%lld %08X %08X %d", (long long) now, cpu->gprs[ARM_PC], hash, kind);
-	for (r = 0; r < 16; ++r) {
-		fprintf(trace, " %08X", cpu->gprs[r]);
-	}
-	fprintf(trace, " %08X %08X %08X\n", cpu->cpsr.packed, cpu->prefetch[0], cpu->prefetch[1]);
-	++lines;
-}
-
 bool ARMJitRun(struct ARMCore* cpu) {
 	struct ARMJit* jit = cpu->jit;
 	uint32_t pc = cpu->gprs[ARM_PC] - WORD_SIZE_ARM;
@@ -1136,17 +1060,12 @@ bool ARMJitRun(struct ARMCore* cpu) {
 		}
 		block = _compile(jit, cpu, pc);
 		if (!block) {
-			++_stats.compileFails;
 			return false;
 		}
-		++_stats.compiles;
 	}
 	if (cpu->prefetch[0] != block->op0 || cpu->prefetch[1] != block->op1) {
-		++_stats.prefetchMisses;
 		return false;
 	}
-	++_stats.runs;
-	_statsTick();
 	jit->current = block;
 	jit->smcHit = 0;
 	int32_t cycles = cpu->cycles;

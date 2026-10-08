@@ -1,3 +1,16 @@
+armGBA
+======
+
+armGBA is a fork of [mGBA](https://mgba.io/) ([libretro/mgba](https://github.com/libretro/mgba)) that adds an AArch64 recompiler for ARM handhelds. It keeps mGBA's accuracy: a game run with the recompiler gives the same savestate, frame for frame, as the same run on mGBA's interpreter.
+
+Status: early. The recompiler covers ARM code running from IWRAM. Thumb code and code running from the cartridge still use the interpreter. Speed on real hardware has not been measured yet.
+
+Turn it on with the `mgba_jit` core option (AArch64 Linux builds only).
+
+mGBA is by Jeffrey Pfau and contributors and is licensed under the MPL 2.0, as is armGBA.
+
+---
+
 mGBA
 ====
 

@@ -41,7 +41,6 @@ void ARMJitDestroy(struct ARMJit* jit);
 void ARMJitFlush(struct ARMJit* jit);
 void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word);
 bool ARMJitRun(struct ARMCore* cpu);
-void ARMJitTrace(struct ARMCore* cpu, int kind);
 
 static inline void ARMJitNotifyWrite(struct ARMJit* jit, uint32_t address) {
 	unsigned word = (address & 0x7FFF) >> 2;
