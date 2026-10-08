@@ -250,10 +250,14 @@ void ARMRunLoop(struct ARMCore* cpu) {
 		while (cpu->cycles < cpu->nextEvent) {
 #ifdef M_ARM_JIT
 			if (cpu->jit && ARMJitRun(cpu)) {
+				ARMJitTrace(cpu, 1);
 				continue;
 			}
 #endif
 			ARMStep(cpu);
+#ifdef M_ARM_JIT
+			ARMJitTrace(cpu, 0);
+#endif
 		}
 	}
 	cpu->irqh.processEvents(cpu);
