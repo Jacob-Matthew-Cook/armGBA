@@ -249,7 +249,7 @@ void ARMRunLoop(struct ARMCore* cpu) {
 	} else {
 		while (cpu->cycles < cpu->nextEvent) {
 #ifdef M_ARM_JIT
-			if (cpu->jit && ARMJitRun(cpu)) {
+			if (cpu->jit && ((uint32_t) cpu->gprs[ARM_PC] >> 24) == 3 && ARMJitRun(cpu)) {
 				continue;
 			}
 #endif

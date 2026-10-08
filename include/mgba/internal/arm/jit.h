@@ -10,7 +10,7 @@
 
 CXX_GUARD_START
 
-#if defined(__aarch64__) && !defined(__APPLE__)
+#if (defined(__aarch64__) || defined(__x86_64__)) && !defined(__APPLE__) && !defined(_WIN32)
 #define M_ARM_JIT 1
 #endif
 
@@ -26,7 +26,8 @@ struct ARMJit {
 	uint8_t cover[ARM_JIT_IWRAM_WORDS];
 	struct ARMJitBlock* blocks[ARM_JIT_IWRAM_WORDS];
 	uint8_t hits[ARM_JIT_IWRAM_WORDS];
-	uint8_t invalidations[ARM_JIT_IWRAM_WORDS];
+	// Writes into compiled code, by the word written
+	uint8_t patched[ARM_JIT_IWRAM_WORDS];
 
 	struct ARMJitBlock* current;
 	uint8_t smcHit;

@@ -305,7 +305,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       },
       "OFF"
    },
-#if defined(__aarch64__) && !defined(__APPLE__)
+#if (defined(__aarch64__) || defined(__x86_64__)) && !defined(__APPLE__) && !defined(_WIN32)
    {
       "mgba_jit",
       "Recompiler (IWRAM ARM code)",
