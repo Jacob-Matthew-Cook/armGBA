@@ -776,7 +776,6 @@ uint32_t GBALoad8(struct ARMCore* cpu, uint32_t address, int* cycleCounter) {
 	JIT_NOTIFY_WRITE(address); \
 	wait += waitstatesRegion[GBA_REGION_EWRAM];
 
-
 #define STORE_IWRAM \
 	STORE_32(value, address & (GBA_SIZE_IWRAM - 4), memory->iwram); \
 	JIT_NOTIFY_WRITE(address);
