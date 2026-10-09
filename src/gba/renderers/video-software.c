@@ -975,14 +975,12 @@ void GBAVideoSoftwareRendererPostprocessBuffer(struct GBAVideoSoftwareRenderer* 
 #ifdef VIDEO_SIMD
 			for (; x + 8 <= end; x += 8) {
 				uint32_t* row = &softwareRenderer->row[x];
-				v32 color[2] = { _v32Load(row), _v32Load(row + 4) };
-				v32 target[2] = { _v32Test(color[0], _v32(FLAG_TARGET_1)), _v32Test(color[1], _v32(FLAG_TARGET_1)) };
-				if (!_v32Any(target[0], target[1])) {
-					continue;
+				p8 color = _p8Load(row);
+				p8 target = _p8Test(color, _p8(FLAG_TARGET_1));
+				if (_p8Any(target)) {
+					v16 mixed = _mix5Bit8(_v16(backdrop), _p8Narrow(color), _v16(softwareRenderer->bldb), _v16(softwareRenderer->blda));
+					_p8Store(row, _p8Select(target, _p8Widen(mixed), color));
 				}
-				v16 mixed = _mix5Bit8(_v16(backdrop), _v16Narrow(color[0], color[1]), _v16(softwareRenderer->bldb), _v16(softwareRenderer->blda));
-				_v32Store(row, _v32Select(target[0], _v16Widen(mixed, 0), color[0]));
-				_v32Store(row + 4, _v32Select(target[1], _v16Widen(mixed, 1), color[1]));
 			}
 #endif
 			for (; x < end; ++x) {

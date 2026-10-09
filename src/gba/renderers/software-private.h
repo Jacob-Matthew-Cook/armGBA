@@ -134,7 +134,7 @@ static inline v16 _mix5Bit8(v16 a, v16 b, v16 weightA, v16 weightB) {
 	return vorrq_u16(vorrq_u16(vshlq_n_u16(red, 11), vshlq_n_u16(green, 6)), blue);
 }
 #else
-#include <smmintrin.h>
+#include <immintrin.h>
 typedef __m128i v32;
 typedef __m128i v16;
 typedef __m128i vidx;
@@ -190,31 +190,64 @@ static inline v16 _mix5Bit8(v16 a, v16 b, v16 weightA, v16 weightB) {
 }
 #endif
 
+// Eight 32-bit pixels: one AVX2 register, or two NEON or SSE registers
+#ifdef __AVX2__
+typedef __m256i p8;
+
+static inline p8 _p8Load(const uint32_t* p) { return _mm256_loadu_si256((const __m256i*) p); }
+static inline void _p8Store(uint32_t* p, p8 v) { _mm256_storeu_si256((__m256i*) p, v); }
+static inline p8 _p8(uint32_t x) { return _mm256_set1_epi32(x); }
+static inline p8 _p8And(p8 a, p8 b) { return _mm256_and_si256(a, b); }
+static inline p8 _p8Or(p8 a, p8 b) { return _mm256_or_si256(a, b); }
+static inline p8 _p8Bic(p8 a, p8 b) { return _mm256_andnot_si256(b, a); }
+static inline p8 _p8Eq(p8 a, p8 b) { return _mm256_cmpeq_epi32(a, b); }
+static inline p8 _p8Ge(p8 a, p8 b) { return _mm256_cmpeq_epi32(_mm256_max_epu32(a, b), a); }
+static inline p8 _p8Test(p8 a, p8 b) { return _mm256_xor_si256(_mm256_cmpeq_epi32(_mm256_and_si256(a, b), _mm256_setzero_si256()), _mm256_set1_epi32(-1)); }
+static inline p8 _p8Select(p8 mask, p8 a, p8 b) { return _mm256_blendv_epi8(b, a, mask); }
+static inline bool _p8Any(p8 a) { return !_mm256_testz_si256(a, a); }
+static inline p8 _p8Widen(v16 v) { return _mm256_cvtepu16_epi32(v); }
+static inline p8 _p8Nonzero(vidx index) { p8 wide = _mm256_cvtepu8_epi32(index); return _p8Test(wide, wide); }
+
+static inline v16 _p8Narrow(p8 v) {
+	p8 low = _mm256_and_si256(v, _mm256_set1_epi32(0xFFFF));
+	return _mm_packus_epi32(_mm256_castsi256_si128(low), _mm256_extracti128_si256(low, 1));
+}
+#else
+typedef struct { v32 low, high; } p8;
+
+static inline p8 _p8Load(const uint32_t* p) { return (p8) { _v32Load(p), _v32Load(p + 4) }; }
+static inline void _p8Store(uint32_t* p, p8 v) { _v32Store(p, v.low); _v32Store(p + 4, v.high); }
+static inline p8 _p8(uint32_t x) { return (p8) { _v32(x), _v32(x) }; }
+static inline p8 _p8And(p8 a, p8 b) { return (p8) { _v32And(a.low, b.low), _v32And(a.high, b.high) }; }
+static inline p8 _p8Or(p8 a, p8 b) { return (p8) { _v32Or(a.low, b.low), _v32Or(a.high, b.high) }; }
+static inline p8 _p8Bic(p8 a, p8 b) { return (p8) { _v32Bic(a.low, b.low), _v32Bic(a.high, b.high) }; }
+static inline p8 _p8Eq(p8 a, p8 b) { return (p8) { _v32Eq(a.low, b.low), _v32Eq(a.high, b.high) }; }
+static inline p8 _p8Ge(p8 a, p8 b) { return (p8) { _v32Ge(a.low, b.low), _v32Ge(a.high, b.high) }; }
+static inline p8 _p8Test(p8 a, p8 b) { return (p8) { _v32Test(a.low, b.low), _v32Test(a.high, b.high) }; }
+static inline p8 _p8Select(p8 mask, p8 a, p8 b) { return (p8) { _v32Select(mask.low, a.low, b.low), _v32Select(mask.high, a.high, b.high) }; }
+static inline bool _p8Any(p8 a) { return _v32Any(a.low, a.high); }
+static inline p8 _p8Widen(v16 v) { return (p8) { _v16Widen(v, 0), _v16Widen(v, 1) }; }
+static inline p8 _p8Nonzero(vidx index) { return (p8) { _nonzero(index, 0), _nonzero(index, 1) }; }
+static inline v16 _p8Narrow(p8 v) { return _v16Narrow(v.low, v.high); }
+#endif
+
 // _compositeBlendNoObjwin, or _compositeNoBlendNoObjwin, for the eight pixels where write is set
-static inline void _composite8(struct GBAVideoSoftwareRenderer* renderer, uint32_t* pixel, const v32 current[2],
-                               const v32 color[2], const v32 write[2], bool blend) {
-	v32 behind[2];
-	v32 mix[2];
-	unsigned h;
-	for (h = 0; h < 2; ++h) {
-		behind[h] = _v32Ge(color[h], current[h]);
-		mix[h] = _v32And(_v32And(write[h], behind[h]), _v32And(_v32Test(current[h], _v32(FLAG_TARGET_1)), _v32Test(color[h], _v32(FLAG_TARGET_2))));
-	}
-	// Most blending rows mix no pixel
-	v16 mixed = _v16(0);
-	if (blend && _v32Any(mix[0], mix[1])) {
-		mixed = _mix5Bit8(_v16Narrow(current[0], current[1]), _v16Narrow(color[0], color[1]), _v16(renderer->blda), _v16(renderer->bldb));
-	}
-	for (h = 0; h < 2; ++h) {
-		v32 below = _v32And(current[h], _v32(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN));
-		v32 out;
-		if (blend) {
-			out = _v32Select(behind[h], _v32Select(mix[h], _v16Widen(mixed, h), below), _v32Bic(color[h], _v32(FLAG_TARGET_2)));
-		} else {
-			out = _v32Select(behind[h], below, color[h]);
+static inline void _composite8(struct GBAVideoSoftwareRenderer* renderer, uint32_t* pixel, p8 current, p8 color, p8 write, bool blend) {
+	p8 behind = _p8Ge(color, current);
+	p8 below = _p8And(current, _p8(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN));
+	p8 out;
+	if (blend) {
+		p8 mix = _p8And(_p8And(write, behind), _p8And(_p8Test(current, _p8(FLAG_TARGET_1)), _p8Test(color, _p8(FLAG_TARGET_2))));
+		// Most blending rows mix no pixel
+		if (_p8Any(mix)) {
+			v16 mixed = _mix5Bit8(_p8Narrow(current), _p8Narrow(color), _v16(renderer->blda), _v16(renderer->bldb));
+			below = _p8Select(mix, _p8Widen(mixed), below);
 		}
-		_v32Store(pixel + 4 * h, _v32Select(write[h], out, current[h]));
+		out = _p8Select(behind, below, _p8Bic(color, _p8(FLAG_TARGET_2)));
+	} else {
+		out = _p8Select(behind, below, color);
 	}
+	_p8Store(pixel, _p8Select(write, out, current));
 }
 #endif
 

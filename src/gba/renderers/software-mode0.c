@@ -13,23 +13,13 @@ static inline void _drawTile16(struct GBAVideoSoftwareRenderer* renderer, uint32
                                int paletteData, const mColor* palette, uint32_t flags, bool blend) {
 	vidx index = _nibbles(tileData);
 	v16 color = _lookup16(&palette[paletteData], index);
-	v32 current[2] = { _v32Load(pixel), _v32Load(pixel + 4) };
+	p8 current = _p8Load(pixel);
 	if (palette != renderer->normalPalette) {
-		v32 reblend[2];
-		unsigned h;
-		for (h = 0; h < 2; ++h) {
-			reblend[h] = _v32Eq(_v32And(current[h], _v32(FLAG_IS_BACKGROUND | FLAG_REBLEND)), _v32(FLAG_REBLEND));
-		}
-		color = _v16Select(_v16Narrow(reblend[0], reblend[1]), _lookup16(&renderer->normalPalette[paletteData], index), color);
+		p8 reblend = _p8Eq(_p8And(current, _p8(FLAG_IS_BACKGROUND | FLAG_REBLEND)), _p8(FLAG_REBLEND));
+		color = _v16Select(_p8Narrow(reblend), _lookup16(&renderer->normalPalette[paletteData], index), color);
 	}
-	v32 colors[2];
-	v32 write[2];
-	unsigned h;
-	for (h = 0; h < 2; ++h) {
-		colors[h] = _v32Or(_v16Widen(color, h), _v32(flags));
-		write[h] = _v32And(_nonzero(index, h), _v32Test(current[h], _v32(0xFE000000)));
-	}
-	_composite8(renderer, pixel, current, colors, write, blend);
+	p8 write = _p8And(_p8Nonzero(index), _p8Test(current, _p8(0xFE000000)));
+	_composite8(renderer, pixel, current, _p8Or(_p8Widen(color), _p8(flags)), write, blend);
 }
 
 #define _BLENDS_Blend true

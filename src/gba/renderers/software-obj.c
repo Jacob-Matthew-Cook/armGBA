@@ -424,19 +424,12 @@ void GBAVideoSoftwareRendererPostprocessSprite(struct GBAVideoSoftwareRenderer* 
 	x = renderer->start;
 #ifdef VIDEO_SIMD
 	for (; x + 8 <= renderer->end; x += 8, pixel += 8) {
-		v32 current[2] = { _v32Load(pixel), _v32Load(pixel + 4) };
-		v32 color[2];
-		v32 write[2];
-		unsigned h;
-		for (h = 0; h < 2; ++h) {
-			v32 sprite = _v32Bic(_v32Load(&renderer->spriteLayer[x + 4 * h]), _v32(FLAG_OBJWIN));
-			v32 unwritten = _v32Eq(_v32And(sprite, _v32(FLAG_UNWRITTEN)), _v32(FLAG_UNWRITTEN));
-			write[h] = _v32Bic(_v32Eq(_v32And(sprite, _v32(FLAG_PRIORITY)), _v32(priority << OFFSET_PRIORITY)), unwritten);
-			color[h] = _v32Or(sprite, _v32(flags));
-		}
+		p8 sprite = _p8Bic(_p8Load(&renderer->spriteLayer[x]), _p8(FLAG_OBJWIN));
+		p8 unwritten = _p8Eq(_p8And(sprite, _p8(FLAG_UNWRITTEN)), _p8(FLAG_UNWRITTEN));
+		p8 write = _p8Bic(_p8Eq(_p8And(sprite, _p8(FLAG_PRIORITY)), _p8(priority << OFFSET_PRIORITY)), unwritten);
 		// Most of a line has no sprite of this priority
-		if (_v32Any(write[0], write[1])) {
-			_composite8(renderer, pixel, current, color, write, true);
+		if (_p8Any(write)) {
+			_composite8(renderer, pixel, _p8Load(pixel), _p8Or(sprite, _p8(flags)), write, true);
 		}
 	}
 #endif
