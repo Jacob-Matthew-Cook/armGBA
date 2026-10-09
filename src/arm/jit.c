@@ -96,6 +96,7 @@ enum {
 	OFF_EXECUTION_MODE = offsetof(struct ARMCore, executionMode),
 	OFF_ACTIVE_MASK = offsetof(struct ARMCore, memory) + offsetof(struct ARMMemory, activeMask),
 	JIT_SMC_HIT = offsetof(struct ARMJit, smcHit),
+	JIT_VRAM_NOTIFIED = offsetof(struct ARMJit, vramNotified),
 	JIT_COVER = offsetof(struct ARMJit, cover),
 	JIT_PAGES = offsetof(struct ARMJit, pages),
 	JIT_PENDING_LINK = offsetof(struct ARMJit, pendingLink),
@@ -767,6 +768,43 @@ static unsigned _prefetchLoads(int32_t seq, int32_t wait) {
 		++loads;
 	}
 	return loads;
+}
+
+// PC-relative word loads have addresses known when compiling: cartridge words are constants
+// (but for the GPIO registers mGBA maps over the header), RAM words load from the host
+enum {
+	LITERAL_NONE,
+	LITERAL_CONSTANT,
+	LITERAL_RAM,
+};
+
+static void* _hostAddress(struct Compiler* c, uint32_t address);
+
+static int _literal(struct Compiler* c, const struct MemOp* mem, uint32_t* value, void** host, int32_t* wait) {
+	if (!mem->load || !mem->base.constant || !mem->immediateOffset || mem->runtimeOffset || mem->writeback || mem->size != 4) {
+		return LITERAL_NONE;
+	}
+	uint32_t address = mem->up ? mem->base.value + mem->offset : mem->base.value - mem->offset;
+	unsigned region = address >> 24;
+	const struct GBAMemory* memory = &c->gba->memory;
+	if (address & 3) {
+		return LITERAL_NONE;
+	}
+	if (region >= GBA_REGION_ROM0 && region <= GBA_REGION_ROM2_EX) {
+		uint32_t offset = address & (GBA_SIZE_ROM0 - 4);
+		if (offset + 4 > memory->romSize || (offset >= 0xC0 && offset < 0xD0)) {
+			return LITERAL_NONE;
+		}
+		LOAD_32(*value, offset, memory->rom);
+		*wait = memory->waitstatesNonseq32[region] + 2;
+		return LITERAL_CONSTANT;
+	}
+	if (region == GBA_REGION_IWRAM || region == GBA_REGION_EWRAM) {
+		*host = _hostAddress(c, address);
+		*wait = (region == GBA_REGION_EWRAM ? memory->waitstatesNonseq32[GBA_REGION_EWRAM] : 0) + 2;
+		return LITERAL_RAM;
+	}
+	return LITERAL_NONE;
 }
 
 // A word of the region this block runs from, as compiled
@@ -1509,6 +1547,7 @@ bool ARMJitEvents(struct ARMCore* cpu) {
 	struct GBA* gba = (struct GBA*) cpu->master;
 	cpu->irqh.processEvents(cpu);
 	jit->eventsRan = true;
+	jit->vramNotified = 0;
 	return jit->inFrame && gba->video.frameCounter == jit->frameCounter &&
 	    mTimingCurrentTime(&gba->timing) - jit->frameStart < VIDEO_TOTAL_LENGTH + VIDEO_HORIZONTAL_LENGTH;
 }
@@ -1550,6 +1589,7 @@ enum ARMJitResult ARMJitRun(struct ARMCore* cpu) {
 	jit->pendingLink = NULL;
 	jit->smcHit = 0;
 	jit->eventsRan = false;
+	jit->vramNotified = 0;
 	int32_t cycles = cpu->cycles;
 	jit->enter(cpu, entry->code);
 	if (jit->eventsRan) {

@@ -32,6 +32,9 @@ struct ARMJitPage;
 struct ARMJit {
 	// Set when blocks are removed, so code running in one stops after the call that did it
 	uint8_t smcHit;
+	// 4 KB VRAM blocks the renderer was told about since events last ran; drawing only
+	// happens in events, so telling it again before then changes nothing
+	uint32_t vramNotified;
 
 	uint8_t* code;
 	size_t codeSize;

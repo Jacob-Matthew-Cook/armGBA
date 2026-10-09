@@ -692,10 +692,31 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	bool load = mem->load;
 	unsigned size = mem->size;
 
+	uint8_t* done[4] = { NULL, NULL, NULL, NULL };
+	uint8_t* toSlow[3] = { NULL, NULL, NULL };
+	uint8_t* checked[2] = { NULL, NULL };
+	uint8_t* toCart = NULL;
+	uint8_t* toEvent = NULL;
+	unsigned d;
+
 	uint8_t* fail = NULL;
 	if (mem->cond != 0xE) {
 		_loadFlags(c);
 		fail = _bCond(e, mem->cond ^ 1);
+	}
+	uint32_t literal;
+	void* literalHost;
+	int32_t literalWait;
+	switch (_literal(c, mem, &literal, &literalHost, &literalWait)) {
+	case LITERAL_CONSTANT:
+		_movImm32(e, 0, literal);
+		_movImm32(e, 3, literalWait);
+		goto tail;
+	case LITERAL_RAM:
+		_movImm64(e, 0, (uintptr_t) literalHost);
+		_ldrW(e, 0, 0, 0);
+		_dataWait(c, i, literalWait);
+		goto tail;
 	}
 	if (!load) {
 		_loadSource(c, 6, _reg(mem->rd));
@@ -728,10 +749,6 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_strW(e, 4, 31, CYCLE_SLOT + 4); // the address decides how LDRSH extends
 	}
 
-	uint8_t* done[4] = { NULL, NULL, NULL, NULL };
-	uint8_t* toSlow[3] = { NULL, NULL, NULL };
-	uint8_t* checked[2] = { NULL, NULL };
-	uint8_t* toCart = NULL;
 	_lsrWImm(e, 7, 4, 24);
 	_emit(e, 0x7100001F | (3 << 10) | (7 << 5)); // cmp w7, #3
 	uint8_t* toEwram = _bCond(e, A64_NE);
@@ -803,6 +820,21 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 			}
 			uint8_t* unchanged = _bCond(e, A64_EQ);
 			_memAccess(e, false, size, 10);
+			// Once per block, unless a tile cache wants every address
+			_movImm64(e, 9, (uintptr_t) &c->gba->video.renderer);
+			_ldrX(e, 9, 9, 0);
+			_ldrX(e, 9, 9, offsetof(struct GBAVideoRenderer, cache));
+			uint8_t* cached = _emitSite(e, 0xB5000000 | 9); // cbnz x9
+			_ldrW(e, 9, 31, CYCLE_SLOT + 4);
+			_ubfx(e, 9, 9, 12, 5);
+			_ldrW(e, 10, R_JIT, JIT_VRAM_NOTIFIED);
+			_lsrvW(e, 11, 10, 9);
+			uint8_t* notified = _tbnz(e, 11, 0);
+			_movImm32(e, 11, 1);
+			_emit(e, 0x1AC02000 | (9 << 16) | (11 << 5) | 11); // lslv w11, w11, w9
+			_orrWShift(e, 10, 10, 11, 0);
+			_strW(e, 10, R_JIT, JIT_VRAM_NOTIFIED);
+			_patch(cached, e->p);
 			unsigned call;
 			for (call = 0; call < (size == 4 ? 2 : 1); ++call) {
 				_movImm64(e, 9, (uintptr_t) &c->gba->video.renderer);
@@ -815,6 +847,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 				_ldrX(e, 16, 0, offsetof(struct GBAVideoRenderer, writeVRAM));
 				_blrC(e, 16);
 			}
+			_patch(notified, e->p);
 			_ldrW(e, 4, 31, CYCLE_SLOT + 4);
 			_patch(unchanged, e->p);
 		}
@@ -883,7 +916,6 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	_ldrW(e, 3, 31, CYCLE_SLOT);
 
 	// Only stores that called out can have hit compiled code
-	uint8_t* toEvent = NULL;
 	if (!load) {
 		unsigned k;
 		for (k = 0; k < 2; ++k) {
@@ -895,7 +927,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_smcCheck(c, i + 1);
 		toEvent = _b(e);
 	}
-	unsigned d;
+tail:
 	for (d = 0; d < 4; ++d) {
 		if (done[d]) {
 			_patch(done[d], e->p);

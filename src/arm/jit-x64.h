@@ -880,9 +880,31 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	bool load = mem->load;
 	unsigned size = mem->size;
 
+	uint8_t* done[4] = { NULL, NULL, NULL, NULL };
+	uint8_t* toSlow[3] = { NULL, NULL, NULL };
+	uint8_t* checked[2] = { NULL, NULL };
+	uint8_t* toCart = NULL;
+	uint8_t* toEvent = NULL;
+	unsigned d;
+
 	uint8_t* fail = NULL;
 	if (mem->cond != 0xE) {
 		fail = _condJump(c, mem->cond, false);
+	}
+	uint32_t literal;
+	void* literalHost;
+	int32_t literalWait;
+	switch (_literal(c, mem, &literal, &literalHost, &literalWait)) {
+	case LITERAL_CONSTANT:
+		_movImm(e, X_RAX, literal);
+		_movImm(e, X_R10, literalWait);
+		goto tail;
+	case LITERAL_RAM:
+		_movImm64(e, X_RAX, (uintptr_t) literalHost);
+		_byte(e, 0x8B); // mov eax, [rax]
+		_byte(e, 0x00);
+		_dataWait(c, i, literalWait);
+		goto tail;
 	}
 	if (!load) {
 		_loadSource(c, X_R9, _reg(mem->rd));
@@ -919,10 +941,6 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_store(e, X_RDI, X_RSP, 4); // the address decides how LDRSH extends
 	}
 
-	uint8_t* done[4] = { NULL, NULL, NULL, NULL };
-	uint8_t* toSlow[3] = { NULL, NULL, NULL };
-	uint8_t* checked[2] = { NULL, NULL };
-	uint8_t* toCart = NULL;
 	_rr(e, OP_MOV, X_RAX, X_RDI);
 	_shift(e, SH_SHR, X_RAX, 24);
 	_ri(e, 7, X_RAX, 3);
@@ -1012,6 +1030,27 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 			}
 			uint8_t* unchanged = _jcc(e, CC_E);
 			_memAccess(e, false, size, X_R11);
+			// Once per block, unless a tile cache wants every address
+			_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
+			_load64(e, X_RDI, X_RAX, 0);
+			_rex(e, true, 0, 0, X_RDI); // cmp qword [rdi + cache], 0
+			_byte(e, 0x81);
+			_modrmMem(e, 7, X_RDI, offsetof(struct GBAVideoRenderer, cache));
+			_imm32(e, 0);
+			uint8_t* cached = _jcc(e, CC_NE);
+			_load(e, X_RAX, X_RSP, 4);
+			_shift(e, SH_SHR, X_RAX, 12);
+			_ri(e, 4, X_RAX, 0x1F);
+			_rex(e, false, X_RAX, 0, X_JIT); // bt [r12 + vramNotified], eax
+			_byte(e, 0x0F);
+			_byte(e, 0xA3);
+			_modrmMem(e, X_RAX, X_JIT, JIT_VRAM_NOTIFIED);
+			uint8_t* notified = _jcc(e, CC_B);
+			_rex(e, false, X_RAX, 0, X_JIT); // bts [r12 + vramNotified], eax
+			_byte(e, 0x0F);
+			_byte(e, 0xAB);
+			_modrmMem(e, X_RAX, X_JIT, JIT_VRAM_NOTIFIED);
+			_patch(cached, e->p);
 			unsigned call;
 			for (call = 0; call < (size == 4 ? 2 : 1); ++call) {
 				_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
@@ -1024,6 +1063,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 				_load64(e, X_RAX, X_RDI, offsetof(struct GBAVideoRenderer, writeVRAM));
 				_callC(e, X_RAX);
 			}
+			_patch(notified, e->p);
 			_load(e, X_RDI, X_RSP, 4);
 			_patch(unchanged, e->p);
 		}
@@ -1099,7 +1139,6 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	_load(e, X_R10, X_RSP, 0);
 
 	// Only stores that called out can have hit compiled code
-	uint8_t* toEvent = NULL;
 	if (!load) {
 		unsigned k;
 		for (k = 0; k < 2; ++k) {
@@ -1111,7 +1150,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_smcCheck(c, i + 1);
 		toEvent = _jmp(e);
 	}
-	unsigned d;
+tail:
 	for (d = 0; d < 4; ++d) {
 		if (done[d]) {
 			_patch(done[d], e->p);
