@@ -31,26 +31,6 @@ enum {
 	CC_LE = 0xE,
 };
 
-enum {
-	OP_ADD = 0x01,
-	OP_OR = 0x09,
-	OP_ADC = 0x11,
-	OP_SBB = 0x19,
-	OP_AND = 0x21,
-	OP_SUB = 0x29,
-	OP_XOR = 0x31,
-	OP_CMP = 0x39,
-	OP_TEST = 0x85,
-	OP_MOV = 0x89,
-};
-
-enum {
-	SH_ROR = 1,
-	SH_SHL = 4,
-	SH_SHR = 5,
-	SH_SAR = 7,
-};
-
 static void _byte(struct Emitter* e, uint8_t value) {
 	*e->p++ = value;
 }
@@ -65,172 +45,193 @@ static void _patch(uint8_t* at, const uint8_t* target) {
 	memcpy(at, &offset, 4);
 }
 
-static void _rex(struct Emitter* e, bool w, int reg, int index, int base) {
-	uint8_t rex = 0x40 | (w ? 8 : 0) | ((reg & 8) ? 4 : 0) | ((index & 8) ? 2 : 0) | ((base & 8) ? 1 : 0);
+// A ModRM operand: a register, or memory at [base + (index << scale) + disp]
+struct X86Operand {
+	int reg;
+	int base;
+	int index;
+	unsigned scale;
+	int32_t disp;
+};
+
+static struct X86Operand _xr(int reg) {
+	struct X86Operand operand = { reg, 0, -1, 0, 0 };
+	return operand;
+}
+
+static struct X86Operand _xm(int base, int32_t disp) {
+	struct X86Operand operand = { -1, base, -1, 0, disp };
+	return operand;
+}
+
+static struct X86Operand _xmi(int base, int index, unsigned scale, int32_t disp) {
+	struct X86Operand operand = { -1, base, index, scale, disp };
+	return operand;
+}
+
+enum {
+	X_W = 1,
+	X_16 = 2,
+};
+
+// Opcodes taking a ModRM operand; two-byte ones start with 0F
+enum {
+	XO_ADD = 0x01, XO_OR = 0x09, XO_ADC = 0x11, XO_SBB = 0x19, XO_AND = 0x21, XO_SUB = 0x29, XO_XOR = 0x31,
+	XO_CMP = 0x39, XO_ADD_RM = 0x03, XO_OR8_RM = 0x0A, XO_OR_RM = 0x0B, XO_AND_RM = 0x23, XO_XOR_RM = 0x33, XO_CMP_RM = 0x3B, XO_IMUL_IMM = 0x69,
+	XO_GROUP1_8 = 0x80, XO_GROUP1 = 0x81, XO_GROUP1_IMM8 = 0x83, XO_TEST8 = 0x84, XO_TEST = 0x85,
+	XO_STORE8 = 0x88, XO_STORE = 0x89, XO_LOAD = 0x8B, XO_LEA = 0x8D, XO_SHIFT = 0xC1, XO_MOV8_IMM = 0xC6,
+	XO_MOV_IMM = 0xC7, XO_SHIFT_CL = 0xD3, XO_GROUP3_8 = 0xF6, XO_GROUP3 = 0xF7, XO_GROUP5 = 0xFF,
+	XO_CMOVB = 0x0F42, XO_SETCC = 0x0F90, XO_BT = 0x0FA3, XO_BTS = 0x0FAB, XO_IMUL = 0x0FAF,
+	XO_MOVZX8 = 0x0FB6, XO_MOVZX16 = 0x0FB7, XO_GROUP8 = 0x0FBA, XO_MOVSX8 = 0x0FBE, XO_MOVSX16 = 0x0FBF,
+};
+
+// /digit forms of the group opcodes
+enum {
+	G1_ADD = 0, G1_OR = 1, G1_SBB = 3, G1_AND = 4, G1_SUB = 5, G1_XOR = 6, G1_CMP = 7,
+	G3_TEST = 0, G3_NOT = 2, G3_NEG = 3, G5_CALL = 2, G5_JMP = 4, G8_BT = 4,
+};
+
+enum {
+	SH_ROR = 1,
+	SH_SHL = 4,
+	SH_SHR = 5,
+	SH_SAR = 7,
+};
+
+static void _modrm(struct Emitter* e, int reg, struct X86Operand rm) {
+	if (rm.reg >= 0) {
+		_byte(e, 0xC0 | ((reg & 7) << 3) | (rm.reg & 7));
+		return;
+	}
+	bool sib = rm.index >= 0 || (rm.base & 7) == X_RSP;
+	int mod = !rm.disp && (rm.base & 7) != X_RBP ? 0 : rm.disp >= -128 && rm.disp < 128 ? 1 : 2;
+	_byte(e, (mod << 6) | ((reg & 7) << 3) | (sib ? 4 : rm.base & 7));
+	if (sib) {
+		_byte(e, (rm.scale << 6) | (((rm.index >= 0 ? rm.index : X_RSP) & 7) << 3) | (rm.base & 7));
+	}
+	if (mod == 1) {
+		_byte(e, rm.disp);
+	} else if (mod == 2) {
+		_imm32(e, rm.disp);
+	}
+}
+
+// [66] [REX] opcode ModRM [SIB] [disp]; reg is a register or the opcode's /digit
+static void _insn(struct Emitter* e, unsigned flags, unsigned opcode, int reg, struct X86Operand rm) {
+	if (flags & X_16) {
+		_byte(e, 0x66);
+	}
+	uint8_t rex = 0x40 | ((flags & X_W) ? 8 : 0) | ((reg & 8) ? 4 : 0) | ((rm.index >= 0 && (rm.index & 8)) ? 2 : 0) | (((rm.reg >= 0 ? rm.reg : rm.base) & 8) ? 1 : 0);
 	if (rex != 0x40) {
 		_byte(e, rex);
 	}
-}
-
-static void _modrmReg(struct Emitter* e, int reg, int rm) {
-	_byte(e, 0xC0 | ((reg & 7) << 3) | (rm & 7));
-}
-
-// [base + disp]
-static void _modrmMem(struct Emitter* e, int reg, int base, int32_t disp) {
-	bool short8 = disp >= -128 && disp < 128;
-	_byte(e, (short8 ? 0x40 : 0x80) | ((reg & 7) << 3) | (base & 7));
-	if ((base & 7) == X_RSP) {
-		_byte(e, 0x24);
+	if (opcode > 0xFF) {
+		_byte(e, opcode >> 8);
 	}
-	if (short8) {
-		_byte(e, disp);
-	} else {
-		_imm32(e, disp);
-	}
-}
-
-// [base + index + disp32]
-static void _modrmIndexDisp(struct Emitter* e, int reg, int base, int index, int32_t disp) {
-	_byte(e, 0x80 | ((reg & 7) << 3) | 4);
-	_byte(e, ((index & 7) << 3) | (base & 7));
-	_imm32(e, disp);
-}
-
-// [base + index]
-static void _modrmIndex(struct Emitter* e, int reg, int base, int index) {
-	bool disp8 = (base & 7) == X_RBP;
-	_byte(e, (disp8 ? 0x40 : 0x00) | ((reg & 7) << 3) | 4);
-	_byte(e, ((index & 7) << 3) | (base & 7));
-	if (disp8) {
-		_byte(e, 0);
-	}
+	_byte(e, opcode);
+	_modrm(e, reg, rm);
 }
 
 // op r/m32, r32
-static void _rr(struct Emitter* e, uint8_t opcode, int dst, int src) {
-	_rex(e, false, src, 0, dst);
-	_byte(e, opcode);
-	_modrmReg(e, src, dst);
+static void _rr(struct Emitter* e, unsigned opcode, int dst, int src) {
+	_insn(e, 0, opcode, src, _xr(dst));
+}
+
+static void _mov(struct Emitter* e, int dst, int src) {
+	_insn(e, 0, XO_STORE, src, _xr(dst));
 }
 
 static void _mov64(struct Emitter* e, int dst, int src) {
-	_rex(e, true, src, 0, dst);
-	_byte(e, 0x89);
-	_modrmReg(e, src, dst);
+	_insn(e, X_W, XO_STORE, src, _xr(dst));
 }
 
-// 81 /digit id: 0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp
+// Group 1 with an immediate: G1_ADD, G1_OR, G1_AND, G1_SUB, G1_XOR, G1_CMP
 static void _ri(struct Emitter* e, int digit, int dst, uint32_t imm) {
-	_rex(e, false, 0, 0, dst);
-	_byte(e, 0x81);
-	_modrmReg(e, digit, dst);
+	_insn(e, 0, XO_GROUP1, digit, _xr(dst));
 	_imm32(e, imm);
 }
 
 static void _movImm(struct Emitter* e, int dst, uint32_t imm) {
-	_rex(e, false, 0, 0, dst);
+	if (dst & 8) {
+		_byte(e, 0x41);
+	}
 	_byte(e, 0xB8 | (dst & 7));
 	_imm32(e, imm);
 }
 
 static void _movImm64(struct Emitter* e, int dst, uint64_t imm) {
-	_rex(e, true, 0, 0, dst);
+	_byte(e, (dst & 8) ? 0x49 : 0x48);
 	_byte(e, 0xB8 | (dst & 7));
 	memcpy(e->p, &imm, 8);
 	e->p += 8;
 }
 
 static void _load(struct Emitter* e, int dst, int base, int32_t disp) {
-	_rex(e, false, dst, 0, base);
-	_byte(e, 0x8B);
-	_modrmMem(e, dst, base, disp);
+	_insn(e, 0, XO_LOAD, dst, _xm(base, disp));
 }
 
 static void _load64(struct Emitter* e, int dst, int base, int32_t disp) {
-	_rex(e, true, dst, 0, base);
-	_byte(e, 0x8B);
-	_modrmMem(e, dst, base, disp);
+	_insn(e, X_W, XO_LOAD, dst, _xm(base, disp));
 }
 
 static void _store(struct Emitter* e, int src, int base, int32_t disp) {
-	_rex(e, false, src, 0, base);
-	_byte(e, 0x89);
-	_modrmMem(e, src, base, disp);
+	_insn(e, 0, XO_STORE, src, _xm(base, disp));
 }
 
 static void _storeImm(struct Emitter* e, int base, int32_t disp, uint32_t imm) {
-	_rex(e, false, 0, 0, base);
-	_byte(e, 0xC7);
-	_modrmMem(e, 0, base, disp);
+	_insn(e, 0, XO_MOV_IMM, 0, _xm(base, disp));
 	_imm32(e, imm);
 }
 
-// add, or, and, cmp (by digit) dword [base + disp], imm
+// Group 1 on dword [base + disp] with an immediate
 static void _memImm(struct Emitter* e, int digit, int base, int32_t disp, uint32_t imm) {
-	_rex(e, false, 0, 0, base);
-	_byte(e, 0x81);
-	_modrmMem(e, digit, base, disp);
+	_insn(e, 0, XO_GROUP1, digit, _xm(base, disp));
 	_imm32(e, imm);
+}
+
+// cmp byte [operand], imm8
+static void _cmpByte(struct Emitter* e, struct X86Operand rm, uint8_t imm) {
+	_insn(e, 0, XO_GROUP1_8, G1_CMP, rm);
+	_byte(e, imm);
 }
 
 static void _cmpRegMem(struct Emitter* e, int reg, int base, int32_t disp) {
-	_rex(e, false, reg, 0, base);
-	_byte(e, 0x3B);
-	_modrmMem(e, reg, base, disp);
+	_insn(e, 0, XO_CMP_RM, reg, _xm(base, disp));
 }
 
 static void _lea64(struct Emitter* e, int dst, int base, int32_t disp) {
-	_rex(e, true, dst, 0, base);
-	_byte(e, 0x8D);
-	_modrmMem(e, dst, base, disp);
+	_insn(e, X_W, XO_LEA, dst, _xm(base, disp));
 }
 
 static void _shift(struct Emitter* e, int digit, int dst, unsigned amount) {
-	_rex(e, false, 0, 0, dst);
-	_byte(e, 0xC1);
-	_modrmReg(e, digit, dst);
+	_insn(e, 0, XO_SHIFT, digit, _xr(dst));
 	_byte(e, amount);
 }
 
 static void _shiftCl(struct Emitter* e, int digit, int dst) {
-	_rex(e, false, 0, 0, dst);
-	_byte(e, 0xD3);
-	_modrmReg(e, digit, dst);
+	_insn(e, 0, XO_SHIFT_CL, digit, _xr(dst));
 }
 
 static void _not(struct Emitter* e, int dst) {
-	_rex(e, false, 0, 0, dst);
-	_byte(e, 0xF7);
-	_modrmReg(e, 2, dst);
+	_insn(e, 0, XO_GROUP3, G3_NOT, _xr(dst));
 }
 
 static void _setcc(struct Emitter* e, int cc, int dst) {
-	_rex(e, false, 0, 0, dst);
-	_byte(e, 0x0F);
-	_byte(e, 0x90 | cc);
-	_modrmReg(e, 0, dst);
+	_insn(e, 0, XO_SETCC | cc, 0, _xr(dst));
 }
 
 static void _movzxByte(struct Emitter* e, int dst, int src) {
-	_rex(e, false, dst, 0, src);
-	_byte(e, 0x0F);
-	_byte(e, 0xB6);
-	_modrmReg(e, dst, src);
+	_insn(e, 0, XO_MOVZX8, dst, _xr(src));
 }
 
 // CF = bit 29 of the guest CPSR
 static void _carryToCf(struct Emitter* e) {
-	_byte(e, 0x0F);
-	_byte(e, 0xBA);
-	_modrmMem(e, 4, X_CPU, OFF_CPSR);
+	_insn(e, 0, XO_GROUP8, G8_BT, _xm(X_CPU, OFF_CPSR));
 	_byte(e, 29);
 }
 
 static void _call(struct Emitter* e, int reg) {
-	_rex(e, false, 0, 0, reg);
-	_byte(e, 0xFF);
-	_modrmReg(e, 2, reg);
+	_insn(e, 0, XO_GROUP5, G5_CALL, _xr(reg));
 }
 
 // C sees and may change the cycle count
@@ -256,13 +257,39 @@ static uint8_t* _jmp(struct Emitter* e) {
 }
 
 static void _push(struct Emitter* e, int reg) {
-	_rex(e, false, 0, 0, reg);
+	if (reg & 8) {
+		_byte(e, 0x41);
+	}
 	_byte(e, 0x50 | (reg & 7));
 }
 
 static void _pop(struct Emitter* e, int reg) {
-	_rex(e, false, 0, 0, reg);
+	if (reg & 8) {
+		_byte(e, 0x41);
+	}
 	_byte(e, 0x58 | (reg & 7));
+}
+
+// rsp += bytes
+static void _adjustStack(struct Emitter* e, int8_t bytes) {
+	_insn(e, X_W, XO_GROUP1_IMM8, bytes < 0 ? G1_SUB : G1_ADD, _xr(X_RSP));
+	_byte(e, bytes < 0 ? -bytes : bytes);
+}
+
+static void _ret(struct Emitter* e) {
+	_byte(e, 0xC3);
+}
+
+static void _cmc(struct Emitter* e) {
+	_byte(e, 0xF5);
+}
+
+// call rel32, returning the site to patch
+static uint8_t* _callSite(struct Emitter* e) {
+	_byte(e, 0xE8);
+	uint8_t* at = e->p;
+	_imm32(e, 0);
+	return at;
 }
 
 static void _prologue(struct Compiler* c) {
@@ -273,10 +300,7 @@ static void _prologue(struct Compiler* c) {
 	_push(e, X_R13);
 	_push(e, X_R14);
 	_push(e, X_R15);
-	_byte(e, 0x48); // sub rsp, 8: keeps calls aligned and holds the cycle slot at [rsp]
-	_byte(e, 0x83);
-	_byte(e, 0xEC);
-	_byte(e, 0x08);
+	_adjustStack(e, -8); // keeps calls aligned and holds the cycle slot at [rsp]
 	_mov64(e, X_CPU, X_RDI);
 	if (c->gba) {
 		_movImm64(e, X_JIT, (uintptr_t) c->jit);
@@ -289,40 +313,27 @@ static void _prologue(struct Compiler* c) {
 static void _epilogue(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	_store(e, X_CYCLES, X_CPU, OFF_CYCLES);
-	_byte(e, 0x48); // add rsp, 8
-	_byte(e, 0x83);
-	_byte(e, 0xC4);
-	_byte(e, 0x08);
+	_adjustStack(e, 8);
 	_pop(e, X_R15);
 	_pop(e, X_R14);
 	_pop(e, X_R13);
 	_pop(e, X_R12);
 	_pop(e, X_RBP);
 	_pop(e, X_RBX);
-	_byte(e, 0xC3);
+	_ret(e);
 }
 
 static void _jumpTo(struct Compiler* c, const uint8_t* target) {
 	_patch(_jmp(&c->e), target);
 }
 
-// mov dst, [base + index * (1 << scale) + disp]
-static void _loadScaled(struct Emitter* e, bool w, int dst, int base, int index, unsigned scale, int32_t disp) {
-	_rex(e, w, dst, index, base);
-	_byte(e, 0x8B);
-	_byte(e, 0x84 | ((dst & 7) << 3));
-	_byte(e, (scale << 6) | ((index & 7) << 3) | (base & 7));
-	_imm32(e, disp);
-}
-
+// mov dst, qword [base + index * 8 + disp]
 static void _loadScaled64(struct Emitter* e, int dst, int base, int index, int32_t disp) {
-	_loadScaled(e, true, dst, base, index, 3, disp);
+	_insn(e, X_W, XO_LOAD, dst, _xmi(base, index, 3, disp));
 }
 
 static void _test64(struct Emitter* e, int reg) {
-	_rex(e, true, reg, 0, reg);
-	_byte(e, 0x85);
-	_modrmReg(e, reg, reg);
+	_insn(e, X_W, XO_TEST, reg, _xr(reg));
 }
 
 static void _patchLink(uint8_t* site, const uint8_t* target) {
@@ -356,21 +367,16 @@ static void _emitTrampoline(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	c->jit->enter = (void (*)(struct ARMCore*, void*)) e->p;
 	_prologue(c);
-	_byte(e, 0xFF); // jmp rsi
-	_byte(e, 0xE6);
+	_insn(e, 0, XO_GROUP5, G5_JMP, _xr(X_RSI));
 
 	// A link stub passes its link in rdx so the exit gets patched to the block found
 	c->jit->linkDispatch = e->p;
-	_rex(e, true, X_RDX, 0, X_JIT); // mov [r12 + pendingLink], rdx
-	_byte(e, 0x89);
-	_modrmMem(e, X_RDX, X_JIT, JIT_PENDING_LINK);
+	_insn(e, X_W, XO_STORE, X_RDX, _xm(X_JIT, JIT_PENDING_LINK));
 	uint8_t* toLookup = _jmp(e);
 
 	// Next block for the PC and mode in the CPU state, if it is compiled and nothing is due
 	c->jit->dispatch = e->p;
-	_rex(e, true, 0, 0, X_JIT); // mov qword [r12 + pendingLink], 0
-	_byte(e, 0xC7);
-	_modrmMem(e, 0, X_JIT, JIT_PENDING_LINK);
+	_insn(e, X_W, XO_MOV_IMM, 0, _xm(X_JIT, JIT_PENDING_LINK));
 	_imm32(e, 0);
 	uint8_t* toLookup2 = _jmp(e);
 
@@ -381,62 +387,46 @@ static void _emitTrampoline(struct Compiler* c) {
 	_movImm64(e, X_RAX, (uintptr_t) ARMJitEvents);
 	_call(e, X_RAX);
 	_load(e, X_CYCLES, X_CPU, OFF_CYCLES);
-	_byte(e, 0x84); // test al, al
-	_byte(e, 0xC0);
+	_insn(e, 0, XO_TEST8, X_RAX, _xr(X_RAX));
 	uint8_t* stop = _jcc(e, CC_E);
-	_rex(e, true, 0, 0, X_JIT); // mov qword [r12 + pendingLink], 0
-	_byte(e, 0xC7);
-	_modrmMem(e, 0, X_JIT, JIT_PENDING_LINK);
+	_insn(e, X_W, XO_MOV_IMM, 0, _xm(X_JIT, JIT_PENDING_LINK));
 	_imm32(e, 0);
 
 	_patch(toLookup, e->p);
 	_patch(toLookup2, e->p);
-	_rex(e, false, 0, 0, X_JIT); // mov byte [r12 + smcHit], 0
-	_byte(e, 0xC6);
-	_modrmMem(e, 0, X_JIT, JIT_SMC_HIT);
+	_insn(e, 0, XO_MOV8_IMM, 0, _xm(X_JIT, JIT_SMC_HIT));
 	_byte(e, 0);
 	_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
 	_patch(_jcc(e, CC_GE), c->jit->events);
 	_load(e, X_RAX, X_CPU, OFF_EXECUTION_MODE);
 	_load(e, X_RCX, X_CPU, OFF_PC);
-	_ri(e, 5, X_RCX, 4);
-	_rr(e, OP_ADD, X_RCX, X_RAX);
-	_rr(e, OP_ADD, X_RCX, X_RAX);
-	_rr(e, OP_MOV, X_RDX, X_RCX);
+	_ri(e, G1_SUB, X_RCX, 4);
+	_rr(e, XO_ADD, X_RCX, X_RAX);
+	_rr(e, XO_ADD, X_RCX, X_RAX);
+	_mov(e, X_RDX, X_RCX);
 	_shift(e, SH_SHR, X_RDX, 12);
-	_ri(e, 4, X_RDX, ARM_JIT_PAGES - 1);
+	_ri(e, G1_AND, X_RDX, ARM_JIT_PAGES - 1);
 	_loadScaled64(e, X_RDX, X_JIT, X_RDX, JIT_PAGES);
 	_test64(e, X_RDX);
 	uint8_t* noPage = _jcc(e, CC_E);
-	_rr(e, OP_MOV, X_RSI, X_RCX);
-	_ri(e, 4, X_RSI, 0xFFF);
+	_mov(e, X_RSI, X_RCX);
+	_ri(e, G1_AND, X_RSI, 0xFFF);
 	_shift(e, SH_SHR, X_RSI, 1);
 	_loadScaled64(e, X_RDX, X_RDX, X_RSI, 0);
 	_test64(e, X_RDX);
 	uint8_t* noBlock = _jcc(e, CC_E);
 	_cmpRegMem(e, X_RCX, X_RDX, ENTRY_PC);
 	uint8_t* otherPc = _jcc(e, CC_NE);
-	_rex(e, false, X_RSI, 0, X_RDX); // movzx esi, byte [rdx + thumb]
-	_byte(e, 0x0F);
-	_byte(e, 0xB6);
-	_modrmMem(e, X_RSI, X_RDX, ENTRY_THUMB);
-	_rr(e, OP_CMP, X_RSI, X_RAX);
+	_insn(e, 0, XO_MOVZX8, X_RSI, _xm(X_RDX, ENTRY_THUMB));
+	_rr(e, XO_CMP, X_RSI, X_RAX);
 	uint8_t* otherMode = _jcc(e, CC_NE);
 	_load(e, X_RSI, X_CPU, OFF_PREFETCH0);
-	_rex(e, false, X_RSI, 0, X_RDX); // xor esi, [rdx + op0]
-	_byte(e, 0x33);
-	_modrmMem(e, X_RSI, X_RDX, ENTRY_OP0);
-	_rex(e, false, X_RSI, 0, X_RDX); // and esi, [rdx + opMask0]
-	_byte(e, 0x23);
-	_modrmMem(e, X_RSI, X_RDX, ENTRY_OP_MASK0);
+	_insn(e, 0, XO_XOR_RM, X_RSI, _xm(X_RDX, ENTRY_OP0));
+	_insn(e, 0, XO_AND_RM, X_RSI, _xm(X_RDX, ENTRY_OP_MASK0));
 	uint8_t* otherOp0 = _jcc(e, CC_NE);
 	_load(e, X_RSI, X_CPU, OFF_PREFETCH1);
-	_rex(e, false, X_RSI, 0, X_RDX); // xor esi, [rdx + op1]
-	_byte(e, 0x33);
-	_modrmMem(e, X_RSI, X_RDX, ENTRY_OP1);
-	_rex(e, false, X_RSI, 0, X_RDX); // and esi, [rdx + opMask1]
-	_byte(e, 0x23);
-	_modrmMem(e, X_RSI, X_RDX, ENTRY_OP_MASK1);
+	_insn(e, 0, XO_XOR_RM, X_RSI, _xm(X_RDX, ENTRY_OP1));
+	_insn(e, 0, XO_AND_RM, X_RSI, _xm(X_RDX, ENTRY_OP_MASK1));
 	uint8_t* otherOp1 = _jcc(e, CC_NE);
 	_load64(e, X_RSI, X_JIT, JIT_PENDING_LINK);
 	_test64(e, X_RSI);
@@ -447,9 +437,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	_call(e, X_RAX);
 	_mov64(e, X_RDX, X_WB);
 	_patch(noLink, e->p);
-	_rex(e, false, 0, 0, X_RDX); // jmp [rdx + entry]
-	_byte(e, 0xFF);
-	_modrmMem(e, 4, X_RDX, ENTRY_CODE);
+	_insn(e, 0, XO_GROUP5, G5_JMP, _xm(X_RDX, ENTRY_CODE));
 
 	c->jit->toC = e->p;
 	_patch(stop, e->p);
@@ -465,43 +453,27 @@ static void _emitTrampoline(struct Compiler* c) {
 	// unless an interrupt moved the PC, code in the block was written or the frame loop stops
 	c->jit->resume = e->p;
 	_load(e, X_WB, X_CPU, OFF_PC);
-	_byte(e, 0x48); // sub rsp, 8
-	_byte(e, 0x83);
-	_byte(e, 0xEC);
-	_byte(e, 0x08);
+	_adjustStack(e, -8);
 	_store(e, X_CYCLES, X_CPU, OFF_CYCLES);
 	_mov64(e, X_RDI, X_CPU);
 	_movImm64(e, X_RAX, (uintptr_t) ARMJitEvents);
 	_call(e, X_RAX);
 	_load(e, X_CYCLES, X_CPU, OFF_CYCLES);
-	_byte(e, 0x84); // test al, al
-	_byte(e, 0xC0);
+	_insn(e, 0, XO_TEST8, X_RAX, _xr(X_RAX));
 	uint8_t* frameDone = _jcc(e, CC_E);
 	_cmpRegMem(e, X_WB, X_CPU, OFF_PC);
 	uint8_t* moved = _jcc(e, CC_NE);
-	_rex(e, false, 0, 0, X_JIT); // cmp byte [r12 + smcHit], 0
-	_byte(e, 0x80);
-	_modrmMem(e, 7, X_JIT, JIT_SMC_HIT);
-	_byte(e, 0);
+	_cmpByte(e, _xm(X_JIT, JIT_SMC_HIT), 0);
 	uint8_t* written = _jcc(e, CC_NE);
-	_byte(e, 0x48); // add rsp, 8
-	_byte(e, 0x83);
-	_byte(e, 0xC4);
-	_byte(e, 0x08);
-	_byte(e, 0xC3); // ret
+	_adjustStack(e, 8);
+	_ret(e);
 	// Leaving: drop the padding and the return address
 	_patch(frameDone, e->p);
-	_byte(e, 0x48); // add rsp, 16
-	_byte(e, 0x83);
-	_byte(e, 0xC4);
-	_byte(e, 0x10);
+	_adjustStack(e, 16);
 	_jumpTo(c, c->jit->toC);
 	_patch(moved, e->p);
 	_patch(written, e->p);
-	_byte(e, 0x48); // add rsp, 16
-	_byte(e, 0x83);
-	_byte(e, 0xC4);
-	_byte(e, 0x10);
+	_adjustStack(e, 16);
 	_jumpTo(c, c->jit->dispatch);
 }
 
@@ -534,14 +506,7 @@ static void _fetchWord(struct Compiler* c, unsigned index) {
 		return;
 	}
 	_movImm64(e, X_RAX, (uintptr_t) _hostAddress(c, c->pc + c->width * index));
-	if (c->thumb) {
-		_byte(e, 0x0F); // movzx ecx, word [rax]
-		_byte(e, 0xB7);
-		_byte(e, 0x08);
-	} else {
-		_byte(e, 0x8B); // mov ecx, [rax]
-		_byte(e, 0x08);
-	}
+	_insn(e, 0, c->thumb ? XO_MOVZX16 : XO_LOAD, X_RCX, _xm(X_RAX, 0));
 	_store(e, X_RCX, X_JIT, JIT_FETCHED + 4 * index);
 }
 
@@ -551,7 +516,7 @@ static void _fetchAhead(struct Compiler* c, unsigned i) {
 }
 
 static void _addCycles(struct Compiler* c, uint32_t constant) {
-	_ri(&c->e, 0, X_CYCLES, constant);
+	_ri(&c->e, G1_ADD, X_CYCLES, constant);
 }
 
 static void _eventCheck(struct Compiler* c, int index) {
@@ -563,18 +528,15 @@ static void _eventCheck(struct Compiler* c, int index) {
 // Jumps to the returned site when an event comes due before the last instruction of a run
 static uint8_t* _segmentCheck(struct Compiler* c, uint32_t cycles) {
 	struct Emitter* e = &c->e;
-	_rr(e, OP_MOV, X_RAX, X_CYCLES);
-	_ri(e, 0, X_RAX, cycles);
+	_mov(e, X_RAX, X_CYCLES);
+	_ri(e, G1_ADD, X_RAX, cycles);
 	_cmpRegMem(e, X_RAX, X_CPU, OFF_NEXT_EVENT);
 	return _jcc(e, CC_GE);
 }
 
 static void _smcCheck(struct Compiler* c, int index) {
 	struct Emitter* e = &c->e;
-	_rex(e, false, 0, 0, X_JIT);
-	_byte(e, 0x80); // cmp byte [r12 + smcHit], 0
-	_modrmMem(e, 7, X_JIT, JIT_SMC_HIT);
-	_byte(e, 0);
+	_cmpByte(e, _xm(X_JIT, JIT_SMC_HIT), 0);
 	_exitAt(c, _jcc(e, CC_NE), index);
 }
 
@@ -592,16 +554,14 @@ static uint8_t* _condJump(struct Compiler* c, unsigned cond, bool taken) {
 	_load(e, X_RAX, X_CPU, OFF_CPSR);
 	_shift(e, SH_SHR, X_RAX, 28);
 	_movImm(e, X_RCX, _conditionLut[cond]);
-	_byte(e, 0x0F); // bt ecx, eax
-	_byte(e, 0xA3);
-	_modrmReg(e, X_RAX, X_RCX);
+	_insn(e, 0, XO_BT, X_RAX, _xr(X_RCX));
 	return _jcc(e, taken ? CC_B : CC_AE);
 }
 
 static void _loadCarry(struct Compiler* c, int dst) {
 	_load(&c->e, dst, X_CPU, OFF_CPSR);
 	_shift(&c->e, SH_SHR, dst, 29);
-	_ri(&c->e, 4, dst, 1);
+	_ri(&c->e, G1_AND, dst, 1);
 }
 
 // Barrel shifter for an immediate shift amount on r11d: value in edx, carry out in r8d if wanted
@@ -609,15 +569,15 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 	struct Emitter* e = &c->e;
 	switch (type) {
 	case 0: // LSL
-		_rr(e, OP_MOV, X_RDX, X_R11);
+		_mov(e, X_RDX, X_R11);
 		if (amount) {
 			_shift(e, SH_SHL, X_RDX, amount);
 		}
 		if (carry) {
 			if (amount) {
-				_rr(e, OP_MOV, X_R8, X_R11);
+				_mov(e, X_R8, X_R11);
 				_shift(e, SH_SHR, X_R8, 32 - amount);
-				_ri(e, 4, X_R8, 1);
+				_ri(e, G1_AND, X_R8, 1);
 			} else {
 				_loadCarry(c, X_R8);
 			}
@@ -625,42 +585,42 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 		break;
 	case 1: // LSR
 		if (amount) {
-			_rr(e, OP_MOV, X_RDX, X_R11);
+			_mov(e, X_RDX, X_R11);
 			_shift(e, SH_SHR, X_RDX, amount);
 		} else {
 			_movImm(e, X_RDX, 0);
 		}
 		if (carry) {
-			_rr(e, OP_MOV, X_R8, X_R11);
+			_mov(e, X_R8, X_R11);
 			_shift(e, SH_SHR, X_R8, amount ? amount - 1 : 31);
-			_ri(e, 4, X_R8, 1);
+			_ri(e, G1_AND, X_R8, 1);
 		}
 		break;
 	case 2: // ASR
-		_rr(e, OP_MOV, X_RDX, X_R11);
+		_mov(e, X_RDX, X_R11);
 		_shift(e, SH_SAR, X_RDX, amount ? amount : 31);
 		if (carry) {
-			_rr(e, OP_MOV, X_R8, X_R11);
+			_mov(e, X_R8, X_R11);
 			_shift(e, SH_SHR, X_R8, amount ? amount - 1 : 31);
-			_ri(e, 4, X_R8, 1);
+			_ri(e, G1_AND, X_R8, 1);
 		}
 		break;
 	case 3: // ROR, RRX
-		_rr(e, OP_MOV, X_RDX, X_R11);
+		_mov(e, X_RDX, X_R11);
 		if (amount) {
 			_shift(e, SH_ROR, X_RDX, amount);
 		} else {
 			_loadCarry(c, X_R10);
 			_shift(e, SH_SHR, X_RDX, 1);
 			_shift(e, SH_SHL, X_R10, 31);
-			_rr(e, OP_OR, X_RDX, X_R10);
+			_rr(e, XO_OR, X_RDX, X_R10);
 		}
 		if (carry) {
-			_rr(e, OP_MOV, X_R8, X_R11);
+			_mov(e, X_R8, X_R11);
 			if (amount) {
 				_shift(e, SH_SHR, X_R8, amount - 1);
 			}
-			_ri(e, 4, X_R8, 1);
+			_ri(e, G1_AND, X_R8, 1);
 		}
 		break;
 	}
@@ -701,61 +661,61 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 	switch (opcode) {
 	case ALU_AND:
 	case ALU_TST:
-		_rr(e, OP_MOV, X_RAX, X_RSI);
-		_rr(e, OP_AND, X_RAX, X_RDX);
+		_mov(e, X_RAX, X_RSI);
+		_rr(e, XO_AND, X_RAX, X_RDX);
 		break;
 	case ALU_EOR:
 	case ALU_TEQ:
-		_rr(e, OP_MOV, X_RAX, X_RSI);
-		_rr(e, OP_XOR, X_RAX, X_RDX);
+		_mov(e, X_RAX, X_RSI);
+		_rr(e, XO_XOR, X_RAX, X_RDX);
 		break;
 	case ALU_ORR:
-		_rr(e, OP_MOV, X_RAX, X_RSI);
-		_rr(e, OP_OR, X_RAX, X_RDX);
+		_mov(e, X_RAX, X_RSI);
+		_rr(e, XO_OR, X_RAX, X_RDX);
 		break;
 	case ALU_BIC:
-		_rr(e, OP_MOV, X_RAX, X_RDX);
+		_mov(e, X_RAX, X_RDX);
 		_not(e, X_RAX);
-		_rr(e, OP_AND, X_RAX, X_RSI);
+		_rr(e, XO_AND, X_RAX, X_RSI);
 		break;
 	case ALU_MOV:
-		_rr(e, OP_MOV, X_RAX, X_RDX);
+		_mov(e, X_RAX, X_RDX);
 		break;
 	case ALU_MVN:
-		_rr(e, OP_MOV, X_RAX, X_RDX);
+		_mov(e, X_RAX, X_RDX);
 		_not(e, X_RAX);
 		break;
 	case ALU_ADD:
 	case ALU_CMN:
-		_rr(e, OP_MOV, X_RAX, X_RSI);
-		_rr(e, OP_ADD, X_RAX, X_RDX);
+		_mov(e, X_RAX, X_RSI);
+		_rr(e, XO_ADD, X_RAX, X_RDX);
 		break;
 	case ALU_SUB:
 	case ALU_CMP:
-		_rr(e, OP_MOV, X_RAX, X_RSI);
-		_rr(e, OP_SUB, X_RAX, X_RDX);
+		_mov(e, X_RAX, X_RSI);
+		_rr(e, XO_SUB, X_RAX, X_RDX);
 		break;
 	case ALU_RSB:
-		_rr(e, OP_MOV, X_RAX, X_RDX);
-		_rr(e, OP_SUB, X_RAX, X_RSI);
+		_mov(e, X_RAX, X_RDX);
+		_rr(e, XO_SUB, X_RAX, X_RSI);
 		break;
 	case ALU_ADC:
-		_rr(e, OP_MOV, X_RAX, X_RSI);
+		_mov(e, X_RAX, X_RSI);
 		_carryToCf(e);
-		_rr(e, OP_ADC, X_RAX, X_RDX);
+		_rr(e, XO_ADC, X_RAX, X_RDX);
 		break;
 	case ALU_SBC:
 		// x86 subtracts CF as a borrow, which is the inverse of the ARM carry
-		_rr(e, OP_MOV, X_RAX, X_RSI);
+		_mov(e, X_RAX, X_RSI);
 		_carryToCf(e);
-		_byte(e, 0xF5); // cmc
-		_rr(e, OP_SBB, X_RAX, X_RDX);
+		_cmc(e);
+		_rr(e, XO_SBB, X_RAX, X_RDX);
 		break;
 	case ALU_RSC:
-		_rr(e, OP_MOV, X_RAX, X_RDX);
+		_mov(e, X_RAX, X_RDX);
 		_carryToCf(e);
-		_byte(e, 0xF5); // cmc
-		_rr(e, OP_SBB, X_RAX, X_RSI);
+		_cmc(e);
+		_rr(e, XO_SBB, X_RAX, X_RSI);
 		break;
 	}
 
@@ -763,18 +723,18 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 		if (logical) {
 			// N and Z from the result, C from the shifter, V and bits 24-27 kept
 			_load(e, X_R9, X_CPU, OFF_CPSR);
-			_ri(e, 4, X_R9, 0x1FFFFFFF);
-			_rr(e, OP_MOV, X_RCX, X_RAX);
-			_ri(e, 4, X_RCX, 0x80000000);
-			_rr(e, OP_OR, X_R9, X_RCX);
-			_rr(e, OP_TEST, X_RAX, X_RAX);
+			_ri(e, G1_AND, X_R9, 0x1FFFFFFF);
+			_mov(e, X_RCX, X_RAX);
+			_ri(e, G1_AND, X_RCX, 0x80000000);
+			_rr(e, XO_OR, X_R9, X_RCX);
+			_rr(e, XO_TEST, X_RAX, X_RAX);
 			_setcc(e, CC_E, X_RCX);
 			_movzxByte(e, X_RCX, X_RCX);
 			_shift(e, SH_SHL, X_RCX, 30);
-			_rr(e, OP_OR, X_R9, X_RCX);
-			_rr(e, OP_MOV, X_RCX, X_R8);
+			_rr(e, XO_OR, X_R9, X_RCX);
+			_mov(e, X_RCX, X_R8);
 			_shift(e, SH_SHL, X_RCX, 29);
-			_rr(e, OP_OR, X_R9, X_RCX);
+			_rr(e, XO_OR, X_R9, X_RCX);
 		} else {
 			_setcc(e, CC_S, X_RCX);
 			_setcc(e, CC_E, X_R9);
@@ -784,20 +744,20 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 			_shift(e, SH_SHL, X_RCX, 31);
 			_movzxByte(e, X_R9, X_R9);
 			_shift(e, SH_SHL, X_R9, 30);
-			_rr(e, OP_OR, X_RCX, X_R9);
+			_rr(e, XO_OR, X_RCX, X_R9);
 			_movzxByte(e, X_R10, X_R10);
 			if (borrow) {
-				_ri(e, 6, X_R10, 1);
+				_ri(e, G1_XOR, X_R10, 1);
 			}
 			_shift(e, SH_SHL, X_R10, 29);
-			_rr(e, OP_OR, X_RCX, X_R10);
+			_rr(e, XO_OR, X_RCX, X_R10);
 			_movzxByte(e, X_R11, X_R11);
 			_shift(e, SH_SHL, X_R11, 28);
-			_rr(e, OP_OR, X_RCX, X_R11);
+			_rr(e, XO_OR, X_RCX, X_R11);
 			_load(e, X_R9, X_CPU, OFF_CPSR);
 			// Add and subtract clear the whole flags byte; SBC and RSC keep bits 24-27
-			_ri(e, 4, X_R9, carryIn && opcode != ALU_ADC ? 0x0FFFFFFF : 0x00FFFFFF);
-			_rr(e, OP_OR, X_R9, X_RCX);
+			_ri(e, G1_AND, X_R9, carryIn && opcode != ALU_ADC ? 0x0FFFFFFF : 0x00FFFFFF);
+			_rr(e, XO_OR, X_R9, X_RCX);
 		}
 		_store(e, X_R9, X_CPU, OFF_CPSR);
 	}
@@ -815,27 +775,15 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 // IWRAM or EWRAM access at [base + rcx]; loads land in eax (rotated like the GBA), stores take r9
 static void _memAccess(struct Emitter* e, bool load, unsigned size, int base) {
 	if (load) {
-		_rex(e, false, X_RAX, X_RCX, base);
-		if (size == 4) {
-			_byte(e, 0x8B);
-		} else {
-			_byte(e, 0x0F);
-			_byte(e, size == 2 ? 0xB7 : 0xB6);
-		}
-		_modrmIndex(e, X_RAX, base, X_RCX);
+		_insn(e, 0, size == 4 ? XO_LOAD : size == 2 ? XO_MOVZX16 : XO_MOVZX8, X_RAX, _xmi(base, X_RCX, 0, 0));
 		if (size > 1) {
-			_rr(e, OP_MOV, X_RCX, X_RDI);
-			_ri(e, 4, X_RCX, size == 4 ? 3 : 1);
+			_mov(e, X_RCX, X_RDI);
+			_ri(e, G1_AND, X_RCX, size == 4 ? 3 : 1);
 			_shift(e, SH_SHL, X_RCX, 3);
 			_shiftCl(e, SH_ROR, X_RAX);
 		}
 	} else {
-		if (size == 2) {
-			_byte(e, 0x66);
-		}
-		_rex(e, false, X_R9, X_RCX, base);
-		_byte(e, size == 1 ? 0x88 : 0x89);
-		_modrmIndex(e, X_R9, base, X_RCX);
+		_insn(e, size == 2 ? X_16 : 0, size == 1 ? XO_STORE8 : XO_STORE, X_R9, _xmi(base, X_RCX, 0, 0));
 	}
 }
 
@@ -848,36 +796,31 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	_movImm64(e, X_R11, (uintptr_t) &c->gba->memory);
 	// Fewer loads when they overlap the last prefetch
 	_load(e, X_RSI, X_R11, offsetof(struct GBAMemory, lastPrefetchedPc));
-	_ri(e, 5, X_RSI, pc);
-	_rr(e, OP_XOR, X_R8, X_R8);
-	_ri(e, 7, X_RSI, 16);
+	_ri(e, G1_SUB, X_RSI, pc);
+	_rr(e, XO_XOR, X_R8, X_R8);
+	_ri(e, G1_CMP, X_RSI, 16);
 	uint8_t* far = _jcc(e, CC_AE);
-	_rr(e, OP_MOV, X_R8, X_RSI);
+	_mov(e, X_R8, X_RSI);
 	_shift(e, SH_SHR, X_R8, 1);
 	_patch(far, e->p);
 	_movImm(e, X_RSI, 8);
-	_rr(e, OP_SUB, X_RSI, X_R8);
+	_rr(e, XO_SUB, X_RSI, X_R8);
 	_movImm(e, X_RDX, _prefetchLoads(s, wait));
-	_rr(e, OP_CMP, X_RSI, X_RDX);
-	_rex(e, false, X_RDX, 0, X_RSI); // cmovb edx, esi
-	_byte(e, 0x0F);
-	_byte(e, 0x42);
-	_modrmReg(e, X_RDX, X_RSI);
+	_rr(e, XO_CMP, X_RSI, X_RDX);
+	_insn(e, 0, XO_CMOVB, X_RDX, _xr(X_RSI));
 	// lastPrefetchedPc = pc + 2 * (loads + previous - 1)
-	_rr(e, OP_MOV, X_RSI, X_RDX);
-	_rr(e, OP_ADD, X_RSI, X_R8);
-	_rr(e, OP_ADD, X_RSI, X_RSI);
-	_ri(e, 0, X_RSI, pc - 2);
+	_mov(e, X_RSI, X_RDX);
+	_rr(e, XO_ADD, X_RSI, X_R8);
+	_rr(e, XO_ADD, X_RSI, X_RSI);
+	_ri(e, G1_ADD, X_RSI, pc - 2);
 	_store(e, X_RSI, X_R11, offsetof(struct GBAMemory, lastPrefetchedPc));
 	// stall = s * loads + 1; wait = max(wait, stall) - stall - (n - s)
-	_rex(e, false, X_RSI, 0, X_RDX); // imul esi, edx, s
-	_byte(e, 0x69);
-	_modrmReg(e, X_RSI, X_RDX);
+	_insn(e, 0, XO_IMUL_IMM, X_RSI, _xr(X_RDX));
 	_imm32(e, s);
-	_ri(e, 0, X_RSI, 1);
+	_ri(e, G1_ADD, X_RSI, 1);
 	_movImm(e, X_R10, wait - (n - s));
-	_rr(e, OP_SUB, X_R10, X_RSI);
-	_ri(e, 7, X_RSI, wait);
+	_rr(e, XO_SUB, X_R10, X_RSI);
+	_ri(e, G1_CMP, X_RSI, wait);
 	uint8_t* fits = _jcc(e, CC_LE);
 	_movImm(e, X_R10, s - n);
 	_patch(fits, e->p);
@@ -898,20 +841,15 @@ static void _memResult(struct Compiler* c, const struct MemOp* mem) {
 		uint8_t* halfword = NULL;
 		if (mem->size == 2) {
 			// LDRSH of an odd address sign-extends the rotated byte
-			_byte(e, 0xF6); // test byte [rsp + 4], 1
-			_modrmMem(e, 0, X_RSP, 4);
+			_insn(e, 0, XO_GROUP3_8, G3_TEST, _xm(X_RSP, 4));
 			_byte(e, 1);
 			halfword = _jcc(e, CC_E);
 		}
-		_byte(e, 0x0F); // movsx eax, al
-		_byte(e, 0xBE);
-		_modrmReg(e, X_RAX, X_RAX);
+		_insn(e, 0, XO_MOVSX8, X_RAX, _xr(X_RAX));
 		if (halfword) {
 			uint8_t* extended = _jmp(e);
 			_patch(halfword, e->p);
-			_byte(e, 0x0F); // movsx eax, ax
-			_byte(e, 0xBF);
-			_modrmReg(e, X_RAX, X_RAX);
+			_insn(e, 0, XO_MOVSX16, X_RAX, _xr(X_RAX));
 			_patch(extended, e->p);
 		}
 	}
@@ -920,7 +858,7 @@ static void _memResult(struct Compiler* c, const struct MemOp* mem) {
 	} else if (mem->writeback) {
 		_store(e, X_WB, X_CPU, 4 * mem->base.reg);
 	}
-	_rr(e, OP_ADD, X_CYCLES, X_R10);
+	_rr(e, XO_ADD, X_CYCLES, X_R10);
 	_addCycles(c, c->memCycles);
 }
 
@@ -928,20 +866,17 @@ static void _memResult(struct Compiler* c, const struct MemOp* mem) {
 // goes to the returned site instead, with the word's index in eax
 static uint8_t* _memRam(struct Compiler* c, unsigned i, const struct MemOp* mem, bool ewram) {
 	struct Emitter* e = &c->e;
-	_rr(e, OP_MOV, X_RCX, X_RDI);
-	_ri(e, 4, X_RCX, (ewram ? GBA_SIZE_EWRAM : GBA_SIZE_IWRAM) - mem->size);
+	_mov(e, X_RCX, X_RDI);
+	_ri(e, G1_AND, X_RCX, (ewram ? GBA_SIZE_EWRAM : GBA_SIZE_IWRAM) - mem->size);
 	_memAccess(e, mem->load, mem->size, ewram ? X_EWRAM : X_IWRAM);
 	uint8_t* smc = NULL;
 	if (!mem->load) {
-		_rr(e, OP_MOV, X_RAX, X_RCX);
+		_mov(e, X_RAX, X_RCX);
 		_shift(e, SH_SHR, X_RAX, 2);
 		if (ewram) {
-			_ri(e, 0, X_RAX, ARM_JIT_IWRAM_WORDS);
+			_ri(e, G1_ADD, X_RAX, ARM_JIT_IWRAM_WORDS);
 		}
-		_rex(e, false, 0, X_RAX, X_JIT); // cmp byte [r12 + rax + cover], 0
-		_byte(e, 0x80);
-		_modrmIndexDisp(e, 7, X_JIT, X_RAX, JIT_COVER);
-		_byte(e, 0);
+		_cmpByte(e, _xmi(X_JIT, X_RAX, 0, JIT_COVER), 0);
 		smc = _jcc(e, CC_NE);
 	}
 	_dataWait(c, i, _ramWait(c, mem, ewram) + (mem->load ? 2 : 1));
@@ -951,7 +886,7 @@ static uint8_t* _memRam(struct Compiler* c, unsigned i, const struct MemOp* mem,
 static void _memInvalidate(struct Compiler* c, unsigned i, const struct MemOp* mem, bool ewram) {
 	struct Emitter* e = &c->e;
 	_mov64(e, X_RDI, X_JIT);
-	_rr(e, OP_MOV, X_RSI, X_RAX);
+	_mov(e, X_RSI, X_RAX);
 	_movImm64(e, X_RAX, (uintptr_t) ARMJitInvalidateWord);
 	_callC(e, X_RAX);
 	_dataWait(c, i, _ramWait(c, mem, ewram) + 1);
@@ -960,13 +895,13 @@ static void _memInvalidate(struct Compiler* c, unsigned i, const struct MemOp* m
 // Timer counters, without the generic load and I/O dispatch
 static void _memTimer(struct Compiler* c, unsigned i, uint8_t** miss, uint8_t** slow) {
 	struct Emitter* e = &c->e;
-	_ri(e, 7, X_RAX, GBA_REGION_IO);
+	_ri(e, G1_CMP, X_RAX, GBA_REGION_IO);
 	*miss = _jcc(e, CC_NE);
-	_rr(e, OP_MOV, X_RCX, X_RDI);
-	_ri(e, 4, X_RCX, 0x00FFFFF3);
-	_ri(e, 7, X_RCX, GBA_REG_TM0CNT_LO);
+	_mov(e, X_RCX, X_RDI);
+	_ri(e, G1_AND, X_RCX, 0x00FFFFF3);
+	_ri(e, G1_CMP, X_RCX, GBA_REG_TM0CNT_LO);
 	*slow = _jcc(e, CC_NE);
-	_rr(e, OP_MOV, X_RSI, X_RDI);
+	_mov(e, X_RSI, X_RDI);
 	_movImm64(e, X_RDI, (uintptr_t) c->gba);
 	_movImm64(e, X_RAX, (uintptr_t) _readTimer);
 	_callC(e, X_RAX);
@@ -978,66 +913,50 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 	struct Emitter* e = &c->e;
 	bool load = mem->load;
 	unsigned size = mem->size;
-	_ri(e, 7, X_RAX, GBA_REGION_VRAM);
+	_ri(e, G1_CMP, X_RAX, GBA_REGION_VRAM);
 	*miss = _jcc(e, CC_NE);
-	_rr(e, OP_MOV, X_RCX, X_RDI);
-	_ri(e, 4, X_RCX, 0x1FFFF);
-	_ri(e, 7, X_RCX, GBA_SIZE_VRAM);
+	_mov(e, X_RCX, X_RDI);
+	_ri(e, G1_AND, X_RCX, 0x1FFFF);
+	_ri(e, G1_CMP, X_RCX, GBA_SIZE_VRAM);
 	*slow = _jcc(e, CC_AE);
-	_ri(e, 4, X_RCX, size == 4 ? 0x1FFFC : size == 2 ? 0x1FFFE : 0x1FFFF);
+	_ri(e, G1_AND, X_RCX, size == 4 ? 0x1FFFC : size == 2 ? 0x1FFFE : 0x1FFFF);
 	_movImm64(e, X_R11, (uintptr_t) c->gba->video.vram);
 	_store(e, X_RDI, X_RSP, 4);
 	if (load) {
 		_memAccess(e, true, size, X_R11);
-		_rr(e, OP_MOV, X_WB, X_RAX); // writeback is already stored for loads
+		_mov(e, X_WB, X_RAX); // writeback is already stored for loads
 	} else {
 		if (size == 4) {
-			_rex(e, false, X_RDX, X_RCX, X_R11); // mov edx, [r11 + rcx]
-			_byte(e, 0x8B);
-			_modrmIndex(e, X_RDX, X_R11, X_RCX);
-			_rr(e, OP_CMP, X_RDX, X_R9);
+			_insn(e, 0, XO_LOAD, X_RDX, _xmi(X_R11, X_RCX, 0, 0));
+			_rr(e, XO_CMP, X_RDX, X_R9);
 		} else {
-			_rex(e, false, X_RDX, X_RCX, X_R11); // movzx edx, word [r11 + rcx]
-			_byte(e, 0x0F);
-			_byte(e, 0xB7);
-			_modrmIndex(e, X_RDX, X_R11, X_RCX);
-			_rex(e, false, X_R10, 0, X_R9); // movzx r10d, r9w
-			_byte(e, 0x0F);
-			_byte(e, 0xB7);
-			_modrmReg(e, X_R10, X_R9);
-			_rr(e, OP_CMP, X_RDX, X_R10);
+			_insn(e, 0, XO_MOVZX16, X_RDX, _xmi(X_R11, X_RCX, 0, 0));
+			_insn(e, 0, XO_MOVZX16, X_R10, _xr(X_R9));
+			_rr(e, XO_CMP, X_RDX, X_R10);
 		}
 		uint8_t* unchanged = _jcc(e, CC_E);
 		_memAccess(e, false, size, X_R11);
 		// Once per block, unless a tile cache wants every address
 		_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
 		_load64(e, X_RDI, X_RAX, 0);
-		_rex(e, true, 0, 0, X_RDI); // cmp qword [rdi + cache], 0
-		_byte(e, 0x81);
-		_modrmMem(e, 7, X_RDI, offsetof(struct GBAVideoRenderer, cache));
+		_insn(e, X_W, XO_GROUP1, G1_CMP, _xm(X_RDI, offsetof(struct GBAVideoRenderer, cache)));
 		_imm32(e, 0);
 		uint8_t* cached = _jcc(e, CC_NE);
 		_load(e, X_RAX, X_RSP, 4);
 		_shift(e, SH_SHR, X_RAX, 12);
-		_ri(e, 4, X_RAX, 0x1F);
-		_rex(e, false, X_RAX, 0, X_JIT); // bt [r12 + vramNotified], eax
-		_byte(e, 0x0F);
-		_byte(e, 0xA3);
-		_modrmMem(e, X_RAX, X_JIT, JIT_VRAM_NOTIFIED);
+		_ri(e, G1_AND, X_RAX, 0x1F);
+		_insn(e, 0, XO_BT, X_RAX, _xm(X_JIT, JIT_VRAM_NOTIFIED));
 		uint8_t* notified = _jcc(e, CC_B);
-		_rex(e, false, X_RAX, 0, X_JIT); // bts [r12 + vramNotified], eax
-		_byte(e, 0x0F);
-		_byte(e, 0xAB);
-		_modrmMem(e, X_RAX, X_JIT, JIT_VRAM_NOTIFIED);
+		_insn(e, 0, XO_BTS, X_RAX, _xm(X_JIT, JIT_VRAM_NOTIFIED));
 		_patch(cached, e->p);
 		unsigned call;
 		for (call = 0; call < (size == 4 ? 2 : 1); ++call) {
 			_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
 			_load64(e, X_RDI, X_RAX, 0);
 			_load(e, X_RSI, X_RSP, 4);
-			_ri(e, 4, X_RSI, size == 4 ? 0x1FFFC : 0x1FFFE);
+			_ri(e, G1_AND, X_RSI, size == 4 ? 0x1FFFC : 0x1FFFE);
 			if (size == 4 && call == 0) {
-				_ri(e, 0, X_RSI, 2);
+				_ri(e, G1_ADD, X_RSI, 2);
 			}
 			_load64(e, X_RAX, X_RDI, offsetof(struct GBAVideoRenderer, writeVRAM));
 			_callC(e, X_RAX);
@@ -1048,22 +967,22 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 	}
 	_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.stallMask);
 	_load(e, X_RAX, X_RAX, 0);
-	_rr(e, OP_TEST, X_RAX, X_RAX);
+	_rr(e, XO_TEST, X_RAX, X_RAX);
 	uint8_t* noStall = _jcc(e, CC_E);
-	_rr(e, OP_MOV, X_RSI, X_RDI);
+	_mov(e, X_RSI, X_RDI);
 	_movImm64(e, X_RDI, (uintptr_t) c->gba);
 	_movImm(e, X_RDX, size);
 	_movImm64(e, X_RAX, (uintptr_t) GBAMemoryVRAMWait);
 	_callC(e, X_RAX);
-	_rr(e, OP_MOV, X_R10, X_RAX);
+	_mov(e, X_R10, X_RAX);
 	_load(e, X_RDI, X_RSP, 4);
 	uint8_t* waited = _jmp(e);
 	_patch(noStall, e->p);
 	_movImm(e, X_R10, size == 4 ? 1 : 0);
 	_patch(waited, e->p);
-	_ri(e, 0, X_R10, load ? 2 : 1);
+	_ri(e, G1_ADD, X_R10, load ? 2 : 1);
 	if (load) {
-		_rr(e, OP_MOV, X_RAX, X_WB);
+		_mov(e, X_RAX, X_WB);
 	}
 }
 
@@ -1071,24 +990,21 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 static void _memCart(struct Compiler* c, const struct MemOp* mem, uint8_t** miss, uint8_t** slow) {
 	struct Emitter* e = &c->e;
 	unsigned size = mem->size;
-	_rr(e, OP_MOV, X_RCX, X_RAX);
-	_ri(e, 5, X_RCX, GBA_REGION_ROM0);
-	_ri(e, 7, X_RCX, GBA_REGION_ROM2 - GBA_REGION_ROM0);
+	_mov(e, X_RCX, X_RAX);
+	_ri(e, G1_SUB, X_RCX, GBA_REGION_ROM0);
+	_ri(e, G1_CMP, X_RCX, GBA_REGION_ROM2 - GBA_REGION_ROM0);
 	*miss = _jcc(e, CC_A);
-	_rr(e, OP_MOV, X_RCX, X_RDI);
-	_ri(e, 4, X_RCX, GBA_SIZE_ROM0 - size);
-	_ri(e, 7, X_RCX, c->gba->memory.romSize);
+	_mov(e, X_RCX, X_RDI);
+	_ri(e, G1_AND, X_RCX, GBA_SIZE_ROM0 - size);
+	_ri(e, G1_CMP, X_RCX, c->gba->memory.romSize);
 	*slow = _jcc(e, CC_AE);
 	_movImm64(e, X_R11, (uintptr_t) c->gba->memory.rom);
 	_memAccess(e, true, size, X_R11);
 	_movImm64(e, X_R11, (uintptr_t) (size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16));
-	_rr(e, OP_MOV, X_RCX, X_RDI);
+	_mov(e, X_RCX, X_RDI);
 	_shift(e, SH_SHR, X_RCX, 24);
-	_rex(e, false, X_R10, X_RCX, X_R11); // movzx r10d, byte [r11 + rcx]
-	_byte(e, 0x0F);
-	_byte(e, 0xB6);
-	_modrmIndex(e, X_R10, X_R11, X_RCX);
-	_ri(e, 0, X_R10, 2);
+	_insn(e, 0, XO_MOVZX8, X_R10, _xmi(X_R11, X_RCX, 0, 0));
+	_ri(e, G1_ADD, X_R10, 2);
 }
 
 // Everything else goes through the memory handlers
@@ -1097,14 +1013,14 @@ static void _memSlow(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	unsigned size = mem->size;
 	_storeState(c, i + 1);
 	_storeImm(e, X_RSP, 0, 0);
-	_rr(e, OP_MOV, X_RSI, X_RDI);
+	_mov(e, X_RSI, X_RDI);
 	_mov64(e, X_RDI, X_CPU);
 	unsigned offset;
 	if (mem->load) {
 		_lea64(e, X_RDX, X_RSP, 0);
 		offset = size == 4 ? offsetof(struct ARMMemory, load32) : size == 2 ? offsetof(struct ARMMemory, load16) : offsetof(struct ARMMemory, load8);
 	} else {
-		_rr(e, OP_MOV, X_RDX, X_R9);
+		_mov(e, X_RDX, X_R9);
 		_lea64(e, X_RCX, X_RSP, 0);
 		offset = size == 4 ? offsetof(struct ARMMemory, store32) : size == 2 ? offsetof(struct ARMMemory, store16) : offsetof(struct ARMMemory, store8);
 	}
@@ -1133,8 +1049,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		goto tail;
 	case LITERAL_RAM:
 		_movImm64(e, X_RAX, (uintptr_t) literalHost);
-		_byte(e, 0x8B); // mov eax, [rax]
-		_byte(e, 0x00);
+		_load(e, X_RAX, X_RAX, 0);
 		_dataWait(c, i, literalWait);
 		goto tail;
 	}
@@ -1143,15 +1058,12 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	}
 	if (mem->runtimeOffset) {
 		_load(e, X_RDX, X_JIT, JIT_FETCHED + 4 * mem->fetchedIndex);
-		_rr(e, OP_MOV, X_RCX, X_RDX);
-		_ri(e, 4, X_RDX, 0xFFF);
-		_byte(e, 0x0F); // bt ecx, 23
-		_byte(e, 0xBA);
-		_modrmReg(e, 4, X_RCX);
+		_mov(e, X_RCX, X_RDX);
+		_ri(e, G1_AND, X_RDX, 0xFFF);
+		_insn(e, 0, XO_GROUP8, G8_BT, _xr(X_RCX));
 		_byte(e, 23);
 		uint8_t* up = _jcc(e, CC_B);
-		_byte(e, 0xF7); // neg edx
-		_modrmReg(e, 3, X_RDX);
+		_insn(e, 0, XO_GROUP3, G3_NEG, _xr(X_RDX));
 		_patch(up, e->p);
 	} else if (mem->immediateOffset) {
 		_movImm(e, X_RDX, mem->offset);
@@ -1160,12 +1072,12 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_shiftImm(c, mem->shiftType, mem->shiftAmount, false);
 	}
 	_loadSource(c, X_RSI, mem->base);
-	_rr(e, OP_MOV, X_R10, X_RSI);
-	_rr(e, mem->up || mem->runtimeOffset ? OP_ADD : OP_SUB, X_R10, X_RDX);
+	_mov(e, X_R10, X_RSI);
+	_rr(e, mem->up || mem->runtimeOffset ? XO_ADD : XO_SUB, X_R10, X_RDX);
 	if (mem->writeback) {
-		_rr(e, OP_MOV, X_WB, X_R10);
+		_mov(e, X_WB, X_R10);
 	}
-	_rr(e, OP_MOV, X_RDI, mem->pre ? X_R10 : X_RSI);
+	_mov(e, X_RDI, mem->pre ? X_R10 : X_RSI);
 	if (load && mem->writeback) {
 		_store(e, X_WB, X_CPU, 4 * mem->base.reg);
 	}
@@ -1179,13 +1091,13 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	c->cold[k].miss[0] = NULL;
 	c->cold[k].miss[1] = NULL;
 	c->cold[k].smc = NULL;
-	_rr(e, OP_MOV, X_RAX, X_RDI);
+	_mov(e, X_RAX, X_RDI);
 	_shift(e, SH_SHR, X_RAX, 24);
 	switch (_memPath(c, mem)) {
 	case PATH_IWRAM:
 	case PATH_EWRAM:
 		c->cold[k].smcEwram = _memPath(c, mem) == PATH_EWRAM;
-		_ri(e, 7, X_RAX, c->cold[k].smcEwram ? GBA_REGION_EWRAM : GBA_REGION_IWRAM);
+		_ri(e, G1_CMP, X_RAX, c->cold[k].smcEwram ? GBA_REGION_EWRAM : GBA_REGION_IWRAM);
 		c->cold[k].miss[0] = _jcc(e, CC_NE);
 		c->cold[k].smc = _memRam(c, i, mem, c->cold[k].smcEwram);
 		break;
@@ -1244,7 +1156,7 @@ static void _emitMemCold(struct Compiler* c, unsigned k) {
 		}
 	}
 	for (x = 0; x < 2; ++x) {
-		_ri(e, 7, X_RAX, x ? GBA_REGION_EWRAM : GBA_REGION_IWRAM);
+		_ri(e, G1_CMP, X_RAX, x ? GBA_REGION_EWRAM : GBA_REGION_IWRAM);
 		miss = _jcc(e, CC_NE);
 		smc = _memRam(c, i, mem, x);
 		_jumpTo(c, c->cold[k].done);
@@ -1296,9 +1208,9 @@ static uint8_t* _fetchedMismatch(struct Compiler* c, unsigned i, uint32_t mask, 
 	struct Emitter* e = &c->e;
 	_load(e, X_RAX, X_JIT, JIT_FETCHED + 4 * i);
 	if (mask != 0xFFFFFFFF) {
-		_ri(e, 4, X_RAX, mask);
+		_ri(e, G1_AND, X_RAX, mask);
 	}
-	_ri(e, 7, X_RAX, value);
+	_ri(e, G1_CMP, X_RAX, value);
 	return _jcc(e, CC_NE);
 }
 
@@ -1315,38 +1227,36 @@ static void _emitDynamicHandler(struct Compiler* c, unsigned i) {
 	_load(e, X_RSI, X_JIT, JIT_FETCHED + 4 * i);
 	uint8_t* toCheck = NULL;
 	if (c->thumb) {
-		_rr(e, OP_MOV, X_RAX, X_RSI);
+		_mov(e, X_RAX, X_RSI);
 		_shift(e, SH_SHR, X_RAX, 6);
 		_movImm64(e, X_RDX, (uintptr_t) _thumbTable);
 		_loadScaled64(e, X_RAX, X_RDX, X_RAX, 0);
 	} else {
 		_load(e, X_RAX, X_CPU, OFF_CPSR);
 		_shift(e, SH_SHR, X_RAX, 28);
-		_rr(e, OP_MOV, X_RCX, X_RSI);
+		_mov(e, X_RCX, X_RSI);
 		_shift(e, SH_SHR, X_RCX, 28);
 		_movImm64(e, X_RDX, (uintptr_t) _conditionLut32);
-		_loadScaled(e, false, X_RDX, X_RDX, X_RCX, 2, 0);
-		_byte(e, 0x0F); // bt edx, eax
-		_byte(e, 0xA3);
-		_modrmReg(e, X_RAX, X_RDX);
+		_insn(e, 0, XO_LOAD, X_RDX, _xmi(X_RDX, X_RCX, 2, 0));
+		_insn(e, 0, XO_BT, X_RAX, _xr(X_RDX));
 		uint8_t* toExec = _jcc(e, CC_B);
 		_addCycles(c, c->aluCycles);
 		toCheck = _jmp(e);
 		_patch(toExec, e->p);
-		_rr(e, OP_MOV, X_RAX, X_RSI);
+		_mov(e, X_RAX, X_RSI);
 		_shift(e, SH_SHR, X_RAX, 16);
-		_ri(e, 4, X_RAX, 0xFF0);
-		_rr(e, OP_MOV, X_RCX, X_RSI);
+		_ri(e, G1_AND, X_RAX, 0xFF0);
+		_mov(e, X_RCX, X_RSI);
 		_shift(e, SH_SHR, X_RCX, 4);
-		_ri(e, 4, X_RCX, 0xF);
-		_rr(e, OP_OR, X_RAX, X_RCX);
+		_ri(e, G1_AND, X_RCX, 0xF);
+		_rr(e, XO_OR, X_RAX, X_RCX);
 		_movImm64(e, X_RDX, (uintptr_t) _armTable);
 		_loadScaled64(e, X_RAX, X_RDX, X_RAX, 0);
 	}
 	_mov64(e, X_RDI, X_CPU);
 	_callC(e, X_RAX);
 	_load(e, X_RAX, X_CPU, OFF_PC);
-	_ri(e, 7, X_RAX, address + 2 * c->width);
+	_ri(e, G1_CMP, X_RAX, address + 2 * c->width);
 	_exitAt(c, _jcc(e, CC_NE), EXIT_DIRECT);
 	if (toCheck) {
 		_patch(toCheck, e->p);
@@ -1375,19 +1285,16 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	_movImm64(e, X_RAX, (uintptr_t) _handler(op, c->thumb));
 	_callC(e, X_RAX);
 	_load(e, X_RAX, X_CPU, OFF_PC);
-	_ri(e, 7, X_RAX, address + 2 * c->width);
+	_ri(e, G1_CMP, X_RAX, address + 2 * c->width);
 	uint8_t* branched = _jcc(e, CC_NE);
 	uint8_t* sequential = _jmp(e);
 
 	// A taken branch back to the start of this block keeps running here
 	_patch(branched, e->p);
 	if (_loopsToStart(c, i)) {
-		_ri(e, 7, X_RAX, c->pc + c->width);
+		_ri(e, G1_CMP, X_RAX, c->pc + c->width);
 		_exitAt(c, _jcc(e, CC_NE), EXIT_DIRECT);
-		_rex(e, false, 0, 0, X_JIT);
-		_byte(e, 0x80); // cmp byte [r12 + smcHit], 0
-		_modrmMem(e, 7, X_JIT, JIT_SMC_HIT);
-		_byte(e, 0);
+		_cmpByte(e, _xm(X_JIT, JIT_SMC_HIT), 0);
 		_exitAt(c, _jcc(e, CC_NE), EXIT_DIRECT);
 		_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
 		_exitAt(c, _jcc(e, CC_GE), EXIT_TO_C);
@@ -1424,14 +1331,7 @@ static void _storeTargetPipeline(struct Compiler* c, uint32_t target) {
 			continue;
 		}
 		_movImm64(e, X_RAX, (uintptr_t) _hostAddress(c, address));
-		if (c->thumb) {
-			_byte(e, 0x0F); // movzx ecx, word [rax]
-			_byte(e, 0xB7);
-			_byte(e, 0x08);
-		} else {
-			_byte(e, 0x8B); // mov ecx, [rax]
-			_byte(e, 0x08);
-		}
+		_insn(e, 0, c->thumb ? XO_MOVZX16 : XO_LOAD, X_RCX, _xm(X_RAX, 0));
 		_store(e, X_RCX, X_CPU, offset);
 	}
 }
@@ -1448,24 +1348,24 @@ static void _emitBranch(struct Compiler* c, unsigned i, const struct BranchOp* b
 	unsigned nSlow = 0;
 	unsigned region = b->target >> 24;
 	_movImm64(e, X_RAX, (uintptr_t) c->gba);
-	_memImm(e, 7, X_RAX, offsetof(struct GBA, memory.activeRegion), region);
+	_memImm(e, G1_CMP, X_RAX, offsetof(struct GBA, memory.activeRegion), region);
 	slow[nSlow++] = _jcc(e, CC_NE);
 	if (region != GBA_REGION_BIOS) {
-		_memImm(e, 7, X_RAX, offsetof(struct GBA, idleOptimization), IDLE_LOOP_DETECT);
+		_memImm(e, G1_CMP, X_RAX, offsetof(struct GBA, idleOptimization), IDLE_LOOP_DETECT);
 		slow[nSlow++] = _jcc(e, CC_GE);
-		_memImm(e, 7, X_RAX, offsetof(struct GBA, idleLoop), b->target);
+		_memImm(e, G1_CMP, X_RAX, offsetof(struct GBA, idleLoop), b->target);
 		slow[nSlow++] = _jcc(e, CC_E);
 	}
 	if (b->thumbLink) {
-		_memImm(e, 7, X_CPU, 4 * ARM_LR, b->lr);
+		_memImm(e, G1_CMP, X_CPU, 4 * ARM_LR, b->lr);
 		slow[nSlow++] = _jcc(e, CC_NE);
 	}
 	_storeImm(e, X_RAX, offsetof(struct GBA, lastJump), b->target);
 	_storeImm(e, X_RAX, offsetof(struct GBA, memory.lastPrefetchedPc), 0);
 	if (c->thumb) {
-		_memImm(e, 1, X_CPU, OFF_ACTIVE_MASK, WORD_SIZE_THUMB);
+		_memImm(e, G1_OR, X_CPU, OFF_ACTIVE_MASK, WORD_SIZE_THUMB);
 	} else {
-		_memImm(e, 4, X_CPU, OFF_ACTIVE_MASK, -WORD_SIZE_ARM);
+		_memImm(e, G1_AND, X_CPU, OFF_ACTIVE_MASK, -WORD_SIZE_ARM);
 	}
 	uint32_t address = c->pc + c->width * i;
 	if (b->link) {
@@ -1512,21 +1412,17 @@ static void _multiTransfers(struct Compiler* c, const struct MultiOp* m, int bas
 		if (!(m->list & (1 << r))) {
 			continue;
 		}
-		_rr(e, OP_MOV, X_RCX, X_RDI);
+		_mov(e, X_RCX, X_RDI);
 		if (k) {
-			_ri(e, 0, X_RCX, 4 * k);
+			_ri(e, G1_ADD, X_RCX, 4 * k);
 		}
-		_ri(e, 4, X_RCX, mask);
+		_ri(e, G1_AND, X_RCX, mask);
 		if (m->load) {
-			_rex(e, false, X_RDX, X_RCX, base); // mov edx, [base + rcx]
-			_byte(e, 0x8B);
-			_modrmIndex(e, X_RDX, base, X_RCX);
+			_insn(e, 0, XO_LOAD, X_RDX, _xmi(base, X_RCX, 0, 0));
 			_store(e, X_RDX, X_CPU, 4 * r);
 		} else {
 			_load(e, X_RDX, X_CPU, 4 * r);
-			_rex(e, false, X_RDX, X_RCX, base); // mov [base + rcx], edx
-			_byte(e, 0x89);
-			_modrmIndex(e, X_RDX, base, X_RCX);
+			_insn(e, 0, XO_STORE, X_RDX, _xmi(base, X_RCX, 0, 0));
 		}
 		++k;
 	}
@@ -1536,23 +1432,21 @@ static void _multiTransfers(struct Compiler* c, const struct MultiOp* m, int bas
 static uint8_t* _multiCoverCheck(struct Compiler* c, const struct MultiOp* m, uint32_t mask, unsigned coverBase) {
 	struct Emitter* e = &c->e;
 	unsigned n = __builtin_popcount(m->list);
-	_rr(e, OP_XOR, X_RAX, X_RAX);
+	_rr(e, XO_XOR, X_RAX, X_RAX);
 	unsigned k;
 	for (k = 0; k < n; ++k) {
-		_rr(e, OP_MOV, X_RCX, X_RDI);
+		_mov(e, X_RCX, X_RDI);
 		if (k) {
-			_ri(e, 0, X_RCX, 4 * k);
+			_ri(e, G1_ADD, X_RCX, 4 * k);
 		}
-		_ri(e, 4, X_RCX, mask);
+		_ri(e, G1_AND, X_RCX, mask);
 		_shift(e, SH_SHR, X_RCX, 2);
 		if (coverBase) {
-			_ri(e, 0, X_RCX, coverBase);
+			_ri(e, G1_ADD, X_RCX, coverBase);
 		}
-		_rex(e, false, X_RAX, X_RCX, X_JIT); // or al, [r12 + rcx + cover]
-		_byte(e, 0x0A);
-		_modrmIndexDisp(e, X_RAX, X_JIT, X_RCX, JIT_COVER);
+		_insn(e, 0, XO_OR8_RM, X_RAX, _xmi(X_JIT, X_RCX, 0, JIT_COVER));
 	}
-	_rr(e, OP_TEST, X_RAX, X_RAX);
+	_rr(e, XO_TEST, X_RAX, X_RAX);
 	return _jcc(e, CC_NE);
 }
 
@@ -1566,14 +1460,14 @@ static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) 
 		fail = _condJump(c, m->cond, false);
 	}
 	_load(e, X_RSI, X_CPU, 4 * m->rn);
-	_rr(e, OP_MOV, X_RDI, X_RSI);
+	_mov(e, X_RDI, X_RSI);
 	int32_t start = m->up ? (m->pre ? 4 : 0) : (m->pre ? -4 * (int32_t) n : -4 * (int32_t) n + 4);
 	if (start) {
-		_ri(e, 0, X_RDI, start);
+		_ri(e, G1_ADD, X_RDI, start);
 	}
-	_rr(e, OP_MOV, X_WB, X_RSI);
-	_ri(e, 0, X_WB, m->up ? 4 * n : -4 * n);
-	_rr(e, OP_MOV, X_RAX, X_RDI);
+	_mov(e, X_WB, X_RSI);
+	_ri(e, G1_ADD, X_WB, m->up ? 4 * n : -4 * n);
+	_mov(e, X_RAX, X_RDI);
 	_shift(e, SH_SHR, X_RAX, 24);
 
 	uint8_t* slow[3];
@@ -1582,7 +1476,7 @@ static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) 
 	unsigned region;
 	for (region = 0; region < 2; ++region) {
 		bool iwram = region == 0;
-		_ri(e, 7, X_RAX, iwram ? GBA_REGION_IWRAM : GBA_REGION_EWRAM);
+		_ri(e, G1_CMP, X_RAX, iwram ? GBA_REGION_IWRAM : GBA_REGION_EWRAM);
 		uint8_t* other = _jcc(e, CC_NE);
 		uint32_t mask = iwram ? GBA_SIZE_IWRAM - 4 : GBA_SIZE_EWRAM - 4;
 		if (!m->load) {
@@ -1605,7 +1499,7 @@ static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) 
 	if (m->writeback) {
 		_store(e, X_WB, X_CPU, 4 * m->rn);
 	}
-	_rr(e, OP_ADD, X_CYCLES, X_R10);
+	_rr(e, XO_ADD, X_CYCLES, X_R10);
 	_addCycles(c, c->memCycles);
 	if (fail) {
 		uint8_t* after = _jmp(e);
@@ -1632,55 +1526,50 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 	}
 	// One more cycle for each significant byte past the first, counting leading ones as zeros
 	_load(e, X_RCX, X_CPU, 4 * m->rs);
-	_rr(e, OP_MOV, X_RAX, X_RCX);
+	_mov(e, X_RAX, X_RCX);
 	_shift(e, SH_SAR, X_RAX, 31);
-	_rr(e, OP_XOR, X_RCX, X_RAX);
+	_rr(e, XO_XOR, X_RCX, X_RAX);
 	_movImm(e, X_R10, m->rn >= 0 ? 2 : 1);
 	unsigned k;
 	for (k = 1; k < 4; ++k) {
-		_ri(e, 7, X_RCX, 1 << (8 * k));
-		_ri(e, 3, X_R10, -1); // sbb r10d, -1
+		_ri(e, G1_CMP, X_RCX, 1 << (8 * k));
+		_ri(e, G1_SBB, X_R10, -1);
 	}
 	if (c->romCode && c->prefetch) {
 		_storeImm(e, X_CPU, OFF_PC, c->pc + c->width * (i + 2));
 		_mov64(e, X_RDI, X_CPU);
-		_rr(e, OP_MOV, X_RSI, X_R10);
+		_mov(e, X_RSI, X_R10);
 		_load64(e, X_RAX, X_CPU, OFF_MEMORY + offsetof(struct ARMMemory, stall));
 		_callC(e, X_RAX);
-		_rr(e, OP_MOV, X_R10, X_RAX);
+		_mov(e, X_R10, X_RAX);
 	}
 	_load(e, X_RAX, X_CPU, 4 * m->rm);
-	_rex(e, false, X_RAX, 0, X_CPU); // imul eax, [rbx + rs]
-	_byte(e, 0x0F);
-	_byte(e, 0xAF);
-	_modrmMem(e, X_RAX, X_CPU, 4 * m->rs);
+	_insn(e, 0, XO_IMUL, X_RAX, _xm(X_CPU, 4 * m->rs));
 	if (m->rn >= 0) {
-		_rex(e, false, X_RAX, 0, X_CPU); // add eax, [rbx + rn]
-		_byte(e, 0x03);
-		_modrmMem(e, X_RAX, X_CPU, 4 * m->rn);
+		_insn(e, 0, XO_ADD_RM, X_RAX, _xm(X_CPU, 4 * m->rn));
 	}
 	_store(e, X_RAX, X_CPU, 4 * m->rd);
 	if (m->s) {
 		// N and Z from the result; ARM takes C from the last shifter result
 		_load(e, X_R9, X_CPU, OFF_CPSR);
-		_ri(e, 4, X_R9, c->thumb ? 0x3FFFFFFF : 0x1FFFFFFF);
-		_rr(e, OP_MOV, X_RCX, X_RAX);
-		_ri(e, 4, X_RCX, 0x80000000);
-		_rr(e, OP_OR, X_R9, X_RCX);
-		_rr(e, OP_TEST, X_RAX, X_RAX);
+		_ri(e, G1_AND, X_R9, c->thumb ? 0x3FFFFFFF : 0x1FFFFFFF);
+		_mov(e, X_RCX, X_RAX);
+		_ri(e, G1_AND, X_RCX, 0x80000000);
+		_rr(e, XO_OR, X_R9, X_RCX);
+		_rr(e, XO_TEST, X_RAX, X_RAX);
 		_setcc(e, CC_E, X_RCX);
 		_movzxByte(e, X_RCX, X_RCX);
 		_shift(e, SH_SHL, X_RCX, 30);
-		_rr(e, OP_OR, X_R9, X_RCX);
+		_rr(e, XO_OR, X_R9, X_RCX);
 		if (!c->thumb) {
 			_load(e, X_RCX, X_CPU, OFF_SHIFTER_CARRY);
-			_ri(e, 4, X_RCX, 1);
+			_ri(e, G1_AND, X_RCX, 1);
 			_shift(e, SH_SHL, X_RCX, 29);
-			_rr(e, OP_OR, X_R9, X_RCX);
+			_rr(e, XO_OR, X_R9, X_RCX);
 		}
 		_store(e, X_R9, X_CPU, OFF_CPSR);
 	}
-	_rr(e, OP_ADD, X_CYCLES, X_R10);
+	_rr(e, XO_ADD, X_CYCLES, X_R10);
 	_addCycles(c, c->memCycles);
 	if (fail) {
 		uint8_t* after = _jmp(e);
@@ -1693,12 +1582,8 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 
 // Runs the due events, then comes back to ops[index] unless the resume routine goes elsewhere
 static void _resumeAfterEvents(struct Compiler* c, unsigned index, const uint8_t* target) {
-	struct Emitter* e = &c->e;
 	UNUSED(index);
-	_byte(e, 0xE8); // call resume
-	uint8_t* site = e->p;
-	_imm32(e, 0);
-	_patch(site, c->jit->resume);
+	_patch(_callSite(&c->e), c->jit->resume);
 	_jumpTo(c, target);
 }
 
