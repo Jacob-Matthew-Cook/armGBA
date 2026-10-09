@@ -79,6 +79,8 @@ void GBASerialize(struct GBA* gba, struct GBASerializedState* state) {
 	}
 	miscFlags = GBASerializedMiscFlagsSetBlocked(miscFlags, gba->cpuBlocked);
 	miscFlags = GBASerializedMiscFlagsSetKeyIRQKeys(miscFlags, gba->keysLast);
+	// MULS and MLAS take their carry from the last shift
+	miscFlags = GBASerializedMiscFlagsSetShifterCarry(miscFlags, gba->cpu->shifterCarryOut & 1);
 	STORE_32(miscFlags, 0, &state->miscFlags);
 	STORE_32(gba->biosStall, 0, &state->biosStall);
 
@@ -188,13 +190,13 @@ bool GBADeserialize(struct GBA* gba, const struct GBASerializedState* state) {
 	GBAUnlCartDeserialize(gba, state);
 	gba->memory.activeRegion = -1;
 	gba->cpu->memory.setActiveRegion(gba->cpu, gba->cpu->gprs[ARM_PC]);
-	if (state->biosPrefetch) {
-		LOAD_32(gba->memory.biosPrefetch, 0, &state->biosPrefetch);
-	}
+	LOAD_32(gba->memory.biosPrefetch, 0, &state->biosPrefetch);
 	LOAD_32(gba->memory.lastPrefetchedPc, 0, &state->lastPrefetchedPc);
+	// Every state after version 0 has the prefetch, which can hold a zero word
+	bool hasPrefetch = ucheck > GBASavestateMagic || (state->cpuPrefetch[0] && state->cpuPrefetch[1]);
 	if (gba->cpu->cpsr.t) {
 		gba->cpu->executionMode = MODE_THUMB;
-		if (state->cpuPrefetch[0] && state->cpuPrefetch[1]) {
+		if (hasPrefetch) {
 			LOAD_32(gba->cpu->prefetch[0], 0, state->cpuPrefetch);
 			LOAD_32(gba->cpu->prefetch[1], 4, state->cpuPrefetch);
 			gba->cpu->prefetch[0] &= 0xFFFF;
@@ -206,7 +208,7 @@ bool GBADeserialize(struct GBA* gba, const struct GBASerializedState* state) {
 		}
 	} else {
 		gba->cpu->executionMode = MODE_ARM;
-		if (state->cpuPrefetch[0] && state->cpuPrefetch[1]) {
+		if (hasPrefetch) {
 			LOAD_32(gba->cpu->prefetch[0], 0, state->cpuPrefetch);
 			LOAD_32(gba->cpu->prefetch[1], 4, state->cpuPrefetch);
 		} else {
@@ -217,6 +219,7 @@ bool GBADeserialize(struct GBA* gba, const struct GBASerializedState* state) {
 	}
 	GBASerializedMiscFlags miscFlags = 0;
 	LOAD_32(miscFlags, 0, &state->miscFlags);
+	gba->cpu->shifterCarryOut = GBASerializedMiscFlagsGetShifterCarry(miscFlags);
 	gba->cpu->halted = GBASerializedMiscFlagsGetHalted(miscFlags);
 	gba->memory.io[GBA_REG(POSTFLG)] = GBASerializedMiscFlagsGetPOSTFLG(miscFlags);
 	if (GBASerializedMiscFlagsIsIrqPending(miscFlags)) {

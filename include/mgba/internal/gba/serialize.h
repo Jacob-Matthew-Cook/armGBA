@@ -234,7 +234,8 @@ mLOG_DECLARE_CATEGORY(GBA_STATE);
  * | bit 2: Is IRQ pending?
  * | bit 3: Is CPU blocked?
  * | bits 4 - 14: Active key IRQ keys
- * | bits 15 - 31: Reserved
+ * | bit 15: Barrel shifter carry out
+ * | bits 16 - 31: Reserved
  * 0x00320 - 0x00323: Next IRQ event
  * 0x00324 - 0x00327: Interruptable BIOS stall cycles
  * 0x00328 - 0x0036F: Special cartridge state, one of:
@@ -323,6 +324,7 @@ DECL_BIT(GBASerializedMiscFlags, POSTFLG, 1);
 DECL_BIT(GBASerializedMiscFlags, IrqPending, 2);
 DECL_BIT(GBASerializedMiscFlags, Blocked, 3);
 DECL_BITS(GBASerializedMiscFlags, KeyIRQKeys, 4, 11);
+DECL_BIT(GBASerializedMiscFlags, ShifterCarry, 15);
 
 enum {
 	GBA_SUBSYSTEM_VIDEO_RENDERER = 0,
