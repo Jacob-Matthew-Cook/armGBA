@@ -1122,7 +1122,7 @@ static const uint32_t _conditionLut32[16] = {
 
 static bool _patchedMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
 	uint32_t address = c->pc + c->width * i;
-	if (c->thumb || !_decodeArmMem(c->ops[i], address, mem) || !mem->immediateOffset || mem->size == 2) {
+	if (c->thumb || (c->ops[i] & 0x0C000000) != 0x04000000 || !_decodeArmMem(c->ops[i], address, mem) || !mem->immediateOffset) {
 		return false;
 	}
 	mem->runtimeOffset = true;
@@ -1468,4 +1468,72 @@ static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) 
 	}
 	_emitFallback(c, i);
 	_patch(next, e->p);
+}
+
+// MUL, MLA and Thumb MUL, timed as ARM_WAIT_SMUL and the stall handler time them
+static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
+	struct Emitter* e = &c->e;
+	uint8_t* fail = NULL;
+	if (m->cond != 0xE) {
+		fail = _condJump(c, m->cond, false);
+	}
+	// One more cycle for each significant byte past the first, counting leading ones as zeros
+	_load(e, X_RCX, X_CPU, 4 * m->rs);
+	_rr(e, OP_MOV, X_RAX, X_RCX);
+	_shift(e, SH_SAR, X_RAX, 31);
+	_rr(e, OP_XOR, X_RCX, X_RAX);
+	_movImm(e, X_R10, m->rn >= 0 ? 2 : 1);
+	unsigned k;
+	for (k = 1; k < 4; ++k) {
+		_ri(e, 7, X_RCX, 1 << (8 * k));
+		_ri(e, 3, X_R10, -1); // sbb r10d, -1
+	}
+	if (c->romCode && c->prefetch) {
+		_storeImm(e, X_CPU, OFF_PC, c->pc + c->width * (i + 2));
+		_mov64(e, X_RDI, X_CPU);
+		_rr(e, OP_MOV, X_RSI, X_R10);
+		_load64(e, X_RAX, X_CPU, OFF_MEMORY + offsetof(struct ARMMemory, stall));
+		_call(e, X_RAX);
+		_rr(e, OP_MOV, X_R10, X_RAX);
+	}
+	_load(e, X_RAX, X_CPU, 4 * m->rm);
+	_rex(e, false, X_RAX, 0, X_CPU); // imul eax, [rbx + rs]
+	_byte(e, 0x0F);
+	_byte(e, 0xAF);
+	_modrmMem(e, X_RAX, X_CPU, 4 * m->rs);
+	if (m->rn >= 0) {
+		_rex(e, false, X_RAX, 0, X_CPU); // add eax, [rbx + rn]
+		_byte(e, 0x03);
+		_modrmMem(e, X_RAX, X_CPU, 4 * m->rn);
+	}
+	_store(e, X_RAX, X_CPU, 4 * m->rd);
+	if (m->s) {
+		// N and Z from the result; ARM takes C from the last shifter result
+		_load(e, X_R9, X_CPU, OFF_CPSR);
+		_ri(e, 4, X_R9, c->thumb ? 0x3FFFFFFF : 0x1FFFFFFF);
+		_rr(e, OP_MOV, X_RCX, X_RAX);
+		_ri(e, 4, X_RCX, 0x80000000);
+		_rr(e, OP_OR, X_R9, X_RCX);
+		_rr(e, OP_TEST, X_RAX, X_RAX);
+		_setcc(e, CC_E, X_RCX);
+		_movzxByte(e, X_RCX, X_RCX);
+		_shift(e, SH_SHL, X_RCX, 30);
+		_rr(e, OP_OR, X_R9, X_RCX);
+		if (!c->thumb) {
+			_load(e, X_RCX, X_CPU, OFF_SHIFTER_CARRY);
+			_ri(e, 4, X_RCX, 1);
+			_shift(e, SH_SHL, X_RCX, 29);
+			_rr(e, OP_OR, X_R9, X_RCX);
+		}
+		_store(e, X_R9, X_CPU, OFF_CPSR);
+	}
+	_addMemReg(e, X_CPU, OFF_CYCLES, X_R10);
+	_addCycles(c, c->memCycles);
+	if (fail) {
+		uint8_t* after = _jmp(e);
+		_patch(fail, e->p);
+		_addCycles(c, c->aluCycles);
+		_patch(after, e->p);
+	}
+	_eventCheck(c, i + 1);
 }

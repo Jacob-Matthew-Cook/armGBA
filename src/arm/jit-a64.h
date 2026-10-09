@@ -903,7 +903,7 @@ static const uint32_t _conditionLut32[16] = {
 
 static bool _patchedMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
 	uint32_t address = c->pc + c->width * i;
-	if (c->thumb || !_decodeArmMem(c->ops[i], address, mem) || !mem->immediateOffset || mem->size == 2) {
+	if (c->thumb || (c->ops[i] & 0x0C000000) != 0x04000000 || !_decodeArmMem(c->ops[i], address, mem) || !mem->immediateOffset) {
 		return false;
 	}
 	mem->runtimeOffset = true;
@@ -1237,4 +1237,67 @@ static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) 
 	}
 	_emitFallback(c, i);
 	_patch(next, e->p);
+}
+
+// MUL, MLA and Thumb MUL, timed as ARM_WAIT_SMUL and the stall handler time them
+static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
+	struct Emitter* e = &c->e;
+	uint8_t* fail = NULL;
+	if (m->cond != 0xE) {
+		_loadFlags(c);
+		fail = _bCond(e, m->cond ^ 1);
+	}
+	// One more cycle for each significant byte past the first, counting leading ones as zeros
+	_ldrW(e, 1, R_CPU, 4 * m->rs);
+	_asrWImm(e, 9, 1, 31);
+	_emit(e, 0x4A000000 | (1 << 16) | (9 << 5) | 9); // eor w9, w9, w1
+	_movImm32(e, 3, m->rn >= 0 ? 2 : 1);
+	unsigned k;
+	for (k = 1; k < 4; ++k) {
+		_lsrWImm(e, 10, 9, 8 * k);
+		_emit(e, 0x7100001F | (10 << 5)); // cmp w10, #0
+		_emit(e, 0x1A800400 | (3 << 16) | (0 << 12) | (3 << 5) | 3); // cinc w3, w3, ne
+	}
+	if (c->romCode && c->prefetch) {
+		_movImm32(e, 0, c->pc + c->width * (i + 2));
+		_strW(e, 0, R_CPU, OFF_PC);
+		_movX(e, 0, R_CPU);
+		_movW(e, 1, 3);
+		_ldrX(e, 16, R_CPU, OFF_MEMORY + offsetof(struct ARMMemory, stall));
+		_blr(e, 16);
+		_movW(e, 3, 0);
+		_ldrW(e, 1, R_CPU, 4 * m->rs);
+	}
+	_ldrW(e, 2, R_CPU, 4 * m->rm);
+	if (m->rn >= 0) {
+		_ldrW(e, 5, R_CPU, 4 * m->rn);
+		_emit(e, 0x1B000000 | (1 << 16) | (5 << 10) | (2 << 5) | 0); // madd w0, w2, w1, w5
+	} else {
+		_emit(e, 0x1B000000 | (1 << 16) | (31 << 10) | (2 << 5) | 0); // mul w0, w2, w1
+	}
+	_strW(e, 0, R_CPU, 4 * m->rd);
+	if (m->s) {
+		// N and Z from the result; ARM takes C from the last shifter result
+		_ldrW(e, 9, R_CPU, OFF_CPSR);
+		_andImm(e, 9, 9, 0, c->thumb ? 30 : 29);
+		_lsrWImm(e, 10, 0, 31);
+		_orrWShift(e, 9, 9, 10, 31);
+		_emit(e, 0x7100001F | (0 << 5)); // cmp w0, #0
+		_emit(e, 0x1A9F17E0 | 10); // cset w10, eq
+		_orrWShift(e, 9, 9, 10, 30);
+		if (!c->thumb) {
+			_ldrW(e, 10, R_CPU, OFF_SHIFTER_CARRY);
+			_andImm(e, 10, 10, 0, 1);
+			_orrWShift(e, 9, 9, 10, 29);
+		}
+		_strW(e, 9, R_CPU, OFF_CPSR);
+	}
+	_addCyclesReg(c, 3, c->memCycles);
+	if (fail) {
+		uint8_t* after = _b(e);
+		_patch(fail, e->p);
+		_addCycles(c, c->aluCycles);
+		_patch(after, e->p);
+	}
+	_eventCheck(c, i + 1);
 }

@@ -408,8 +408,10 @@ static bool _decodeArmMem(uint32_t op, uint32_t address, struct MemOp* mem) {
 			mem->immediateOffset = true;
 			mem->offset = op & 0xFFF;
 		}
-	} else if ((op & 0x0E000090) == 0x00000090 && (op & 0x60) == 0x20 && (p || !w)) {
-		mem->size = 2; // LDRH, STRH
+	} else if ((op & 0x0E000090) == 0x00000090 && (op & 0x60) && ((op & 0x60) == 0x20 || (op & (1 << 20))) && (p || !w)) {
+		// LDRH, STRH, LDRSB, LDRSH
+		mem->size = (op & 0x60) == 0x40 ? 1 : 2;
+		mem->signExtend = op & 0x40;
 		if (op & (1 << 22)) {
 			mem->immediateOffset = true;
 			mem->offset = ((op >> 4) & 0xF0) | (op & 0xF);
@@ -622,6 +624,43 @@ static bool _branchTarget(struct Compiler* c, unsigned i, uint32_t* target) {
 		return true;
 	}
 	return false;
+}
+
+// MUL, MLA and Thumb MUL, which take a wait by the multiplier's significant bytes
+struct MulOp {
+	unsigned cond;
+	unsigned rd;
+	unsigned rm;
+	unsigned rs;
+	int rn;
+	bool s;
+};
+
+static bool _decodeMul(struct Compiler* c, unsigned i, struct MulOp* m) {
+	uint32_t op = c->ops[i];
+	if (c->thumb) {
+		if ((op & 0xFFC0) != 0x4340) {
+			return false;
+		}
+		// rd *= rn, waiting by rd
+		m->cond = 0xE;
+		m->rd = op & 7;
+		m->rs = op & 7;
+		m->rm = (op >> 3) & 7;
+		m->rn = -1;
+		m->s = true;
+		return true;
+	}
+	if ((op & 0x0FC000F0) != 0x00000090) {
+		return false;
+	}
+	m->cond = op >> 28;
+	m->rd = (op >> 16) & 0xF;
+	m->rs = (op >> 8) & 0xF;
+	m->rm = op & 0xF;
+	m->rn = (op & 0x00200000) ? (int) ((op >> 12) & 0xF) : -1;
+	m->s = op & 0x00100000;
+	return m->cond != 0xF && m->rd != ARM_PC && m->rs != ARM_PC && m->rm != ARM_PC && m->rn != ARM_PC;
 }
 
 // LDM and STM without PC, the S bit or an empty list; Thumb PUSH, POP, LDMIA and STMIA
@@ -1106,6 +1145,7 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	struct AluOp alus[MAX_SPAN];
 	struct MemOp mem;
 	struct MultiOp multi;
+	struct MulOp mul;
 	i = 0;
 	while (i < count) {
 		fast[i] = c->e.p;
@@ -1148,6 +1188,10 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		} else if (_decodeMem(c, i, &mem)) {
 			_fetchAhead(c, i);
 			_emitMem(c, i, &mem);
+			++i;
+		} else if (_decodeMul(c, i, &mul)) {
+			_fetchAhead(c, i);
+			_emitMul(c, i, &mul);
 			++i;
 		} else if (_decodeMulti(c, i, &multi)) {
 			_fetchAhead(c, i);
