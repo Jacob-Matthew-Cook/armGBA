@@ -382,32 +382,17 @@ static void _linkStub(struct Compiler* c, struct ARMJitLink* link) {
 	_jumpTo(c, c->jit->linkDispatch);
 }
 
-static void _emitTrampoline(struct Compiler* c) {
+// Starts generated code at the address in rsi
+static void _emitEnter(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	c->jit->enter = (void (*)(struct ARMCore*, void*)) e->p;
 	_prologue(c);
 	_insn(e, 0, XO_GROUP5, G5_JMP, _xr(X_RSI));
+}
 
-	// A link stub passes its link in rdx so the exit gets patched to the block found
-	c->jit->linkDispatch = e->p;
-	_insn(e, X_W, XO_STORE, X_RDX, _xm(X_JIT, JIT_PENDING_LINK));
-	uint8_t* toLookup = _jmp(e);
-
-	// Next block for the PC and mode in the CPU state, if it is compiled and nothing is due
-	c->jit->dispatch = e->p;
-	_insn(e, X_W, XO_MOV_IMM, 0, _xm(X_JIT, JIT_PENDING_LINK));
-	_imm32(e, 0);
-	uint8_t* toLookup2 = _jmp(e);
-
-	// Due events run here; the frame loop decides whether to come back
-	c->jit->events = e->p;
-	_callEvents(e);
-	uint8_t* stop = _jcc(e, CC_E);
-	_insn(e, X_W, XO_MOV_IMM, 0, _xm(X_JIT, JIT_PENDING_LINK));
-	_imm32(e, 0);
-
-	_patch(toLookup, e->p);
-	_patch(toLookup2, e->p);
+// The block for the PC and mode in the CPU state, if it is compiled and nothing is due; otherwise back to C
+static void _emitLookup(struct Compiler* c) {
+	struct Emitter* e = &c->e;
 	_insn(e, 0, XO_MOV8_IMM, 0, _xm(X_JIT, JIT_BLOCKS_DROPPED));
 	_byte(e, 0);
 	_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
@@ -422,26 +407,26 @@ static void _emitTrampoline(struct Compiler* c) {
 	_ri(e, G1_AND, X_RDX, ARM_JIT_PAGES - 1);
 	_loadScaled64(e, X_RDX, X_JIT, X_RDX, JIT_PAGES);
 	_test64(e, X_RDX);
-	uint8_t* noPage = _jcc(e, CC_E);
+	_patch(_jcc(e, CC_E), c->jit->toC);
 	_mov(e, X_RSI, X_RCX);
 	_ri(e, G1_AND, X_RSI, 0xFFF);
 	_shift(e, SH_SHR, X_RSI, 1);
 	_loadScaled64(e, X_RDX, X_RDX, X_RSI, 0);
 	_test64(e, X_RDX);
-	uint8_t* noBlock = _jcc(e, CC_E);
+	_patch(_jcc(e, CC_E), c->jit->toC);
 	_cmpRegMem(e, X_RCX, X_RDX, ENTRY_PC);
-	uint8_t* otherPc = _jcc(e, CC_NE);
+	_patch(_jcc(e, CC_NE), c->jit->toC);
 	_insn(e, 0, XO_MOVZX8, X_RSI, _xm(X_RDX, ENTRY_THUMB));
 	_rr(e, XO_CMP, X_RSI, X_RAX);
-	uint8_t* otherMode = _jcc(e, CC_NE);
-	_load(e, X_RSI, X_CPU, OFF_PREFETCH0);
-	_insn(e, 0, XO_XOR_RM, X_RSI, _xm(X_RDX, ENTRY_OP0));
-	_insn(e, 0, XO_AND_RM, X_RSI, _xm(X_RDX, ENTRY_OP_MASK0));
-	uint8_t* otherOp0 = _jcc(e, CC_NE);
-	_load(e, X_RSI, X_CPU, OFF_PREFETCH1);
-	_insn(e, 0, XO_XOR_RM, X_RSI, _xm(X_RDX, ENTRY_OP1));
-	_insn(e, 0, XO_AND_RM, X_RSI, _xm(X_RDX, ENTRY_OP_MASK1));
-	uint8_t* otherOp1 = _jcc(e, CC_NE);
+	_patch(_jcc(e, CC_NE), c->jit->toC);
+	unsigned k;
+	for (k = 0; k < 2; ++k) {
+		_load(e, X_RSI, X_CPU, k ? OFF_PREFETCH1 : OFF_PREFETCH0);
+		_insn(e, 0, XO_XOR_RM, X_RSI, _xm(X_RDX, k ? ENTRY_OP1 : ENTRY_OP0));
+		_insn(e, 0, XO_AND_RM, X_RSI, _xm(X_RDX, k ? ENTRY_OP_MASK1 : ENTRY_OP_MASK0));
+		_patch(_jcc(e, CC_NE), c->jit->toC);
+	}
+	// A pending link gets patched to jump straight to the block
 	_load64(e, X_RSI, X_JIT, JIT_PENDING_LINK);
 	_test64(e, X_RSI);
 	uint8_t* noLink = _jcc(e, CC_E);
@@ -452,18 +437,11 @@ static void _emitTrampoline(struct Compiler* c) {
 	_mov64(e, X_RDX, X_WB);
 	_patch(noLink, e->p);
 	_insn(e, 0, XO_GROUP5, G5_JMP, _xm(X_RDX, ENTRY_CODE));
+}
 
-	c->jit->toC = e->p;
-	_patch(stop, e->p);
-	_patch(noPage, e->p);
-	_patch(noBlock, e->p);
-	_patch(otherPc, e->p);
-	_patch(otherMode, e->p);
-	_patch(otherOp0, e->p);
-	_patch(otherOp1, e->p);
-	_epilogue(c);
-
-	// Runs a due exit's events, then returns to the block unless the PC moved, its code changed or the frame ended
+// Runs a due exit's events, then returns to the block unless the PC moved, its code changed or the frame ended
+static void _emitResume(struct Compiler* c) {
+	struct Emitter* e = &c->e;
 	c->jit->resume = e->p;
 	_load(e, X_WB, X_CPU, OFF_PC);
 	_adjustStack(e, -8);
@@ -483,6 +461,32 @@ static void _emitTrampoline(struct Compiler* c) {
 	_patch(written, e->p);
 	_adjustStack(e, 16);
 	_jumpTo(c, c->jit->dispatch);
+}
+
+// The routines all generated code shares
+static void _emitTrampoline(struct Compiler* c) {
+	struct Emitter* e = &c->e;
+	_emitEnter(c);
+	c->jit->toC = e->p;
+	_epilogue(c);
+
+	// A link stub passes its link in rdx so the exit gets patched to the block found
+	c->jit->linkDispatch = e->p;
+	_insn(e, X_W, XO_STORE, X_RDX, _xm(X_JIT, JIT_PENDING_LINK));
+	uint8_t* toLookup = _jmp(e);
+
+	// Due events run here; the frame loop decides whether to come back
+	c->jit->events = e->p;
+	_callEvents(e);
+	_patch(_jcc(e, CC_E), c->jit->toC);
+
+	// Next block for the PC and mode in the CPU state, if it is compiled and nothing is due
+	c->jit->dispatch = e->p;
+	_insn(e, X_W, XO_MOV_IMM, 0, _xm(X_JIT, JIT_PENDING_LINK));
+	_imm32(e, 0);
+	_patch(toLookup, e->p);
+	_emitLookup(c);
+	_emitResume(c);
 }
 
 static void _exitJump(struct Compiler* c, int index) {
