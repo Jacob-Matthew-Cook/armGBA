@@ -260,7 +260,7 @@ void GBADMAUpdate(struct GBA* gba) {
 	}
 }
 
-void GBADMAService(struct GBA* gba, int number, struct GBADMA* info) {
+static void _dmaUnit(struct GBA* gba, int number, struct GBADMA* info) {
 	struct GBAMemory* memory = &gba->memory;
 	struct ARMCore* cpu = gba->cpu;
 	uint32_t width = 2 << GBADMARegisterGetWidth(info->reg);
@@ -358,6 +358,49 @@ void GBADMAService(struct GBA* gba, int number, struct GBADMA* info) {
 			info->when += 2;
 		}
 	}
+}
+
+// Memory, and video registers on the I/O side, which take a DMA unit without touching the timing
+static bool _dmaPlain(uint32_t address, bool dest) {
+	switch (address >> BASE_OFFSET) {
+	case GBA_REGION_EWRAM:
+	case GBA_REGION_IWRAM:
+	case GBA_REGION_PALETTE_RAM:
+	case GBA_REGION_VRAM:
+	case GBA_REGION_OAM:
+		return true;
+	case GBA_REGION_IO:
+		address &= OFFSET_MASK;
+		return dest && address < GBA_REG_SOUND1CNT_LO && (address < GBA_REG_DISPSTAT || address > GBA_REG_VCOUNT);
+	case GBA_REGION_ROM0:
+	case GBA_REGION_ROM0_EX:
+	case GBA_REGION_ROM1:
+	case GBA_REGION_ROM1_EX:
+	case GBA_REGION_ROM2:
+		return !dest;
+	default:
+		return false;
+	}
+}
+
+// The next unit comes before any other event and with no other DMA waiting, so the scheduler would run it now
+static bool _dmaRunsOn(struct GBA* gba, int number, const struct GBADMA* info) {
+	if (!(info->nextCount & 0xFFFFF) || !gba->timing.root || (int32_t) (gba->timing.root->when - info->when) <= 0) {
+		return false;
+	}
+	int i;
+	for (i = 0; i < 4; ++i) {
+		if (i != number && GBADMARegisterIsEnable(gba->memory.dma[i].reg) && gba->memory.dma[i].nextCount) {
+			return false;
+		}
+	}
+	return _dmaPlain(info->nextSource, false) && _dmaPlain(info->nextDest, true);
+}
+
+void GBADMAService(struct GBA* gba, int number, struct GBADMA* info) {
+	do {
+		_dmaUnit(gba, number, info);
+	} while (_dmaRunsOn(gba, number, info));
 	GBADMAUpdate(gba);
 }
 
