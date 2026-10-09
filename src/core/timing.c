@@ -124,10 +124,6 @@ int32_t mTimingTick(struct mTiming* timing, int32_t cycles) {
 	return *timing->nextEvent;
 }
 
-int32_t mTimingCurrentTime(const struct mTiming* timing) {
-	return timing->masterCycles + *timing->relativeCycles;
-}
-
 uint64_t mTimingGlobalTime(const struct mTiming* timing) {
 	return timing->globalCycles + *timing->relativeCycles;
 }

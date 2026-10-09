@@ -44,7 +44,9 @@ bool mTimingIsScheduled(const struct mTiming* timing, const struct mTimingEvent*
 
 int32_t mTimingTick(struct mTiming* timing, int32_t cycles);
 
-int32_t mTimingCurrentTime(const struct mTiming* timing);
+static inline int32_t mTimingCurrentTime(const struct mTiming* timing) {
+	return timing->masterCycles + *timing->relativeCycles;
+}
 uint64_t mTimingGlobalTime(const struct mTiming* timing);
 
 int32_t mTimingNextEvent(struct mTiming* timing);
