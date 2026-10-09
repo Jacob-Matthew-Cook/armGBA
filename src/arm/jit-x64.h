@@ -146,10 +146,19 @@ static void _mov64(struct Emitter* e, int dst, int src) {
 	_insn(e, X_W, XO_STORE, src, _xr(dst));
 }
 
-// Group 1 with an immediate: G1_ADD, G1_OR, G1_AND, G1_SUB, G1_XOR, G1_CMP
+// Group 1 (G1_*) with an immediate, sign-extended from a byte when it fits
+static void _groupImm(struct Emitter* e, unsigned flags, int digit, struct X86Operand rm, uint32_t imm) {
+	bool small = (int32_t) imm == (int8_t) imm;
+	_insn(e, flags, small ? XO_GROUP1_IMM8 : XO_GROUP1, digit, rm);
+	if (small) {
+		_byte(e, imm);
+	} else {
+		_imm32(e, imm);
+	}
+}
+
 static void _ri(struct Emitter* e, int digit, int dst, uint32_t imm) {
-	_insn(e, 0, XO_GROUP1, digit, _xr(dst));
-	_imm32(e, imm);
+	_groupImm(e, 0, digit, _xr(dst), imm);
 }
 
 static void _movImm(struct Emitter* e, int dst, uint32_t imm) {
@@ -186,8 +195,7 @@ static void _storeImm(struct Emitter* e, int base, int32_t disp, uint32_t imm) {
 
 // Group 1 on dword [base + disp] with an immediate
 static void _memImm(struct Emitter* e, int digit, int base, int32_t disp, uint32_t imm) {
-	_insn(e, 0, XO_GROUP1, digit, _xm(base, disp));
-	_imm32(e, imm);
+	_groupImm(e, 0, digit, _xm(base, disp), imm);
 }
 
 // cmp byte [operand], imm8
@@ -273,8 +281,7 @@ static void _pop(struct Emitter* e, int reg) {
 
 // rsp += bytes
 static void _adjustStack(struct Emitter* e, int8_t bytes) {
-	_insn(e, X_W, XO_GROUP1_IMM8, bytes < 0 ? G1_SUB : G1_ADD, _xr(X_RSP));
-	_byte(e, bytes < 0 ? -bytes : bytes);
+	_groupImm(e, X_W, G1_ADD, _xr(X_RSP), bytes);
 }
 
 static void _ret(struct Emitter* e) {
@@ -925,8 +932,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 		// Once per block, unless a tile cache wants every address
 		_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
 		_load64(e, X_RDI, X_RAX, 0);
-		_insn(e, X_W, XO_GROUP1, G1_CMP, _xm(X_RDI, offsetof(struct GBAVideoRenderer, cache)));
-		_imm32(e, 0);
+		_groupImm(e, X_W, G1_CMP, _xm(X_RDI, offsetof(struct GBAVideoRenderer, cache)), 0);
 		uint8_t* cached = _jcc(e, CC_NE);
 		_load(e, X_RAX, X_RSP, 4);
 		_shift(e, SH_SHR, X_RAX, 12);
