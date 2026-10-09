@@ -15,9 +15,13 @@ enum {
 #define X_JIT X_R12
 #define X_IWRAM X_R13
 #define X_EWRAM X_R14
+// A transfer's base writeback, or a value kept across C calls
 #define X_WB X_R15
 // The cycle count lives here while generated code runs
 #define X_CYCLES X_RBP
+// Stack slots: a C call's cycles and the address of the access in flight
+#define CYCLE_SLOT 0
+#define ADDRESS_SLOT 4
 
 enum {
 	CC_O = 0x0,
@@ -299,6 +303,14 @@ static uint8_t* _callSite(struct Emitter* e) {
 	return at;
 }
 
+// Runs the due events; ZF is set when the frame is done
+static void _callEvents(struct Emitter* e) {
+	_mov64(e, X_RDI, X_CPU);
+	_movImm64(e, X_RAX, (uintptr_t) ARMJitEvents);
+	_callC(e, X_RAX);
+	_insn(e, 0, XO_TEST8, X_RAX, _xr(X_RAX));
+}
+
 static void _prologue(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	_push(e, X_RBX);
@@ -307,7 +319,7 @@ static void _prologue(struct Compiler* c) {
 	_push(e, X_R13);
 	_push(e, X_R14);
 	_push(e, X_R15);
-	_adjustStack(e, -8); // keeps calls aligned; [rsp] holds a C call's cycles and [rsp + 4] the access address
+	_adjustStack(e, -8); // keeps calls aligned and holds the stack slots
 	_mov64(e, X_CPU, X_RDI);
 	if (c->gba) {
 		_movImm64(e, X_JIT, (uintptr_t) c->jit);
@@ -389,12 +401,7 @@ static void _emitTrampoline(struct Compiler* c) {
 
 	// Due events run here; the frame loop decides whether to come back
 	c->jit->events = e->p;
-	_store(e, X_CYCLES, X_CPU, OFF_CYCLES);
-	_mov64(e, X_RDI, X_CPU);
-	_movImm64(e, X_RAX, (uintptr_t) ARMJitEvents);
-	_call(e, X_RAX);
-	_load(e, X_CYCLES, X_CPU, OFF_CYCLES);
-	_insn(e, 0, XO_TEST8, X_RAX, _xr(X_RAX));
+	_callEvents(e);
 	uint8_t* stop = _jcc(e, CC_E);
 	_insn(e, X_W, XO_MOV_IMM, 0, _xm(X_JIT, JIT_PENDING_LINK));
 	_imm32(e, 0);
@@ -460,12 +467,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	c->jit->resume = e->p;
 	_load(e, X_WB, X_CPU, OFF_PC);
 	_adjustStack(e, -8);
-	_store(e, X_CYCLES, X_CPU, OFF_CYCLES);
-	_mov64(e, X_RDI, X_CPU);
-	_movImm64(e, X_RAX, (uintptr_t) ARMJitEvents);
-	_call(e, X_RAX);
-	_load(e, X_CYCLES, X_CPU, OFF_CYCLES);
-	_insn(e, 0, XO_TEST8, X_RAX, _xr(X_RAX));
+	_callEvents(e);
 	uint8_t* frameDone = _jcc(e, CC_E);
 	_cmpRegMem(e, X_WB, X_CPU, OFF_PC);
 	uint8_t* moved = _jcc(e, CC_NE);
@@ -531,8 +533,19 @@ static void _eventCheck(struct Compiler* c, unsigned index) {
 	_exitAt(c, _jcc(e, CC_GE), index | EXIT_DUE);
 }
 
+// A conditional instruction that does not run still takes its fetch
+static void _skipped(struct Compiler* c, uint8_t* fail) {
+	struct Emitter* e = &c->e;
+	if (fail) {
+		uint8_t* after = _jmp(e);
+		_patch(fail, e->p);
+		_addCycles(c, c->aluCycles);
+		_patch(after, e->p);
+	}
+}
+
 // Jumps to the returned site when an event comes due before the last instruction of a run
-static uint8_t* _segmentCheck(struct Compiler* c, uint32_t cycles) {
+static uint8_t* _runCheck(struct Compiler* c, uint32_t cycles) {
 	struct Emitter* e = &c->e;
 	_mov(e, X_RAX, X_CYCLES);
 	_ri(e, G1_ADD, X_RAX, cycles);
@@ -827,7 +840,7 @@ static void _memResult(struct Compiler* c, const struct MemOp* mem) {
 		uint8_t* halfword = NULL;
 		if (mem->size == 2) {
 			// LDRSH of an odd address sign-extends the rotated byte
-			_insn(e, 0, XO_GROUP3_8, G3_TEST, _xm(X_RSP, 4));
+			_insn(e, 0, XO_GROUP3_8, G3_TEST, _xm(X_RSP, ADDRESS_SLOT));
 			_byte(e, 1);
 			halfword = _jcc(e, CC_E);
 		}
@@ -906,7 +919,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 	*slow = _jcc(e, CC_AE);
 	_ri(e, G1_AND, X_RCX, size == 4 ? 0x1FFFC : size == 2 ? 0x1FFFE : 0x1FFFF);
 	_movImm64(e, X_R11, (uintptr_t) c->gba->video.vram);
-	_store(e, X_RDI, X_RSP, 4);
+	_store(e, X_RDI, X_RSP, ADDRESS_SLOT);
 	if (load) {
 		_memAccess(e, true, size, X_R11);
 		_mov(e, X_WB, X_RAX); // writeback is already stored for loads
@@ -926,7 +939,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 		_load64(e, X_RDI, X_RAX, 0);
 		_groupImm(e, X_W, G1_CMP, _xm(X_RDI, offsetof(struct GBAVideoRenderer, cache)), 0);
 		uint8_t* cached = _jcc(e, CC_NE);
-		_load(e, X_RAX, X_RSP, 4);
+		_load(e, X_RAX, X_RSP, ADDRESS_SLOT);
 		_shift(e, SH_SHR, X_RAX, 12);
 		_ri(e, G1_AND, X_RAX, 0x1F);
 		_insn(e, 0, XO_BT, X_RAX, _xm(X_JIT, JIT_VRAM_NOTIFIED));
@@ -937,7 +950,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 		for (call = 0; call < (size == 4 ? 2 : 1); ++call) {
 			_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
 			_load64(e, X_RDI, X_RAX, 0);
-			_load(e, X_RSI, X_RSP, 4);
+			_load(e, X_RSI, X_RSP, ADDRESS_SLOT);
 			_ri(e, G1_AND, X_RSI, size == 4 ? 0x1FFFC : 0x1FFFE);
 			if (size == 4 && call == 0) {
 				_ri(e, G1_ADD, X_RSI, 2);
@@ -946,7 +959,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 			_callC(e, X_RAX);
 		}
 		_patch(notified, e->p);
-		_load(e, X_RDI, X_RSP, 4);
+		_load(e, X_RDI, X_RSP, ADDRESS_SLOT);
 		_patch(unchanged, e->p);
 	}
 	_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.stallMask);
@@ -959,7 +972,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 	_movImm64(e, X_RAX, (uintptr_t) GBAMemoryVRAMWait);
 	_callC(e, X_RAX);
 	_mov(e, X_R10, X_RAX);
-	_load(e, X_RDI, X_RSP, 4);
+	_load(e, X_RDI, X_RSP, ADDRESS_SLOT);
 	uint8_t* waited = _jmp(e);
 	_patch(noStall, e->p);
 	_movImm(e, X_R10, size == 4 ? 1 : 0);
@@ -996,22 +1009,22 @@ static void _memSlow(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	struct Emitter* e = &c->e;
 	unsigned size = mem->size;
 	_storeState(c, i + 1);
-	_storeImm(e, X_RSP, 0, 0);
+	_storeImm(e, X_RSP, CYCLE_SLOT, 0);
 	_mov(e, X_RSI, X_RDI);
 	_mov64(e, X_RDI, X_CPU);
 	unsigned offset;
 	if (mem->load) {
-		_lea64(e, X_RDX, X_RSP, 0);
+		_lea64(e, X_RDX, X_RSP, CYCLE_SLOT);
 		offset = size == 4 ? offsetof(struct ARMMemory, load32) : size == 2 ? offsetof(struct ARMMemory, load16) : offsetof(struct ARMMemory, load8);
 	} else {
 		// Narrow values go sign-extended, as clang expects of int16_t and int8_t arguments
 		_insn(e, 0, size == 4 ? XO_LOAD : size == 2 ? XO_MOVSX16 : XO_MOVSX8, X_RDX, _xr(X_R9));
-		_lea64(e, X_RCX, X_RSP, 0);
+		_lea64(e, X_RCX, X_RSP, CYCLE_SLOT);
 		offset = size == 4 ? offsetof(struct ARMMemory, store32) : size == 2 ? offsetof(struct ARMMemory, store16) : offsetof(struct ARMMemory, store8);
 	}
 	_load64(e, X_RAX, X_CPU, OFF_MEMORY + offset);
 	_callC(e, X_RAX);
-	_load(e, X_R10, X_RSP, 0);
+	_load(e, X_R10, X_RSP, CYCLE_SLOT);
 	if (!mem->load) {
 		// The interpreter charges a store N - S as the store leaves them, not as compiled
 		unsigned nonseq;
@@ -1076,7 +1089,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_store(e, X_WB, X_CPU, 4 * mem->base.reg);
 	}
 	if (mem->signExtend && mem->size == 2) {
-		_store(e, X_RDI, X_RSP, 4); // the address decides how LDRSH extends
+		_store(e, X_RDI, X_RSP, ADDRESS_SLOT); // the address decides how LDRSH extends
 	}
 
 	cold = true;
@@ -1111,12 +1124,7 @@ tail:
 		c->cold[k].done = e->p;
 	}
 	_memResult(c, mem);
-	if (fail) {
-		uint8_t* after = _jmp(e);
-		_patch(fail, e->p);
-		_addCycles(c, c->aluCycles);
-		_patch(after, e->p);
-	}
+	_skipped(c, fail);
 	if (cold) {
 		c->cold[k].toEvent = e->p;
 		++c->nCold;
@@ -1285,13 +1293,13 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_cmpByte(e, _xm(X_JIT, JIT_SMC_HIT), 0);
 		_exitAt(c, _jcc(e, CC_NE), EXIT_DIRECT);
 		_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
-		_exitAt(c, _jcc(e, CC_GE), EXIT_TO_C);
+		_exitAt(c, _jcc(e, CC_GE), EXIT_EVENTS);
 		c->loops[c->nLoops++] = _jmp(e);
 	} else {
 		uint32_t target;
 		if (_branchTarget(c, i, &target)) {
 			_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
-			_exitAt(c, _jcc(e, CC_GE), EXIT_TO_C);
+			_exitAt(c, _jcc(e, CC_GE), EXIT_EVENTS);
 			_linkJump(c);
 		} else {
 			_exitJump(c, EXIT_DIRECT);
@@ -1369,7 +1377,7 @@ static void _emitBranch(struct Compiler* c, unsigned i, const struct BranchOp* b
 	} else {
 		_storeTargetPipeline(c, b->target);
 		_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
-		_exitAt(c, _jcc(e, CC_GE), EXIT_TO_C);
+		_exitAt(c, _jcc(e, CC_GE), EXIT_EVENTS);
 		_linkJump(c);
 	}
 
@@ -1487,12 +1495,7 @@ static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) 
 	}
 	_rr(e, XO_ADD, X_CYCLES, X_R10);
 	_addCycles(c, c->memCycles);
-	if (fail) {
-		uint8_t* after = _jmp(e);
-		_patch(fail, e->p);
-		_addCycles(c, c->aluCycles);
-		_patch(after, e->p);
-	}
+	_skipped(c, fail);
 	_eventCheck(c, i + 1);
 	uint8_t* next = _jmp(e);
 	unsigned s;
@@ -1557,12 +1560,7 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 	}
 	_rr(e, XO_ADD, X_CYCLES, X_R10);
 	_addCycles(c, c->memCycles);
-	if (fail) {
-		uint8_t* after = _jmp(e);
-		_patch(fail, e->p);
-		_addCycles(c, c->aluCycles);
-		_patch(after, e->p);
-	}
+	_skipped(c, fail);
 	_eventCheck(c, i + 1);
 }
 

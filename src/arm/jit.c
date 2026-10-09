@@ -28,9 +28,9 @@
 #define PATCH_LIMIT 4
 #define CODE_SIZE (32 * 1024 * 1024)
 #define MAX_INSN_BYTES 2048
-// Exits go to the dispatcher, back to C, or to a stub that stores the state before an instruction
+// Exits go to the dispatcher, to the due events, or to a stub that stores the state before an instruction
 #define EXIT_DIRECT -1
-#define EXIT_TO_C -2
+#define EXIT_EVENTS -2
 #define EXIT_DUE 0x1000
 #define MAX_EXITS (MAX_BLOCK * 16)
 
@@ -829,7 +829,7 @@ static unsigned _emitAluRun(struct Compiler* c, unsigned i, struct AluOp* alus) 
 		}
 	}
 	if (run > 1) {
-		c->runs[c->nRuns].site = _segmentCheck(c, cycles);
+		c->runs[c->nRuns].site = _runCheck(c, cycles);
 		c->runs[c->nRuns].index = i;
 		++c->nRuns;
 		c->runLength[i] = run;
@@ -939,11 +939,11 @@ static void _emitExits(struct Compiler* c) {
 	}
 	uint8_t* direct = c->e.p;
 	_jumpTo(c, c->jit->dispatch);
-	uint8_t* toC = c->e.p;
+	uint8_t* events = c->e.p;
 	_jumpTo(c, c->jit->events);
 	for (x = 0; x < c->nExits; ++x) {
 		int index = c->exits[x].index;
-		uint8_t* target = index == EXIT_DIRECT ? direct : index == EXIT_TO_C ? toC : stubs[(index & EXIT_DUE) != 0][index & ~EXIT_DUE];
+		uint8_t* target = index == EXIT_DIRECT ? direct : index == EXIT_EVENTS ? events : stubs[(index & EXIT_DUE) != 0][index & ~EXIT_DUE];
 		_patch(c->exits[x].at, target);
 	}
 	struct ARMJitBlock* block = c->block;
