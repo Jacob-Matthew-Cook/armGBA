@@ -123,6 +123,8 @@ static bool updateAudioLatency;
 static bool updateAudioRate;
 static bool deferredSetup = false;
 static bool useBitmasks = true;
+static bool useFastForward;
+static bool fastForwarding;
 static bool envVarsUpdated;
 static int32_t tiltX = 0;
 static int32_t tiltY = 0;
@@ -1393,6 +1395,9 @@ void retro_init(void) {
 #endif
 	environCallback(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt);
 
+	// L2 and R2 fast-forward while held when the frontend lets the core ask for it, like gpSP
+	useFastForward = environCallback(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, NULL);
+
 	struct retro_input_descriptor inputDescriptors[] = {
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A, "A" },
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B, "B" },
@@ -1406,8 +1411,8 @@ void retro_init(void) {
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN, "Down" },
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "R" },
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, "L" },
-		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Turbo R" },
-		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Turbo L" },
+		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, useFastForward ? "Fast Forward" : "Turbo R" },
+		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, useFastForward ? "Fast Forward" : "Turbo L" },
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3, "Brighten Solar Sensor" },
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3, "Darken Solar Sensor" },
 		{ 0 }
@@ -1509,6 +1514,7 @@ void retro_deinit(void) {
 	luxSensorEnabled = false;
 	sensorsInitDone = false;
 	useBitmasks = false;
+	useFastForward = false;
 
 	audioLowPassEnabled = false;
 	audioLowPassRange = 0;
@@ -1546,6 +1552,17 @@ int16_t cycleturbo(bool a, bool b, bool l, bool r) {
 	return buttons;
 }
 
+static void _setFastForward(bool fastForward) {
+	struct retro_fastforwarding_override override = {
+		.ratio = -1.0f,
+		.fastforward = fastForward,
+		.notification = true,
+		.inhibit_toggle = fastForward,
+	};
+	environCallback(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &override);
+	fastForwarding = fastForward;
+}
+
 void retro_run(void) {
 	if (deferredSetup) {
 		_doDeferredSetup();
@@ -1581,28 +1598,37 @@ void retro_run(void) {
 
 	keys = 0;
 	unsigned i;
+	bool l2;
+	bool r2;
 	if (useBitmasks) {
 		int16_t joypadMask = inputCallback(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_MASK);
 		for (i = 0; i < sizeof(keymap) / sizeof(*keymap); ++i) {
 			keys |= ((joypadMask >> keymap[i]) & 1) << i;
 		}
+		l2 = joypadMask & (1 << RETRO_DEVICE_ID_JOYPAD_L2);
+		r2 = joypadMask & (1 << RETRO_DEVICE_ID_JOYPAD_R2);
 		// XXX: turbo keys, should be moved to frontend
 #define JOYPAD_BIT(BUTTON) (1 << RETRO_DEVICE_ID_JOYPAD_ ## BUTTON)
-		keys |= cycleturbo(joypadMask & JOYPAD_BIT(X), joypadMask & JOYPAD_BIT(Y), joypadMask & JOYPAD_BIT(L2), joypadMask & JOYPAD_BIT(R2));
+		keys |= cycleturbo(joypadMask & JOYPAD_BIT(X), joypadMask & JOYPAD_BIT(Y), !useFastForward && l2, !useFastForward && r2);
 #undef JOYPAD_BIT
 	} else {
 		for (i = 0; i < sizeof(keymap) / sizeof(*keymap); ++i) {
 			keys |= (!!inputCallback(0, RETRO_DEVICE_JOYPAD, 0, keymap[i])) << i;
 		}
+		l2 = inputCallback(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2);
+		r2 = inputCallback(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2);
 		// XXX: turbo keys, should be moved to frontend
 		keys |= cycleturbo(
 			inputCallback(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X),
 			inputCallback(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y),
-			inputCallback(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2),
-			inputCallback(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2)
+			!useFastForward && l2,
+			!useFastForward && r2
 		);
 	}
 	core->setKeys(core, keys);
+	if (useFastForward && fastForwarding != (l2 || r2)) {
+		_setFastForward(l2 || r2);
+	}
 
 	if (!luxSensorUsed) {
 		static bool wasAdjustingLux = false;
@@ -2139,6 +2165,9 @@ bool retro_load_game(const struct retro_game_info* game) {
 void retro_unload_game(void) {
 	if (!core) {
 		return;
+	}
+	if (fastForwarding) {
+		_setFastForward(false);
 	}
 	mCoreConfigDeinit(&core->config);
 	core->deinit(core);
