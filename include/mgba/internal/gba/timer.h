@@ -28,6 +28,7 @@ struct GBATimer {
 
 void GBATimerInit(struct GBA* gba);
 void GBATimerUpdateRegister(struct GBA* gba, int timer, int32_t cyclesLate);
+void GBATimerReadRegister(struct GBA* gba, int timer);
 void GBATimerWriteTMCNT_LO(struct GBA* gba, int timer, uint16_t value);
 void GBATimerWriteTMCNT_HI(struct GBA* gba, int timer, uint16_t value);
 

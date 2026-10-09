@@ -83,7 +83,7 @@ void GBATimerInit(struct GBA* gba) {
 	gba->timers[3].event.priority = 0x23;
 }
 
-void GBATimerUpdateRegister(struct GBA* gba, int timer, int32_t cyclesLate) {
+static void _updateRegister(struct GBA* gba, int timer, int32_t cyclesLate, bool read) {
 	struct GBATimer* currentTimer = &gba->timers[timer];
 	if (!GBATimerFlagsIsEnable(currentTimer->flags) || GBATimerFlagsIsCountUp(currentTimer->flags)) {
 		return;
@@ -109,8 +109,22 @@ void GBATimerUpdateRegister(struct GBA* gba, int timer, int32_t cyclesLate) {
 	tickIncrement = (0x10000 - tickIncrement) << prescaleBits;
 	currentTime += tickIncrement;
 	currentTime &= ~tickMask;
+	// A read finds the event of a running timer scheduled, and timer priorities are unique, so
+	// rescheduling it at the same time would leave the queue as it is
+	if (read && currentTimer->event.when == (uint32_t) currentTime) {
+		return;
+	}
 	mTimingDeschedule(&gba->timing, &currentTimer->event);
 	mTimingScheduleAbsolute(&gba->timing, &currentTimer->event, currentTime);
+}
+
+void GBATimerUpdateRegister(struct GBA* gba, int timer, int32_t cyclesLate) {
+	_updateRegister(gba, timer, cyclesLate, false);
+}
+
+// Reading the counter takes two cycles (1N+1I), removed preemptively
+void GBATimerReadRegister(struct GBA* gba, int timer) {
+	_updateRegister(gba, timer, 2, true);
 }
 
 void GBATimerWriteTMCNT_LO(struct GBA* gba, int timer, uint16_t reload) {

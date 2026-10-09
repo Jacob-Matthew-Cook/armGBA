@@ -773,18 +773,17 @@ uint16_t GBAIORead(struct GBA* gba, uint32_t address) {
 	}
 
 	switch (address) {
-	// Reading this takes two cycles (1N+1I), so let's remove them preemptively
 	case GBA_REG_TM0CNT_LO:
-		GBATimerUpdateRegister(gba, 0, 2);
+		GBATimerReadRegister(gba, 0);
 		break;
 	case GBA_REG_TM1CNT_LO:
-		GBATimerUpdateRegister(gba, 1, 2);
+		GBATimerReadRegister(gba, 1);
 		break;
 	case GBA_REG_TM2CNT_LO:
-		GBATimerUpdateRegister(gba, 2, 2);
+		GBATimerReadRegister(gba, 2);
 		break;
 	case GBA_REG_TM3CNT_LO:
-		GBATimerUpdateRegister(gba, 3, 2);
+		GBATimerReadRegister(gba, 3);
 		break;
 
 	case GBA_REG_KEYINPUT: {
