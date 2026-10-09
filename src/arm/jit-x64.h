@@ -75,13 +75,18 @@ static void _modrmReg(struct Emitter* e, int reg, int rm) {
 	_byte(e, 0xC0 | ((reg & 7) << 3) | (rm & 7));
 }
 
-// [base + disp32]
+// [base + disp]
 static void _modrmMem(struct Emitter* e, int reg, int base, int32_t disp) {
-	_byte(e, 0x80 | ((reg & 7) << 3) | (base & 7));
+	bool short8 = disp >= -128 && disp < 128;
+	_byte(e, (short8 ? 0x40 : 0x80) | ((reg & 7) << 3) | (base & 7));
 	if ((base & 7) == X_RSP) {
 		_byte(e, 0x24);
 	}
-	_imm32(e, disp);
+	if (short8) {
+		_byte(e, disp);
+	} else {
+		_imm32(e, disp);
+	}
 }
 
 // [base + index + disp32]
