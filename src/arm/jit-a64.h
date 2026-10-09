@@ -14,8 +14,10 @@
 #define R_COVER 24
 // The cycle count lives here while generated code runs
 #define R_CYCLES 25
-#define FRAME_SIZE 96
-#define CYCLE_SLOT 80
+// cpu->nextEvent, reloaded whenever C code may have changed it
+#define R_NEXT 27
+#define FRAME_SIZE 112
+#define CYCLE_SLOT 96
 
 enum {
 	A64_EQ = 0,
@@ -171,11 +173,12 @@ static uint8_t* _b(struct Emitter* e) {
 	return _emitSite(e, 0x14000000);
 }
 
-// C sees and may change the cycle count
+// C sees and may change the cycle count and the next event
 static void _blrC(struct Emitter* e, int rn) {
 	_strW(e, R_CYCLES, R_CPU, OFF_CYCLES);
 	_blr(e, rn);
 	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_ldrW(e, R_NEXT, R_CPU, OFF_NEXT_EVENT);
 }
 
 static void _prologue(struct Compiler* c) {
@@ -185,6 +188,7 @@ static void _prologue(struct Compiler* c) {
 	_stpX(e, 21, 22, 32);
 	_stpX(e, 23, 24, 48);
 	_stpX(e, 25, 26, 64);
+	_stpX(e, 27, 28, 80);
 	_movX(e, R_CPU, 0);
 	if (c->gba) {
 		_movImm64(e, R_JIT, (uintptr_t) c->jit);
@@ -193,11 +197,13 @@ static void _prologue(struct Compiler* c) {
 		_movImm64(e, R_COVER, (uintptr_t) c->jit->cover);
 	}
 	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_ldrW(e, R_NEXT, R_CPU, OFF_NEXT_EVENT);
 }
 
 static void _epilogue(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	_strW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_ldpX(e, 27, 28, 80);
 	_ldpX(e, 25, 26, 64);
 	_ldpX(e, 23, 24, 48);
 	_ldpX(e, 21, 22, 32);
@@ -270,8 +276,8 @@ static void _emitTrampoline(struct Compiler* c) {
 	_patch(toLookup, e->p);
 	_patch(toLookup2, e->p);
 	_emit(e, 0x39000000 | (JIT_SMC_HIT << 10) | (R_JIT << 5) | 31); // strb wzr, [x20, #smcHit]
-	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-	_cmpW(e, R_CYCLES, 1);
+	_ldrW(e, R_NEXT, R_CPU, OFF_NEXT_EVENT);
+	_cmpW(e, R_CYCLES, R_NEXT);
 	_patch(_bCond(e, A64_GE), c->jit->events);
 	_ldrW(e, 2, R_CPU, OFF_EXECUTION_MODE);
 	_ldrW(e, 3, R_CPU, OFF_PC);
@@ -331,6 +337,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	_movImm64(e, 16, (uintptr_t) ARMJitEvents);
 	_blr(e, 16);
 	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_ldrW(e, R_NEXT, R_CPU, OFF_NEXT_EVENT);
 	_emit(e, 0x7200001F | (7 << 10)); // tst w0, #0xFF
 	_patch(_bCond(e, A64_EQ), c->jit->toC);
 	_ldrW(e, 0, R_CPU, OFF_PC);
@@ -400,17 +407,15 @@ static void _addCycles(struct Compiler* c, uint32_t constant) {
 
 static void _eventCheck(struct Compiler* c, int index) {
 	struct Emitter* e = &c->e;
-	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-	_cmpW(e, R_CYCLES, 1);
+	_cmpW(e, R_CYCLES, R_NEXT);
 	_exitAt(c, _bCond(e, A64_GE), index < 0 ? index : index | EXIT_DUE);
 }
 
 // Jumps to the returned site when an event comes due before the last instruction of a run
 static uint8_t* _segmentCheck(struct Compiler* c, uint32_t cycles) {
 	struct Emitter* e = &c->e;
-	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
 	_addWImm(e, 0, R_CYCLES, cycles);
-	_cmpW(e, 0, 1);
+	_cmpW(e, 0, R_NEXT);
 	return _bCond(e, A64_GE);
 }
 
@@ -1083,15 +1088,13 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_exitAt(c, _bCond(e, A64_NE), EXIT_DIRECT);
 		_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
 		_exitAt(c, _cbnzW(e, 0), EXIT_DIRECT);
-		_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-		_cmpW(e, R_CYCLES, 1);
+		_cmpW(e, R_CYCLES, R_NEXT);
 		_exitAt(c, _bCond(e, A64_GE), EXIT_TO_C);
 		c->loops[c->nLoops++] = _b(e);
 	} else {
 		uint32_t target;
 		if (_branchTarget(c, i, &target)) {
-			_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-			_cmpW(e, R_CYCLES, 1);
+			_cmpW(e, R_CYCLES, R_NEXT);
 			_exitAt(c, _bCond(e, A64_GE), EXIT_TO_C);
 			_linkJump(c);
 		} else {
@@ -1183,8 +1186,7 @@ static void _emitBranch(struct Compiler* c, unsigned i, const struct BranchOp* b
 		_jumpTo(c, c->fast[b->index]);
 	} else {
 		_storeTargetPipeline(c, b->target);
-		_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-		_cmpW(e, R_CYCLES, 1);
+		_cmpW(e, R_CYCLES, R_NEXT);
 		_exitAt(c, _bCond(e, A64_GE), EXIT_TO_C);
 		_linkJump(c);
 	}
