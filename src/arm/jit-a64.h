@@ -712,6 +712,17 @@ static uint32_t _aluImm(unsigned opcode, bool s, uint32_t imm) {
 	}
 }
 
+// w9 = CPSR with N and Z from the result register, keeping its low keep bits
+static void _mergeNZ(struct Emitter* e, int result, int scratch, unsigned keep) {
+	_ldrW(e, 9, R_CPU, OFF_CPSR);
+	_andImm(e, 9, 9, 0, keep);
+	_lsrWImm(e, scratch, result, 31);
+	_dp(e, A64_ORR, 9, 9, scratch, 31);
+	_cmpWImm(e, result, 0);
+	_cset(e, scratch, A64_EQ);
+	_dp(e, A64_ORR, 9, 9, scratch, 30);
+}
+
 // storeCarry: MULS and MLAS take C from the last shifter result, so keep it for them
 static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarry) {
 	struct Emitter* e = &c->e;
@@ -809,13 +820,7 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 	if (setFlags) {
 		if (logical) {
 			// N and Z from the result, C from the shifter, V and bits 24-27 kept
-			_ldrW(e, 9, R_CPU, OFF_CPSR);
-			_andImm(e, 9, 9, 0, 29);
-			_andImm(e, 4, 3, 31, 1);
-			_dp(e, A64_ORR, 9, 9, 4, 0);
-			_cmpWImm(e, 3, 0);
-			_cset(e, 4, A64_EQ);
-			_dp(e, A64_ORR, 9, 9, 4, 30);
+			_mergeNZ(e, 3, 4, 29);
 			_dp(e, A64_ORR, 9, 9, 2, 29);
 		} else {
 			_mrsNzcv(e, 4);
@@ -1156,10 +1161,11 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	c->cold[k].miss[1] = NULL;
 	c->cold[k].smc = NULL;
 	_lsrWImm(e, 7, 4, 24);
-	switch (_memPath(c, mem)) {
+	int path = _memPath(c, mem);
+	switch (path) {
 	case PATH_IWRAM:
 	case PATH_EWRAM:
-		c->cold[k].smcEwram = _memPath(c, mem) == PATH_EWRAM;
+		c->cold[k].smcEwram = path == PATH_EWRAM;
 		_cmpWImm(e, 7, (c->cold[k].smcEwram ? GBA_REGION_EWRAM : GBA_REGION_IWRAM));
 		c->cold[k].miss[0] = _bCond(e, A64_NE);
 		c->cold[k].smc = _memRam(c, i, mem, c->cold[k].smcEwram);
@@ -1497,9 +1503,9 @@ static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) 
 	uint8_t* slow[3];
 	unsigned nSlow = 0;
 	uint8_t* done[2];
-	unsigned region;
-	for (region = 0; region < 2; ++region) {
-		bool iwram = region == 0;
+	unsigned pass;
+	for (pass = 0; pass < 2; ++pass) {
+		bool iwram = pass == 0;
 		_cmpWImm(e, 7, (iwram ? GBA_REGION_IWRAM : GBA_REGION_EWRAM));
 		uint8_t* other = _bCond(e, A64_NE);
 		unsigned bits = iwram ? 13 : 16;
@@ -1543,7 +1549,7 @@ static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) 
 		int32_t wait = memory->waitstatesSeq32[dataRegion] - memory->waitstatesNonseq32[dataRegion];
 		wait += n * (1 + (iwram ? 0 : memory->waitstatesSeq32[GBA_REGION_EWRAM])) + (m->load ? 1 : 0);
 		_dataWait(c, i, wait);
-		done[region] = _b(e);
+		done[pass] = _b(e);
 		_patch(other, e->p);
 		if (!iwram) {
 			slow[nSlow++] = _b(e);
@@ -1605,13 +1611,7 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 	_strW(e, 0, R_CPU, 4 * m->rd);
 	if (m->s) {
 		// N and Z from the result; ARM takes C from the last shifter result
-		_ldrW(e, 9, R_CPU, OFF_CPSR);
-		_andImm(e, 9, 9, 0, c->thumb ? 30 : 29);
-		_lsrWImm(e, 10, 0, 31);
-		_dp(e, A64_ORR, 9, 9, 10, 31);
-		_cmpWImm(e, 0, 0);
-		_cset(e, 10, A64_EQ);
-		_dp(e, A64_ORR, 9, 9, 10, 30);
+		_mergeNZ(e, 0, 10, c->thumb ? 30 : 29);
 		if (!c->thumb) {
 			_ldrW(e, 10, R_CPU, OFF_SHIFTER_CARRY);
 			_andImm(e, 10, 10, 0, 1);
