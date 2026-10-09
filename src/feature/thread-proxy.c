@@ -25,6 +25,10 @@ static void _unlock(struct mVideoLogger* logger);
 static void _wait(struct mVideoLogger* logger);
 static void _wake(struct mVideoLogger* logger, int y);
 
+// Each thread polls this many times before sleeping on the other. Sleeping between scanlines makes
+// both cores look idle, and an ondemand governor then lowers their clock
+#define PROXY_SPIN 100000
+
 void mVideoThreadProxyCreate(struct mVideoThreadProxy* renderer) {
 	mVideoLoggerRendererCreate(&renderer->d, false);
 	renderer->d.block = true;
@@ -100,11 +104,16 @@ void _proxyThreadRecover(struct mVideoThreadProxy* proxyRenderer) {
 	ThreadCreate(&proxyRenderer->thread, _proxyThread, proxyRenderer);
 }
 
+// Both sides retry under the lock before sleeping: the other thread only signals after its own
+// work, and polls without the lock
 static bool _writeData(struct mVideoLogger* logger, const void* data, size_t length) {
 	struct mVideoThreadProxy* proxyRenderer = (struct mVideoThreadProxy*) logger;
+	if (RingFIFOWrite(&proxyRenderer->dirtyQueue, data, length)) {
+		return true;
+	}
+	mLOG(GBA_VIDEO, DEBUG, "Can't write %"PRIz"u bytes. Proxy thread asleep?", length);
+	MutexLock(&proxyRenderer->mutex);
 	while (!RingFIFOWrite(&proxyRenderer->dirtyQueue, data, length)) {
-		mLOG(GBA_VIDEO, DEBUG, "Can't write %"PRIz"u bytes. Proxy thread asleep?", length);
-		MutexLock(&proxyRenderer->mutex);
 		if (proxyRenderer->threadState == PROXY_THREAD_STOPPED) {
 			mLOG(GBA_VIDEO, ERROR, "Proxy thread stopped prematurely!");
 			MutexUnlock(&proxyRenderer->mutex);
@@ -112,32 +121,43 @@ static bool _writeData(struct mVideoLogger* logger, const void* data, size_t len
 		}
 		ConditionWake(&proxyRenderer->toThreadCond);
 		ConditionWait(&proxyRenderer->fromThreadCond, &proxyRenderer->mutex);
-		MutexUnlock(&proxyRenderer->mutex);
 	}
+	MutexUnlock(&proxyRenderer->mutex);
 	return true;
 }
 
 static bool _readData(struct mVideoLogger* logger, void* data, size_t length, bool block) {
 	struct mVideoThreadProxy* proxyRenderer = (struct mVideoThreadProxy*) logger;
-	bool read = false;
-	while (true) {
-		read = RingFIFORead(&proxyRenderer->dirtyQueue, data, length);
-		if (!block || read) {
-			break;
+	int spin = block ? PROXY_SPIN : 0;
+	do {
+		if (RingFIFORead(&proxyRenderer->dirtyQueue, data, length)) {
+			return true;
 		}
-		mLOG(GBA_VIDEO, DEBUG, "Can't read %"PRIz"u bytes. CPU thread asleep?", length);
-		MutexLock(&proxyRenderer->mutex);
+	} while (spin--);
+	if (!block) {
+		return false;
+	}
+	mLOG(GBA_VIDEO, DEBUG, "Can't read %"PRIz"u bytes. CPU thread asleep?", length);
+	MutexLock(&proxyRenderer->mutex);
+	while (!RingFIFORead(&proxyRenderer->dirtyQueue, data, length)) {
 		ConditionWake(&proxyRenderer->fromThreadCond);
 		ConditionWait(&proxyRenderer->toThreadCond, &proxyRenderer->mutex);
-		MutexUnlock(&proxyRenderer->mutex);
 	}
-	return read;
+	MutexUnlock(&proxyRenderer->mutex);
+	return true;
 }
 
 static void _postEvent(struct mVideoLogger* logger, enum mVideoLoggerEvent event) {
 	struct mVideoThreadProxy* proxyRenderer = (struct mVideoThreadProxy*) logger;
 	MutexLock(&proxyRenderer->mutex);
 	proxyRenderer->event = event;
+	ConditionWake(&proxyRenderer->toThreadCond);
+	MutexUnlock(&proxyRenderer->mutex);
+	int spin;
+	for (spin = 0; spin < PROXY_SPIN && event; ++spin) {
+		ATOMIC_LOAD(event, proxyRenderer->event);
+	}
+	MutexLock(&proxyRenderer->mutex);
 	while (proxyRenderer->event) {
 		ConditionWake(&proxyRenderer->toThreadCond);
 		ConditionWait(&proxyRenderer->fromThreadCond, &proxyRenderer->mutex);
@@ -157,6 +177,11 @@ static void _wait(struct mVideoLogger* logger) {
 		_proxyThreadRecover(proxyRenderer);
 		return;
 	}
+	MutexLock(&proxyRenderer->mutex);
+	ConditionWake(&proxyRenderer->toThreadCond);
+	MutexUnlock(&proxyRenderer->mutex);
+	int spin;
+	for (spin = 0; spin < PROXY_SPIN && RingFIFOSize(&proxyRenderer->dirtyQueue); ++spin);
 	MutexLock(&proxyRenderer->mutex);
 	while (RingFIFOSize(&proxyRenderer->dirtyQueue)) {
 		ConditionWake(&proxyRenderer->toThreadCond);
@@ -188,7 +213,21 @@ static THREAD_ENTRY _proxyThread(void* logger) {
 	while (proxyRenderer->threadState != PROXY_THREAD_STOPPED) {
 		// Data written while the last batch ran was announced while nobody waited
 		if (!proxyRenderer->event && !RingFIFOSize(&proxyRenderer->dirtyQueue)) {
-			ConditionWait(&proxyRenderer->toThreadCond, &proxyRenderer->mutex);
+			MutexUnlock(&proxyRenderer->mutex);
+			int spin;
+			for (spin = 0; spin < PROXY_SPIN; ++spin) {
+				enum mVideoLoggerEvent event;
+				enum mVideoThreadProxyState state;
+				ATOMIC_LOAD(event, proxyRenderer->event);
+				ATOMIC_LOAD(state, proxyRenderer->threadState);
+				if (event || state == PROXY_THREAD_STOPPED || RingFIFOSize(&proxyRenderer->dirtyQueue)) {
+					break;
+				}
+			}
+			MutexLock(&proxyRenderer->mutex);
+			if (proxyRenderer->threadState != PROXY_THREAD_STOPPED && !proxyRenderer->event && !RingFIFOSize(&proxyRenderer->dirtyQueue)) {
+				ConditionWait(&proxyRenderer->toThreadCond, &proxyRenderer->mutex);
+			}
 		}
 		if (proxyRenderer->threadState == PROXY_THREAD_STOPPED) {
 			break;
