@@ -84,41 +84,131 @@ static inline void _compositeNoBlendNoObjwin(struct GBAVideoSoftwareRenderer* re
 	*pixel = color;
 }
 
-#if defined(__ARM_NEON) && defined(__aarch64__) && defined(COLOR_16_BIT) && defined(COLOR_5_6_5)
+// Eight pixels at a time where there is NEON or SSE4.1
+#if defined(COLOR_16_BIT) && defined(COLOR_5_6_5) && ((defined(__ARM_NEON) && defined(__aarch64__)) || defined(__SSE4_1__))
+#define VIDEO_SIMD 1
+#ifdef __ARM_NEON
 #include <arm_neon.h>
-#define VIDEO_NEON 1
+typedef uint32x4_t v32;
+typedef uint16x8_t v16;
+typedef uint8x8_t vidx;
+
+static inline v32 _v32Load(const uint32_t* p) { return vld1q_u32(p); }
+static inline void _v32Store(uint32_t* p, v32 v) { vst1q_u32(p, v); }
+static inline v32 _v32(uint32_t x) { return vdupq_n_u32(x); }
+static inline v32 _v32And(v32 a, v32 b) { return vandq_u32(a, b); }
+static inline v32 _v32Or(v32 a, v32 b) { return vorrq_u32(a, b); }
+static inline v32 _v32Bic(v32 a, v32 b) { return vbicq_u32(a, b); }
+static inline v32 _v32Eq(v32 a, v32 b) { return vceqq_u32(a, b); }
+static inline v32 _v32Ge(v32 a, v32 b) { return vcgeq_u32(a, b); }
+static inline v32 _v32Test(v32 a, v32 b) { return vtstq_u32(a, b); }
+static inline v32 _v32Select(v32 mask, v32 a, v32 b) { return vbslq_u32(mask, a, b); }
+static inline bool _v32Any(v32 a, v32 b) { return vmaxvq_u32(vorrq_u32(a, b)); }
+static inline v16 _v16(uint16_t x) { return vdupq_n_u16(x); }
+static inline v16 _v16Narrow(v32 low, v32 high) { return vcombine_u16(vmovn_u32(low), vmovn_u32(high)); }
+static inline v32 _v16Widen(v16 v, unsigned half) { return vmovl_u16(half ? vget_high_u16(v) : vget_low_u16(v)); }
+static inline v16 _v16Select(v16 mask, v16 a, v16 b) { return vbslq_u16(mask, a, b); }
+
+// The eight 4-bit pixels of a tile row, in drawing order
+static inline vidx _nibbles(uint32_t tileData) {
+	uint8x8_t bytes = vreinterpret_u8_u32(vdup_n_u32(tileData));
+	return vzip_u8(vand_u8(bytes, vdup_n_u8(0xF)), vshr_n_u8(bytes, 4)).val[0];
+}
+
+static inline v32 _nonzero(vidx index, unsigned half) {
+	v32 wide = vmovl_u16(half ? vget_high_u16(vmovl_u8(index)) : vget_low_u16(vmovl_u8(index)));
+	return vtstq_u32(wide, wide);
+}
+
+static inline v16 _lookup16(const mColor* palette, vidx index) {
+	uint8x16x2_t bytes = vld2q_u8((const uint8_t*) palette);
+	return vorrq_u16(vmovl_u8(vqtbl1_u8(bytes.val[0], index)), vshlq_n_u16(vmovl_u8(vqtbl1_u8(bytes.val[1], index)), 8));
+}
 
 // mColorMix5Bit for eight colors
-static inline uint16x8_t _mix5Bit8(uint16x8_t a, uint16x8_t b, uint16x8_t weightA, uint16x8_t weightB) {
+static inline v16 _mix5Bit8(v16 a, v16 b, v16 weightA, v16 weightB) {
 	uint16x8_t mask = vdupq_n_u16(0x1F);
 	uint16x8_t red = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vshrq_n_u16(a, 11), weightA), vshrq_n_u16(b, 11), weightB), 4), mask);
 	uint16x8_t green = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vandq_u16(vshrq_n_u16(a, 6), mask), weightA), vandq_u16(vshrq_n_u16(b, 6), mask), weightB), 4), mask);
 	uint16x8_t blue = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vandq_u16(a, mask), weightA), vandq_u16(b, mask), weightB), 4), mask);
 	return vorrq_u16(vorrq_u16(vshlq_n_u16(red, 11), vshlq_n_u16(green, 6)), blue);
 }
+#else
+#include <smmintrin.h>
+typedef __m128i v32;
+typedef __m128i v16;
+typedef __m128i vidx;
+
+static inline v32 _v32Load(const uint32_t* p) { return _mm_loadu_si128((const __m128i*) p); }
+static inline void _v32Store(uint32_t* p, v32 v) { _mm_storeu_si128((__m128i*) p, v); }
+static inline v32 _v32(uint32_t x) { return _mm_set1_epi32(x); }
+static inline v32 _v32And(v32 a, v32 b) { return _mm_and_si128(a, b); }
+static inline v32 _v32Or(v32 a, v32 b) { return _mm_or_si128(a, b); }
+static inline v32 _v32Bic(v32 a, v32 b) { return _mm_andnot_si128(b, a); }
+static inline v32 _v32Eq(v32 a, v32 b) { return _mm_cmpeq_epi32(a, b); }
+static inline v32 _v32Ge(v32 a, v32 b) { return _mm_cmpeq_epi32(_mm_max_epu32(a, b), a); }
+static inline v32 _v32Test(v32 a, v32 b) { return _mm_xor_si128(_mm_cmpeq_epi32(_mm_and_si128(a, b), _mm_setzero_si128()), _mm_set1_epi32(-1)); }
+static inline v32 _v32Select(v32 mask, v32 a, v32 b) { return _mm_blendv_epi8(b, a, mask); }
+static inline bool _v32Any(v32 a, v32 b) { v32 mask = _mm_or_si128(a, b); return !_mm_testz_si128(mask, mask); }
+static inline v16 _v16(uint16_t x) { return _mm_set1_epi16(x); }
+static inline v16 _v16Narrow(v32 low, v32 high) { return _mm_packus_epi32(_mm_and_si128(low, _mm_set1_epi32(0xFFFF)), _mm_and_si128(high, _mm_set1_epi32(0xFFFF))); }
+static inline v32 _v16Widen(v16 v, unsigned half) { return _mm_cvtepu16_epi32(half ? _mm_srli_si128(v, 8) : v); }
+static inline v16 _v16Select(v16 mask, v16 a, v16 b) { return _mm_blendv_epi8(b, a, mask); }
+
+static inline vidx _nibbles(uint32_t tileData) {
+	__m128i bytes = _mm_cvtsi32_si128(tileData);
+	__m128i low = _mm_and_si128(bytes, _mm_set1_epi8(0xF));
+	__m128i high = _mm_and_si128(_mm_srli_epi16(bytes, 4), _mm_set1_epi8(0xF));
+	return _mm_unpacklo_epi8(low, high);
+}
+
+static inline v32 _nonzero(vidx index, unsigned half) {
+	v32 wide = _mm_cvtepu8_epi32(half ? _mm_srli_si128(index, 4) : index);
+	return _v32Test(wide, wide);
+}
+
+static inline v16 _lookup16(const mColor* palette, vidx index) {
+	const __m128i even = _mm_setr_epi8(0, 2, 4, 6, 8, 10, 12, 14, -1, -1, -1, -1, -1, -1, -1, -1);
+	const __m128i odd = _mm_setr_epi8(1, 3, 5, 7, 9, 11, 13, 15, -1, -1, -1, -1, -1, -1, -1, -1);
+	__m128i first = _mm_loadu_si128((const __m128i*) palette);
+	__m128i second = _mm_loadu_si128((const __m128i*) &palette[8]);
+	__m128i low = _mm_unpacklo_epi64(_mm_shuffle_epi8(first, even), _mm_shuffle_epi8(second, even));
+	__m128i high = _mm_unpacklo_epi64(_mm_shuffle_epi8(first, odd), _mm_shuffle_epi8(second, odd));
+	return _mm_unpacklo_epi8(_mm_shuffle_epi8(low, index), _mm_shuffle_epi8(high, index));
+}
+
+static inline v16 _mixChannel(v16 a, v16 b, v16 weightA, v16 weightB) {
+	return _mm_min_epu16(_mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(a, weightA), _mm_mullo_epi16(b, weightB)), 4), _mm_set1_epi16(0x1F));
+}
+
+static inline v16 _mix5Bit8(v16 a, v16 b, v16 weightA, v16 weightB) {
+	__m128i mask = _mm_set1_epi16(0x1F);
+	__m128i red = _mixChannel(_mm_srli_epi16(a, 11), _mm_srli_epi16(b, 11), weightA, weightB);
+	__m128i green = _mixChannel(_mm_and_si128(_mm_srli_epi16(a, 6), mask), _mm_and_si128(_mm_srli_epi16(b, 6), mask), weightA, weightB);
+	__m128i blue = _mixChannel(_mm_and_si128(a, mask), _mm_and_si128(b, mask), weightA, weightB);
+	return _mm_or_si128(_mm_or_si128(_mm_slli_epi16(red, 11), _mm_slli_epi16(green, 6)), blue);
+}
+#endif
 
 // _compositeBlendNoObjwin, or _compositeNoBlendNoObjwin, for the eight pixels where write is set
-static inline void _composite8(struct GBAVideoSoftwareRenderer* renderer, uint32_t* pixel, const uint32x4_t current[2],
-                               const uint32x4_t color[2], const uint32x4_t write[2], bool blend) {
-	uint16x8_t mixed = vdupq_n_u16(0);
+static inline void _composite8(struct GBAVideoSoftwareRenderer* renderer, uint32_t* pixel, const v32 current[2],
+                               const v32 color[2], const v32 write[2], bool blend) {
+	v16 mixed = _v16(0);
 	if (blend) {
-		mixed = _mix5Bit8(vcombine_u16(vmovn_u32(current[0]), vmovn_u32(current[1])),
-		                  vcombine_u16(vmovn_u32(color[0]), vmovn_u32(color[1])),
-		                  vdupq_n_u16(renderer->blda), vdupq_n_u16(renderer->bldb));
+		mixed = _mix5Bit8(_v16Narrow(current[0], current[1]), _v16Narrow(color[0], color[1]), _v16(renderer->blda), _v16(renderer->bldb));
 	}
 	unsigned h;
 	for (h = 0; h < 2; ++h) {
-		uint32x4_t behind = vcgeq_u32(color[h], current[h]);
-		uint32x4_t below = vandq_u32(current[h], vdupq_n_u32(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN));
-		uint32x4_t out;
+		v32 behind = _v32Ge(color[h], current[h]);
+		v32 below = _v32And(current[h], _v32(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN));
+		v32 out;
 		if (blend) {
-			uint32x4_t mix = vandq_u32(behind, vandq_u32(vtstq_u32(current[h], vdupq_n_u32(FLAG_TARGET_1)), vtstq_u32(color[h], vdupq_n_u32(FLAG_TARGET_2))));
-			uint32x4_t mixedColor = vmovl_u16(h ? vget_high_u16(mixed) : vget_low_u16(mixed));
-			out = vbslq_u32(behind, vbslq_u32(mix, mixedColor, below), vbicq_u32(color[h], vdupq_n_u32(FLAG_TARGET_2)));
+			v32 mix = _v32And(behind, _v32And(_v32Test(current[h], _v32(FLAG_TARGET_1)), _v32Test(color[h], _v32(FLAG_TARGET_2))));
+			out = _v32Select(behind, _v32Select(mix, _v16Widen(mixed, h), below), _v32Bic(color[h], _v32(FLAG_TARGET_2)));
 		} else {
-			out = vbslq_u32(behind, below, color[h]);
+			out = _v32Select(behind, below, color[h]);
 		}
-		vst1q_u32(pixel + 4 * h, vbslq_u32(write[h], out, current[h]));
+		_v32Store(pixel + 4 * h, _v32Select(write[h], out, current[h]));
 	}
 }
 #endif

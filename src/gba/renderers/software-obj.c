@@ -422,21 +422,20 @@ void GBAVideoSoftwareRendererPostprocessSprite(struct GBAVideoSoftwareRenderer* 
 		return;
 	}
 	x = renderer->start;
-#ifdef VIDEO_NEON
+#ifdef VIDEO_SIMD
 	for (; x + 8 <= renderer->end; x += 8, pixel += 8) {
-		uint32x4_t current[2] = { vld1q_u32(pixel), vld1q_u32(pixel + 4) };
-		uint32x4_t color[2];
-		uint32x4_t write[2];
+		v32 current[2] = { _v32Load(pixel), _v32Load(pixel + 4) };
+		v32 color[2];
+		v32 write[2];
 		unsigned h;
 		for (h = 0; h < 2; ++h) {
-			uint32x4_t sprite = vbicq_u32(vld1q_u32(&renderer->spriteLayer[x + 4 * h]), vdupq_n_u32(FLAG_OBJWIN));
-			uint32x4_t written = vmvnq_u32(vceqq_u32(vandq_u32(sprite, vdupq_n_u32(FLAG_UNWRITTEN)), vdupq_n_u32(FLAG_UNWRITTEN)));
-			uint32x4_t layer = vceqq_u32(vandq_u32(sprite, vdupq_n_u32(FLAG_PRIORITY)), vdupq_n_u32(priority << OFFSET_PRIORITY));
-			write[h] = vandq_u32(written, layer);
-			color[h] = vorrq_u32(sprite, vdupq_n_u32(flags));
+			v32 sprite = _v32Bic(_v32Load(&renderer->spriteLayer[x + 4 * h]), _v32(FLAG_OBJWIN));
+			v32 unwritten = _v32Eq(_v32And(sprite, _v32(FLAG_UNWRITTEN)), _v32(FLAG_UNWRITTEN));
+			write[h] = _v32Bic(_v32Eq(_v32And(sprite, _v32(FLAG_PRIORITY)), _v32(priority << OFFSET_PRIORITY)), unwritten);
+			color[h] = _v32Or(sprite, _v32(flags));
 		}
 		// Most of a line has no sprite of this priority
-		if (vmaxvq_u32(vorrq_u32(write[0], write[1]))) {
+		if (_v32Any(write[0], write[1])) {
 			_composite8(renderer, pixel, current, color, write, true);
 		}
 	}

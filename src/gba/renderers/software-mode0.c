@@ -7,36 +7,27 @@
 
 #include <mgba/internal/gba/gba.h>
 
-#ifdef VIDEO_NEON
-static inline uint16x8_t _paletteLookup(const mColor* palette, uint8x8_t index) {
-	uint8x16x2_t bytes = vld2q_u8((const uint8_t*) palette);
-	return vorrq_u16(vmovl_u8(vqtbl1_u8(bytes.val[0], index)), vshlq_n_u16(vmovl_u8(vqtbl1_u8(bytes.val[1], index)), 8));
-}
-
+#ifdef VIDEO_SIMD
 // A whole 16-color tile row at once, as eight BACKGROUND_DRAW_PIXEL_16 with COMPOSITE_16_NO_OBJWIN
 static inline void _drawTile16(struct GBAVideoSoftwareRenderer* renderer, uint32_t* pixel, uint32_t tileData,
                                int paletteData, const mColor* palette, uint32_t flags, bool blend) {
-	uint8x8_t bytes = vreinterpret_u8_u32(vdup_n_u32(tileData));
-	uint8x8_t index = vzip_u8(vand_u8(bytes, vdup_n_u8(0xF)), vshr_n_u8(bytes, 4)).val[0];
-	uint16x8_t color = _paletteLookup(&palette[paletteData], index);
-	uint32x4_t current[2] = { vld1q_u32(pixel), vld1q_u32(pixel + 4) };
+	vidx index = _nibbles(tileData);
+	v16 color = _lookup16(&palette[paletteData], index);
+	v32 current[2] = { _v32Load(pixel), _v32Load(pixel + 4) };
 	if (palette != renderer->normalPalette) {
-		uint32x4_t reblend[2];
+		v32 reblend[2];
 		unsigned h;
 		for (h = 0; h < 2; ++h) {
-			reblend[h] = vceqq_u32(vandq_u32(current[h], vdupq_n_u32(FLAG_IS_BACKGROUND | FLAG_REBLEND)), vdupq_n_u32(FLAG_REBLEND));
+			reblend[h] = _v32Eq(_v32And(current[h], _v32(FLAG_IS_BACKGROUND | FLAG_REBLEND)), _v32(FLAG_REBLEND));
 		}
-		uint16x8_t normal = _paletteLookup(&renderer->normalPalette[paletteData], index);
-		color = vbslq_u16(vcombine_u16(vmovn_u32(reblend[0]), vmovn_u32(reblend[1])), normal, color);
+		color = _v16Select(_v16Narrow(reblend[0], reblend[1]), _lookup16(&renderer->normalPalette[paletteData], index), color);
 	}
-	uint16x8_t index16 = vmovl_u8(index);
-	uint32x4_t colors[2];
-	uint32x4_t write[2];
+	v32 colors[2];
+	v32 write[2];
 	unsigned h;
 	for (h = 0; h < 2; ++h) {
-		uint32x4_t idx = vmovl_u16(h ? vget_high_u16(index16) : vget_low_u16(index16));
-		colors[h] = vorrq_u32(vmovl_u16(h ? vget_high_u16(color) : vget_low_u16(color)), vdupq_n_u32(flags));
-		write[h] = vandq_u32(vtstq_u32(idx, idx), vtstq_u32(current[h], vdupq_n_u32(0xFE000000)));
+		colors[h] = _v32Or(_v16Widen(color, h), _v32(flags));
+		write[h] = _v32And(_nonzero(index, h), _v32Test(current[h], _v32(0xFE000000)));
 	}
 	_composite8(renderer, pixel, current, colors, write, blend);
 }

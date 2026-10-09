@@ -972,19 +972,17 @@ void GBAVideoSoftwareRendererPostprocessBuffer(struct GBAVideoSoftwareRenderer* 
 				backdrop |= softwareRenderer->variantPalette[0];
 			}
 			int end = softwareRenderer->windows[w].endX;
-#ifdef VIDEO_NEON
-			uint16x8_t backdrops = vdupq_n_u16(backdrop);
+#ifdef VIDEO_SIMD
 			for (; x + 8 <= end; x += 8) {
 				uint32_t* row = &softwareRenderer->row[x];
-				uint32x4_t color[2] = { vld1q_u32(row), vld1q_u32(row + 4) };
-				uint32x4_t target[2] = { vtstq_u32(color[0], vdupq_n_u32(FLAG_TARGET_1)), vtstq_u32(color[1], vdupq_n_u32(FLAG_TARGET_1)) };
-				if (!vmaxvq_u32(vorrq_u32(target[0], target[1]))) {
+				v32 color[2] = { _v32Load(row), _v32Load(row + 4) };
+				v32 target[2] = { _v32Test(color[0], _v32(FLAG_TARGET_1)), _v32Test(color[1], _v32(FLAG_TARGET_1)) };
+				if (!_v32Any(target[0], target[1])) {
 					continue;
 				}
-				uint16x8_t mixed = _mix5Bit8(backdrops, vcombine_u16(vmovn_u32(color[0]), vmovn_u32(color[1])),
-				                             vdupq_n_u16(softwareRenderer->bldb), vdupq_n_u16(softwareRenderer->blda));
-				vst1q_u32(row, vbslq_u32(target[0], vmovl_u16(vget_low_u16(mixed)), color[0]));
-				vst1q_u32(row + 4, vbslq_u32(target[1], vmovl_u16(vget_high_u16(mixed)), color[1]));
+				v16 mixed = _mix5Bit8(_v16(backdrop), _v16Narrow(color[0], color[1]), _v16(softwareRenderer->bldb), _v16(softwareRenderer->blda));
+				_v32Store(row, _v32Select(target[0], _v16Widen(mixed, 0), color[0]));
+				_v32Store(row + 4, _v32Select(target[1], _v16Widen(mixed, 1), color[1]));
 			}
 #endif
 			for (; x < end; ++x) {
