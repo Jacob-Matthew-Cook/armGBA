@@ -2210,7 +2210,8 @@ bool retro_unserialize(const void* data, size_t size) {
 		_doDeferredSetup();
 	}
 	struct VFile* vfm = VFileFromConstMemory(data, size);
-	bool success = mCoreLoadStateNamed(core, vfm, SAVESTATE_RTC);
+	// Save data goes straight back to the save RAM the frontend writes out: masked, it never reached the .srm under run-ahead
+	bool success = mCoreLoadStateNamed(core, vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
 	vfm->close(vfm);
 	return success;
 }
