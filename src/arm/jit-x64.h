@@ -25,6 +25,7 @@ enum {
 	CC_AE = 0x3,
 	CC_E = 0x4,
 	CC_NE = 0x5,
+	CC_A = 0x7,
 	CC_S = 0x8,
 	CC_GE = 0xD,
 	CC_LE = 0xE,
@@ -923,17 +924,200 @@ static void _memResult(struct Compiler* c, const struct MemOp* mem) {
 	_addCycles(c, c->memCycles);
 }
 
-static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
+// IWRAM or EWRAM once the region matched, leaving the wait in r10. A store into compiled code
+// goes to the returned site instead, with the word's index in eax
+static uint8_t* _memRam(struct Compiler* c, unsigned i, const struct MemOp* mem, bool ewram) {
+	struct Emitter* e = &c->e;
+	_rr(e, OP_MOV, X_RCX, X_RDI);
+	_ri(e, 4, X_RCX, (ewram ? GBA_SIZE_EWRAM : GBA_SIZE_IWRAM) - mem->size);
+	_memAccess(e, mem->load, mem->size, ewram ? X_EWRAM : X_IWRAM);
+	uint8_t* smc = NULL;
+	if (!mem->load) {
+		_rr(e, OP_MOV, X_RAX, X_RCX);
+		_shift(e, SH_SHR, X_RAX, 2);
+		if (ewram) {
+			_ri(e, 0, X_RAX, ARM_JIT_IWRAM_WORDS);
+		}
+		_rex(e, false, 0, X_RAX, X_JIT); // cmp byte [r12 + rax + cover], 0
+		_byte(e, 0x80);
+		_modrmIndexDisp(e, 7, X_JIT, X_RAX, JIT_COVER);
+		_byte(e, 0);
+		smc = _jcc(e, CC_NE);
+	}
+	_dataWait(c, i, _ramWait(c, mem, ewram) + (mem->load ? 2 : 1));
+	return smc;
+}
+
+static void _memInvalidate(struct Compiler* c, unsigned i, const struct MemOp* mem, bool ewram) {
+	struct Emitter* e = &c->e;
+	_mov64(e, X_RDI, X_JIT);
+	_rr(e, OP_MOV, X_RSI, X_RAX);
+	_movImm64(e, X_RAX, (uintptr_t) ARMJitInvalidateWord);
+	_callC(e, X_RAX);
+	_dataWait(c, i, _ramWait(c, mem, ewram) + 1);
+}
+
+// Timer counters, without the generic load and I/O dispatch
+static void _memTimer(struct Compiler* c, unsigned i, uint8_t** miss, uint8_t** slow) {
+	struct Emitter* e = &c->e;
+	_ri(e, 7, X_RAX, GBA_REGION_IO);
+	*miss = _jcc(e, CC_NE);
+	_rr(e, OP_MOV, X_RCX, X_RDI);
+	_ri(e, 4, X_RCX, 0x00FFFFF3);
+	_ri(e, 7, X_RCX, GBA_REG_TM0CNT_LO);
+	*slow = _jcc(e, CC_NE);
+	_rr(e, OP_MOV, X_RSI, X_RDI);
+	_movImm64(e, X_RDI, (uintptr_t) c->gba);
+	_movImm64(e, X_RAX, (uintptr_t) _readTimer);
+	_callC(e, X_RAX);
+	_dataWait(c, i, 2);
+}
+
+// VRAM: stores tell the renderer about changed halfwords; byte stores stay with the handlers
+static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss, uint8_t** slow) {
 	struct Emitter* e = &c->e;
 	bool load = mem->load;
 	unsigned size = mem->size;
+	_ri(e, 7, X_RAX, GBA_REGION_VRAM);
+	*miss = _jcc(e, CC_NE);
+	_rr(e, OP_MOV, X_RCX, X_RDI);
+	_ri(e, 4, X_RCX, 0x1FFFF);
+	_ri(e, 7, X_RCX, GBA_SIZE_VRAM);
+	*slow = _jcc(e, CC_AE);
+	_ri(e, 4, X_RCX, size == 4 ? 0x1FFFC : size == 2 ? 0x1FFFE : 0x1FFFF);
+	_movImm64(e, X_R11, (uintptr_t) c->gba->video.vram);
+	_store(e, X_RDI, X_RSP, 4);
+	if (load) {
+		_memAccess(e, true, size, X_R11);
+		_rr(e, OP_MOV, X_WB, X_RAX); // writeback is already stored for loads
+	} else {
+		if (size == 4) {
+			_rex(e, false, X_RDX, X_RCX, X_R11); // mov edx, [r11 + rcx]
+			_byte(e, 0x8B);
+			_modrmIndex(e, X_RDX, X_R11, X_RCX);
+			_rr(e, OP_CMP, X_RDX, X_R9);
+		} else {
+			_rex(e, false, X_RDX, X_RCX, X_R11); // movzx edx, word [r11 + rcx]
+			_byte(e, 0x0F);
+			_byte(e, 0xB7);
+			_modrmIndex(e, X_RDX, X_R11, X_RCX);
+			_rex(e, false, X_R10, 0, X_R9); // movzx r10d, r9w
+			_byte(e, 0x0F);
+			_byte(e, 0xB7);
+			_modrmReg(e, X_R10, X_R9);
+			_rr(e, OP_CMP, X_RDX, X_R10);
+		}
+		uint8_t* unchanged = _jcc(e, CC_E);
+		_memAccess(e, false, size, X_R11);
+		// Once per block, unless a tile cache wants every address
+		_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
+		_load64(e, X_RDI, X_RAX, 0);
+		_rex(e, true, 0, 0, X_RDI); // cmp qword [rdi + cache], 0
+		_byte(e, 0x81);
+		_modrmMem(e, 7, X_RDI, offsetof(struct GBAVideoRenderer, cache));
+		_imm32(e, 0);
+		uint8_t* cached = _jcc(e, CC_NE);
+		_load(e, X_RAX, X_RSP, 4);
+		_shift(e, SH_SHR, X_RAX, 12);
+		_ri(e, 4, X_RAX, 0x1F);
+		_rex(e, false, X_RAX, 0, X_JIT); // bt [r12 + vramNotified], eax
+		_byte(e, 0x0F);
+		_byte(e, 0xA3);
+		_modrmMem(e, X_RAX, X_JIT, JIT_VRAM_NOTIFIED);
+		uint8_t* notified = _jcc(e, CC_B);
+		_rex(e, false, X_RAX, 0, X_JIT); // bts [r12 + vramNotified], eax
+		_byte(e, 0x0F);
+		_byte(e, 0xAB);
+		_modrmMem(e, X_RAX, X_JIT, JIT_VRAM_NOTIFIED);
+		_patch(cached, e->p);
+		unsigned call;
+		for (call = 0; call < (size == 4 ? 2 : 1); ++call) {
+			_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
+			_load64(e, X_RDI, X_RAX, 0);
+			_load(e, X_RSI, X_RSP, 4);
+			_ri(e, 4, X_RSI, size == 4 ? 0x1FFFC : 0x1FFFE);
+			if (size == 4 && call == 0) {
+				_ri(e, 0, X_RSI, 2);
+			}
+			_load64(e, X_RAX, X_RDI, offsetof(struct GBAVideoRenderer, writeVRAM));
+			_callC(e, X_RAX);
+		}
+		_patch(notified, e->p);
+		_load(e, X_RDI, X_RSP, 4);
+		_patch(unchanged, e->p);
+	}
+	_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.stallMask);
+	_load(e, X_RAX, X_RAX, 0);
+	_rr(e, OP_TEST, X_RAX, X_RAX);
+	uint8_t* noStall = _jcc(e, CC_E);
+	_rr(e, OP_MOV, X_RSI, X_RDI);
+	_movImm64(e, X_RDI, (uintptr_t) c->gba);
+	_movImm(e, X_RDX, size);
+	_movImm64(e, X_RAX, (uintptr_t) GBAMemoryVRAMWait);
+	_callC(e, X_RAX);
+	_rr(e, OP_MOV, X_R10, X_RAX);
+	_load(e, X_RDI, X_RSP, 4);
+	uint8_t* waited = _jmp(e);
+	_patch(noStall, e->p);
+	_movImm(e, X_R10, size == 4 ? 1 : 0);
+	_patch(waited, e->p);
+	_ri(e, 0, X_R10, load ? 2 : 1);
+	if (load) {
+		_rr(e, OP_MOV, X_RAX, X_WB);
+	}
+}
 
-	uint8_t* done[5] = { NULL, NULL, NULL, NULL, NULL };
-	uint8_t* toSlow[3] = { NULL, NULL, NULL };
-	uint8_t* checked[2] = { NULL, NULL };
-	uint8_t* toCart = NULL;
-	uint8_t* toEvent = NULL;
-	unsigned d;
+// Cartridge reads: no prefetch buffer stall for these addresses; region 0x0D is EEPROM
+static void _memCart(struct Compiler* c, const struct MemOp* mem, uint8_t** miss, uint8_t** slow) {
+	struct Emitter* e = &c->e;
+	unsigned size = mem->size;
+	_rr(e, OP_MOV, X_RCX, X_RAX);
+	_ri(e, 5, X_RCX, GBA_REGION_ROM0);
+	_ri(e, 7, X_RCX, GBA_REGION_ROM2 - GBA_REGION_ROM0);
+	*miss = _jcc(e, CC_A);
+	_rr(e, OP_MOV, X_RCX, X_RDI);
+	_ri(e, 4, X_RCX, GBA_SIZE_ROM0 - size);
+	_ri(e, 7, X_RCX, c->gba->memory.romSize);
+	*slow = _jcc(e, CC_AE);
+	_movImm64(e, X_R11, (uintptr_t) c->gba->memory.rom);
+	_memAccess(e, true, size, X_R11);
+	_movImm64(e, X_R11, (uintptr_t) (size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16));
+	_rr(e, OP_MOV, X_RCX, X_RDI);
+	_shift(e, SH_SHR, X_RCX, 24);
+	_rex(e, false, X_R10, X_RCX, X_R11); // movzx r10d, byte [r11 + rcx]
+	_byte(e, 0x0F);
+	_byte(e, 0xB6);
+	_modrmIndex(e, X_R10, X_R11, X_RCX);
+	_ri(e, 0, X_R10, 2);
+}
+
+// Everything else goes through the memory handlers
+static void _memSlow(struct Compiler* c, unsigned i, const struct MemOp* mem) {
+	struct Emitter* e = &c->e;
+	unsigned size = mem->size;
+	_storeState(c, i + 1);
+	_storeImm(e, X_RSP, 0, 0);
+	_rr(e, OP_MOV, X_RSI, X_RDI);
+	_mov64(e, X_RDI, X_CPU);
+	unsigned offset;
+	if (mem->load) {
+		_lea64(e, X_RDX, X_RSP, 0);
+		offset = size == 4 ? offsetof(struct ARMMemory, load32) : size == 2 ? offsetof(struct ARMMemory, load16) : offsetof(struct ARMMemory, load8);
+	} else {
+		_rr(e, OP_MOV, X_RDX, X_R9);
+		_lea64(e, X_RCX, X_RSP, 0);
+		offset = size == 4 ? offsetof(struct ARMMemory, store32) : size == 2 ? offsetof(struct ARMMemory, store16) : offsetof(struct ARMMemory, store8);
+	}
+	_load64(e, X_RAX, X_CPU, OFF_MEMORY + offset);
+	_callC(e, X_RAX);
+	_load(e, X_R10, X_RSP, 0);
+}
+
+static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
+	struct Emitter* e = &c->e;
+	bool load = mem->load;
+	unsigned k = c->nCold;
+	bool cold = false;
 
 	uint8_t* fail = NULL;
 	if (mem->cond != 0xE) {
@@ -989,238 +1173,36 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_store(e, X_RDI, X_RSP, 4); // the address decides how LDRSH extends
 	}
 
+	cold = true;
+	c->cold[k].index = i;
+	c->cold[k].mem = *mem;
+	c->cold[k].miss[0] = NULL;
+	c->cold[k].miss[1] = NULL;
+	c->cold[k].smc = NULL;
 	_rr(e, OP_MOV, X_RAX, X_RDI);
 	_shift(e, SH_SHR, X_RAX, 24);
-	_ri(e, 7, X_RAX, 3);
-	uint8_t* toEwram = _jcc(e, CC_NE);
-	_rr(e, OP_MOV, X_RCX, X_RDI);
-	_ri(e, 4, X_RCX, size == 4 ? 0x7FFC : size == 2 ? 0x7FFE : 0x7FFF);
-	_memAccess(e, load, size, X_IWRAM);
-	if (!load) {
-		// Writes into compiled code
-		_rr(e, OP_MOV, X_RAX, X_RCX);
-		_shift(e, SH_SHR, X_RAX, 2);
-		_rex(e, false, 0, X_RAX, X_JIT);
-		_byte(e, 0x80); // cmp byte [r12 + rax + cover], 0
-		_modrmIndexDisp(e, 7, X_JIT, X_RAX, JIT_COVER);
-		_byte(e, 0);
-		uint8_t* noCode = _jcc(e, CC_E);
-		_movImm64(e, X_RDI, (uintptr_t) c->jit);
-		_rr(e, OP_MOV, X_RSI, X_RAX);
-		_movImm64(e, X_RAX, (uintptr_t) ARMJitInvalidateWord);
-		_callC(e, X_RAX);
-		_dataWait(c, i, 1);
-		checked[0] = _jmp(e);
-		_patch(noCode, e->p);
-	}
-	_dataWait(c, i, load ? 2 : 1);
-	done[0] = _jmp(e);
-
-	_patch(toEwram, e->p);
-	int32_t ewramWait = (size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16)[GBA_REGION_EWRAM];
-	_ri(e, 7, X_RAX, 2);
-	toCart = _jcc(e, CC_NE);
-	_rr(e, OP_MOV, X_RCX, X_RDI);
-	_ri(e, 4, X_RCX, size == 4 ? 0x3FFFC : size == 2 ? 0x3FFFE : 0x3FFFF);
-	_memAccess(e, load, size, X_EWRAM);
-	if (!load) {
-		_rr(e, OP_MOV, X_RAX, X_RCX);
-		_shift(e, SH_SHR, X_RAX, 2);
-		_ri(e, 0, X_RAX, ARM_JIT_IWRAM_WORDS);
-		_rex(e, false, 0, X_RAX, X_JIT);
-		_byte(e, 0x80); // cmp byte [r12 + rax + cover], 0
-		_modrmIndexDisp(e, 7, X_JIT, X_RAX, JIT_COVER);
-		_byte(e, 0);
-		uint8_t* noCode = _jcc(e, CC_E);
-		_movImm64(e, X_RDI, (uintptr_t) c->jit);
-		_rr(e, OP_MOV, X_RSI, X_RAX);
-		_movImm64(e, X_RAX, (uintptr_t) ARMJitInvalidateWord);
-		_callC(e, X_RAX);
-		_dataWait(c, i, ewramWait + 1);
-		checked[1] = _jmp(e);
-		_patch(noCode, e->p);
-	}
-	_dataWait(c, i, ewramWait + (load ? 2 : 1));
-	done[1] = _jmp(e);
-
-	// Timer counters, without the generic load and I/O dispatch
-	_patch(toCart, e->p);
-	toCart = NULL;
-	if (load && size == 2) {
-		_ri(e, 7, X_RAX, GBA_REGION_IO);
-		uint8_t* notIo = _jcc(e, CC_NE);
-		_rr(e, OP_MOV, X_RCX, X_RDI);
-		_ri(e, 4, X_RCX, 0x00FFFFF3);
-		_ri(e, 7, X_RCX, GBA_REG_TM0CNT_LO);
-		uint8_t* notTimer = _jcc(e, CC_NE);
-		_rr(e, OP_MOV, X_RSI, X_RDI);
-		_movImm64(e, X_RDI, (uintptr_t) c->gba);
-		_movImm64(e, X_RAX, (uintptr_t) _readTimer);
-		_callC(e, X_RAX);
-		_dataWait(c, i, 2);
-		done[4] = _jmp(e);
-		_patch(notTimer, e->p);
-		_patch(notIo, e->p);
+	switch (_memPath(c, mem)) {
+	case PATH_IWRAM:
+	case PATH_EWRAM:
+		c->cold[k].smcEwram = _memPath(c, mem) == PATH_EWRAM;
+		_ri(e, 7, X_RAX, c->cold[k].smcEwram ? GBA_REGION_EWRAM : GBA_REGION_IWRAM);
+		c->cold[k].miss[0] = _jcc(e, CC_NE);
+		c->cold[k].smc = _memRam(c, i, mem, c->cold[k].smcEwram);
+		break;
+	case PATH_VRAM:
+		_memVram(c, mem, &c->cold[k].miss[0], &c->cold[k].miss[1]);
+		break;
+	case PATH_CART:
+		_memCart(c, mem, &c->cold[k].miss[0], &c->cold[k].miss[1]);
+		break;
+	default:
+		c->cold[k].miss[0] = _jmp(e);
+		break;
 	}
 
-	// VRAM: stores tell the renderer about changed halfwords; byte stores stay with the handlers
-	if (!c->romCode && (load || size > 1)) {
-		_ri(e, 7, X_RAX, GBA_REGION_VRAM);
-		toCart = _jcc(e, CC_NE);
-		_rr(e, OP_MOV, X_RCX, X_RDI);
-		_ri(e, 4, X_RCX, 0x1FFFF);
-		_ri(e, 7, X_RCX, GBA_SIZE_VRAM);
-		toSlow[2] = _jcc(e, CC_AE);
-		_ri(e, 4, X_RCX, size == 4 ? 0x1FFFC : size == 2 ? 0x1FFFE : 0x1FFFF);
-		_movImm64(e, X_R11, (uintptr_t) c->gba->video.vram);
-		_store(e, X_RDI, X_RSP, 4);
-		if (load) {
-			_memAccess(e, true, size, X_R11);
-			_rr(e, OP_MOV, X_WB, X_RAX); // writeback is already stored for loads
-		} else {
-			if (size == 4) {
-				_rex(e, false, X_RDX, X_RCX, X_R11); // mov edx, [r11 + rcx]
-				_byte(e, 0x8B);
-				_modrmIndex(e, X_RDX, X_R11, X_RCX);
-				_rr(e, OP_CMP, X_RDX, X_R9);
-			} else {
-				_rex(e, false, X_RDX, X_RCX, X_R11); // movzx edx, word [r11 + rcx]
-				_byte(e, 0x0F);
-				_byte(e, 0xB7);
-				_modrmIndex(e, X_RDX, X_R11, X_RCX);
-				_rex(e, false, X_R10, 0, X_R9); // movzx r10d, r9w
-				_byte(e, 0x0F);
-				_byte(e, 0xB7);
-				_modrmReg(e, X_R10, X_R9);
-				_rr(e, OP_CMP, X_RDX, X_R10);
-			}
-			uint8_t* unchanged = _jcc(e, CC_E);
-			_memAccess(e, false, size, X_R11);
-			// Once per block, unless a tile cache wants every address
-			_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
-			_load64(e, X_RDI, X_RAX, 0);
-			_rex(e, true, 0, 0, X_RDI); // cmp qword [rdi + cache], 0
-			_byte(e, 0x81);
-			_modrmMem(e, 7, X_RDI, offsetof(struct GBAVideoRenderer, cache));
-			_imm32(e, 0);
-			uint8_t* cached = _jcc(e, CC_NE);
-			_load(e, X_RAX, X_RSP, 4);
-			_shift(e, SH_SHR, X_RAX, 12);
-			_ri(e, 4, X_RAX, 0x1F);
-			_rex(e, false, X_RAX, 0, X_JIT); // bt [r12 + vramNotified], eax
-			_byte(e, 0x0F);
-			_byte(e, 0xA3);
-			_modrmMem(e, X_RAX, X_JIT, JIT_VRAM_NOTIFIED);
-			uint8_t* notified = _jcc(e, CC_B);
-			_rex(e, false, X_RAX, 0, X_JIT); // bts [r12 + vramNotified], eax
-			_byte(e, 0x0F);
-			_byte(e, 0xAB);
-			_modrmMem(e, X_RAX, X_JIT, JIT_VRAM_NOTIFIED);
-			_patch(cached, e->p);
-			unsigned call;
-			for (call = 0; call < (size == 4 ? 2 : 1); ++call) {
-				_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
-				_load64(e, X_RDI, X_RAX, 0);
-				_load(e, X_RSI, X_RSP, 4);
-				_ri(e, 4, X_RSI, size == 4 ? 0x1FFFC : 0x1FFFE);
-				if (size == 4 && call == 0) {
-					_ri(e, 0, X_RSI, 2);
-				}
-				_load64(e, X_RAX, X_RDI, offsetof(struct GBAVideoRenderer, writeVRAM));
-				_callC(e, X_RAX);
-			}
-			_patch(notified, e->p);
-			_load(e, X_RDI, X_RSP, 4);
-			_patch(unchanged, e->p);
-		}
-		_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.stallMask);
-		_load(e, X_RAX, X_RAX, 0);
-		_rr(e, OP_TEST, X_RAX, X_RAX);
-		uint8_t* noStall = _jcc(e, CC_E);
-		_rr(e, OP_MOV, X_RSI, X_RDI);
-		_movImm64(e, X_RDI, (uintptr_t) c->gba);
-		_movImm(e, X_RDX, size);
-		_movImm64(e, X_RAX, (uintptr_t) GBAMemoryVRAMWait);
-		_callC(e, X_RAX);
-		_rr(e, OP_MOV, X_R10, X_RAX);
-		_load(e, X_RDI, X_RSP, 4);
-		uint8_t* waited = _jmp(e);
-		_patch(noStall, e->p);
-		_movImm(e, X_R10, size == 4 ? 1 : 0);
-		_patch(waited, e->p);
-		_ri(e, 0, X_R10, load ? 2 : 1);
-		if (load) {
-			_rr(e, OP_MOV, X_RAX, X_WB);
-		}
-		done[3] = _jmp(e);
-	}
-	if (toCart) {
-		_patch(toCart, e->p);
-	}
-	if (load) {
-		// Cartridge reads: no prefetch buffer stall for these addresses; region 0x0D is EEPROM
-		_rr(e, OP_MOV, X_RCX, X_RAX);
-		_ri(e, 5, X_RCX, GBA_REGION_ROM0);
-		_ri(e, 7, X_RCX, GBA_REGION_ROM2 - GBA_REGION_ROM0);
-		toSlow[0] = _jcc(e, 0x7); // ja
-		_rr(e, OP_MOV, X_RCX, X_RDI);
-		_ri(e, 4, X_RCX, size == 4 ? GBA_SIZE_ROM0 - 4 : size == 2 ? GBA_SIZE_ROM0 - 2 : GBA_SIZE_ROM0 - 1);
-		_ri(e, 7, X_RCX, c->gba->memory.romSize);
-		toSlow[1] = _jcc(e, CC_AE);
-		_movImm64(e, X_R11, (uintptr_t) c->gba->memory.rom);
-		_memAccess(e, true, size, X_R11);
-		char* cartWaits = size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16;
-		_movImm64(e, X_R11, (uintptr_t) cartWaits);
-		_rr(e, OP_MOV, X_RCX, X_RDI);
-		_shift(e, SH_SHR, X_RCX, 24);
-		_rex(e, false, X_R10, X_RCX, X_R11); // movzx r10d, byte [r11 + rcx]
-		_byte(e, 0x0F);
-		_byte(e, 0xB6);
-		_modrmIndex(e, X_R10, X_R11, X_RCX);
-		_ri(e, 0, X_R10, 2);
-		done[2] = _jmp(e);
-	}
-
-	unsigned t;
-	for (t = 0; t < 3; ++t) {
-		if (toSlow[t]) {
-			_patch(toSlow[t], e->p);
-		}
-	}
-	_storeState(c, i + 1);
-	_storeImm(e, X_RSP, 0, 0);
-	_rr(e, OP_MOV, X_RSI, X_RDI);
-	_mov64(e, X_RDI, X_CPU);
-	unsigned offset;
-	if (load) {
-		_lea64(e, X_RDX, X_RSP, 0);
-		offset = size == 4 ? offsetof(struct ARMMemory, load32) : size == 2 ? offsetof(struct ARMMemory, load16) : offsetof(struct ARMMemory, load8);
-	} else {
-		_rr(e, OP_MOV, X_RDX, X_R9);
-		_lea64(e, X_RCX, X_RSP, 0);
-		offset = size == 4 ? offsetof(struct ARMMemory, store32) : size == 2 ? offsetof(struct ARMMemory, store16) : offsetof(struct ARMMemory, store8);
-	}
-	_load64(e, X_RAX, X_CPU, OFF_MEMORY + offset);
-	_callC(e, X_RAX);
-	_load(e, X_R10, X_RSP, 0);
-
-	// Only stores that called out can have hit compiled code
-	if (!load) {
-		unsigned k;
-		for (k = 0; k < 2; ++k) {
-			if (checked[k]) {
-				_patch(checked[k], e->p);
-			}
-		}
-		_memResult(c, mem);
-		_smcCheck(c, i + 1);
-		toEvent = _jmp(e);
-	}
 tail:
-	for (d = 0; d < 5; ++d) {
-		if (done[d]) {
-			_patch(done[d], e->p);
-		}
+	if (cold) {
+		c->cold[k].done = e->p;
 	}
 	_memResult(c, mem);
 	if (fail) {
@@ -1229,10 +1211,79 @@ tail:
 		_addCycles(c, c->aluCycles);
 		_patch(after, e->p);
 	}
-	if (toEvent) {
-		_patch(toEvent, e->p);
+	if (cold) {
+		c->cold[k].toEvent = e->p;
+		++c->nCold;
 	}
 	_eventCheck(c, i + 1);
+}
+
+// The rest of a memory access, after the block: every region in turn, then the memory handlers.
+// Stores that called out can have hit compiled code, so they check for that before going back
+static void _emitMemCold(struct Compiler* c, unsigned k) {
+	struct Emitter* e = &c->e;
+	unsigned i = c->cold[k].index;
+	const struct MemOp* mem = &c->cold[k].mem;
+	bool load = mem->load;
+	uint8_t* toChecked[3];
+	unsigned nChecked = 0;
+	uint8_t* toSlow[4];
+	unsigned nSlow = 0;
+	uint8_t* miss;
+	uint8_t* smc;
+	unsigned x;
+
+	if (c->cold[k].smc) {
+		_patch(c->cold[k].smc, e->p);
+		_memInvalidate(c, i, mem, c->cold[k].smcEwram);
+		toChecked[nChecked++] = _jmp(e);
+	}
+	for (x = 0; x < 2; ++x) {
+		if (c->cold[k].miss[x]) {
+			_patch(c->cold[k].miss[x], e->p);
+		}
+	}
+	for (x = 0; x < 2; ++x) {
+		_ri(e, 7, X_RAX, x ? GBA_REGION_EWRAM : GBA_REGION_IWRAM);
+		miss = _jcc(e, CC_NE);
+		smc = _memRam(c, i, mem, x);
+		_jumpTo(c, c->cold[k].done);
+		if (smc) {
+			_patch(smc, e->p);
+			_memInvalidate(c, i, mem, x);
+			toChecked[nChecked++] = _jmp(e);
+		}
+		_patch(miss, e->p);
+	}
+	if (load && mem->size == 2) {
+		_memTimer(c, i, &miss, &toSlow[nSlow++]);
+		_jumpTo(c, c->cold[k].done);
+		_patch(miss, e->p);
+	}
+	if (!c->romCode && (load || mem->size > 1)) {
+		_memVram(c, mem, &miss, &toSlow[nSlow++]);
+		_jumpTo(c, c->cold[k].done);
+		_patch(miss, e->p);
+	}
+	if (load) {
+		_memCart(c, mem, &toSlow[nSlow], &toSlow[nSlow + 1]);
+		nSlow += 2;
+		_jumpTo(c, c->cold[k].done);
+	}
+	for (x = 0; x < nSlow; ++x) {
+		_patch(toSlow[x], e->p);
+	}
+	_memSlow(c, i, mem);
+	if (load) {
+		_jumpTo(c, c->cold[k].done);
+		return;
+	}
+	for (x = 0; x < nChecked; ++x) {
+		_patch(toChecked[x], e->p);
+	}
+	_memResult(c, mem);
+	_smcCheck(c, i + 1);
+	_jumpTo(c, c->cold[k].toEvent);
 }
 
 static const uint32_t _conditionLut32[16] = {
@@ -1651,7 +1702,9 @@ static void _resumeAfterEvents(struct Compiler* c, unsigned index, const uint8_t
 	_jumpTo(c, target);
 }
 
-// Every path of a memory access stays inline in this backend
 static void _emitColdPaths(struct Compiler* c) {
-	UNUSED(c);
+	unsigned k;
+	for (k = 0; k < c->nCold; ++k) {
+		_emitMemCold(c, k);
+	}
 }

@@ -399,6 +399,43 @@ static void _trackMulti(struct Compiler* c, const struct MultiOp* m) {
 	}
 }
 
+static int32_t _ramWait(struct Compiler* c, const struct MemOp* mem, bool ewram) {
+	if (!ewram) {
+		return 0;
+	}
+	return (mem->size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16)[GBA_REGION_EWRAM];
+}
+
+enum {
+	PATH_NONE,
+	PATH_IWRAM,
+	PATH_EWRAM,
+	PATH_VRAM,
+	PATH_CART,
+};
+
+// The region an access checks inline is where its base register pointed when the block was
+// compiled; the full dispatch goes after the block
+static int _memPath(struct Compiler* c, const struct MemOp* mem) {
+	switch (_sourceRegion(c, mem->base)) {
+	case -1:
+	case GBA_REGION_IWRAM:
+		return PATH_IWRAM;
+	case GBA_REGION_EWRAM:
+		return PATH_EWRAM;
+	case GBA_REGION_VRAM:
+		return !c->romCode && (mem->load || mem->size > 1) ? PATH_VRAM : PATH_NONE;
+	case GBA_REGION_ROM0:
+	case GBA_REGION_ROM0_EX:
+	case GBA_REGION_ROM1:
+	case GBA_REGION_ROM1_EX:
+	case GBA_REGION_ROM2:
+		return mem->load ? PATH_CART : PATH_NONE;
+	default:
+		return PATH_NONE;
+	}
+}
+
 #if defined(__aarch64__)
 #include "jit-a64.h"
 #else
