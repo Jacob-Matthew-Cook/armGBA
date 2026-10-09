@@ -16,6 +16,7 @@
 #define R_CYCLES 25
 // cpu->nextEvent, reloaded whenever C code may have changed it
 #define R_NEXT 27
+#define R_GBA 28
 #define FRAME_SIZE 112
 #define CYCLE_SLOT 96
 
@@ -195,6 +196,7 @@ static void _prologue(struct Compiler* c) {
 		_movImm64(e, R_IWRAM, (uintptr_t) c->gba->memory.iwram);
 		_movImm64(e, R_EWRAM, (uintptr_t) c->gba->memory.wram);
 		_movImm64(e, R_COVER, (uintptr_t) c->jit->cover);
+		_movImm64(e, R_GBA, (uintptr_t) c->gba);
 	}
 	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
 	_ldrW(e, R_NEXT, R_CPU, OFF_NEXT_EVENT);
@@ -371,18 +373,27 @@ static void _storeState(struct Compiler* c, unsigned index) {
 	_storePrefetch(c, OFF_PREFETCH1, index + 1);
 }
 
+// A word or halfword of IWRAM or EWRAM, through their base registers
+static void _ldrRam(struct Compiler* c, int rt, uint32_t address, bool halfword) {
+	struct Emitter* e = &c->e;
+	int base = (address >> 24) == GBA_REGION_IWRAM ? R_IWRAM : R_EWRAM;
+	uint32_t offset = address & (base == R_IWRAM ? GBA_SIZE_IWRAM - 1 : GBA_SIZE_EWRAM - 1);
+	unsigned scale = halfword ? 2 : 4;
+	if (offset < 0x1000 * scale && !(offset & (scale - 1))) {
+		_emit(e, (halfword ? 0x79400000 : 0xB9400000) | ((offset / scale) << 10) | (base << 5) | rt);
+	} else {
+		_movImm32(e, rt, offset);
+		_emit(e, (halfword ? 0x78604800 : 0xB8604800) | (rt << 16) | (base << 5) | rt); // ldr(h) wt, [base, wt, uxtw]
+	}
+}
+
 // Copy a patched word as it is now into jit->fetched
 static void _fetchWord(struct Compiler* c, unsigned index) {
 	struct Emitter* e = &c->e;
 	if (index > c->count + 1 || !c->hot[index]) {
 		return;
 	}
-	_movImm64(e, 0, (uintptr_t) _hostAddress(c, c->pc + c->width * index));
-	if (c->thumb) {
-		_emit(e, 0x79400000 | (0 << 5) | 0); // ldrh w0, [x0]
-	} else {
-		_ldrW(e, 0, 0, 0);
-	}
+	_ldrRam(c, 0, c->pc + c->width * index, c->thumb);
 	_strW(e, 0, R_JIT, JIT_FETCHED + 4 * index);
 }
 
@@ -507,6 +518,66 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 	}
 }
 
+static uint32_t _ror(uint32_t value, unsigned amount, unsigned size) {
+	uint32_t mask = size == 32 ? 0xFFFFFFFF : (1u << size) - 1;
+	return amount ? ((value >> amount) | (value << (size - amount))) & mask : value;
+}
+
+// The immr and imms fields of a logical immediate: a rotated run of ones repeated in elements
+// of 2 to 32 bits
+static bool _bitmaskImm(uint32_t value, uint32_t* fields) {
+	if (!value || value == 0xFFFFFFFF) {
+		return false;
+	}
+	unsigned size = 32;
+	while (size > 2 && ((value >> (size / 2)) & ((1u << (size / 2)) - 1)) == (value & ((1u << (size / 2)) - 1))) {
+		size /= 2;
+	}
+	uint32_t element = value & (size == 32 ? 0xFFFFFFFF : (1u << size) - 1);
+	unsigned ones = __builtin_popcount(element);
+	unsigned rotate;
+	for (rotate = 0; rotate < size; ++rotate) {
+		if (_ror(element, rotate, size) == (1u << ones) - 1) {
+			*fields = (((size - rotate) % size) << 16) | ((((~(size - 1)) << 1) & 0x3F) | (ones - 1)) << 10;
+			return true;
+		}
+	}
+	return false;
+}
+
+// The host instruction for an ALU op on w0 and an immediate, into w3, or 0 when the immediate
+// does not fit one
+static uint32_t _aluImm(unsigned opcode, bool s, uint32_t imm) {
+	uint32_t fields;
+	switch (opcode) {
+	case ALU_ADD:
+	case ALU_CMN:
+	case ALU_SUB:
+	case ALU_CMP: {
+		uint32_t op = (opcode == ALU_SUB || opcode == ALU_CMP ? 0x51000000 : 0x11000000) | (s ? 0x20000000 : 0);
+		if (imm < 0x1000) {
+			return op | (imm << 10) | 3;
+		}
+		if (!(imm & 0xFFF) && imm < 0x1000000) {
+			return op | (1 << 22) | ((imm >> 12) << 10) | 3;
+		}
+		return 0;
+	}
+	case ALU_AND:
+	case ALU_TST:
+		return _bitmaskImm(imm, &fields) ? 0x12000000 | fields | 3 : 0;
+	case ALU_EOR:
+	case ALU_TEQ:
+		return _bitmaskImm(imm, &fields) ? 0x52000000 | fields | 3 : 0;
+	case ALU_ORR:
+		return _bitmaskImm(imm, &fields) ? 0x32000000 | fields | 3 : 0;
+	case ALU_BIC:
+		return _bitmaskImm(~imm, &fields) ? 0x12000000 | fields | 3 : 0;
+	default:
+		return 0;
+	}
+}
+
 // storeCarry: MULS and MLAS take C from the last shifter result, so keep it for them
 static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarry) {
 	struct Emitter* e = &c->e;
@@ -523,8 +594,14 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 		skip = _bCond(e, alu->cond ^ 1);
 	}
 
+	// Immediates go into the host instruction when they fit
+	uint32_t hostImm = alu->immediate ? _aluImm(opcode, s, alu->imm) : 0;
 	if (alu->immediate) {
-		_movImm32(e, 1, alu->imm);
+		if (opcode == ALU_MOV || opcode == ALU_MVN) {
+			_movImm32(e, 3, opcode == ALU_MOV ? alu->imm : ~alu->imm);
+		} else if (!hostImm) {
+			_movImm32(e, 1, alu->imm);
+		}
 		if (carryOut) {
 			if (alu->immCarry >= 0) {
 				_movImm32(e, 2, alu->immCarry);
@@ -543,7 +620,9 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 		_loadFlags(c);
 	}
 
-	switch (opcode) {
+	if (hostImm) {
+		_emit(e, hostImm | (0 << 5));
+	} else switch (opcode) {
 	case ALU_AND:
 	case ALU_TST:
 		_emit(e, 0x0A000000 | (1 << 16) | (0 << 5) | 3);
@@ -559,10 +638,14 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 		_emit(e, 0x0A200000 | (1 << 16) | (0 << 5) | 3);
 		break;
 	case ALU_MOV:
-		_movW(e, 3, 1);
+		if (!alu->immediate) {
+			_movW(e, 3, 1);
+		}
 		break;
 	case ALU_MVN:
-		_emit(e, 0x2A2003E0 | (1 << 16) | 3);
+		if (!alu->immediate) {
+			_emit(e, 0x2A2003E0 | (1 << 16) | 3);
+		}
 		break;
 	case ALU_ADD:
 	case ALU_CMN:
@@ -643,9 +726,8 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	int32_t s = c->seq16;
 	int32_t n = c->nonseq16;
 	uint32_t pc = c->pc + c->width * (i + 2);
-	_movImm64(e, 9, (uintptr_t) &c->gba->memory.lastPrefetchedPc);
 	// Fewer loads when they overlap the last prefetch
-	_ldrW(e, 10, 9, 0);
+	_ldrW(e, 10, R_GBA, offsetof(struct GBA, memory.lastPrefetchedPc));
 	_movImm32(e, 11, pc);
 	_emit(e, 0x4B000000 | (11 << 16) | (10 << 5) | 10); // sub w10, w10, w11
 	_movImm32(e, 12, 0);
@@ -663,7 +745,7 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	_addW(e, 10, 10, 10);
 	_movImm32(e, 13, pc - 2);
 	_addW(e, 10, 10, 13);
-	_strW(e, 10, 9, 0);
+	_strW(e, 10, R_GBA, offsetof(struct GBA, memory.lastPrefetchedPc));
 	// stall = s * loads + 1; wait = max(wait, stall) - stall - (n - s)
 	_movImm32(e, 13, s);
 	_emit(e, 0x1B000000 | (13 << 16) | (31 << 10) | (11 << 5) | 10); // mul w10, w11, w13
@@ -741,7 +823,7 @@ static uint8_t* _memRam(struct Compiler* c, unsigned i, const struct MemOp* mem,
 
 static void _memInvalidate(struct Compiler* c, unsigned i, const struct MemOp* mem, bool ewram) {
 	struct Emitter* e = &c->e;
-	_movImm64(e, 0, (uintptr_t) c->jit);
+	_movX(e, 0, R_JIT);
 	_movW(e, 1, 9);
 	_movImm64(e, 16, (uintptr_t) ARMJitInvalidateWord);
 	_blrC(e, 16);
@@ -757,7 +839,7 @@ static void _memTimer(struct Compiler* c, unsigned i, uint8_t** miss, uint8_t** 
 	_emit(e, 0x0A000000 | (9 << 16) | (4 << 5) | 9); // and w9, w4, w9
 	_emit(e, 0x7100001F | (GBA_REG_TM0CNT_LO << 10) | (9 << 5)); // cmp w9, #TM0CNT_LO
 	*slow = _bCond(e, A64_NE);
-	_movImm64(e, 0, (uintptr_t) c->gba);
+	_movX(e, 0, R_GBA);
 	_movW(e, 1, 4);
 	_movImm64(e, 16, (uintptr_t) _readTimer);
 	_blrC(e, 16);
@@ -776,7 +858,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 	_cmpW(e, 8, 9);
 	*slow = _bCond(e, 2); // b.hs
 	_andImm(e, 8, 4, size == 4 ? 2 : size == 2 ? 1 : 0, size == 4 ? 15 : size == 2 ? 16 : 17);
-	_movImm64(e, 10, (uintptr_t) c->gba->video.vram);
+	_ldrX(e, 10, R_GBA, offsetof(struct GBA, video.vram));
 	_strW(e, 4, 31, CYCLE_SLOT + 4);
 	if (load) {
 		_memAccess(e, true, size, 10);
@@ -793,8 +875,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 		uint8_t* unchanged = _bCond(e, A64_EQ);
 		_memAccess(e, false, size, 10);
 		// Once per block, unless a tile cache wants every address
-		_movImm64(e, 9, (uintptr_t) &c->gba->video.renderer);
-		_ldrX(e, 9, 9, 0);
+		_ldrX(e, 9, R_GBA, offsetof(struct GBA, video.renderer));
 		_ldrX(e, 9, 9, offsetof(struct GBAVideoRenderer, cache));
 		uint8_t* cached = _emitSite(e, 0xB5000000 | 9); // cbnz x9
 		_ldrW(e, 9, 31, CYCLE_SLOT + 4);
@@ -809,8 +890,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 		_patch(cached, e->p);
 		unsigned call;
 		for (call = 0; call < (size == 4 ? 2 : 1); ++call) {
-			_movImm64(e, 9, (uintptr_t) &c->gba->video.renderer);
-			_ldrX(e, 0, 9, 0);
+			_ldrX(e, 0, R_GBA, offsetof(struct GBA, video.renderer));
 			_ldrW(e, 1, 31, CYCLE_SLOT + 4);
 			_andImm(e, 1, 1, size == 4 ? 2 : 1, size == 4 ? 15 : 16);
 			if (size == 4 && call == 0) {
@@ -823,10 +903,9 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 		_ldrW(e, 4, 31, CYCLE_SLOT + 4);
 		_patch(unchanged, e->p);
 	}
-	_movImm64(e, 9, (uintptr_t) &c->gba->video.stallMask);
-	_ldrW(e, 9, 9, 0);
+	_ldrW(e, 9, R_GBA, offsetof(struct GBA, video.stallMask));
 	uint8_t* noStall = _cbzW(e, 9);
-	_movImm64(e, 0, (uintptr_t) c->gba);
+	_movX(e, 0, R_GBA);
 	_movW(e, 1, 4);
 	_movImm32(e, 2, size);
 	_movImm64(e, 16, (uintptr_t) GBAMemoryVRAMWait);
@@ -854,10 +933,9 @@ static void _memCart(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 	_movImm32(e, 9, c->gba->memory.romSize);
 	_cmpW(e, 8, 9);
 	*slow = _bCond(e, 2); // b.hs
-	_movImm64(e, 10, (uintptr_t) c->gba->memory.rom);
+	_ldrX(e, 10, R_GBA, offsetof(struct GBA, memory.rom));
 	_memAccess(e, true, size, 10);
-	char* cartWaits = size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16;
-	_movImm64(e, 10, (uintptr_t) cartWaits);
+	_addXImm(e, 10, R_GBA, size == 4 ? offsetof(struct GBA, memory.waitstatesNonseq32) : offsetof(struct GBA, memory.waitstatesNonseq16));
 	_emit(e, 0x38604800 | (7 << 16) | (10 << 5) | 3); // ldrb w3, [x10, w7, uxtw]
 	_addWImm(e, 3, 3, 2);
 }
@@ -934,8 +1012,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_movImm32(e, 3, literalWait);
 		goto tail;
 	case LITERAL_RAM:
-		_movImm64(e, 0, (uintptr_t) literalHost);
-		_ldrW(e, 0, 0, 0);
+		_ldrRam(c, 0, mem->up ? mem->base.value + mem->offset : mem->base.value - mem->offset, false);
 		_dataWait(c, i, literalWait);
 		goto tail;
 	}
@@ -1222,12 +1299,7 @@ static void _storeTargetPipeline(struct Compiler* c, uint32_t target) {
 		if (ARMJitRamWord(address) < 0) {
 			_movImm32(e, 0, _opAt(c, address));
 		} else {
-			_movImm64(e, 0, (uintptr_t) _hostAddress(c, address));
-			if (c->thumb) {
-				_emit(e, 0x79400000 | (0 << 5) | 0); // ldrh w0, [x0]
-			} else {
-				_ldrW(e, 0, 0, 0);
-			}
+			_ldrRam(c, 0, address, c->thumb);
 		}
 		_strW(e, 0, R_CPU, k ? OFF_PREFETCH1 : OFF_PREFETCH0);
 	}
@@ -1245,15 +1317,14 @@ static void _emitBranch(struct Compiler* c, unsigned i, const struct BranchOp* b
 	uint8_t* slow[4];
 	unsigned nSlow = 0;
 	unsigned region = b->target >> 24;
-	_movImm64(e, 9, (uintptr_t) c->gba);
-	_ldrW(e, 10, 9, offsetof(struct GBA, memory.activeRegion));
+	_ldrW(e, 10, R_GBA, offsetof(struct GBA, memory.activeRegion));
 	_emit(e, 0x7100001F | (region << 10) | (10 << 5)); // cmp w10, #region
 	slow[nSlow++] = _bCond(e, A64_NE);
 	if (region != GBA_REGION_BIOS) {
-		_ldrW(e, 10, 9, offsetof(struct GBA, idleOptimization));
+		_ldrW(e, 10, R_GBA, offsetof(struct GBA, idleOptimization));
 		_emit(e, 0x7100001F | (IDLE_LOOP_DETECT << 10) | (10 << 5)); // cmp w10, #IDLE_LOOP_DETECT
 		slow[nSlow++] = _bCond(e, A64_GE);
-		_ldrW(e, 10, 9, offsetof(struct GBA, idleLoop));
+		_ldrW(e, 10, R_GBA, offsetof(struct GBA, idleLoop));
 		_movImm32(e, 11, b->target);
 		_cmpW(e, 10, 11);
 		slow[nSlow++] = _bCond(e, A64_EQ);
@@ -1265,8 +1336,8 @@ static void _emitBranch(struct Compiler* c, unsigned i, const struct BranchOp* b
 		slow[nSlow++] = _bCond(e, A64_NE);
 	}
 	_movImm32(e, 10, b->target);
-	_strW(e, 10, 9, offsetof(struct GBA, lastJump));
-	_strW(e, 31, 9, offsetof(struct GBA, memory.lastPrefetchedPc));
+	_strW(e, 10, R_GBA, offsetof(struct GBA, lastJump));
+	_strW(e, 31, R_GBA, offsetof(struct GBA, memory.lastPrefetchedPc));
 	_ldrW(e, 10, R_CPU, OFF_ACTIVE_MASK);
 	if (c->thumb) {
 		_emit(e, 0x32000000 | (31 << 16) | (10 << 5) | 10); // orr w10, w10, #2
