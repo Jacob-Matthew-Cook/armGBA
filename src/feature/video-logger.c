@@ -747,6 +747,8 @@ void mVideoLogContextDestroy(struct mCore* core, struct mVideoLogContext* contex
 	if (core) {
 		core->endVideoLog(core);
 	}
+#else
+	UNUSED(core);
 #endif
 	if (context->initialState) {
 		mappedMemoryFree(context->initialState, context->initialStateSize);
