@@ -13,6 +13,41 @@
 		SPRITE_DRAW_PIXEL_ ## DEPTH ## _ ## TYPE(inX); \
 	}
 
+#ifdef VIDEO_SIMD
+// A whole 16-color tile row at once, as eight SPRITE_DRAW_PIXEL_16_NORMAL
+static inline void _spriteRow16(uint32_t* layer, uint32_t tileData, const mColor* palette, uint32_t flags) {
+	vidx index = _nibbles(tileData);
+	p8 current = _p8Load(layer);
+	p8 kept = _p8Ge(_p8(flags), _p8And(current, _p8(FLAG_ORDER_MASK)));
+	p8 reordered = _p8Or(_p8Bic(current, _p8(FLAG_ORDER_MASK | FLAG_REBLEND | FLAG_TARGET_1)), _p8(flags & (FLAG_ORDER_MASK | FLAG_REBLEND | FLAG_TARGET_1)));
+	p8 behind = _p8Select(_p8Eq(current, _p8(FLAG_UNWRITTEN)), current, reordered);
+	p8 drawn = _p8Select(_p8Nonzero(index), _p8Or(_p8Widen(_lookup16(palette, index)), _p8(flags)), behind);
+	_p8Store(layer, _p8Select(kept, current, drawn));
+}
+
+// Rows that line up with the sprite's tiles go eight pixels at a time, flipped ones with their nibbles reversed
+#define SPRITE_NORMAL_LOOP_16_NORMAL \
+	SPRITE_YBASE_16(inY); \
+	unsigned tileData; \
+	for (; outX < condition; ++outX, inX += xOffset) { \
+		if (outX + 8 <= condition && !((xOffset > 0 ? inX : inX - 7) & 7)) { \
+			SPRITE_XBASE_16((inX & ~7)); \
+			LOAD_32(tileData, (yBase + ((xBase + charBase) & maskLo)) & 0x7FFE, vramBase); \
+			if (xOffset < 0) { \
+				tileData = __builtin_bswap32(((tileData >> 4) & 0x0F0F0F0F) | ((tileData & 0x0F0F0F0F) << 4)); \
+			} \
+			_spriteRow16(&renderer->spriteLayer[outX], tileData, palette, flags); \
+			outX += 7; \
+			inX += 7 * xOffset; \
+			continue; \
+		} \
+		SPRITE_XBASE_16(inX); \
+		SPRITE_DRAW_PIXEL_16_NORMAL(inX); \
+	}
+#else
+#define SPRITE_NORMAL_LOOP_16_NORMAL SPRITE_NORMAL_LOOP(16, NORMAL)
+#endif
+
 #define SPRITE_MOSAIC_LOOP(DEPTH, TYPE) \
 	SPRITE_YBASE_ ## DEPTH(inY); \
 	unsigned tileData; \
@@ -354,7 +389,7 @@ int GBAVideoSoftwareRendererPreprocessSprite(struct GBAVideoSoftwareRenderer* re
 				objwinPalette = &objwinPalette[GBAObjAttributesCGetPalette(sprite->c) << 4];
 				SPRITE_NORMAL_LOOP(16, NORMAL_OBJWIN);
 			} else {
-				SPRITE_NORMAL_LOOP(16, NORMAL);
+				SPRITE_NORMAL_LOOP_16_NORMAL;
 			}
 		} else {
 			if (flags & FLAG_OBJWIN) {

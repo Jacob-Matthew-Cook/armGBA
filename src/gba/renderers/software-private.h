@@ -105,6 +105,7 @@ static inline v32 _v32Test(v32 a, v32 b) { return vtstq_u32(a, b); }
 static inline v32 _v32Select(v32 mask, v32 a, v32 b) { return vbslq_u32(mask, a, b); }
 static inline bool _v32Any(v32 a, v32 b) { return vmaxvq_u32(vorrq_u32(a, b)); }
 static inline v16 _v16(uint16_t x) { return vdupq_n_u16(x); }
+static inline void _v16Store(uint16_t* p, v16 v) { vst1q_u16(p, v); }
 static inline v16 _v16Narrow(v32 low, v32 high) { return vcombine_u16(vmovn_u32(low), vmovn_u32(high)); }
 static inline v32 _v16Widen(v16 v, unsigned half) { return vmovl_u16(half ? vget_high_u16(v) : vget_low_u16(v)); }
 static inline v16 _v16Select(v16 mask, v16 a, v16 b) { return vbslq_u16(mask, a, b); }
@@ -151,6 +152,7 @@ static inline v32 _v32Test(v32 a, v32 b) { return _mm_xor_si128(_mm_cmpeq_epi32(
 static inline v32 _v32Select(v32 mask, v32 a, v32 b) { return _mm_blendv_epi8(b, a, mask); }
 static inline bool _v32Any(v32 a, v32 b) { v32 mask = _mm_or_si128(a, b); return !_mm_testz_si128(mask, mask); }
 static inline v16 _v16(uint16_t x) { return _mm_set1_epi16(x); }
+static inline void _v16Store(uint16_t* p, v16 v) { _mm_storeu_si128((__m128i*) p, v); }
 static inline v16 _v16Narrow(v32 low, v32 high) { return _mm_packus_epi32(_mm_and_si128(low, _mm_set1_epi32(0xFFFF)), _mm_and_si128(high, _mm_set1_epi32(0xFFFF))); }
 static inline v32 _v16Widen(v16 v, unsigned half) { return _mm_cvtepu16_epi32(half ? _mm_srli_si128(v, 8) : v); }
 static inline v16 _v16Select(v16 mask, v16 a, v16 b) { return _mm_blendv_epi8(b, a, mask); }

@@ -718,7 +718,11 @@ static void GBAVideoSoftwareRendererDrawScanline(struct GBAVideoRenderer* render
 
 		}
 	} else {
-#ifdef COLOR_16_BIT
+#ifdef VIDEO_SIMD
+		for (x = 0; x < GBA_VIDEO_HORIZONTAL_PIXELS; x += 8) {
+			_v16Store(&row[x], _p8Narrow(_p8Load(&softwareRenderer->row[x])));
+		}
+#elif defined(COLOR_16_BIT)
 		for (x = 0; x < GBA_VIDEO_HORIZONTAL_PIXELS; x += 4) {
 			row[x] = softwareRenderer->row[x];
 			row[x + 1] = softwareRenderer->row[x + 1];
@@ -893,12 +897,18 @@ void GBAVideoSoftwareRendererStepWindow(struct GBAVideoSoftwareRenderer* softwar
 
 void GBAVideoSoftwareRendererPreprocessBuffer(struct GBAVideoSoftwareRenderer* softwareRenderer) {
 	int x;
+#ifdef VIDEO_SIMD
+	for (x = 0; x < GBA_VIDEO_HORIZONTAL_PIXELS; x += 8) {
+		_p8Store(&softwareRenderer->spriteLayer[x], _p8(FLAG_UNWRITTEN));
+	}
+#else
 	for (x = 0; x < GBA_VIDEO_HORIZONTAL_PIXELS; x += 4) {
 		softwareRenderer->spriteLayer[x] = FLAG_UNWRITTEN;
 		softwareRenderer->spriteLayer[x + 1] = FLAG_UNWRITTEN;
 		softwareRenderer->spriteLayer[x + 2] = FLAG_UNWRITTEN;
 		softwareRenderer->spriteLayer[x + 3] = FLAG_UNWRITTEN;
 	}
+#endif
 
 	softwareRenderer->windows[0].endX = GBA_VIDEO_HORIZONTAL_PIXELS;
 	softwareRenderer->nWindows = 1;
