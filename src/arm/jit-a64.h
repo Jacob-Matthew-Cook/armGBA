@@ -390,7 +390,7 @@ static void _entryStub(struct Compiler* c, unsigned index, const uint8_t* target
 	struct Emitter* e = &c->e;
 	unsigned i;
 	for (i = 0; i < 2; ++i) {
-		if (c->hot[index + i]) {
+		if (c->patched[index + i]) {
 			_ldrW(e, 0, R_CPU, i ? OFF_PREFETCH1 : OFF_PREFETCH0);
 			_strW(e, 0, R_JIT, JIT_FETCHED + 4 * (index + i));
 		}
@@ -434,7 +434,7 @@ static void _emitTrampoline(struct Compiler* c) {
 
 	_patch(toLookup, e->p);
 	_patch(toLookup2, e->p);
-	_strbW(e, A64_ZR, R_JIT, JIT_SMC_HIT);
+	_strbW(e, A64_ZR, R_JIT, JIT_BLOCKS_DROPPED);
 	_ldrW(e, R_NEXT, R_CPU, OFF_NEXT_EVENT);
 	_cmpW(e, R_CYCLES, R_NEXT);
 	_patch(_bCond(e, A64_GE), c->jit->events);
@@ -495,7 +495,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	_ldrW(e, 0, R_CPU, OFF_PC);
 	_cmpW(e, 0, R_WB);
 	_patch(_bCond(e, A64_NE), c->jit->dispatch);
-	_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
+	_ldrbW(e, 0, R_JIT, JIT_BLOCKS_DROPPED);
 	_patch(_cbnzW(e, 0), c->jit->dispatch);
 	_ret(e, 26);
 }
@@ -506,7 +506,7 @@ static void _exitJump(struct Compiler* c, int index) {
 
 static void _storePrefetch(struct Compiler* c, unsigned offset, unsigned index) {
 	struct Emitter* e = &c->e;
-	if (c->hot[index]) {
+	if (c->patched[index]) {
 		_ldrW(e, 0, R_JIT, JIT_FETCHED + 4 * index);
 	} else {
 		_movImm32(e, 0, c->ops[index]);
@@ -540,7 +540,7 @@ static void _ldrRam(struct Compiler* c, int rt, uint32_t address, bool halfword)
 // Copy a patched word as it is now into jit->fetched
 static void _fetchWord(struct Compiler* c, unsigned index) {
 	struct Emitter* e = &c->e;
-	if (index > c->count + 1 || !c->hot[index]) {
+	if (index > c->count + 1 || !c->patched[index]) {
 		return;
 	}
 	_ldrRam(c, 0, c->pc + c->width * index, c->thumb);
@@ -593,7 +593,7 @@ static uint8_t* _runCheck(struct Compiler* c, uint32_t cycles) {
 
 static void _smcCheck(struct Compiler* c, int index) {
 	struct Emitter* e = &c->e;
-	_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
+	_ldrbW(e, 0, R_JIT, JIT_BLOCKS_DROPPED);
 	_exitAt(c, _cbnzW(e, 0), index);
 }
 
@@ -1361,7 +1361,7 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_movImm32(e, 1, c->pc + c->width);
 		_cmpW(e, 0, 1);
 		_exitAt(c, _bCond(e, A64_NE), EXIT_DIRECT);
-		_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
+		_ldrbW(e, 0, R_JIT, JIT_BLOCKS_DROPPED);
 		_exitAt(c, _cbnzW(e, 0), EXIT_DIRECT);
 		_cmpW(e, R_CYCLES, R_NEXT);
 		_exitAt(c, _bCond(e, A64_GE), EXIT_EVENTS);

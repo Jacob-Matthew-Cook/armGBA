@@ -31,7 +31,7 @@ struct ARMJitPage;
 
 struct ARMJit {
 	// Set when blocks are removed, so code running in one stops after the call that did it
-	uint8_t smcHit;
+	uint8_t blocksDropped;
 	// 4 KiB VRAM blocks the renderer was told about since events last ran
 	uint32_t vramNotified;
 
@@ -63,7 +63,7 @@ struct ARMJit {
 	// Number of compiled blocks whose code (or baked-in prefetch) covers each RAM word
 	uint8_t cover[ARM_JIT_RAM_WORDS];
 	// Writes into compiled code, by the word written, and the last two different values written
-	uint8_t patched[ARM_JIT_RAM_WORDS];
+	uint8_t patchCount[ARM_JIT_RAM_WORDS];
 	uint32_t patchValue[ARM_JIT_RAM_WORDS];
 	uint32_t patchOther[ARM_JIT_RAM_WORDS];
 	const uint32_t* iwram;

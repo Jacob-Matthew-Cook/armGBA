@@ -87,7 +87,7 @@ enum {
 	OFF_MEMORY = offsetof(struct ARMCore, memory),
 	OFF_EXECUTION_MODE = offsetof(struct ARMCore, executionMode),
 	OFF_ACTIVE_MASK = offsetof(struct ARMCore, memory) + offsetof(struct ARMMemory, activeMask),
-	JIT_SMC_HIT = offsetof(struct ARMJit, smcHit),
+	JIT_BLOCKS_DROPPED = offsetof(struct ARMJit, blocksDropped),
 	JIT_VRAM_NOTIFIED = offsetof(struct ARMJit, vramNotified),
 	JIT_COVER = offsetof(struct ARMJit, cover),
 	JIT_PAGES = offsetof(struct ARMJit, pages),
@@ -116,7 +116,7 @@ struct Compiler {
 	uint32_t mask;
 	uint32_t ops[MAX_SPAN];
 	// Patched instructions and prefetch words, read at runtime from jit->fetched
-	bool hot[MAX_SPAN];
+	bool patched[MAX_SPAN];
 	unsigned count;
 	bool thumb;
 	unsigned width;
@@ -201,7 +201,7 @@ struct BranchOp {
 static bool _branchTarget(struct Compiler* c, unsigned i, struct BranchOp* b) {
 	uint32_t op = c->ops[i];
 	uint32_t address = c->pc + c->width * i;
-	if (c->hot[i]) {
+	if (c->patched[i]) {
 		return false;
 	}
 	b->link = false;
@@ -217,7 +217,7 @@ static bool _branchTarget(struct Compiler* c, unsigned i, struct BranchOp* b) {
 		b->target = address + 4 + ((int8_t) op << 1);
 	} else if ((op & 0xF800) == 0xE000) {
 		b->target = address + 4 + ((int32_t) (op << 21) >> 20);
-	} else if ((op & 0xF800) == 0xF800 && i > 0 && !c->hot[i - 1] && (c->ops[i - 1] & 0xF800) == 0xF000) {
+	} else if ((op & 0xF800) == 0xF800 && i > 0 && !c->patched[i - 1] && (c->ops[i - 1] & 0xF800) == 0xF000) {
 		// BL whose first half is the previous instruction, so LR is known
 		b->thumbLink = true;
 		b->lr = address + 2 + ((int32_t) (c->ops[i - 1] << 21) >> 9);
@@ -572,7 +572,7 @@ static void _removeBlock(struct ARMJit* jit, struct ARMJitBlock* block) {
 			--jit->cover[block->coverStart + i];
 		}
 	}
-	jit->smcHit = 1;
+	jit->blocksDropped = 1;
 	_freeBlock(block);
 }
 
@@ -613,7 +613,7 @@ void ARMJitDropBlocks(struct ARMJit* jit) {
 		_freeBlock(block);
 		block = next;
 	}
-	jit->smcHit = 1;
+	jit->blocksDropped = 1;
 	jit->blockList = NULL;
 	unsigned i;
 	for (i = 0; i < ARM_JIT_PAGES; ++i) {
@@ -645,7 +645,7 @@ void ARMJitFlush(struct ARMJit* jit) {
 			memset(jit->pages[i]->hits, 0, sizeof(jit->pages[i]->hits));
 		}
 	}
-	memset(jit->patched, 0, sizeof(jit->patched));
+	memset(jit->patchCount, 0, sizeof(jit->patchCount));
 	memset(jit->patchValue, 0, sizeof(jit->patchValue));
 	memset(jit->patchOther, 0, sizeof(jit->patchOther));
 }
@@ -658,8 +658,8 @@ static uint32_t _ramWordAddress(unsigned word) {
 }
 
 void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word) {
-	if (jit->patched[word] < 255) {
-		++jit->patched[word];
+	if (jit->patchCount[word] < 255) {
+		++jit->patchCount[word];
 	}
 	uint32_t value = word < ARM_JIT_IWRAM_WORDS ? jit->iwram[word] : jit->ewram[word - ARM_JIT_IWRAM_WORDS];
 	if (value != jit->patchValue[word]) {
@@ -682,7 +682,7 @@ void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word) {
 // Words that keep getting patched are read when fetched instead of compiled in
 static bool _isPatched(struct ARMJit* jit, uint32_t address) {
 	int word = ARMJitRamWord(address);
-	return word >= 0 && jit->patched[word] >= PATCH_LIMIT;
+	return word >= 0 && jit->patchCount[word] >= PATCH_LIMIT;
 }
 
 // End of the region a block at this address may run through, or 0 if it can't be compiled
@@ -728,11 +728,11 @@ static bool _readBlock(struct Compiler* c, struct ARMJit* jit, struct ARMCore* c
 	c->count = count;
 	unsigned i;
 	for (i = 0; i < count + 2; ++i) {
-		c->hot[i] = _isPatched(jit, pc + c->width * i);
+		c->patched[i] = _isPatched(jit, pc + c->width * i);
 		c->ops[i] = _opAt(c, pc + c->width * i);
 	}
-	return count && !((c->ops[0] ^ cpu->prefetch[0]) & (c->hot[0] ? 0 : 0xFFFFFFFF)) &&
-	       !((c->ops[1] ^ cpu->prefetch[1]) & (c->hot[1] ? 0 : 0xFFFFFFFF));
+	return count && !((c->ops[0] ^ cpu->prefetch[0]) & (c->patched[0] ? 0 : 0xFFFFFFFF)) &&
+	       !((c->ops[1] ^ cpu->prefetch[1]) & (c->patched[1] ? 0 : 0xFFFFFFFF));
 }
 
 static struct ARMJitBlock* _newBlock(unsigned count) {
@@ -787,7 +787,7 @@ static void _startCompiler(struct Compiler* c, struct ARMJit* jit, struct ARMCor
 // A run of ALU instructions goes at once only when no event can come due before its last one
 static unsigned _emitAluRun(struct Compiler* c, unsigned i, struct AluOp* alus) {
 	unsigned run = 1;
-	while (i + run < c->count && !c->hot[i + run] && !c->isTarget[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
+	while (i + run < c->count && !c->patched[i + run] && !c->isTarget[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
 		++run;
 	}
 	unsigned lastAlways = 0;
@@ -825,7 +825,7 @@ static void _emitBody(struct Compiler* c) {
 	while (i < c->count) {
 		c->fast[i] = c->e.p;
 		uint32_t op = c->ops[i];
-		if (c->hot[i]) {
+		if (c->patched[i]) {
 			_fetchAhead(c, i);
 			_emitPatched(c, i);
 		} else if (_decodeAlu(c, i, &alus[i])) {
@@ -940,11 +940,11 @@ static void _emitEntries(struct Compiler* c) {
 		entry->pc = c->pc + c->width * i;
 		entry->op0 = c->ops[i];
 		entry->op1 = c->ops[i + 1];
-		entry->opMask0 = c->hot[i] ? 0 : 0xFFFFFFFF;
-		entry->opMask1 = c->hot[i + 1] ? 0 : 0xFFFFFFFF;
+		entry->opMask0 = c->patched[i] ? 0 : 0xFFFFFFFF;
+		entry->opMask1 = c->patched[i + 1] ? 0 : 0xFFFFFFFF;
 		entry->thumb = c->thumb;
 		entry->block = block;
-		if (c->hot[i] || c->hot[i + 1]) {
+		if (c->patched[i] || c->patched[i + 1]) {
 			entry->code = c->e.p;
 			_entryStub(c, i, target);
 		}
@@ -966,7 +966,7 @@ static void _registerBlock(struct Compiler* c) {
 	if (block->coverStart >= 0) {
 		block->coverWords = ARMJitRamWord(c->pc + c->width * (c->count + 2) - 1) - block->coverStart + 1;
 		for (i = 0; i < block->coverWords; ++i) {
-			if (jit->patched[block->coverStart + i] < PATCH_LIMIT) {
+			if (jit->patchCount[block->coverStart + i] < PATCH_LIMIT) {
 				block->coverMask[i / 32] |= 1u << (i & 31);
 				++jit->cover[block->coverStart + i];
 			}
@@ -1067,7 +1067,7 @@ static unsigned _selfTestAluMode(struct ARMJit* jit, unsigned iterations, bool t
 		c->gba = NULL;
 		c->pc = address;
 		memset(c->ops, 0, sizeof(c->ops));
-		memset(c->hot, 0, sizeof(c->hot));
+		memset(c->patched, 0, sizeof(c->patched));
 		c->ops[0] = op;
 		c->count = 1;
 		c->thumb = thumb;
@@ -1170,7 +1170,7 @@ enum ARMJitResult ARMJitRun(struct ARMCore* cpu) {
 		return ARM_JIT_STEP;
 	}
 	jit->pendingLink = NULL;
-	jit->smcHit = 0;
+	jit->blocksDropped = 0;
 	jit->eventsRan = false;
 	jit->vramNotified = 0;
 	int32_t cycles = cpu->cycles;

@@ -364,7 +364,7 @@ static void _entryStub(struct Compiler* c, unsigned index, const uint8_t* target
 	struct Emitter* e = &c->e;
 	unsigned i;
 	for (i = 0; i < 2; ++i) {
-		if (c->hot[index + i]) {
+		if (c->patched[index + i]) {
 			_load(e, X_RAX, X_CPU, i ? OFF_PREFETCH1 : OFF_PREFETCH0);
 			_store(e, X_RAX, X_JIT, JIT_FETCHED + 4 * (index + i));
 		}
@@ -408,7 +408,7 @@ static void _emitTrampoline(struct Compiler* c) {
 
 	_patch(toLookup, e->p);
 	_patch(toLookup2, e->p);
-	_insn(e, 0, XO_MOV8_IMM, 0, _xm(X_JIT, JIT_SMC_HIT));
+	_insn(e, 0, XO_MOV8_IMM, 0, _xm(X_JIT, JIT_BLOCKS_DROPPED));
 	_byte(e, 0);
 	_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
 	_patch(_jcc(e, CC_GE), c->jit->events);
@@ -471,7 +471,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	uint8_t* frameDone = _jcc(e, CC_E);
 	_cmpRegMem(e, X_WB, X_CPU, OFF_PC);
 	uint8_t* moved = _jcc(e, CC_NE);
-	_cmpByte(e, _xm(X_JIT, JIT_SMC_HIT), 0);
+	_cmpByte(e, _xm(X_JIT, JIT_BLOCKS_DROPPED), 0);
 	uint8_t* written = _jcc(e, CC_NE);
 	_adjustStack(e, 8);
 	_ret(e);
@@ -491,7 +491,7 @@ static void _exitJump(struct Compiler* c, int index) {
 
 static void _storePrefetch(struct Compiler* c, int32_t offset, unsigned index) {
 	struct Emitter* e = &c->e;
-	if (c->hot[index]) {
+	if (c->patched[index]) {
 		_load(e, X_RAX, X_JIT, JIT_FETCHED + 4 * index);
 		_store(e, X_RAX, X_CPU, offset);
 	} else {
@@ -510,7 +510,7 @@ static void _storeState(struct Compiler* c, unsigned index) {
 // Copy a patched word as it is now into jit->fetched
 static void _fetchWord(struct Compiler* c, unsigned index) {
 	struct Emitter* e = &c->e;
-	if (index > c->count + 1 || !c->hot[index]) {
+	if (index > c->count + 1 || !c->patched[index]) {
 		return;
 	}
 	_movImm64(e, X_RAX, (uintptr_t) _hostAddress(c, c->pc + c->width * index));
@@ -555,7 +555,7 @@ static uint8_t* _runCheck(struct Compiler* c, uint32_t cycles) {
 
 static void _smcCheck(struct Compiler* c, int index) {
 	struct Emitter* e = &c->e;
-	_cmpByte(e, _xm(X_JIT, JIT_SMC_HIT), 0);
+	_cmpByte(e, _xm(X_JIT, JIT_BLOCKS_DROPPED), 0);
 	_exitAt(c, _jcc(e, CC_NE), index);
 }
 
@@ -1296,7 +1296,7 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		// A taken branch back to the start of this block keeps running here
 		_ri(e, G1_CMP, X_RAX, c->pc + c->width);
 		_exitAt(c, _jcc(e, CC_NE), EXIT_DIRECT);
-		_cmpByte(e, _xm(X_JIT, JIT_SMC_HIT), 0);
+		_cmpByte(e, _xm(X_JIT, JIT_BLOCKS_DROPPED), 0);
 		_exitAt(c, _jcc(e, CC_NE), EXIT_DIRECT);
 		_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
 		_exitAt(c, _jcc(e, CC_GE), EXIT_EVENTS);
