@@ -692,7 +692,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	bool load = mem->load;
 	unsigned size = mem->size;
 
-	uint8_t* done[4] = { NULL, NULL, NULL, NULL };
+	uint8_t* done[5] = { NULL, NULL, NULL, NULL, NULL };
 	uint8_t* toSlow[3] = { NULL, NULL, NULL };
 	uint8_t* checked[2] = { NULL, NULL };
 	uint8_t* toCart = NULL;
@@ -793,9 +793,27 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	_dataWait(c, i, ewramWait + (load ? 2 : 1));
 	done[1] = _b(e);
 
-	// VRAM: stores tell the renderer about changed halfwords; byte stores stay with the handlers
+	// Timer counters, without the generic load and I/O dispatch
 	_patch(toCart, e->p);
 	toCart = NULL;
+	if (load && size == 2) {
+		_emit(e, 0x7100001F | (GBA_REGION_IO << 10) | (7 << 5)); // cmp w7, #4
+		uint8_t* notIo = _bCond(e, A64_NE);
+		_movImm32(e, 9, 0x00FFFFF3);
+		_emit(e, 0x0A000000 | (9 << 16) | (4 << 5) | 9); // and w9, w4, w9
+		_emit(e, 0x7100001F | (GBA_REG_TM0CNT_LO << 10) | (9 << 5)); // cmp w9, #TM0CNT_LO
+		uint8_t* notTimer = _bCond(e, A64_NE);
+		_movImm64(e, 0, (uintptr_t) c->gba);
+		_movW(e, 1, 4);
+		_movImm64(e, 16, (uintptr_t) _readTimer);
+		_blrC(e, 16);
+		_dataWait(c, i, 2);
+		done[4] = _b(e);
+		_patch(notTimer, e->p);
+		_patch(notIo, e->p);
+	}
+
+	// VRAM: stores tell the renderer about changed halfwords; byte stores stay with the handlers
 	if (!c->romCode && (load || size > 1)) {
 		_emit(e, 0x7100001F | (GBA_REGION_VRAM << 10) | (7 << 5)); // cmp w7, #6
 		toCart = _bCond(e, A64_NE);
@@ -928,7 +946,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		toEvent = _b(e);
 	}
 tail:
-	for (d = 0; d < 4; ++d) {
+	for (d = 0; d < 5; ++d) {
 		if (done[d]) {
 			_patch(done[d], e->p);
 		}

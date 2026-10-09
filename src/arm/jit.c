@@ -12,6 +12,7 @@
 #include <mgba/internal/arm/isa-thumb.h>
 #include <mgba/internal/arm/macros.h>
 #include <mgba/internal/gba/gba.h>
+#include <mgba/internal/gba/io.h>
 #include <mgba-util/memory.h>
 
 #include <stddef.h>
@@ -805,6 +806,13 @@ static int _literal(struct Compiler* c, const struct MemOp* mem, uint32_t* value
 		return LITERAL_RAM;
 	}
 	return LITERAL_NONE;
+}
+
+// Timer counter reads, as GBALoad16 and GBAIORead make them
+static uint32_t _readTimer(struct GBA* gba, uint32_t address) {
+	gba->haltPending = false;
+	GBATimerReadRegister(gba, (address >> 2) & 3);
+	return gba->memory.io[GBA_REG(TM0CNT_LO) + ((address >> 1) & 6)];
 }
 
 // A word of the region this block runs from, as compiled

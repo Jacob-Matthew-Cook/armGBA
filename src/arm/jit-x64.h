@@ -880,7 +880,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	bool load = mem->load;
 	unsigned size = mem->size;
 
-	uint8_t* done[4] = { NULL, NULL, NULL, NULL };
+	uint8_t* done[5] = { NULL, NULL, NULL, NULL, NULL };
 	uint8_t* toSlow[3] = { NULL, NULL, NULL };
 	uint8_t* checked[2] = { NULL, NULL };
 	uint8_t* toCart = NULL;
@@ -995,9 +995,27 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	_dataWait(c, i, ewramWait + (load ? 2 : 1));
 	done[1] = _jmp(e);
 
-	// VRAM: stores tell the renderer about changed halfwords; byte stores stay with the handlers
+	// Timer counters, without the generic load and I/O dispatch
 	_patch(toCart, e->p);
 	toCart = NULL;
+	if (load && size == 2) {
+		_ri(e, 7, X_RAX, GBA_REGION_IO);
+		uint8_t* notIo = _jcc(e, CC_NE);
+		_rr(e, OP_MOV, X_RCX, X_RDI);
+		_ri(e, 4, X_RCX, 0x00FFFFF3);
+		_ri(e, 7, X_RCX, GBA_REG_TM0CNT_LO);
+		uint8_t* notTimer = _jcc(e, CC_NE);
+		_rr(e, OP_MOV, X_RSI, X_RDI);
+		_movImm64(e, X_RDI, (uintptr_t) c->gba);
+		_movImm64(e, X_RAX, (uintptr_t) _readTimer);
+		_callC(e, X_RAX);
+		_dataWait(c, i, 2);
+		done[4] = _jmp(e);
+		_patch(notTimer, e->p);
+		_patch(notIo, e->p);
+	}
+
+	// VRAM: stores tell the renderer about changed halfwords; byte stores stay with the handlers
 	if (!c->romCode && (load || size > 1)) {
 		_ri(e, 7, X_RAX, GBA_REGION_VRAM);
 		toCart = _jcc(e, CC_NE);
@@ -1151,7 +1169,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		toEvent = _jmp(e);
 	}
 tail:
-	for (d = 0; d < 4; ++d) {
+	for (d = 0; d < 5; ++d) {
 		if (done[d]) {
 			_patch(done[d], e->p);
 		}
