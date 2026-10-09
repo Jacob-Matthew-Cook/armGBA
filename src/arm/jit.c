@@ -376,6 +376,27 @@ static void _trackAlu(struct Compiler* c, const struct AluOp* alu) {
 	_setRegion(c, alu->rd, region);
 }
 
+// What a literal pool word points into, if that has an inline path: known for cartridge literals, read now for RAM ones
+static int _literalRegion(struct Compiler* c, const struct MemOp* mem) {
+	uint32_t value;
+	void* host;
+	int32_t wait;
+	switch (_literal(c, mem, &value, &host, &wait)) {
+	case LITERAL_CONSTANT:
+		break;
+	case LITERAL_RAM:
+		LOAD_32(value, 0, host);
+		break;
+	default:
+		return -1;
+	}
+	unsigned region = value >> 24;
+	if (region == GBA_REGION_IWRAM || region == GBA_REGION_EWRAM || region == GBA_REGION_VRAM || (region >= GBA_REGION_ROM0 && region <= GBA_REGION_ROM2)) {
+		return region;
+	}
+	return -1;
+}
+
 static void _trackMulti(struct Compiler* c, const struct MultiOp* m) {
 	unsigned reg;
 	for (reg = 0; reg < 16 && m->load; ++reg) {
@@ -826,7 +847,7 @@ static void _emitBody(struct Compiler* c) {
 			_fetchAhead(c, i);
 			_emitMem(c, i, &mem);
 			if (mem.load) {
-				_setRegion(c, mem.rd, -1);
+				_setRegion(c, mem.rd, _literalRegion(c, &mem));
 			}
 		} else if (_decodeMul(op, c->thumb, &mul)) {
 			_fetchAhead(c, i);
