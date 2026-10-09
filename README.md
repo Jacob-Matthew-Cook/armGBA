@@ -1,9 +1,9 @@
 armGBA
 ======
 
-armGBA is a fork of [mGBA](https://mgba.io/) ([libretro/mgba](https://github.com/libretro/mgba)) that adds a recompiler for ARM handhelds. It keeps mGBA's accuracy: with the recompiler, a game gives the same savestate and the same picture, frame for frame, as on stock mGBA. That is checked on 16 games.
+armGBA is a fork of [mGBA](https://mgba.io/) ([libretro/mgba](https://github.com/libretro/mgba)) that adds a recompiler for ARM handhelds. It keeps mGBA's accuracy: with the recompiler, a game gives the same savestate and the same picture, frame for frame, as on stock mGBA. That is checked on 16 games, on AArch64 and x86-64.
 
-The recompiler covers ARM and Thumb code running from IWRAM, EWRAM, the cartridge and the BIOS, including code a game rewrites while it runs. It builds for AArch64 and x86-64 Linux.
+The recompiler covers ARM and Thumb code running from IWRAM, EWRAM, the cartridge and the BIOS, including code a game rewrites while it runs. On AArch64 the renderer also draws tile rows, sprites and blending eight pixels at a time with NEON.
 
 Core options, both on by default:
 
@@ -12,7 +12,17 @@ Core options, both on by default:
 
 Hold L2 or R2 to fast-forward at the frontend's fast-forward speed. Frontends without the libretro fast-forward override keep mGBA's turbo L and R on those buttons.
 
-Speed on handhelds has not been measured yet. On an x86-64 PC with both options on, the emulation thread runs about 1.8 to 2.5 times faster than stock mGBA in the games tested, with rendering on a second core.
+Unthrottled speed on the Cortex-A55 cores of a Retroid Pocket 5, both options on:
+
+| Game | mGBA | armGBA | |
+|---|---|---|---|
+| Payback | 148 fps | 221 fps | 1.5x |
+| Pokémon Emerald | 407 fps | 743 fps | 1.8x |
+| The Legend of Zelda: The Minish Cap | 392 fps | 806 fps | 2.1x |
+| Golden Sun | 425 fps | 628 fps | 1.5x |
+| V-Rally 3 | 329 fps | 770 fps | 2.3x |
+
+`src/arm/jit-ops.h` decodes guest instructions into operations, `src/arm/jit-a64.h` and `src/arm/jit-x64.h` emit them, and `src/arm/jit.c` compiles, links and invalidates the blocks.
 
 mGBA is by Jeffrey Pfau and contributors and is licensed under the MPL 2.0, as is armGBA.
 
