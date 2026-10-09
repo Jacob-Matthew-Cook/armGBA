@@ -3,7 +3,7 @@ armGBA
 
 armGBA is a fork of [mGBA](https://mgba.io/) ([libretro/mgba](https://github.com/libretro/mgba)) that adds a recompiler for ARM handhelds. It keeps mGBA's accuracy: with the recompiler, a game gives the same savestate and the same picture, frame for frame, as on stock mGBA. That is checked on 16 games, on AArch64 and x86-64.
 
-The recompiler covers ARM and Thumb code running from IWRAM, EWRAM, the cartridge and the BIOS, including code a game rewrites while it runs. On AArch64 the renderer also draws tile rows, sprites and blending eight pixels at a time with NEON.
+The recompiler covers ARM and Thumb code running from IWRAM, EWRAM, the cartridge and the BIOS, including code a game rewrites while it runs. The renderer also draws tile rows, sprites and blending eight pixels at a time: with NEON on AArch64, SSE4.1 on x86-64-v2 and AVX2 on x86-64-v3.
 
 Core options, both on by default:
 
@@ -21,6 +21,16 @@ Unthrottled speed on the Cortex-A55 cores of a Retroid Pocket 5, both options on
 | The Legend of Zelda: The Minish Cap | 392 fps | 806 fps | 2.1x |
 | Golden Sun | 425 fps | 628 fps | 1.5x |
 | V-Rally 3 | 329 fps | 770 fps | 2.3x |
+
+The same on an Intel Core i7-9700F, built for x86-64-v3:
+
+| Game | mGBA | armGBA | |
+|---|---|---|---|
+| Payback | 648 fps | 1289 fps | 2.0x |
+| Pokémon Emerald | 1983 fps | 3948 fps | 2.0x |
+| The Legend of Zelda: The Minish Cap | 1856 fps | 4393 fps | 2.4x |
+| Golden Sun | 1848 fps | 3499 fps | 1.9x |
+| V-Rally 3 | 1576 fps | 3716 fps | 2.4x |
 
 `src/arm/jit-ops.h` decodes guest instructions into operations, `src/arm/jit-a64.h` and `src/arm/jit-x64.h` emit them, and `src/arm/jit.c` compiles, links and invalidates the blocks.
 
