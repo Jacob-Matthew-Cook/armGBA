@@ -175,15 +175,14 @@ static inline void _drawTile16(struct GBAVideoSoftwareRenderer* renderer, uint32
 	}
 
 #define DRAW_BACKGROUND_MODE_0_TILES_16(BLEND, OBJWIN) \
+	/* Kept in locals, which the pixel stores can't change, with the tile row for both flips */ \
+	uint32_t rowBase = background->charBase + ((inY & 0x7) << 2); \
+	uint32_t flippedRowBase = background->charBase + ((7 - (inY & 0x7)) << 2); \
 	for (; tileX < tileEnd; ++tileX) { \
 		mapData = background->mapCache[(localX >> 3) & 0x3F]; \
 		localX += 8; \
-		localY = inY & 0x7; \
-		if (GBA_TEXT_MAP_VFLIP(mapData)) { \
-			localY = 7 - localY; \
-		} \
 		paletteData = GBA_TEXT_MAP_PALETTE(mapData) << 4; \
-		charBase = (background->charBase + (GBA_TEXT_MAP_TILE(mapData) << 5)) + (localY << 2); \
+		charBase = (GBA_TEXT_MAP_VFLIP(mapData) ? flippedRowBase : rowBase) + (GBA_TEXT_MAP_TILE(mapData) << 5); \
 		if (UNLIKELY(charBase >= 0x10000)) { \
 			pixel += 8; \
 			continue; \
