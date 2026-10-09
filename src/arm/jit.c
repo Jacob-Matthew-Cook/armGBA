@@ -116,12 +116,12 @@ struct Compiler {
 	const uint32_t* region;
 	uint32_t mask;
 	uint32_t ops[MAX_SPAN];
-	// Patched instructions and prefetch words, decoded at runtime from jit->fetched
+	// Patched instructions and prefetch words, read at runtime from jit->fetched
 	bool hot[MAX_SPAN];
 	unsigned count;
 	bool thumb;
 	unsigned width;
-	// Data accesses from cartridge code go through the memory handlers for the prefetch buffer
+	// Cartridge code adds prefetch stalls to its data waits and leaves VRAM to the handlers
 	bool romCode;
 	uint32_t aluCycles;
 	uint32_t memCycles;
@@ -279,7 +279,7 @@ static unsigned _prefetchLoads(int32_t seq, int32_t wait) {
 	return loads;
 }
 
-// GBAMemoryStall by the loads left from the last prefetch (0 to 7), as byte tables: lastPrefetchedPc in halfwords past the PC, and -min(wait, stall)
+// Byte tables by loads left from the last prefetch: lastPrefetchedPc in halfwords past the PC, and -min(wait, stall)
 static void _stallTables(int32_t seq, int32_t wait, uint64_t* advances, uint64_t* stalls) {
 	unsigned first = _prefetchLoads(seq, wait);
 	*advances = 0;
@@ -353,7 +353,6 @@ static void* _hostAddress(struct Compiler* c, uint32_t address) {
 	return (uint8_t*) c->gba->memory.wram + (address & (GBA_SIZE_EWRAM - 1));
 }
 
-// Pointer arithmetic keeps a register's region; other results lose it
 static int _valueRegion(uint32_t value) {
 	return value >> 24 < 16 ? (int) (value >> 24) : -1;
 }
@@ -375,6 +374,7 @@ static void _forgetRegions(struct Compiler* c) {
 	}
 }
 
+// Pointer arithmetic keeps a register's region; other results lose it
 static void _trackAlu(struct Compiler* c, const struct AluOp* alu) {
 	if (alu->opcode >= ALU_TST && alu->opcode <= ALU_CMN) {
 		return;
@@ -481,7 +481,7 @@ static bool _patchedMem(struct Compiler* c, unsigned i, uint32_t op, struct MemO
 	return true;
 }
 
-// Patched instructions run their last two forms inline and anything else through the handler
+// Patched ARM instructions run their last two forms inline; anything else goes through the handler
 static void _emitPatched(struct Compiler* c, unsigned i) {
 	uint32_t forms[2] = { c->ops[i], 0 };
 	unsigned nForms = 1;
@@ -633,7 +633,7 @@ void ARMJitDestroy(struct ARMJit* jit) {
 	free(jit);
 }
 
-// Waitstate changes and a full code buffer drop every block but keep the patch history
+// EWRAM waitstate changes and a full code buffer drop every block but keep the patch history
 void ARMJitDropBlocks(struct ARMJit* jit) {
 	struct ARMJitBlock* block = jit->blockList;
 	while (block) {
@@ -957,7 +957,7 @@ static void _emitExits(struct Compiler* c) {
 	block->nLinks = c->nLinks;
 }
 
-// Entry stubs set the current block and take patched first words from the pipeline
+// Entry stubs take patched first words from the pipeline
 static void _emitEntries(struct Compiler* c) {
 	struct ARMJitBlock* block = c->block;
 	block->nEntries = 0;
@@ -1004,7 +1004,7 @@ static void _registerBlock(struct Compiler* c) {
 			}
 		}
 	}
-	// Other blocks keep the boundaries they already cover
+	// The first block to register an address keeps its entry
 	for (i = 0; i < block->nEntries; ++i) {
 		struct ARMJitEntry* entry = &block->entries[i];
 		struct ARMJitPage* page = _page(jit, entry->pc, true);
@@ -1210,7 +1210,7 @@ enum ARMJitResult ARMJitRun(struct ARMCore* cpu) {
 	if (jit->eventsRan) {
 		return ARM_JIT_EVENTS;
 	}
-	// A block exits before its first segment when an event is due inside it
+	// A block that ran nothing leaves the instruction to the interpreter
 	return cpu->cycles != cycles ? ARM_JIT_RAN : ARM_JIT_STEP;
 }
 

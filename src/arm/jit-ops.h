@@ -347,8 +347,9 @@ enum {
 	FLAG_Z = 2,
 	FLAG_C = 4,
 	FLAG_V = 8,
+	// Bits 24-27, which add and subtract clear
 	FLAG_LOW = 16,
-	FLAG_ALL = 31,
+	FLAG_ALL = FLAG_N | FLAG_Z | FLAG_C | FLAG_V | FLAG_LOW,
 };
 
 static unsigned _condReads(unsigned cond) {
@@ -421,7 +422,7 @@ static bool _decodeMul(uint32_t op, bool thumb, struct MulOp* m) {
 		if ((op & 0xFFC0) != 0x4340) {
 			return false;
 		}
-		// rd *= rn, waiting by rd
+		// rd *= rm, waiting by rd
 		m->cond = 0xE;
 		m->rd = op & 7;
 		m->rs = op & 7;

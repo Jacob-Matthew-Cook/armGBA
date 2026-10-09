@@ -307,7 +307,7 @@ static void _prologue(struct Compiler* c) {
 	_push(e, X_R13);
 	_push(e, X_R14);
 	_push(e, X_R15);
-	_adjustStack(e, -8); // keeps calls aligned and holds the cycle slot at [rsp]
+	_adjustStack(e, -8); // keeps calls aligned; [rsp] holds a C call's cycles and [rsp + 4] the access address
 	_mov64(e, X_CPU, X_RDI);
 	if (c->gba) {
 		_movImm64(e, X_JIT, (uintptr_t) c->jit);
@@ -570,7 +570,7 @@ static void _loadCarry(struct Compiler* c, int dst) {
 	_ri(&c->e, G1_AND, dst, 1);
 }
 
-// Barrel shifter for an immediate shift amount on r11d: value in edx, carry out in r8d if wanted
+// Barrel shifter for an immediate shift amount on r11d: value in edx, carry out in r8d if wanted; RRX also uses r10d
 static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool carry) {
 	struct Emitter* e = &c->e;
 	switch (type) {
@@ -765,7 +765,7 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 	}
 }
 
-// IWRAM or EWRAM access at [base + rcx]; loads land in eax (rotated like the GBA), stores take r9
+// Access at [base + rcx]; loads land in eax, rotated like the GBA by the address in edi; stores take r9
 static void _memAccess(struct Emitter* e, bool load, unsigned size, int base) {
 	if (load) {
 		_insn(e, 0, size == 4 ? XO_LOAD : size == 2 ? XO_MOVZX16 : XO_MOVZX8, X_RAX, _xmi(base, X_RCX, 0, 0));
@@ -812,7 +812,7 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	_ri(e, G1_ADD, X_R10, wait - (n - s));
 }
 
-// r10 = the wait of a data access to IWRAM or EWRAM
+// r10 = a data access wait, through GBAMemoryStall when cartridge code runs with prefetch on
 static void _dataWait(struct Compiler* c, unsigned i, int32_t wait) {
 	if (c->romCode && c->prefetch) {
 		_romStall(c, i, wait);
@@ -921,7 +921,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 		}
 		uint8_t* unchanged = _jcc(e, CC_E);
 		_memAccess(e, false, size, X_R11);
-		// Once per block, unless a tile cache wants every address
+		// Once per 4 KiB of VRAM between events, unless a tile cache wants every address
 		_movImm64(e, X_RAX, (uintptr_t) &c->gba->video.renderer);
 		_load64(e, X_RDI, X_RAX, 0);
 		_groupImm(e, X_W, G1_CMP, _xm(X_RDI, offsetof(struct GBAVideoRenderer, cache)), 0);
@@ -1282,9 +1282,9 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	uint8_t* branched = _jcc(e, CC_NE);
 	uint8_t* sequential = _jmp(e);
 
-	// A taken branch back to the start of this block keeps running here
 	_patch(branched, e->p);
 	if (_loopsToStart(c, i)) {
+		// A taken branch back to the start of this block keeps running here
 		_ri(e, G1_CMP, X_RAX, c->pc + c->width);
 		_exitAt(c, _jcc(e, CC_NE), EXIT_DIRECT);
 		_cmpByte(e, _xm(X_JIT, JIT_SMC_HIT), 0);
@@ -1420,7 +1420,7 @@ static void _multiTransfers(struct Compiler* c, const struct MultiOp* m, int bas
 	}
 }
 
-// Whether any word a multiple store writes holds compiled code
+// Jumps to the returned site when a word the store writes holds compiled code
 static uint8_t* _multiCoverCheck(struct Compiler* c, const struct MultiOp* m, uint32_t mask, unsigned coverBase) {
 	struct Emitter* e = &c->e;
 	unsigned n = __builtin_popcount(m->list);

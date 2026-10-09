@@ -32,7 +32,7 @@ enum {
 	A64_LE = 13,
 };
 
-// Data processing on w registers, or x registers with A64_X: rd = rn op rm, with rm optionally shifted left
+// Data processing on w registers, or x registers with A64_X: rd = rn op rm, with rm optionally shifted left for AND to SUBS
 enum {
 	A64_X = 0x80000000,
 	A64_AND = 0x0A000000, A64_BIC = 0x0A200000, A64_ORR = 0x2A000000, A64_ORN = 0x2A200000, A64_EOR = 0x4A000000, A64_ANDS = 0x6A000000,
@@ -594,7 +594,7 @@ static void _loadSource(struct Compiler* c, int rt, struct Source source) {
 	}
 }
 
-// Host NZCV = guest NZCV; leaves CPSR in w9
+// Host NZCV = guest NZCV, using w9 and w10
 static void _loadFlags(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	_ldrW(e, 9, R_CPU, OFF_CPSR);
@@ -830,7 +830,7 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 	}
 }
 
-// IWRAM or EWRAM access at [base + w8]; loads land in w0 (rotated like the GBA), stores take w6
+// Access at [base + w8]; loads land in w0, rotated like the GBA by the address in w4; stores take w6
 static void _memAccess(struct Emitter* e, bool load, unsigned size, int base) {
 	static const uint32_t loads[] = { 0, A64_LDRB_R, A64_LDRH_R, 0, A64_LDR_R };
 	static const uint32_t stores[] = { 0, A64_STRB_R, A64_STRH_R, 0, A64_STR_R };
@@ -878,7 +878,7 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	_dpImm(e, adjust >= 0 ? A64_ADD_IMM : A64_SUB_IMM, 3, 14, adjust >= 0 ? adjust : -adjust);
 }
 
-// w3 = the wait of a data access to IWRAM or EWRAM
+// w3 = a data access wait, through GBAMemoryStall when cartridge code runs with prefetch on
 static void _dataWait(struct Compiler* c, unsigned i, int32_t wait) {
 	if (c->romCode && c->prefetch) {
 		_romStall(c, i, wait);
@@ -985,7 +985,7 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 		}
 		uint8_t* unchanged = _bCond(e, A64_EQ);
 		_memAccess(e, false, size, 10);
-		// Once per block, unless a tile cache wants every address
+		// Once per 4 KiB of VRAM between events, unless a tile cache wants every address
 		_ldrX(e, 9, R_GBA, offsetof(struct GBA, video.renderer));
 		_ldrX(e, 9, 9, offsetof(struct GBAVideoRenderer, cache));
 		uint8_t* cached = _cbnzX(e, 9);
@@ -1349,9 +1349,9 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	uint8_t* branched = _bCond(e, A64_NE);
 	uint8_t* sequential = _b(e);
 
-	// A taken branch back to the start of this block keeps running here
 	_patch(branched, e->p);
 	if (_loopsToStart(c, i)) {
+		// A taken branch back to the start of this block keeps running here
 		_movImm32(e, 1, c->pc + c->width);
 		_cmpW(e, 0, 1);
 		_exitAt(c, _bCond(e, A64_NE), EXIT_DIRECT);
