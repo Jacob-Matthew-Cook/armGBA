@@ -885,9 +885,23 @@ static void _GBACoreRunFrame(struct mCore* core) {
 	struct GBA* gba = core->board;
 	uint32_t frameCounter = gba->video.frameCounter;
 	uint32_t startCycle = mTimingCurrentTime(&gba->timing);
+#ifdef M_ARM_JIT
+	struct ARMJit* jit = gba->cpu->jit;
+	if (jit) {
+		// Generated code runs events itself while this loop would go on
+		jit->inFrame = true;
+		jit->frameCounter = frameCounter;
+		jit->frameStart = startCycle;
+	}
+#endif
 	while (gba->video.frameCounter == frameCounter && mTimingCurrentTime(&gba->timing) - startCycle < VIDEO_TOTAL_LENGTH + VIDEO_HORIZONTAL_LENGTH) {
 		ARMRunLoop(core->cpu);
 	}
+#ifdef M_ARM_JIT
+	if (jit) {
+		jit->inFrame = false;
+	}
+#endif
 }
 
 static void _GBACoreRunLoop(struct mCore* core) {

@@ -366,13 +366,31 @@ static void _emitTrampoline(struct Compiler* c) {
 	_byte(e, 0xC7);
 	_modrmMem(e, 0, X_JIT, JIT_PENDING_LINK);
 	_imm32(e, 0);
+	uint8_t* toLookup2 = _jmp(e);
+
+	// Due events run here; the frame loop decides whether to come back
+	c->jit->events = e->p;
+	_store(e, X_CYCLES, X_CPU, OFF_CYCLES);
+	_mov64(e, X_RDI, X_CPU);
+	_movImm64(e, X_RAX, (uintptr_t) ARMJitEvents);
+	_call(e, X_RAX);
+	_load(e, X_CYCLES, X_CPU, OFF_CYCLES);
+	_byte(e, 0x84); // test al, al
+	_byte(e, 0xC0);
+	uint8_t* stop = _jcc(e, CC_E);
+	_rex(e, true, 0, 0, X_JIT); // mov qword [r12 + pendingLink], 0
+	_byte(e, 0xC7);
+	_modrmMem(e, 0, X_JIT, JIT_PENDING_LINK);
+	_imm32(e, 0);
+
 	_patch(toLookup, e->p);
+	_patch(toLookup2, e->p);
 	_rex(e, false, 0, 0, X_JIT); // mov byte [r12 + smcHit], 0
 	_byte(e, 0xC6);
 	_modrmMem(e, 0, X_JIT, JIT_SMC_HIT);
 	_byte(e, 0);
 	_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
-	uint8_t* due = _jcc(e, CC_GE);
+	_patch(_jcc(e, CC_GE), c->jit->events);
 	_load(e, X_RAX, X_CPU, OFF_EXECUTION_MODE);
 	_load(e, X_RCX, X_CPU, OFF_PC);
 	_ri(e, 5, X_RCX, 4);
@@ -428,7 +446,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	_modrmMem(e, 4, X_RDX, ENTRY_CODE);
 
 	c->jit->toC = e->p;
-	_patch(due, e->p);
+	_patch(stop, e->p);
 	_patch(noPage, e->p);
 	_patch(noBlock, e->p);
 	_patch(otherPc, e->p);

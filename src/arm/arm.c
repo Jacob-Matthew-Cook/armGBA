@@ -245,8 +245,14 @@ void ARMRunLoop(struct ARMCore* cpu) {
 	if (cpu->executionMode == MODE_THUMB) {
 		while (cpu->cycles < cpu->nextEvent) {
 #ifdef M_ARM_JIT
-			if (cpu->jit && ARMJitRun(cpu)) {
-				continue;
+			if (cpu->jit) {
+				enum ARMJitResult result = ARMJitRun(cpu);
+				if (result == ARM_JIT_EVENTS) {
+					return;
+				}
+				if (result == ARM_JIT_RAN) {
+					continue;
+				}
 			}
 #endif
 			ThumbStep(cpu);
@@ -254,8 +260,14 @@ void ARMRunLoop(struct ARMCore* cpu) {
 	} else {
 		while (cpu->cycles < cpu->nextEvent) {
 #ifdef M_ARM_JIT
-			if (cpu->jit && ARMJitRun(cpu)) {
-				continue;
+			if (cpu->jit) {
+				enum ARMJitResult result = ARMJitRun(cpu);
+				if (result == ARM_JIT_EVENTS) {
+					return;
+				}
+				if (result == ARM_JIT_RAN) {
+					continue;
+				}
 			}
 #endif
 			ARMStep(cpu);

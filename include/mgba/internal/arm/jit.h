@@ -45,6 +45,12 @@ struct ARMJit {
 	uint8_t* toC;
 	// Set by a link stub so the dispatcher patches that exit to jump straight to the block
 	struct ARMJitLink* pendingLink;
+	// Due events run from generated code; it keeps running while the frame loop would
+	uint8_t* events;
+	bool eventsRan;
+	bool inFrame;
+	uint32_t frameCounter;
+	uint32_t frameStart;
 	// Runtime copies of patched words, taken when the GBA's pipeline would fetch them
 	uint32_t fetched[ARM_JIT_MAX_SPAN];
 
@@ -63,7 +69,15 @@ void ARMJitFlush(struct ARMJit* jit);
 void ARMJitDropBlocks(struct ARMJit* jit);
 void ARMJitDropRegion(struct ARMJit* jit, uint32_t start, uint32_t end);
 void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word);
-bool ARMJitRun(struct ARMCore* cpu);
+enum ARMJitResult {
+	ARM_JIT_STEP,
+	ARM_JIT_RAN,
+	// The events ran too, so the run loop is done
+	ARM_JIT_EVENTS,
+};
+
+enum ARMJitResult ARMJitRun(struct ARMCore* cpu);
+bool ARMJitEvents(struct ARMCore* cpu);
 void ARMJitLink(struct ARMJit* jit, struct ARMJitLink* link, struct ARMJitEntry* entry);
 
 static inline int ARMJitRamWord(uint32_t address) {

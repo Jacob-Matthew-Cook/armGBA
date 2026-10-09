@@ -1249,7 +1249,7 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	uint8_t* direct = c->e.p;
 	_jumpTo(c, jit->dispatch);
 	uint8_t* toC = c->e.p;
-	_jumpTo(c, jit->toC);
+	_jumpTo(c, jit->events);
 	for (x = 0; x < c->nExits; ++x) {
 		int index = c->exits[x].index;
 		uint8_t* target;
@@ -1437,7 +1437,17 @@ static void _buildTrampoline(struct ARMJit* jit, struct ARMCore* cpu) {
 	jit->codeUsed = jit->codeStart;
 }
 
-bool ARMJitRun(struct ARMCore* cpu) {
+// Runs due events for generated code, and says whether the frame loop would run on
+bool ARMJitEvents(struct ARMCore* cpu) {
+	struct ARMJit* jit = cpu->jit;
+	struct GBA* gba = (struct GBA*) cpu->master;
+	cpu->irqh.processEvents(cpu);
+	jit->eventsRan = true;
+	return jit->inFrame && gba->video.frameCounter == jit->frameCounter &&
+	    mTimingCurrentTime(&gba->timing) - jit->frameStart < VIDEO_TOTAL_LENGTH + VIDEO_HORIZONTAL_LENGTH;
+}
+
+enum ARMJitResult ARMJitRun(struct ARMCore* cpu) {
 	struct ARMJit* jit = cpu->jit;
 	if (!jit->enter) {
 		_buildTrampoline(jit, cpu);
@@ -1449,14 +1459,14 @@ bool ARMJitRun(struct ARMCore* cpu) {
 	struct ARMJitEntry* entry = page ? page->entries[index] : NULL;
 	if (!entry || entry->pc != pc || entry->thumb != thumb) {
 		if (!_regionEnd(cpu, pc)) {
-			return false;
+			return ARM_JIT_STEP;
 		}
 		if (!page) {
 			page = _page(jit, pc, true);
 		}
 		if (page->hits[index] < HOT_THRESHOLD) {
 			++page->hits[index];
-			return false;
+			return ARM_JIT_STEP;
 		}
 		if (entry) {
 			_removeBlock(jit, entry->block);
@@ -1464,19 +1474,23 @@ bool ARMJitRun(struct ARMCore* cpu) {
 		struct ARMJitBlock* block = _compile(jit, cpu, pc, thumb);
 		if (!block) {
 			page->hits[index] = 0;
-			return false;
+			return ARM_JIT_STEP;
 		}
 		entry = &block->entries[0];
 	}
 	if (((cpu->prefetch[0] ^ entry->op0) & entry->opMask0) || ((cpu->prefetch[1] ^ entry->op1) & entry->opMask1)) {
-		return false;
+		return ARM_JIT_STEP;
 	}
 	jit->pendingLink = NULL;
 	jit->smcHit = 0;
+	jit->eventsRan = false;
 	int32_t cycles = cpu->cycles;
 	jit->enter(cpu, entry->code);
+	if (jit->eventsRan) {
+		return ARM_JIT_EVENTS;
+	}
 	// A block exits before its first segment when an event is due inside it
-	return cpu->cycles != cycles;
+	return cpu->cycles != cycles ? ARM_JIT_RAN : ARM_JIT_STEP;
 }
 
 #endif

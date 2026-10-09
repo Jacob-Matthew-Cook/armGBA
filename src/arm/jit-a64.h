@@ -253,12 +253,26 @@ static void _emitTrampoline(struct Compiler* c) {
 	// Next block for the PC and mode in the CPU state, if it is compiled and nothing is due
 	c->jit->dispatch = e->p;
 	_emit(e, 0xF9000000 | ((JIT_PENDING_LINK / 8) << 10) | (R_JIT << 5) | 31); // str xzr, [x20, #pendingLink]
-	_patch(toLookup, e->p);
-	_emit(e, 0x39000000 | (JIT_SMC_HIT << 10) | (R_JIT << 5) | 31); // strb wzr, [x20, #smcHit]
+	uint8_t* toLookup2 = _b(e);
+
+	// Due events run here; the frame loop decides whether to come back
+	c->jit->events = e->p;
+	_strW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_movX(e, 0, R_CPU);
+	_movImm64(e, 16, (uintptr_t) ARMJitEvents);
+	_blr(e, 16);
+	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
 	uint8_t* toC[8];
+	_emit(e, 0x7200001F | (7 << 10)); // tst w0, #0xFF
+	toC[0] = _bCond(e, A64_EQ);
+	_emit(e, 0xF9000000 | ((JIT_PENDING_LINK / 8) << 10) | (R_JIT << 5) | 31); // str xzr, [x20, #pendingLink]
+
+	_patch(toLookup, e->p);
+	_patch(toLookup2, e->p);
+	_emit(e, 0x39000000 | (JIT_SMC_HIT << 10) | (R_JIT << 5) | 31); // strb wzr, [x20, #smcHit]
 	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
 	_cmpW(e, R_CYCLES, 1);
-	toC[0] = _bCond(e, A64_GE);
+	_patch(_bCond(e, A64_GE), c->jit->events);
 	_ldrW(e, 2, R_CPU, OFF_EXECUTION_MODE);
 	_ldrW(e, 3, R_CPU, OFF_PC);
 	_emit(e, 0x51001000 | (3 << 5) | 3); // sub w3, w3, #4
