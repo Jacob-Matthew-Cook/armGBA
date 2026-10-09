@@ -12,8 +12,10 @@
 #define R_EWRAM 22
 #define R_WB 23
 #define R_COVER 24
-#define FRAME_SIZE 80
-#define CYCLE_SLOT 64
+// The cycle count lives here while generated code runs
+#define R_CYCLES 25
+#define FRAME_SIZE 96
+#define CYCLE_SLOT 80
 
 enum {
 	A64_EQ = 0,
@@ -169,12 +171,20 @@ static uint8_t* _b(struct Emitter* e) {
 	return _emitSite(e, 0x14000000);
 }
 
+// C sees and may change the cycle count
+static void _blrC(struct Emitter* e, int rn) {
+	_strW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_blr(e, rn);
+	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+}
+
 static void _prologue(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	_emit(e, 0xA9800000 | ((-FRAME_SIZE / 8) & 0x7F) << 15 | (30 << 10) | (31 << 5) | 29); // stp x29, x30, [sp, #-FRAME_SIZE]!
 	_stpX(e, 19, 20, 16);
 	_stpX(e, 21, 22, 32);
 	_stpX(e, 23, 24, 48);
+	_stpX(e, 25, 26, 64);
 	_movX(e, R_CPU, 0);
 	if (c->gba) {
 		_movImm64(e, R_JIT, (uintptr_t) c->jit);
@@ -182,10 +192,13 @@ static void _prologue(struct Compiler* c) {
 		_movImm64(e, R_EWRAM, (uintptr_t) c->gba->memory.wram);
 		_movImm64(e, R_COVER, (uintptr_t) c->jit->cover);
 	}
+	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
 }
 
 static void _epilogue(struct Compiler* c) {
 	struct Emitter* e = &c->e;
+	_strW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_ldpX(e, 25, 26, 64);
 	_ldpX(e, 23, 24, 48);
 	_ldpX(e, 21, 22, 32);
 	_ldpX(e, 19, 20, 16);
@@ -243,9 +256,8 @@ static void _emitTrampoline(struct Compiler* c) {
 	_patch(toLookup, e->p);
 	_emit(e, 0x39000000 | (JIT_SMC_HIT << 10) | (R_JIT << 5) | 31); // strb wzr, [x20, #smcHit]
 	uint8_t* toC[8];
-	_ldrW(e, 0, R_CPU, OFF_CYCLES);
 	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-	_cmpW(e, 0, 1);
+	_cmpW(e, R_CYCLES, 1);
 	toC[0] = _bCond(e, A64_GE);
 	_ldrW(e, 2, R_CPU, OFF_EXECUTION_MODE);
 	_ldrW(e, 3, R_CPU, OFF_PC);
@@ -341,14 +353,12 @@ static void _fetchAhead(struct Compiler* c, unsigned i) {
 
 static void _addCyclesReg(struct Compiler* c, int reg, uint32_t constant) {
 	struct Emitter* e = &c->e;
-	_ldrW(e, 1, R_CPU, OFF_CYCLES);
 	if (reg >= 0) {
-		_addW(e, 1, 1, reg);
+		_addW(e, R_CYCLES, R_CYCLES, reg);
 	}
 	if (constant) {
-		_addWImm(e, 1, 1, constant);
+		_addWImm(e, R_CYCLES, R_CYCLES, constant);
 	}
-	_strW(e, 1, R_CPU, OFF_CYCLES);
 }
 
 static void _addCycles(struct Compiler* c, uint32_t constant) {
@@ -357,18 +367,16 @@ static void _addCycles(struct Compiler* c, uint32_t constant) {
 
 static void _eventCheck(struct Compiler* c, int index) {
 	struct Emitter* e = &c->e;
-	_ldrW(e, 0, R_CPU, OFF_CYCLES);
 	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-	_cmpW(e, 0, 1);
+	_cmpW(e, R_CYCLES, 1);
 	_exitAt(c, _bCond(e, A64_GE), index < 0 ? index : index | EXIT_DUE);
 }
 
 // Jumps to the returned site when an event comes due before the last instruction of a run
 static uint8_t* _segmentCheck(struct Compiler* c, uint32_t cycles) {
 	struct Emitter* e = &c->e;
-	_ldrW(e, 0, R_CPU, OFF_CYCLES);
 	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-	_addWImm(e, 0, 0, cycles);
+	_addWImm(e, 0, R_CYCLES, cycles);
 	_cmpW(e, 0, 1);
 	return _bCond(e, A64_GE);
 }
@@ -723,7 +731,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_movImm64(e, 0, (uintptr_t) c->jit);
 		_movW(e, 1, 9);
 		_movImm64(e, 16, (uintptr_t) ARMJitInvalidateWord);
-		_blr(e, 16);
+		_blrC(e, 16);
 		_dataWait(c, i, 1);
 		checked[0] = _b(e);
 		_patch(noCode, e->p);
@@ -746,7 +754,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_movImm64(e, 0, (uintptr_t) c->jit);
 		_movW(e, 1, 9);
 		_movImm64(e, 16, (uintptr_t) ARMJitInvalidateWord);
-		_blr(e, 16);
+		_blrC(e, 16);
 		_dataWait(c, i, ewramWait + 1);
 		checked[1] = _b(e);
 		_patch(noCode, e->p);
@@ -791,7 +799,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 					_addWImm(e, 1, 1, 2);
 				}
 				_ldrX(e, 16, 0, offsetof(struct GBAVideoRenderer, writeVRAM));
-				_blr(e, 16);
+				_blrC(e, 16);
 			}
 			_ldrW(e, 4, 31, CYCLE_SLOT + 4);
 			_patch(unchanged, e->p);
@@ -803,7 +811,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_movW(e, 1, 4);
 		_movImm32(e, 2, size);
 		_movImm64(e, 16, (uintptr_t) GBAMemoryVRAMWait);
-		_blr(e, 16);
+		_blrC(e, 16);
 		_movW(e, 3, 0);
 		_ldrW(e, 4, 31, CYCLE_SLOT + 4);
 		uint8_t* waited = _b(e);
@@ -857,7 +865,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		offset = size == 4 ? offsetof(struct ARMMemory, store32) : size == 2 ? offsetof(struct ARMMemory, store16) : offsetof(struct ARMMemory, store8);
 	}
 	_ldrX(e, 16, R_CPU, OFF_MEMORY + offset);
-	_blr(e, 16);
+	_blrC(e, 16);
 	_ldrW(e, 3, 31, CYCLE_SLOT);
 
 	// Only stores that called out can have hit compiled code
@@ -962,7 +970,7 @@ static void _emitDynamicHandler(struct Compiler* c, unsigned i) {
 	}
 	_emit(e, 0xF8605800 | (12 << 16) | (14 << 5) | 16); // ldr x16, [x14, w12, uxtw #3]
 	_movX(e, 0, R_CPU);
-	_blr(e, 16);
+	_blrC(e, 16);
 	_ldrW(e, 0, R_CPU, OFF_PC);
 	_movImm32(e, 1, address + 2 * c->width);
 	_cmpW(e, 0, 1);
@@ -996,7 +1004,7 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	_movX(e, 0, R_CPU);
 	_movImm32(e, 1, op);
 	_movImm64(e, 16, (uintptr_t) _handler(c, op));
-	_blr(e, 16);
+	_blrC(e, 16);
 	_ldrW(e, 0, R_CPU, OFF_PC);
 	_movImm32(e, 1, address + 2 * c->width);
 	_cmpW(e, 0, 1);
@@ -1011,17 +1019,15 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_exitAt(c, _bCond(e, A64_NE), EXIT_DIRECT);
 		_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
 		_exitAt(c, _cbnzW(e, 0), EXIT_DIRECT);
-		_ldrW(e, 0, R_CPU, OFF_CYCLES);
 		_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-		_cmpW(e, 0, 1);
+		_cmpW(e, R_CYCLES, 1);
 		_exitAt(c, _bCond(e, A64_GE), EXIT_TO_C);
 		c->loops[c->nLoops++] = _b(e);
 	} else {
 		uint32_t target;
 		if (_branchTarget(c, i, &target)) {
-			_ldrW(e, 0, R_CPU, OFF_CYCLES);
 			_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-			_cmpW(e, 0, 1);
+			_cmpW(e, R_CYCLES, 1);
 			_exitAt(c, _bCond(e, A64_GE), EXIT_TO_C);
 			_linkJump(c);
 		} else {
@@ -1113,9 +1119,8 @@ static void _emitBranch(struct Compiler* c, unsigned i, const struct BranchOp* b
 		_jumpTo(c, c->fast[b->index]);
 	} else {
 		_storeTargetPipeline(c, b->target);
-		_ldrW(e, 0, R_CPU, OFF_CYCLES);
 		_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
-		_cmpW(e, 0, 1);
+		_cmpW(e, R_CYCLES, 1);
 		_exitAt(c, _bCond(e, A64_GE), EXIT_TO_C);
 		_linkJump(c);
 	}
@@ -1264,7 +1269,7 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 		_movX(e, 0, R_CPU);
 		_movW(e, 1, 3);
 		_ldrX(e, 16, R_CPU, OFF_MEMORY + offsetof(struct ARMMemory, stall));
-		_blr(e, 16);
+		_blrC(e, 16);
 		_movW(e, 3, 0);
 		_ldrW(e, 1, R_CPU, 4 * m->rs);
 	}

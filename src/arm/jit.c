@@ -96,6 +96,7 @@ enum {
 	OFF_EXECUTION_MODE = offsetof(struct ARMCore, executionMode),
 	OFF_ACTIVE_MASK = offsetof(struct ARMCore, memory) + offsetof(struct ARMMemory, activeMask),
 	JIT_SMC_HIT = offsetof(struct ARMJit, smcHit),
+	JIT_COVER = offsetof(struct ARMJit, cover),
 	JIT_PAGES = offsetof(struct ARMJit, pages),
 	JIT_PENDING_LINK = offsetof(struct ARMJit, pendingLink),
 	JIT_FETCHED = offsetof(struct ARMJit, fetched),
