@@ -580,5 +580,8 @@ void GBAHardwareDeserialize(struct GBACartridgeHardware* hw, const struct GBASer
 	}
 	if ((hw->p->memory.io[GBA_REG(SIOCNT)] & 0x0080) && when < 0x20000) {
 		mTimingSchedule(&hw->p->timing, &hw->p->sio.completeEvent, when);
+	} else {
+		// Kept as saved, as timers do, so a reloaded state saves the same
+		hw->p->sio.completeEvent.when = when + mTimingCurrentTime(&hw->p->timing);
 	}
 }

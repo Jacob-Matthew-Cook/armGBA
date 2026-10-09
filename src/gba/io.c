@@ -1054,6 +1054,8 @@ void GBAIODeserialize(struct GBA* gba, const struct GBASerializedState* state) {
 		}
 	}
 	gba->sio.siocnt = gba->memory.io[GBA_REG(SIOCNT)];
+	// RCNT's data bits are saved as the game reads them, which a write alone would leave as they were
+	gba->sio.rcnt = gba->memory.io[GBA_REG(RCNT)];
 	GBASIOWriteRCNT(&gba->sio, gba->memory.io[GBA_REG(RCNT)]);
 
 	LOAD_32(gba->bus, 0, &state->bus);
