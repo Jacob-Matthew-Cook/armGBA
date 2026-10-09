@@ -120,6 +120,7 @@ mLOG_DECLARE_CATEGORY(GBA_STATE);
  * | 0x001F0 - 0x001F3: Reserved
  * | 0x001F4 - 0x001F7: Next event
  * | 0x001F8 - 0x001FB: Miscellaneous flags
+ *   | bits 2 - 12: VRAM stall mask
  * | 0x001FC - 0x001FF: Frame counter
  * 0x00200 - 0x00213: Timer 0
  * | 0x00200 - 0x00201: Reload value
@@ -298,6 +299,7 @@ DECL_BIT(GBASerializedAudioFlags2, SweepStepSaved, 14);
 
 DECL_BITFIELD(GBASerializedVideoFlags, uint32_t);
 DECL_BITS(GBASerializedVideoFlags, Mode, 0, 2);
+DECL_BITS(GBASerializedVideoFlags, StallMask, 2, 11);
 
 DECL_BITFIELD(GBASerializedHWFlags1, uint16_t);
 DECL_BIT(GBASerializedHWFlags1, ReadWrite, 0);

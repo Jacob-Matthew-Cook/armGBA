@@ -449,6 +449,7 @@ void GBAVideoSerialize(const struct GBAVideo* video, struct GBASerializedState* 
 	} else if (video->event.callback == _startHblank) {
 		flags = GBASerializedVideoFlagsSetMode(flags, 2);
 	}
+	flags = GBASerializedVideoFlagsSetStallMask(flags, video->stallMask);
 	STORE_32(flags, 0, &state->video.flags);
 	STORE_32(video->frameCounter, 0, &state->video.frameCounter);
 }
@@ -467,9 +468,10 @@ void GBAVideoDeserialize(struct GBAVideo* video, const struct GBASerializedState
 	}
 	LOAD_32(video->frameCounter, 0, &state->video.frameCounter);
 
-	video->stallMask = 0;
 	int32_t flags;
 	LOAD_32(flags, 0, &state->video.flags);
+	// Kept as worked out at the start of the line, before any later DISPCNT write
+	video->stallMask = GBASerializedVideoFlagsGetStallMask(flags);
 	GBARegisterDISPSTAT dispstat = state->io[GBA_REG(DISPSTAT)];
 	switch (GBASerializedVideoFlagsGetMode(flags)) {
 	case 0:
@@ -484,7 +486,6 @@ void GBAVideoDeserialize(struct GBAVideo* video, const struct GBASerializedState
 		break;
 	case 2:
 		video->event.callback = _startHblank;
-		video->stallMask = _calculateStallMask(video->p, state->io[GBA_REG(DISPCNT)]);
 		break;
 	case 3:
 		video->event.callback = _startHdraw;
