@@ -32,15 +32,13 @@ struct ARMJitPage;
 struct ARMJit {
 	// Set when blocks are removed, so code running in one stops after the call that did it
 	uint8_t smcHit;
-	// 4 KB VRAM blocks the renderer was told about since events last ran; drawing only
-	// happens in events, so telling it again before then changes nothing
+	// VRAM blocks the renderer heard about since events last ran, when it draws
 	uint32_t vramNotified;
 
 	uint8_t* code;
 	size_t codeSize;
 	size_t codeUsed;
-	// Generated once: enter(cpu, block) runs blocks until an event is due or the next block
-	// isn't compiled; blocks exit to dispatch, and toC returns to the caller
+	// enter(cpu, code) runs blocks until an event is due or the next is not compiled; toC returns to C
 	size_t codeStart;
 	void (*enter)(struct ARMCore*, void*);
 	uint8_t* dispatch;

@@ -109,8 +109,7 @@ static void _updateRegister(struct GBA* gba, int timer, int32_t cyclesLate, bool
 	tickIncrement = (0x10000 - tickIncrement) << prescaleBits;
 	currentTime += tickIncrement;
 	currentTime &= ~tickMask;
-	// A read finds the event of a running timer scheduled, and timer priorities are unique, so
-	// rescheduling it at the same time would leave the queue as it is
+	// Rescheduling a running timer's event at the same time would leave the queue unchanged
 	if (read && currentTimer->event.when == (uint32_t) currentTime) {
 		return;
 	}

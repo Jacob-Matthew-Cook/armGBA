@@ -25,8 +25,7 @@ static void _unlock(struct mVideoLogger* logger);
 static void _wait(struct mVideoLogger* logger);
 static void _wake(struct mVideoLogger* logger, int y);
 
-// Each thread polls this many times before sleeping on the other. Sleeping between scanlines makes
-// both cores look idle, and an ondemand governor then lowers their clock
+// Polls before sleeping, or an ondemand governor sees both cores idle and lowers their clock
 #define PROXY_SPIN 100000
 
 void mVideoThreadProxyCreate(struct mVideoThreadProxy* renderer) {
@@ -104,8 +103,7 @@ void _proxyThreadRecover(struct mVideoThreadProxy* proxyRenderer) {
 	ThreadCreate(&proxyRenderer->thread, _proxyThread, proxyRenderer);
 }
 
-// Both sides retry under the lock before sleeping: the other thread only signals after its own
-// work, and polls without the lock
+// Retried under the lock before sleeping, as the other thread polls without it
 static bool _writeData(struct mVideoLogger* logger, const void* data, size_t length) {
 	struct mVideoThreadProxy* proxyRenderer = (struct mVideoThreadProxy*) logger;
 	if (RingFIFOWrite(&proxyRenderer->dirtyQueue, data, length)) {

@@ -329,8 +329,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	}
 	_epilogue(c);
 
-	// Called by a block's due exit with its state stored: runs the events, then returns there
-	// unless an interrupt moved the PC, code in the block was written or the frame loop stops
+	// Runs a due exit's events, then returns to the block unless the PC moved, its code changed or the frame ended
 	c->jit->resume = e->p;
 	_ldrW(e, R_WB, R_CPU, OFF_PC);
 	_movX(e, 26, 30);
@@ -461,7 +460,7 @@ static void _loadCarry(struct Compiler* c, int rd) {
 static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool carry) {
 	struct Emitter* e = &c->e;
 	switch (type) {
-	case 0: // LSL
+	case SHIFT_LSL:
 		if (!amount) {
 			_movW(e, 1, 3);
 			if (carry) {
@@ -474,7 +473,7 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 			}
 		}
 		break;
-	case 1: // LSR
+	case SHIFT_LSR:
 		if (!amount) {
 			_movImm32(e, 1, 0);
 			if (carry) {
@@ -487,7 +486,7 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 			}
 		}
 		break;
-	case 2: // ASR
+	case SHIFT_ASR:
 		if (!amount) {
 			_asrWImm(e, 1, 3, 31);
 			if (carry) {
@@ -500,7 +499,7 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 			}
 		}
 		break;
-	case 3: // ROR, RRX
+	case SHIFT_ROR:
 		if (!amount) {
 			_loadCarry(c, 2);
 			_lsrWImm(e, 1, 3, 1);
@@ -523,8 +522,7 @@ static uint32_t _ror(uint32_t value, unsigned amount, unsigned size) {
 	return amount ? ((value >> amount) | (value << (size - amount))) & mask : value;
 }
 
-// The immr and imms fields of a logical immediate: a rotated run of ones repeated in elements
-// of 2 to 32 bits
+// immr and imms of a logical immediate: a rotated run of ones repeated in 2 to 32-bit elements
 static bool _bitmaskImm(uint32_t value, uint32_t* fields) {
 	if (!value || value == 0xFFFFFFFF) {
 		return false;
@@ -545,8 +543,7 @@ static bool _bitmaskImm(uint32_t value, uint32_t* fields) {
 	return false;
 }
 
-// The host instruction for an ALU op on w0 and an immediate, into w3, or 0 when the immediate
-// does not fit one
+// The host instruction for w3 = w0 op imm, or 0 when the immediate does not fit one
 static uint32_t _aluImm(unsigned opcode, bool s, uint32_t imm) {
 	uint32_t fields;
 	switch (opcode) {
@@ -796,8 +793,7 @@ static void _memResult(struct Compiler* c, const struct MemOp* mem) {
 	_addCyclesReg(c, 3, c->memCycles);
 }
 
-// IWRAM or EWRAM once the region matched, leaving the wait in w3. A store into compiled code
-// goes to the returned site instead, with the word's index in w9
+// IWRAM or EWRAM, wait in w3; a store into compiled code takes the returned site with its word in w9
 static uint8_t* _memRam(struct Compiler* c, unsigned i, const struct MemOp* mem, bool ewram) {
 	struct Emitter* e = &c->e;
 	unsigned lsb = mem->size == 4 ? 2 : mem->size == 2 ? 1 : 0;
@@ -1057,8 +1053,7 @@ tail:
 	_eventCheck(c, i + 1);
 }
 
-// The rest of a memory access, after the block: every region in turn, then the memory handlers.
-// Stores that called out can have hit compiled code, so they check for that before going back
+// After the block: every region in turn, then the handlers; stores check for compiled code before returning
 static void _emitMemCold(struct Compiler* c, unsigned k) {
 	struct Emitter* e = &c->e;
 	unsigned i = c->cold[k].index;
@@ -1271,8 +1266,7 @@ static void _storeTargetPipeline(struct Compiler* c, uint32_t target) {
 	}
 }
 
-// B, BL and Thumb conditional branches in the same region, as GBASetActiveRegion and
-// ARMWritePC or ThumbWritePC would run them; anything else goes to the handler
+// Branches within a region, as GBASetActiveRegion and ARMWritePC or ThumbWritePC run them
 static void _emitBranch(struct Compiler* c, unsigned i, const struct BranchOp* b) {
 	struct Emitter* e = &c->e;
 	uint8_t* notTaken = NULL;
@@ -1353,8 +1347,7 @@ static void _multiAddress(struct Compiler* c, unsigned k, unsigned bits) {
 	_andImm(e, 8, 8, 2, bits);
 }
 
-// LDM and STM on IWRAM or EWRAM as GBALoadMultiple and GBAStoreMultiple time them;
-// other regions and stores into compiled code go to the handler
+// LDM and STM on IWRAM or EWRAM, timed as GBALoadMultiple and GBAStoreMultiple do
 static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) {
 	struct Emitter* e = &c->e;
 	unsigned n = __builtin_popcount(m->list);

@@ -21,9 +21,7 @@
 
 #include "jit-ops.h"
 
-// Blocks run ARM and Thumb code from BIOS, EWRAM, IWRAM and the cartridge. Every guest
-// instruction keeps the interpreter's
-// exact state: PC, the two prefetched words, cycles, and an event check afterwards.
+// Blocks keep the interpreter's exact state after every instruction: PC, pipeline, cycles and events
 
 #define MAX_BLOCK 64
 #define MAX_SPAN ARM_JIT_MAX_SPAN
@@ -31,15 +29,13 @@
 #define PATCH_LIMIT 4
 #define CODE_SIZE (32 * 1024 * 1024)
 #define MAX_INSN_BYTES 2048
-// Exits jump to the dispatcher, back to C, or store the state before an instruction first.
-// Exits taken because an event is due go back to C.
+// Exits go to the dispatcher, back to C, or to a stub that stores the state before an instruction
 #define EXIT_DIRECT -1
 #define EXIT_TO_C -2
 #define EXIT_DUE 0x1000
 #define MAX_EXITS (MAX_BLOCK * 16)
 
-// An exit whose target is known when compiling; once the target is compiled the exit jumps
-// straight to it, and removing the target sends it back to its stub
+// An exit with a known target, patched to jump straight there while the target is compiled
 struct ARMJitLink {
 	uint8_t* site;
 	uint8_t* stub;
@@ -48,8 +44,7 @@ struct ARMJitLink {
 	struct ARMJitLink** prev;
 };
 
-// A place a block can be entered: its start, and every instruction boundary it can be left
-// at, so resuming after an event jumps back in instead of compiling another block
+// Every boundary a block can be left at is an entry, so resuming after an event jumps back in
 struct ARMJitEntry {
 	void* code;
 	uint32_t pc;
@@ -153,8 +148,7 @@ struct Compiler {
 	uint8_t* careful[MAX_SPAN];
 	unsigned runLength[MAX_SPAN];
 	bool isTarget[MAX_SPAN];
-	// The region each guest register pointed into when the block was compiled, kept through
-	// pointer arithmetic, or -1
+	// The region each register pointed into when compiled, or -1
 	int regRegion[16];
 	// Memory access paths that go after the block
 	struct {
@@ -191,7 +185,6 @@ static bool _decodeMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
 	return _decodeArmMem(c->ops[i], address, mem);
 }
 
-// Whether a taken branch at ops[i] goes back to the start of this block
 static bool _loopsToStart(struct Compiler* c, unsigned i) {
 	uint32_t op = c->ops[i];
 	uint32_t address = c->pc + c->width * i;
@@ -212,7 +205,6 @@ static bool _loopsToStart(struct Compiler* c, unsigned i) {
 	return address + 2 * c->width + offset == c->pc;
 }
 
-// Target of a taken branch at ops[i], when it is known before running it
 static bool _branchTarget(struct Compiler* c, unsigned i, uint32_t* target) {
 	uint32_t op = c->ops[i];
 	uint32_t address = c->pc + c->width * i;
@@ -287,8 +279,7 @@ static unsigned _prefetchLoads(int32_t seq, int32_t wait) {
 	return loads;
 }
 
-// PC-relative word loads have addresses known when compiling: cartridge words are constants
-// (but for the GPIO registers mGBA maps over the header), RAM words load from the host
+// PC-relative loads: cartridge words are constants but for the GPIO registers, RAM words load at runtime
 enum {
 	LITERAL_NONE,
 	LITERAL_CONSTANT,
@@ -331,7 +322,6 @@ static uint32_t _readTimer(struct GBA* gba, uint32_t address) {
 	return gba->memory.io[GBA_REG(TM0CNT_LO) + ((address >> 1) & 6)];
 }
 
-// A word of the region this block runs from, as compiled
 static uint32_t _opAt(struct Compiler* c, uint32_t address) {
 	uint32_t op;
 	if (c->thumb) {
@@ -342,7 +332,6 @@ static uint32_t _opAt(struct Compiler* c, uint32_t address) {
 	return op;
 }
 
-// Host address of a RAM word compiled from, for reading patched words at runtime
 static void* _hostAddress(struct Compiler* c, uint32_t address) {
 	if ((address >> 24) == GBA_REGION_IWRAM) {
 		return (uint8_t*) c->gba->memory.iwram + (address & (GBA_SIZE_IWRAM - 1));
@@ -350,10 +339,7 @@ static void* _hostAddress(struct Compiler* c, uint32_t address) {
 	return (uint8_t*) c->gba->memory.wram + (address & (GBA_SIZE_EWRAM - 1));
 }
 
-// Each backend provides _prologue, _epilogue, _storeState, _addCycles, _segmentCheck,
-// _eventCheck, _exitJump, _patch, _emitAlu, _emitMem and _emitFallback
-// Where each register points, for the region a memory access checks first: pointer arithmetic
-// keeps a register's region, other results lose it
+// Pointer arithmetic keeps a register's region; other results lose it
 static int _valueRegion(uint32_t value) {
 	return value >> 24 < 16 ? (int) (value >> 24) : -1;
 }
@@ -414,8 +400,7 @@ enum {
 	PATH_CART,
 };
 
-// The region an access checks inline is where its base register pointed when the block was
-// compiled; the full dispatch goes after the block
+// An access checks inline only the region its base register pointed into when compiled
 static int _memPath(struct Compiler* c, const struct MemOp* mem) {
 	switch (_sourceRegion(c, mem->base)) {
 	case -1:
@@ -455,8 +440,7 @@ static bool _patchedMem(struct Compiler* c, unsigned i, uint32_t op, struct MemO
 	return true;
 }
 
-// A patched instruction: inline code for the two forms last written to it, the handler with
-// the opcode the pipeline fetched for anything else
+// Patched instructions run their last two forms inline and anything else through the handler
 static void _emitPatched(struct Compiler* c, unsigned i) {
 	uint32_t forms[2] = { c->ops[i], 0 };
 	unsigned nForms = 1;
@@ -682,8 +666,7 @@ void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word) {
 	}
 }
 
-// Words that keep getting patched are read when the pipeline fetches them instead of being
-// compiled in
+// Words that keep getting patched are read when fetched instead of compiled in
 static bool _isPatched(struct ARMJit* jit, uint32_t address) {
 	int word = ARMJitRamWord(address);
 	return word >= 0 && jit->patched[word] >= PATCH_LIMIT;
@@ -788,8 +771,7 @@ static void _startCompiler(struct Compiler* c, struct ARMJit* jit, struct ARMCor
 	}
 }
 
-// ALU instructions run back to back; the interpreter checks for events after each, so the run
-// goes at once only when none can come due before its last instruction
+// A run of ALU instructions goes at once only when no event can come due before its last one
 static unsigned _emitAluRun(struct Compiler* c, unsigned i, struct AluOp* alus) {
 	unsigned run = 1;
 	while (i + run < c->count && !c->hot[i + run] && !c->isTarget[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
@@ -896,8 +878,7 @@ static uint8_t* _entryCode(struct Compiler* c, unsigned i) {
 	return c->fast[i] ? c->fast[i] : c->careful[i];
 }
 
-// Exit stubs set the interpreter state for the next instruction, then go to the dispatcher, or
-// run the due events and come back
+// Exit stubs store the state for the next instruction, then dispatch or run the due events
 static void _emitExits(struct Compiler* c) {
 	uint8_t* stubs[2][MAX_SPAN];
 	memset(stubs, 0, sizeof(stubs));

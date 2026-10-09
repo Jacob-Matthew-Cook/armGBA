@@ -449,8 +449,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	_patch(otherOp1, e->p);
 	_epilogue(c);
 
-	// Called by a block's due exit with its state stored: runs the events, then returns there
-	// unless an interrupt moved the PC, code in the block was written or the frame loop stops
+	// Runs a due exit's events, then returns to the block unless the PC moved, its code changed or the frame ended
 	c->jit->resume = e->p;
 	_load(e, X_WB, X_CPU, OFF_PC);
 	_adjustStack(e, -8);
@@ -568,7 +567,7 @@ static void _loadCarry(struct Compiler* c, int dst) {
 static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool carry) {
 	struct Emitter* e = &c->e;
 	switch (type) {
-	case 0: // LSL
+	case SHIFT_LSL:
 		_mov(e, X_RDX, X_R11);
 		if (amount) {
 			_shift(e, SH_SHL, X_RDX, amount);
@@ -583,7 +582,7 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 			}
 		}
 		break;
-	case 1: // LSR
+	case SHIFT_LSR:
 		if (amount) {
 			_mov(e, X_RDX, X_R11);
 			_shift(e, SH_SHR, X_RDX, amount);
@@ -596,7 +595,7 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 			_ri(e, G1_AND, X_R8, 1);
 		}
 		break;
-	case 2: // ASR
+	case SHIFT_ASR:
 		_mov(e, X_RDX, X_R11);
 		_shift(e, SH_SAR, X_RDX, amount ? amount : 31);
 		if (carry) {
@@ -605,7 +604,7 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 			_ri(e, G1_AND, X_R8, 1);
 		}
 		break;
-	case 3: // ROR, RRX
+	case SHIFT_ROR:
 		_mov(e, X_RDX, X_R11);
 		if (amount) {
 			_shift(e, SH_ROR, X_RDX, amount);
@@ -862,8 +861,7 @@ static void _memResult(struct Compiler* c, const struct MemOp* mem) {
 	_addCycles(c, c->memCycles);
 }
 
-// IWRAM or EWRAM once the region matched, leaving the wait in r10. A store into compiled code
-// goes to the returned site instead, with the word's index in eax
+// IWRAM or EWRAM, wait in r10; a store into compiled code takes the returned site with its word in eax
 static uint8_t* _memRam(struct Compiler* c, unsigned i, const struct MemOp* mem, bool ewram) {
 	struct Emitter* e = &c->e;
 	_mov(e, X_RCX, X_RDI);
@@ -1130,8 +1128,7 @@ tail:
 	_eventCheck(c, i + 1);
 }
 
-// The rest of a memory access, after the block: every region in turn, then the memory handlers.
-// Stores that called out can have hit compiled code, so they check for that before going back
+// After the block: every region in turn, then the handlers; stores check for compiled code before returning
 static void _emitMemCold(struct Compiler* c, unsigned k) {
 	struct Emitter* e = &c->e;
 	unsigned i = c->cold[k].index;
@@ -1336,8 +1333,7 @@ static void _storeTargetPipeline(struct Compiler* c, uint32_t target) {
 	}
 }
 
-// B, BL and Thumb conditional branches in the same region, as GBASetActiveRegion and
-// ARMWritePC or ThumbWritePC would run them; anything else goes to the handler
+// Branches within a region, as GBASetActiveRegion and ARMWritePC or ThumbWritePC run them
 static void _emitBranch(struct Compiler* c, unsigned i, const struct BranchOp* b) {
 	struct Emitter* e = &c->e;
 	uint8_t* notTaken = NULL;
@@ -1450,8 +1446,7 @@ static uint8_t* _multiCoverCheck(struct Compiler* c, const struct MultiOp* m, ui
 	return _jcc(e, CC_NE);
 }
 
-// LDM and STM on IWRAM or EWRAM as GBALoadMultiple and GBAStoreMultiple time them;
-// other regions and stores into compiled code go to the handler
+// LDM and STM on IWRAM or EWRAM, timed as GBALoadMultiple and GBAStoreMultiple do
 static void _emitMulti(struct Compiler* c, unsigned i, const struct MultiOp* m) {
 	struct Emitter* e = &c->e;
 	unsigned n = __builtin_popcount(m->list);

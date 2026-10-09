@@ -11,12 +11,15 @@ static const uint16_t _conditionLut[16] = {
 };
 
 enum {
+	SHIFT_LSL, SHIFT_LSR, SHIFT_ASR, SHIFT_ROR
+};
+
+enum {
 	ALU_AND, ALU_EOR, ALU_SUB, ALU_RSB, ALU_ADD, ALU_ADC, ALU_SBC, ALU_RSC,
 	ALU_TST, ALU_TEQ, ALU_CMP, ALU_CMN, ALU_ORR, ALU_MOV, ALU_BIC, ALU_MVN
 };
 
-// ARM and Thumb instructions decode to the same operations. A source is a guest register
-// or a value known when compiling (the PC).
+// A source is a guest register, or a value known when compiling (the PC)
 struct Source {
 	bool constant;
 	uint32_t value;
@@ -370,7 +373,7 @@ static unsigned _aluReads(const struct AluOp* alu) {
 	if (alu->opcode == ALU_ADC || alu->opcode == ALU_SBC || alu->opcode == ALU_RSC) {
 		reads |= FLAG_C;
 	}
-	if (!alu->immediate && alu->shiftType == 3 && alu->shiftAmount == 0) {
+	if (!alu->immediate && alu->shiftType == SHIFT_ROR && alu->shiftAmount == 0) {
 		reads |= FLAG_C; // RRX
 	}
 	return reads;
