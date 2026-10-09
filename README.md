@@ -1,13 +1,13 @@
 armGBA
 ======
 
-armGBA is a fork of [mGBA](https://mgba.io/) ([libretro/mgba](https://github.com/libretro/mgba)) that adds a recompiler for ARM handhelds. It keeps mGBA's accuracy: with the recompiler, a game gives the same savestate and the same picture, frame for frame, as on stock mGBA. That is checked on 16 games, on AArch64 and x86-64.
+armGBA is a fork of [mGBA](https://mgba.io/) ([libretro/mgba](https://github.com/libretro/mgba)) that adds a recompiler, made for ARM handhelds and also built for x86-64. It keeps mGBA's accuracy: with the recompiler, a game gives the same savestate and the same picture, frame for frame, as on stock mGBA. That is checked on 16 games, on AArch64 and x86-64.
 
-The recompiler covers ARM and Thumb code running from IWRAM, EWRAM, the cartridge and the BIOS, including code a game rewrites while it runs. The renderer also draws tile rows, sprites and blending eight pixels at a time: with NEON on AArch64, SSE4.1 on x86-64-v2 and AVX2 on x86-64-v3.
+The recompiler covers ARM and Thumb code running from IWRAM, EWRAM, the cartridge and the BIOS, including code a game rewrites while it runs. The renderer also draws 16-color tile rows, merges sprites, fills the backdrop and blends eight pixels at a time: with NEON on AArch64, SSE4.1 on x86-64-v2 and AVX2 on x86-64-v3.
 
 Core options, both on by default:
 
-- `mgba_jit` (Recompiler): AArch64 and x86-64 Linux builds.
+- `mgba_jit` (Recompiler): AArch64 and x86-64 builds, except for Windows and macOS.
 - `mgba_threaded_video` (Threaded Rendering): draws each frame on another CPU core. Linux builds.
 
 Hold L2 or R2 to fast-forward at the frontend's fast-forward speed. Frontends without the libretro fast-forward override keep mGBA's turbo L and R on those buttons.
@@ -16,23 +16,23 @@ Unthrottled speed on the Cortex-A55 cores of a Retroid Pocket 5, both options on
 
 | Game | mGBA | armGBA | |
 |---|---|---|---|
-| Payback | 148 fps | 221 fps | 1.5x |
-| Pokémon Emerald | 407 fps | 743 fps | 1.8x |
-| The Legend of Zelda: The Minish Cap | 392 fps | 806 fps | 2.1x |
-| Golden Sun | 425 fps | 628 fps | 1.5x |
-| V-Rally 3 | 329 fps | 770 fps | 2.3x |
+| Payback | 149 fps | 246 fps | 1.7x |
+| Pokémon Emerald | 410 fps | 755 fps | 1.8x |
+| The Legend of Zelda: The Minish Cap | 395 fps | 832 fps | 2.1x |
+| Golden Sun | 426 fps | 659 fps | 1.5x |
+| V-Rally 3 | 332 fps | 780 fps | 2.3x |
 
 The same on an Intel Core i7-9700F, built for x86-64-v3:
 
 | Game | mGBA | armGBA | |
 |---|---|---|---|
-| Payback | 648 fps | 1289 fps | 2.0x |
-| Pokémon Emerald | 1983 fps | 3948 fps | 2.0x |
-| The Legend of Zelda: The Minish Cap | 1856 fps | 4393 fps | 2.4x |
-| Golden Sun | 1848 fps | 3499 fps | 1.9x |
-| V-Rally 3 | 1576 fps | 3716 fps | 2.4x |
+| Payback | 643 fps | 1299 fps | 2.0x |
+| Pokémon Emerald | 1988 fps | 4088 fps | 2.1x |
+| The Legend of Zelda: The Minish Cap | 1850 fps | 4519 fps | 2.4x |
+| Golden Sun | 1854 fps | 3556 fps | 1.9x |
+| V-Rally 3 | 1576 fps | 3843 fps | 2.4x |
 
-`src/arm/jit-ops.h` decodes guest instructions into operations, `src/arm/jit-a64.h` and `src/arm/jit-x64.h` emit them, and `src/arm/jit.c` compiles, links and invalidates the blocks.
+`src/arm/jit-ops.h` decodes guest instructions into operations, `src/arm/jit-a64.h` and `src/arm/jit-x64.h` emit them, and `src/arm/jit.c` compiles, links and invalidates the blocks. The eight-pixel renderer paths are in `src/gba/renderers/software-private.h`, and `src/feature/thread-proxy.c` hands frames to the render thread.
 
 mGBA is by Jeffrey Pfau and contributors and is licensed under the MPL 2.0, as is armGBA.
 
