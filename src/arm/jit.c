@@ -731,8 +731,18 @@ static bool _readBlock(struct Compiler* c, struct ARMJit* jit, struct ARMCore* c
 		c->patched[i] = _isPatched(jit, pc + c->width * i);
 		c->ops[i] = _opAt(c, pc + c->width * i);
 	}
-	return count && !((c->ops[0] ^ cpu->prefetch[0]) & (c->patched[0] ? 0 : 0xFFFFFFFF)) &&
-	       !((c->ops[1] ^ cpu->prefetch[1]) & (c->patched[1] ? 0 : 0xFFFFFFFF));
+	return count;
+}
+
+// The CPU's prefetched words must be the code read, except for patched words read at runtime
+static bool _pipelineMatches(const struct Compiler* c, const struct ARMCore* cpu) {
+	unsigned k;
+	for (k = 0; k < 2; ++k) {
+		if (!c->patched[k] && c->ops[k] != cpu->prefetch[k]) {
+			return false;
+		}
+	}
+	return true;
 }
 
 static struct ARMJitBlock* _newBlock(unsigned count) {
@@ -750,11 +760,18 @@ static struct ARMJitBlock* _newBlock(unsigned count) {
 	return block;
 }
 
-static void _startCompiler(struct Compiler* c, struct ARMJit* jit, struct ARMCore* cpu, struct ARMJitBlock* block) {
+// The one compiler, which emits after the code already used
+static struct Compiler _compiler;
+
+static void _startEmitting(struct Compiler* c, struct ARMJit* jit, struct ARMCore* cpu) {
 	c->e.p = &jit->code[jit->codeUsed];
 	c->jit = jit;
 	c->cpu = cpu;
-	c->gba = (struct GBA*) cpu->master;
+	c->gba = cpu ? (struct GBA*) cpu->master : NULL;
+}
+
+static void _startBlock(struct Compiler* c, struct ARMJitBlock* block) {
+	struct ARMCore* cpu = c->cpu;
 	c->block = block;
 	c->romCode = (c->pc >> 24) >= GBA_REGION_ROM0;
 	c->nExits = 0;
@@ -989,9 +1006,8 @@ static void _registerBlock(struct Compiler* c) {
 }
 
 static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uint32_t pc, bool thumb) {
-	static struct Compiler compiler;
-	struct Compiler* c = &compiler;
-	if (!_readBlock(c, jit, cpu, pc, thumb)) {
+	struct Compiler* c = &_compiler;
+	if (!_readBlock(c, jit, cpu, pc, thumb) || !_pipelineMatches(c, cpu)) {
 		return NULL;
 	}
 	if (jit->codeUsed + c->count * MAX_INSN_BYTES + 1024 > jit->codeSize) {
@@ -1001,7 +1017,8 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	if (!block) {
 		return NULL;
 	}
-	_startCompiler(c, jit, cpu, block);
+	_startEmitting(c, jit, cpu);
+	_startBlock(c, block);
 	uint8_t* code = c->e.p;
 	_emitBody(c);
 	_emitColdPaths(c);
@@ -1016,8 +1033,7 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 
 // Debug: compare inline ALU code with the interpreter on random inputs
 static unsigned _selfTestAluMode(struct ARMJit* jit, unsigned iterations, bool thumb) {
-	static struct Compiler compiler;
-	struct Compiler* c = &compiler;
+	struct Compiler* c = &_compiler;
 	uint32_t seed = thumb ? 54321 : 12345;
 	unsigned failures = 0;
 	unsigned n;
@@ -1061,10 +1077,8 @@ static unsigned _selfTestAluMode(struct ARMJit* jit, unsigned iterations, bool t
 			a.cycles += 1;
 		}
 
-		uint8_t* code = &jit->code[jit->codeUsed];
-		c->e.p = code;
-		c->jit = jit;
-		c->gba = NULL;
+		_startEmitting(c, jit, NULL);
+		uint8_t* code = c->e.p;
 		c->pc = address;
 		memset(c->ops, 0, sizeof(c->ops));
 		memset(c->patched, 0, sizeof(c->patched));
@@ -1109,15 +1123,9 @@ static void _selfTestAlu(struct ARMJit* jit, unsigned iterations) {
 }
 
 static void _buildTrampoline(struct ARMJit* jit, struct ARMCore* cpu) {
-	static struct Compiler compiler;
-	struct Compiler* c = &compiler;
-	uint8_t* code = jit->code;
-	c->e.p = code;
-	c->jit = jit;
-	c->cpu = cpu;
-	c->gba = (struct GBA*) cpu->master;
-	jit->iwram = c->gba->memory.iwram;
-	jit->ewram = c->gba->memory.wram;
+	struct Compiler* c = &_compiler;
+	_startEmitting(c, jit, cpu);
+	uint8_t* code = c->e.p;
 	_emitTrampoline(c);
 	__builtin___clear_cache((char*) code, (char*) c->e.p);
 	jit->codeStart = c->e.p - code;
@@ -1138,6 +1146,9 @@ bool ARMJitEvents(struct ARMCore* cpu) {
 enum ARMJitResult ARMJitRun(struct ARMCore* cpu) {
 	struct ARMJit* jit = cpu->jit;
 	if (!jit->enter) {
+		struct GBA* gba = (struct GBA*) cpu->master;
+		jit->iwram = gba->memory.iwram;
+		jit->ewram = gba->memory.wram;
 		_buildTrampoline(jit, cpu);
 	}
 	bool thumb = cpu->executionMode == MODE_THUMB;
