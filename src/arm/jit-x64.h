@@ -28,7 +28,6 @@ enum {
 	CC_A = 0x7,
 	CC_S = 0x8,
 	CC_GE = 0xD,
-	CC_LE = 0xE,
 };
 
 static void _byte(struct Emitter* e, uint8_t value) {
@@ -78,11 +77,11 @@ enum {
 enum {
 	XO_ADD = 0x01, XO_OR = 0x09, XO_SUB = 0x29, XO_XOR = 0x31,
 	XO_CMP = 0x39, XO_ADD_RM = 0x03, XO_OR8_RM = 0x0A, XO_OR_RM = 0x0B, XO_ADC_RM = 0x13, XO_SBB_RM = 0x1B,
-	XO_SUB_RM = 0x2B, XO_AND_RM = 0x23, XO_XOR_RM = 0x33, XO_CMP_RM = 0x3B, XO_IMUL_IMM = 0x69,
+	XO_SUB_RM = 0x2B, XO_AND_RM = 0x23, XO_XOR_RM = 0x33, XO_CMP_RM = 0x3B,
 	XO_GROUP1_8 = 0x80, XO_GROUP1 = 0x81, XO_GROUP1_IMM8 = 0x83, XO_TEST8 = 0x84, XO_TEST = 0x85,
 	XO_STORE8 = 0x88, XO_STORE = 0x89, XO_LOAD = 0x8B, XO_LEA = 0x8D, XO_SHIFT = 0xC1, XO_MOV8_IMM = 0xC6,
 	XO_MOV_IMM = 0xC7, XO_SHIFT_CL = 0xD3, XO_GROUP3_8 = 0xF6, XO_GROUP3 = 0xF7, XO_GROUP5 = 0xFF,
-	XO_CMOVB = 0x0F42, XO_SETCC = 0x0F90, XO_BT = 0x0FA3, XO_BTS = 0x0FAB, XO_IMUL = 0x0FAF,
+	XO_SETCC = 0x0F90, XO_BT = 0x0FA3, XO_BTS = 0x0FAB, XO_IMUL = 0x0FAF,
 	XO_MOVZX8 = 0x0FB6, XO_MOVZX16 = 0x0FB7, XO_GROUP8 = 0x0FBA, XO_MOVSX8 = 0x0FBE, XO_MOVSX16 = 0x0FBF,
 };
 
@@ -787,37 +786,38 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	int32_t s = c->seq16;
 	int32_t n = c->nonseq16;
 	uint32_t pc = c->pc + c->width * (i + 2);
+	// Both results depend only on the loads left from the last prefetch (0 to 7), so they come from byte tables
+	unsigned first = _prefetchLoads(s, wait);
+	uint64_t advances = 0;
+	uint64_t stalls = 0;
+	unsigned previous;
+	for (previous = 0; previous < 8; ++previous) {
+		unsigned loads = first < 8 - previous ? first : 8 - previous;
+		int32_t stall = s * loads + 1;
+		advances |= (uint64_t) (loads + previous - 1) << (8 * previous);
+		stalls |= (uint64_t) (uint8_t) -(stall < wait ? stall : wait) << (8 * previous);
+	}
 	_movImm64(e, X_R11, (uintptr_t) &c->gba->memory);
-	// Fewer loads when they overlap the last prefetch
 	_load(e, X_RSI, X_R11, offsetof(struct GBAMemory, lastPrefetchedPc));
 	_ri(e, G1_SUB, X_RSI, pc);
-	_rr(e, XO_XOR, X_R8, X_R8);
+	_rr(e, XO_XOR, X_RCX, X_RCX);
 	_ri(e, G1_CMP, X_RSI, 16);
 	uint8_t* far = _jcc(e, CC_AE);
-	_mov(e, X_R8, X_RSI);
-	_shift(e, SH_SHR, X_R8, 1);
+	_mov(e, X_RCX, X_RSI);
+	_ri(e, G1_AND, X_RCX, 14);
+	_shift(e, SH_SHL, X_RCX, 2);
 	_patch(far, e->p);
-	_movImm(e, X_RSI, 8);
-	_rr(e, XO_SUB, X_RSI, X_R8);
-	_movImm(e, X_RDX, _prefetchLoads(s, wait));
-	_rr(e, XO_CMP, X_RSI, X_RDX);
-	_insn(e, 0, XO_CMOVB, X_RDX, _xr(X_RSI));
 	// lastPrefetchedPc = pc + 2 * (loads + previous - 1)
-	_mov(e, X_RSI, X_RDX);
-	_rr(e, XO_ADD, X_RSI, X_R8);
-	_rr(e, XO_ADD, X_RSI, X_RSI);
-	_ri(e, G1_ADD, X_RSI, pc - 2);
-	_store(e, X_RSI, X_R11, offsetof(struct GBAMemory, lastPrefetchedPc));
-	// stall = s * loads + 1; wait = max(wait, stall) - stall - (n - s)
-	_insn(e, 0, XO_IMUL_IMM, X_RSI, _xr(X_RDX));
-	_imm32(e, s);
-	_ri(e, G1_ADD, X_RSI, 1);
-	_movImm(e, X_R10, wait - (n - s));
-	_rr(e, XO_SUB, X_R10, X_RSI);
-	_ri(e, G1_CMP, X_RSI, wait);
-	uint8_t* fits = _jcc(e, CC_LE);
-	_movImm(e, X_R10, s - n);
-	_patch(fits, e->p);
+	_movImm64(e, X_RDX, advances);
+	_insn(e, X_W, XO_SHIFT_CL, SH_SHR, _xr(X_RDX));
+	_movzxByte(e, X_RDX, X_RDX);
+	_insn(e, 0, XO_LEA, X_RDX, _xmi(X_RDX, X_RDX, 0, pc));
+	_store(e, X_RDX, X_R11, offsetof(struct GBAMemory, lastPrefetchedPc));
+	// max(wait, stall) - stall - (n - s), as wait - (n - s) - min(wait, stall)
+	_movImm64(e, X_R10, stalls);
+	_insn(e, X_W, XO_SHIFT_CL, SH_SHR, _xr(X_R10));
+	_insn(e, 0, XO_MOVSX8, X_R10, _xr(X_R10));
+	_ri(e, G1_ADD, X_R10, wait - (n - s));
 }
 
 // r10 = the wait of a data access to IWRAM or EWRAM
