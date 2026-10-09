@@ -7,6 +7,84 @@
 
 #include <mgba/internal/gba/gba.h>
 
+#if defined(__ARM_NEON) && defined(__aarch64__) && defined(COLOR_16_BIT) && defined(COLOR_5_6_5)
+#include <arm_neon.h>
+
+static inline uint16x8_t _paletteLookup(const mColor* palette, uint8x8_t index) {
+	uint8x16x2_t bytes = vld2q_u8((const uint8_t*) palette);
+	return vorrq_u16(vmovl_u8(vqtbl1_u8(bytes.val[0], index)), vshlq_n_u16(vmovl_u8(vqtbl1_u8(bytes.val[1], index)), 8));
+}
+
+// mColorMix5Bit for eight colors
+static inline uint16x8_t _mix5Bit(uint16x8_t a, uint16x8_t b, uint16x8_t weightA, uint16x8_t weightB) {
+	uint16x8_t mask = vdupq_n_u16(0x1F);
+	uint16x8_t max = vdupq_n_u16(0x1F);
+	uint16x8_t red = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vshrq_n_u16(a, 11), weightA), vshrq_n_u16(b, 11), weightB), 4), max);
+	uint16x8_t green = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vandq_u16(vshrq_n_u16(a, 6), mask), weightA), vandq_u16(vshrq_n_u16(b, 6), mask), weightB), 4), max);
+	uint16x8_t blue = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vandq_u16(a, mask), weightA), vandq_u16(b, mask), weightB), 4), max);
+	return vorrq_u16(vorrq_u16(vshlq_n_u16(red, 11), vshlq_n_u16(green, 6)), blue);
+}
+
+// A whole 16-color tile row at once, as eight BACKGROUND_DRAW_PIXEL_16 with COMPOSITE_16_NO_OBJWIN
+static inline void _drawTile16(struct GBAVideoSoftwareRenderer* renderer, uint32_t* pixel, uint32_t tileData,
+                               int paletteData, const mColor* palette, uint32_t flags, bool blend) {
+	uint8x8_t bytes = vreinterpret_u8_u32(vdup_n_u32(tileData));
+	uint8x8_t index = vzip_u8(vand_u8(bytes, vdup_n_u8(0xF)), vshr_n_u8(bytes, 4)).val[0];
+	uint16x8_t color = _paletteLookup(&palette[paletteData], index);
+	uint32x4_t current[2] = { vld1q_u32(pixel), vld1q_u32(pixel + 4) };
+	if (palette != renderer->normalPalette) {
+		uint32x4_t reblend[2];
+		unsigned h;
+		for (h = 0; h < 2; ++h) {
+			reblend[h] = vceqq_u32(vandq_u32(current[h], vdupq_n_u32(FLAG_IS_BACKGROUND | FLAG_REBLEND)), vdupq_n_u32(FLAG_REBLEND));
+		}
+		uint16x8_t normal = _paletteLookup(&renderer->normalPalette[paletteData], index);
+		color = vbslq_u16(vcombine_u16(vmovn_u32(reblend[0]), vmovn_u32(reblend[1])), normal, color);
+	}
+	uint16x8_t mixed = vdupq_n_u16(0);
+	if (blend) {
+		uint16x8_t below = vcombine_u16(vmovn_u32(current[0]), vmovn_u32(current[1]));
+		mixed = _mix5Bit(below, color, vdupq_n_u16(renderer->blda), vdupq_n_u16(renderer->bldb));
+	}
+	uint16x8_t index16 = vmovl_u8(index);
+	unsigned h;
+	for (h = 0; h < 2; ++h) {
+		uint32x4_t cur = current[h];
+		uint32x4_t col = vorrq_u32(vmovl_u16(h ? vget_high_u16(color) : vget_low_u16(color)), vdupq_n_u32(flags));
+		uint32x4_t idx = vmovl_u16(h ? vget_high_u16(index16) : vget_low_u16(index16));
+		uint32x4_t write = vandq_u32(vtstq_u32(idx, idx), vtstq_u32(cur, vdupq_n_u32(0xFE000000)));
+		uint32x4_t behind = vcgeq_u32(col, cur);
+		uint32x4_t below = vandq_u32(cur, vdupq_n_u32(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN));
+		uint32x4_t out;
+		if (blend) {
+			uint32x4_t mix = vandq_u32(behind, vandq_u32(vtstq_u32(cur, vdupq_n_u32(FLAG_TARGET_1)), vtstq_u32(col, vdupq_n_u32(FLAG_TARGET_2))));
+			uint32x4_t mixedColor = vmovl_u16(h ? vget_high_u16(mixed) : vget_low_u16(mixed));
+			out = vbslq_u32(behind, vbslq_u32(mix, mixedColor, below), vbicq_u32(col, vdupq_n_u32(FLAG_TARGET_2)));
+		} else {
+			out = vbslq_u32(behind, below, col);
+		}
+		vst1q_u32(pixel + 4 * h, vbslq_u32(write, out, cur));
+	}
+}
+
+#define _BLENDS_Blend true
+#define _BLENDS_NoBlend false
+#define DRAW_TILE_16_NO_OBJWIN(BLEND) _drawTile16(renderer, pixel, tileData, paletteData, palette, flags, _BLENDS_ ## BLEND);
+#else
+#define DRAW_TILE_16_NO_OBJWIN(BLEND) DRAW_TILE_16_OBJWIN_(BLEND, NO_OBJWIN)
+#endif
+
+#define DRAW_TILE_16_OBJWIN(BLEND) DRAW_TILE_16_OBJWIN_(BLEND, OBJWIN)
+#define DRAW_TILE_16_OBJWIN_(BLEND, OBJWIN) \
+	BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 0); \
+	BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 1); \
+	BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 2); \
+	BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 3); \
+	BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 4); \
+	BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 5); \
+	BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 6); \
+	BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 7);
+
 #define BACKGROUND_TEXT_SELECT_CHARACTER \
 	xBase = localX & 0xF8; \
 	if (background->size & 1) { \
@@ -162,14 +240,7 @@
 			tileData = ((tileData & 0xF0F0F0F0) >> 4) | ((tileData & 0x0F0F0F0F) << 4); \
 		} \
 		if (tileData) { \
-			BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 0); \
-			BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 1); \
-			BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 2); \
-			BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 3); \
-			BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 4); \
-			BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 5); \
-			BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 6); \
-			BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, 7); \
+			DRAW_TILE_16_ ## OBJWIN(BLEND) \
 		} \
 		pixel += 8; \
 	}
