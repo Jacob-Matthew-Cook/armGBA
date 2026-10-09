@@ -43,7 +43,6 @@ struct MemOp {
 	bool writeback;
 	// A patched instruction: the 12-bit offset and the up bit come from the fetched opcode
 	bool runtimeOffset;
-	unsigned fetchedIndex;
 };
 
 static bool _isLogical(unsigned opcode) {
@@ -69,7 +68,6 @@ struct AluOp {
 	bool keepsShifterCarry;
 	// Whether any flag this sets is read before another instruction overwrites it
 	bool flagsLive;
-	uint32_t cycles;
 };
 
 static struct Source _reg(unsigned reg) {
@@ -82,7 +80,7 @@ static struct Source _const(uint32_t value) {
 	return source;
 }
 
-static bool _decodeArmAlu(uint32_t op, uint32_t address, uint32_t aluCycles, struct AluOp* alu) {
+static bool _decodeArmAlu(uint32_t op, uint32_t address, struct AluOp* alu) {
 	if ((op & 0x0C000000) || (op >> 28) == 0xF) {
 		return false;
 	}
@@ -119,18 +117,16 @@ static bool _decodeArmAlu(uint32_t op, uint32_t address, uint32_t aluCycles, str
 		alu->shiftAmount = (op >> 7) & 0x1F;
 	}
 	alu->keepsShifterCarry = true;
-	alu->cycles = aluCycles;
 	return true;
 }
 
-static void _thumbAlu(struct AluOp* alu, unsigned opcode, bool s, unsigned rd, struct Source n, uint32_t cycles) {
+static void _thumbAlu(struct AluOp* alu, unsigned opcode, bool s, unsigned rd, struct Source n) {
 	memset(alu, 0, sizeof(*alu));
 	alu->cond = 0xE;
 	alu->opcode = opcode;
 	alu->s = s;
 	alu->rd = rd;
 	alu->n = n;
-	alu->cycles = cycles;
 }
 
 static void _thumbImm(struct AluOp* alu, uint32_t imm) {
@@ -145,18 +141,18 @@ static void _thumbReg(struct AluOp* alu, unsigned reg, unsigned shiftType, unsig
 	alu->shiftAmount = shiftAmount;
 }
 
-static bool _decodeThumbAlu(uint32_t op, uint32_t address, uint32_t aluCycles, struct AluOp* alu) {
+static bool _decodeThumbAlu(uint32_t op, uint32_t address, struct AluOp* alu) {
 	unsigned rd = op & 7;
 	unsigned rs = (op >> 3) & 7;
 	switch (op >> 11) {
 	case 0x00: // LSL, LSR, ASR #imm
 	case 0x01:
 	case 0x02:
-		_thumbAlu(alu, ALU_MOV, true, rd, _reg(0), aluCycles);
+		_thumbAlu(alu, ALU_MOV, true, rd, _reg(0));
 		_thumbReg(alu, rs, op >> 11, (op >> 6) & 0x1F);
 		return true;
 	case 0x03: // ADD, SUB with a register or 3-bit immediate
-		_thumbAlu(alu, (op & 0x0200) ? ALU_SUB : ALU_ADD, true, rd, _reg(rs), aluCycles);
+		_thumbAlu(alu, (op & 0x0200) ? ALU_SUB : ALU_ADD, true, rd, _reg(rs));
 		if (op & 0x0400) {
 			_thumbImm(alu, (op >> 6) & 7);
 		} else {
@@ -169,7 +165,7 @@ static bool _decodeThumbAlu(uint32_t op, uint32_t address, uint32_t aluCycles, s
 	case 0x07: {
 		static const unsigned opcodes[] = { ALU_MOV, ALU_CMP, ALU_ADD, ALU_SUB };
 		rd = (op >> 8) & 7;
-		_thumbAlu(alu, opcodes[(op >> 11) & 3], true, rd, _reg(rd), aluCycles);
+		_thumbAlu(alu, opcodes[(op >> 11) & 3], true, rd, _reg(rd));
 		_thumbImm(alu, op & 0xFF);
 		return true;
 	}
@@ -185,10 +181,10 @@ static bool _decodeThumbAlu(uint32_t op, uint32_t address, uint32_t aluCycles, s
 				return false; // Register shifts and MUL
 			}
 			if (opcode == ALU_RSB) {
-				_thumbAlu(alu, ALU_RSB, true, rd, _reg(rs), aluCycles); // NEG
+				_thumbAlu(alu, ALU_RSB, true, rd, _reg(rs)); // NEG
 				_thumbImm(alu, 0);
 			} else {
-				_thumbAlu(alu, opcode, true, rd, _reg(rd), aluCycles);
+				_thumbAlu(alu, opcode, true, rd, _reg(rd));
 				_thumbReg(alu, rs, 0, 0);
 			}
 			return true;
@@ -202,7 +198,7 @@ static bool _decodeThumbAlu(uint32_t op, uint32_t address, uint32_t aluCycles, s
 			if (hd == ARM_PC && opcode != ALU_CMP) {
 				return false;
 			}
-			_thumbAlu(alu, opcode, opcode == ALU_CMP, hd, hd == ARM_PC ? _const(address + 4) : _reg(hd), aluCycles);
+			_thumbAlu(alu, opcode, opcode == ALU_CMP, hd, hd == ARM_PC ? _const(address + 4) : _reg(hd));
 			if (hm == ARM_PC) {
 				_thumbImm(alu, address + 4);
 			} else {
@@ -212,22 +208,22 @@ static bool _decodeThumbAlu(uint32_t op, uint32_t address, uint32_t aluCycles, s
 		}
 		return false;
 	case 0x14: // ADD rd, PC, #imm
-		_thumbAlu(alu, ALU_MOV, false, (op >> 8) & 7, _reg(0), aluCycles);
+		_thumbAlu(alu, ALU_MOV, false, (op >> 8) & 7, _reg(0));
 		_thumbImm(alu, ((address + 4) & ~3) + ((op & 0xFF) << 2));
 		return true;
 	case 0x15: // ADD rd, SP, #imm
-		_thumbAlu(alu, ALU_ADD, false, (op >> 8) & 7, _reg(ARM_SP), aluCycles);
+		_thumbAlu(alu, ALU_ADD, false, (op >> 8) & 7, _reg(ARM_SP));
 		_thumbImm(alu, (op & 0xFF) << 2);
 		return true;
 	case 0x16:
 		if ((op & 0x0F00) == 0x0000) { // ADD SP, #+/-imm
-			_thumbAlu(alu, (op & 0x80) ? ALU_SUB : ALU_ADD, false, ARM_SP, _reg(ARM_SP), aluCycles);
+			_thumbAlu(alu, (op & 0x80) ? ALU_SUB : ALU_ADD, false, ARM_SP, _reg(ARM_SP));
 			_thumbImm(alu, (op & 0x7F) << 2);
 			return true;
 		}
 		return false;
 	case 0x1E: // BL prefix
-		_thumbAlu(alu, ALU_MOV, false, ARM_LR, _reg(0), aluCycles);
+		_thumbAlu(alu, ALU_MOV, false, ARM_LR, _reg(0));
 		_thumbImm(alu, address + 4 + ((int32_t) (op << 21) >> 9));
 		return true;
 	default:

@@ -1069,7 +1069,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_loadSource(c, X_R9, _reg(mem->rd));
 	}
 	if (mem->runtimeOffset) {
-		_load(e, X_RDX, X_JIT, JIT_FETCHED + 4 * mem->fetchedIndex);
+		_load(e, X_RDX, X_JIT, JIT_FETCHED + 4 * i);
 		_mov(e, X_RCX, X_RDX);
 		_ri(e, G1_AND, X_RDX, 0xFFF);
 		_insn(e, 0, XO_GROUP8, G8_BT, _xr(X_RCX));

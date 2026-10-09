@@ -1128,7 +1128,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_loadSource(c, 6, _reg(mem->rd));
 	}
 	if (mem->runtimeOffset) {
-		_ldrW(e, 1, R_JIT, JIT_FETCHED + 4 * mem->fetchedIndex);
+		_ldrW(e, 1, R_JIT, JIT_FETCHED + 4 * i);
 		_ubfx(e, 9, 1, 23, 1);
 		_andImm(e, 1, 1, 0, 12);
 		uint8_t* up = _cbnzW(e, 9);

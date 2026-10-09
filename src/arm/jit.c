@@ -171,9 +171,9 @@ static void _exitAt(struct Compiler* c, uint8_t* at, int index) {
 static bool _decodeAlu(struct Compiler* c, unsigned i, struct AluOp* alu) {
 	uint32_t address = c->pc + c->width * i;
 	if (c->thumb) {
-		return _decodeThumbAlu(c->ops[i], address, c->aluCycles, alu);
+		return _decodeThumbAlu(c->ops[i], address, alu);
 	}
-	return _decodeArmAlu(c->ops[i], address, c->aluCycles, alu);
+	return _decodeArmAlu(c->ops[i], address, alu);
 }
 
 static bool _decodeMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
@@ -450,7 +450,6 @@ static bool _patchedMem(struct Compiler* c, unsigned i, uint32_t op, struct MemO
 		return false;
 	}
 	mem->runtimeOffset = true;
-	mem->fetchedIndex = i;
 	return true;
 }
 
@@ -478,12 +477,12 @@ static void _emitPatched(struct Compiler* c, unsigned i) {
 			if (mem.load) {
 				_setRegion(c, mem.rd, -1);
 			}
-		} else if (!c->thumb && _decodeArmAlu(forms[k], c->pc + c->width * i, c->aluCycles, &alu)) {
+		} else if (!c->thumb && _decodeArmAlu(forms[k], c->pc + c->width * i, &alu)) {
 			other = _fetchedMismatch(c, i, 0xFFFFFFFF, forms[k]);
 			alu.flagsLive = true;
 			_emitAlu(c, &alu, alu.keepsShifterCarry);
 			_setRegion(c, alu.rd, -1);
-			_addCycles(c, alu.cycles);
+			_addCycles(c, c->aluCycles);
 			_eventCheck(c, i + 1);
 		} else {
 			continue;
@@ -791,19 +790,15 @@ static unsigned _emitAluRun(struct Compiler* c, unsigned i, struct AluOp* alus) 
 	while (i + run < c->count && !c->hot[i + run] && !c->isTarget[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
 		++run;
 	}
-	uint32_t cycles = 0;
 	unsigned lastAlways = 0;
 	unsigned j;
 	for (j = 0; j < run; ++j) {
-		if (j < run - 1) {
-			cycles += alus[i + j].cycles;
-		}
 		if (alus[i + j].cond == 0xE) {
 			lastAlways = j;
 		}
 	}
 	if (run > 1) {
-		c->runs[c->nRuns].site = _runCheck(c, cycles);
+		c->runs[c->nRuns].site = _runCheck(c, (run - 1) * c->aluCycles);
 		c->runs[c->nRuns].index = i;
 		++c->nRuns;
 		c->runLength[i] = run;
@@ -814,7 +809,7 @@ static unsigned _emitAluRun(struct Compiler* c, unsigned i, struct AluOp* alus) 
 		_emitAlu(c, &alus[i + j], alus[i + j].keepsShifterCarry && j >= lastAlways);
 		_trackAlu(c, &alus[i + j]);
 	}
-	_addCycles(c, cycles + alus[i + run - 1].cycles);
+	_addCycles(c, run * c->aluCycles);
 	_eventCheck(c, i + run);
 	return run;
 }
@@ -1038,7 +1033,7 @@ static unsigned _selfTestAluMode(struct ARMJit* jit, unsigned iterations, bool t
 			if (thumb) {
 				op &= 0xFFFF;
 			}
-		} while (thumb ? !_decodeThumbAlu(op, address, 1, &alu) : !_decodeArmAlu(op, address, 1, &alu));
+		} while (thumb ? !_decodeThumbAlu(op, address, &alu) : !_decodeArmAlu(op, address, &alu));
 		struct ARMCore a;
 		memset(&a, 0, sizeof(a));
 		unsigned r;
@@ -1084,7 +1079,7 @@ static unsigned _selfTestAluMode(struct ARMJit* jit, unsigned iterations, bool t
 		alu.flagsLive = true;
 		_prologue(c);
 		_emitAlu(c, &alu, alu.keepsShifterCarry);
-		_addCycles(c, alu.cycles);
+		_addCycles(c, c->aluCycles);
 		_epilogue(c);
 		__builtin___clear_cache((char*) code, (char*) c->e.p);
 		((void (*)(struct ARMCore*)) code)(&b);
