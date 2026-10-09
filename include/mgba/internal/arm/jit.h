@@ -30,7 +30,7 @@ struct ARMJitLink;
 struct ARMJitPage;
 
 struct ARMJit {
-	struct ARMJitBlock* current;
+	// Set when blocks are removed, so code running in one stops after the call that did it
 	uint8_t smcHit;
 
 	uint8_t* code;

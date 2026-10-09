@@ -94,7 +94,7 @@ enum {
 	OFF_SHIFTER_CARRY = offsetof(struct ARMCore, shifterCarryOut),
 	OFF_MEMORY = offsetof(struct ARMCore, memory),
 	OFF_EXECUTION_MODE = offsetof(struct ARMCore, executionMode),
-	JIT_CURRENT = offsetof(struct ARMJit, current),
+	OFF_ACTIVE_MASK = offsetof(struct ARMCore, memory) + offsetof(struct ARMMemory, activeMask),
 	JIT_SMC_HIT = offsetof(struct ARMJit, smcHit),
 	JIT_PAGES = offsetof(struct ARMJit, pages),
 	JIT_PENDING_LINK = offsetof(struct ARMJit, pendingLink),
@@ -123,6 +123,8 @@ struct Compiler {
 	struct ARMCore* cpu;
 	struct GBA* gba;
 	uint32_t pc;
+	const uint32_t* region;
+	uint32_t mask;
 	const uint32_t* ops;
 	// Patched instructions and prefetch words, decoded at runtime from jit->fetched
 	const bool* hot;
@@ -134,6 +136,10 @@ struct Compiler {
 	uint8_t* body;
 	uint32_t aluCycles;
 	uint32_t memCycles;
+	// For the prefetch stalls of data accesses from cartridge code
+	int32_t seq16;
+	int32_t nonseq16;
+	bool prefetch;
 	struct {
 		uint8_t* at;
 		int index;
@@ -149,6 +155,7 @@ struct Compiler {
 	unsigned nCareful;
 	uint8_t* loops[MAX_BLOCK];
 	unsigned nLoops;
+	uint8_t* const* fast;
 };
 
 static void _exitAt(struct Compiler* c, uint8_t* at, int index) {
@@ -617,6 +624,55 @@ static bool _branchTarget(struct Compiler* c, unsigned i, uint32_t* target) {
 	return false;
 }
 
+// LDM and STM without PC, the S bit or an empty list; Thumb PUSH, POP, LDMIA and STMIA
+struct MultiOp {
+	unsigned cond;
+	bool load;
+	unsigned rn;
+	unsigned list;
+	bool up;
+	bool pre;
+	bool writeback;
+};
+
+static bool _decodeMulti(struct Compiler* c, unsigned i, struct MultiOp* m) {
+	uint32_t op = c->ops[i];
+	m->cond = 0xE;
+	if (c->thumb) {
+		if ((op & 0xF000) == 0xC000) {
+			m->load = op & 0x0800;
+			m->rn = (op >> 8) & 7;
+			m->list = op & 0xFF;
+			m->up = true;
+			m->pre = false;
+		} else if ((op & 0xFE00) == 0xB400 || (op & 0xFF00) == 0xBC00) {
+			m->load = op & 0x0800;
+			m->rn = ARM_SP;
+			m->list = op & 0xFF;
+			if (op & 0x0100) {
+				m->list |= 1 << ARM_LR;
+			}
+			m->up = m->load;
+			m->pre = !m->load;
+		} else {
+			return false;
+		}
+		m->writeback = !(m->load && (m->list & (1 << m->rn)));
+	} else {
+		if ((op & 0x0E400000) != 0x08000000) {
+			return false;
+		}
+		m->cond = op >> 28;
+		m->load = op & 0x00100000;
+		m->rn = (op >> 16) & 0xF;
+		m->list = op & 0xFFFF;
+		m->up = op & 0x00800000;
+		m->pre = op & 0x01000000;
+		m->writeback = (op & 0x00200000) && !(m->load && (m->list & (1 << m->rn)));
+	}
+	return m->list && !(m->list & (1 << ARM_PC)) && m->rn != ARM_PC && m->cond != 0xF;
+}
+
 // Condition checked before calling a handler: ARM conditions and Thumb conditional branches
 static unsigned _fallbackCond(struct Compiler* c, uint32_t op) {
 	if (!c->thumb) {
@@ -626,6 +682,62 @@ static unsigned _fallbackCond(struct Compiler* c, uint32_t op) {
 		return (op >> 8) & 0xF;
 	}
 	return 0xE;
+}
+
+static uint32_t _regionEnd(struct ARMCore* cpu, uint32_t pc);
+
+struct BranchOp {
+	uint32_t target;
+	unsigned cond;
+	// ARM BL sets LR; Thumb BL checks the LR its first half set, then sets it
+	bool link;
+	bool thumbLink;
+	uint32_t lr;
+	// Target instruction in this block, or -1
+	int index;
+};
+
+// A branch to a known address in the same region, which needs no region change
+static bool _decodeBranch(struct Compiler* c, unsigned i, struct BranchOp* b) {
+	uint32_t op = c->ops[i];
+	uint32_t address = c->pc + c->width * i;
+	if (!_branchTarget(c, i, &b->target)) {
+		return false;
+	}
+	b->cond = _fallbackCond(c, op);
+	b->link = !c->thumb && (op & 0x01000000);
+	b->thumbLink = c->thumb && (op & 0xF800) == 0xF800;
+	b->lr = b->thumbLink ? address + 2 + ((int32_t) (c->ops[i - 1] << 21) >> 9) : 0;
+	if (b->cond == 0xF || (b->target >> 24) != (c->pc >> 24) || b->target + 2 * c->width > _regionEnd(c->cpu, c->pc) || b->target < (c->pc & 0xFF000000)) {
+		return false;
+	}
+	b->index = -1;
+	if (b->target >= c->pc && b->target < c->pc + c->width * c->count) {
+		b->index = (b->target - c->pc) / c->width;
+	}
+	return true;
+}
+
+// Sequential loads GBAMemoryStall fits in a wait when nothing was prefetched before
+static unsigned _prefetchLoads(int32_t seq, int32_t wait) {
+	int32_t stall = seq + 1;
+	unsigned loads = 1;
+	while (stall < wait && loads < 8) {
+		stall += seq;
+		++loads;
+	}
+	return loads;
+}
+
+// A word of the region this block runs from, as compiled
+static uint32_t _opAt(struct Compiler* c, uint32_t address) {
+	uint32_t op;
+	if (c->thumb) {
+		LOAD_16(op, address & c->mask, c->region);
+	} else {
+		LOAD_32(op, address & c->mask, c->region);
+	}
+	return op;
 }
 
 // Host address of a RAM word compiled from, for reading patched words at runtime
@@ -751,10 +863,7 @@ static void _removeBlock(struct ARMJit* jit, struct ARMJitBlock* block) {
 			--jit->cover[block->coverStart + i];
 		}
 	}
-	if (block == jit->current) {
-		jit->smcHit = 1;
-		jit->current = NULL;
-	}
+	jit->smcHit = 1;
 	_freeBlock(block);
 }
 
@@ -792,13 +901,10 @@ void ARMJitDropBlocks(struct ARMJit* jit) {
 	struct ARMJitBlock* block = jit->blockList;
 	while (block) {
 		struct ARMJitBlock* next = block->next;
-		if (block == jit->current) {
-			jit->smcHit = 1;
-			jit->current = NULL;
-		}
 		_freeBlock(block);
 		block = next;
 	}
+	jit->smcHit = 1;
 	jit->blockList = NULL;
 	unsigned i;
 	for (i = 0; i < ARM_JIT_PAGES; ++i) {
@@ -936,8 +1042,8 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	if (!block) {
 		return NULL;
 	}
-	// One linkable exit per instruction at most, plus falling off the end
-	block->links = calloc(count + 1, sizeof(*block->links));
+	// Two linkable exits per branch at most (inline and through the handler), plus falling off the end
+	block->links = calloc(2 * count + 1, sizeof(*block->links));
 	block->entries = calloc(count + 1, sizeof(*block->entries));
 	if (!block->links || !block->entries) {
 		_freeBlock(block);
@@ -951,6 +1057,8 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	c->cpu = cpu;
 	c->gba = (struct GBA*) cpu->master;
 	c->pc = pc;
+	c->region = region;
+	c->mask = mask;
 	c->ops = ops;
 	c->hot = hot;
 	c->count = count;
@@ -962,6 +1070,9 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	c->nLinks = 0;
 	c->nCareful = 0;
 	c->nLoops = 0;
+	c->seq16 = cpu->memory.activeSeqCycles16;
+	c->nonseq16 = cpu->memory.activeNonseqCycles16;
+	c->prefetch = c->gba->memory.prefetch;
 	if (thumb) {
 		c->aluCycles = 1 + cpu->memory.activeSeqCycles16;
 		c->memCycles = 1 + cpu->memory.activeNonseqCycles16;
@@ -980,9 +1091,22 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	memset(careful, 0, sizeof(careful));
 	memset(runLength, 0, sizeof(runLength));
 
+	// Branches back into the block jump straight to their target, so it starts a unit
+	bool isTarget[MAX_SPAN];
+	memset(isTarget, 0, sizeof(isTarget));
+	struct BranchOp branch;
+	unsigned i;
+	for (i = 0; i < count; ++i) {
+		if (!hot[i] && _decodeBranch(c, i, &branch) && branch.index >= 0) {
+			isTarget[branch.index] = true;
+		}
+	}
+	c->fast = fast;
+
 	struct AluOp alus[MAX_SPAN];
 	struct MemOp mem;
-	unsigned i = 0;
+	struct MultiOp multi;
+	i = 0;
 	while (i < count) {
 		fast[i] = c->e.p;
 		if (hot[i]) {
@@ -991,7 +1115,7 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 			++i;
 		} else if (_decodeAlu(c, i, &alus[i])) {
 			unsigned run = 1;
-			while (i + run < count && !hot[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
+			while (i + run < count && !hot[i + run] && !isTarget[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
 				++run;
 			}
 			// The interpreter checks for events after every instruction, so the run only goes
@@ -1024,6 +1148,14 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		} else if (_decodeMem(c, i, &mem)) {
 			_fetchAhead(c, i);
 			_emitMem(c, i, &mem);
+			++i;
+		} else if (_decodeMulti(c, i, &multi)) {
+			_fetchAhead(c, i);
+			_emitMulti(c, i, &multi);
+			++i;
+		} else if (_decodeBranch(c, i, &branch)) {
+			_fetchAhead(c, i);
+			_emitBranch(c, i, &branch);
 			++i;
 		} else {
 			_fetchAhead(c, i);
@@ -1101,7 +1233,7 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 			continue;
 		}
 		struct ARMJitEntry* entry = &block->entries[block->nEntries++];
-		entry->code = c->e.p;
+		entry->code = target;
 		entry->pc = pc + width * i;
 		entry->op0 = ops[i];
 		entry->op1 = ops[i + 1];
@@ -1109,7 +1241,10 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		entry->opMask1 = hot[i + 1] ? 0 : 0xFFFFFFFF;
 		entry->thumb = thumb;
 		entry->block = block;
-		_entryStub(c, i, target);
+		if (hot[i] || hot[i + 1]) {
+			entry->code = c->e.p;
+			_entryStub(c, i, target);
+		}
 	}
 	for (x = 0; x < c->nLoops; ++x) {
 		_patch(c->loops[x], block->entries[0].code);
@@ -1292,9 +1427,9 @@ bool ARMJitRun(struct ARMCore* cpu) {
 		return false;
 	}
 	jit->pendingLink = NULL;
+	jit->smcHit = 0;
 	int32_t cycles = cpu->cycles;
 	jit->enter(cpu, entry->code);
-	jit->current = NULL;
 	// A block exits before its first segment when an event is due inside it
 	return cpu->cycles != cycles;
 }

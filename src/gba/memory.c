@@ -1720,6 +1720,7 @@ void GBAAdjustWaitstates(struct GBA* gba, uint16_t parameters) {
 	memcpy(oldWaitstates[1], memory->waitstatesSeq32, 16);
 	memcpy(oldWaitstates[2], memory->waitstatesNonseq16, 16);
 	memcpy(oldWaitstates[3], memory->waitstatesNonseq32, 16);
+	bool oldPrefetch = memory->prefetch;
 #endif
 	int sram = parameters & 0x0003;
 	int ws0 = (parameters & 0x000C) >> 2;
@@ -1786,9 +1787,10 @@ void GBAAdjustWaitstates(struct GBA* gba, uint16_t parameters) {
 		GBADMARecalculateCycles(gba);
 	}
 #ifdef M_ARM_JIT
-	// Cartridge blocks bake in their fetch timing; games often rewrite the same WAITCNT
+	// Cartridge blocks bake in their fetch timing and prefetch stalls; games often rewrite the same WAITCNT
 	if (cpu->jit && (memcmp(oldWaitstates[0], memory->waitstatesSeq16, 16) || memcmp(oldWaitstates[1], memory->waitstatesSeq32, 16) ||
-	                 memcmp(oldWaitstates[2], memory->waitstatesNonseq16, 16) || memcmp(oldWaitstates[3], memory->waitstatesNonseq32, 16))) {
+	                 memcmp(oldWaitstates[2], memory->waitstatesNonseq16, 16) || memcmp(oldWaitstates[3], memory->waitstatesNonseq32, 16) ||
+	                 oldPrefetch != memory->prefetch)) {
 		ARMJitDropRegion(cpu->jit, GBA_BASE_ROM0, GBA_BASE_SRAM);
 	}
 #endif
@@ -1801,9 +1803,9 @@ void GBAAdjustEWRAMWaitstates(struct GBA* gba, uint16_t parameters) {
 	int wait = 15 - ((parameters >> 8) & 0xF);
 	if (wait) {
 #ifdef M_ARM_JIT
-		// EWRAM blocks bake in their fetch timing
+		// Blocks bake in EWRAM timing for fetches and data accesses
 		if (cpu->jit && memory->waitstatesSeq16[GBA_REGION_EWRAM] != wait) {
-			ARMJitDropRegion(cpu->jit, GBA_BASE_EWRAM, GBA_BASE_IWRAM);
+			ARMJitDropBlocks(cpu->jit);
 		}
 #endif
 		memory->waitstatesNonseq16[GBA_REGION_EWRAM] = wait;
@@ -1866,6 +1868,18 @@ int32_t GBAMemoryStall(struct ARMCore* cpu, int32_t wait) {
 	// The next |loads|S waitstates disappear entirely, so long as they're all in a row
 	wait -= stall;
 
+	return wait;
+}
+
+// The wait the VRAM cases of GBALoad and GBAStore add, for VRAM accesses made elsewhere
+int32_t GBAMemoryVRAMWait(struct GBA* gba, uint32_t address, unsigned size) {
+	int32_t wait = size == 4 ? 1 : 0;
+	if (!gba->video.stallMask) {
+		return wait;
+	}
+	if (size == 1 || (address & 0x0001FFFF) < ((GBARegisterDISPCNTGetMode(gba->memory.io[GBA_REG(DISPCNT)]) >= 3) ? 0x00014000 : 0x00010000)) {
+		wait += GBAMemoryStallVRAM(gba, wait, size == 4);
+	}
 	return wait;
 }
 
