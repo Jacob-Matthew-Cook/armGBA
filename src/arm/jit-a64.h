@@ -67,17 +67,26 @@ static uint8_t* _emitSite(struct Emitter* e, uint32_t insn) {
 	return at;
 }
 
+// Immediates and branches that do not fit their fields are compiler bugs, so they stop it
+static uint32_t _field(uint32_t value, unsigned bits) {
+	if (value >> bits) {
+		abort();
+	}
+	return value;
+}
+
+// B and BL take 26 bits, TBZ and TBNZ 14, B.cond, CBZ and CBNZ 19
 static void _patch(uint8_t* at, const uint8_t* target) {
 	int32_t offset = (target - at) / 4;
 	uint32_t insn;
 	memcpy(&insn, at, 4);
-	if ((insn & 0x7C000000) == 0x14000000) { // B, BL
-		insn |= offset & 0x3FFFFFF;
-	} else if ((insn & 0x7E000000) == 0x36000000) {
-		insn |= (offset & 0x3FFF) << 5;
-	} else {
-		insn |= (offset & 0x7FFFF) << 5;
+	unsigned bits = (insn & 0x7C000000) == 0x14000000 ? 26 : (insn & 0x7E000000) == 0x36000000 ? 14 : 19;
+	int32_t limit = 1 << (bits - 1);
+	if (offset < -limit || offset >= limit) {
+		abort();
 	}
+	uint32_t field = (uint32_t) offset & ((1u << bits) - 1);
+	insn |= bits == 26 ? field : field << 5;
 	memcpy(at, &insn, 4);
 }
 
@@ -112,13 +121,15 @@ static void _dp(struct Emitter* e, uint32_t op, int rd, int rn, int rm, unsigned
 }
 
 static void _dpImm(struct Emitter* e, uint32_t op, int rd, int rn, unsigned imm) {
-	_emit(e, op | (imm << 10) | (rn << 5) | rd);
+	_emit(e, op | (_field(imm, 12) << 10) | (rn << 5) | rd);
 }
 
 // Logical immediates must be encodable bitmasks
 static void _logicImm(struct Emitter* e, uint32_t op, int rd, int rn, uint32_t value) {
 	uint32_t fields = 0;
-	_bitmaskImm(value, &fields);
+	if (!_bitmaskImm(value, &fields)) {
+		abort();
+	}
 	_emit(e, op | fields | (rn << 5) | rd);
 }
 
@@ -144,32 +155,40 @@ static void _movImm64(struct Emitter* e, int rd, uint64_t value) {
 	}
 }
 
+// A load or store's unsigned offset, in units of the access size
+static uint32_t _scaled(unsigned offset, unsigned scale) {
+	if (offset & ((1 << scale) - 1)) {
+		abort();
+	}
+	return _field(offset >> scale, 12) << 10;
+}
+
 static void _ldrW(struct Emitter* e, int rt, int rn, unsigned offset) {
-	_emit(e, 0xB9400000 | ((offset >> 2) << 10) | (rn << 5) | rt);
+	_emit(e, 0xB9400000 | _scaled(offset, 2) | (rn << 5) | rt);
 }
 
 static void _strW(struct Emitter* e, int rt, int rn, unsigned offset) {
-	_emit(e, 0xB9000000 | ((offset >> 2) << 10) | (rn << 5) | rt);
+	_emit(e, 0xB9000000 | _scaled(offset, 2) | (rn << 5) | rt);
 }
 
 static void _ldrbW(struct Emitter* e, int rt, int rn, unsigned offset) {
-	_emit(e, 0x39400000 | (offset << 10) | (rn << 5) | rt);
+	_emit(e, 0x39400000 | _scaled(offset, 0) | (rn << 5) | rt);
 }
 
 static void _ldrhW(struct Emitter* e, int rt, int rn, unsigned offset) {
-	_emit(e, 0x79400000 | ((offset >> 1) << 10) | (rn << 5) | rt);
+	_emit(e, 0x79400000 | _scaled(offset, 1) | (rn << 5) | rt);
 }
 
 static void _strbW(struct Emitter* e, int rt, int rn, unsigned offset) {
-	_emit(e, 0x39000000 | (offset << 10) | (rn << 5) | rt);
+	_emit(e, 0x39000000 | _scaled(offset, 0) | (rn << 5) | rt);
 }
 
 static void _ldrX(struct Emitter* e, int rt, int rn, unsigned offset) {
-	_emit(e, 0xF9400000 | ((offset >> 3) << 10) | (rn << 5) | rt);
+	_emit(e, 0xF9400000 | _scaled(offset, 3) | (rn << 5) | rt);
 }
 
 static void _strX(struct Emitter* e, int rt, int rn, unsigned offset) {
-	_emit(e, 0xF9000000 | ((offset >> 3) << 10) | (rn << 5) | rt);
+	_emit(e, 0xF9000000 | _scaled(offset, 3) | (rn << 5) | rt);
 }
 
 static void _stpX(struct Emitter* e, int rt, int rt2, int offset) {
@@ -194,7 +213,7 @@ static void _addWImm(struct Emitter* e, int rd, int rn, unsigned imm) {
 }
 
 static void _addXImm(struct Emitter* e, int rd, int rn, unsigned imm) {
-	_emit(e, 0x91000000 | (imm << 10) | (rn << 5) | rd);
+	_dpImm(e, A64_ADD_IMM | A64_X, rd, rn, imm);
 }
 
 static void _addW(struct Emitter* e, int rd, int rn, int rm) {
@@ -214,7 +233,7 @@ static void _movW(struct Emitter* e, int rd, int rm) {
 }
 
 static void _movX(struct Emitter* e, int rd, int rm) {
-	_emit(e, 0xAA0003E0 | (rm << 16) | rd);
+	_dp(e, A64_ORR | A64_X, rd, A64_ZR, rm, 0);
 }
 
 static void _negW(struct Emitter* e, int rd, int rm) {
