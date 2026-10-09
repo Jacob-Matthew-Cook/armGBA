@@ -307,6 +307,33 @@ static void _test64(struct Emitter* e, int reg) {
 	_modrmReg(e, reg, reg);
 }
 
+static void _patchLink(uint8_t* site, const uint8_t* target) {
+	_patch(site, target);
+}
+
+// Blocks are entered here from the dispatcher and from linked exits
+static void _blockEntry(struct Compiler* c) {
+	struct Emitter* e = &c->e;
+	_movImm64(e, X_RAX, (uintptr_t) c->block);
+	_rex(e, true, X_RAX, 0, X_JIT); // mov [r12 + current], rax
+	_byte(e, 0x89);
+	_modrmMem(e, X_RAX, X_JIT, JIT_CURRENT);
+	_rex(e, false, 0, 0, X_JIT); // mov byte [r12 + smcHit], 0
+	_byte(e, 0xC6);
+	_modrmMem(e, 0, X_JIT, JIT_SMC_HIT);
+	_byte(e, 0);
+}
+
+static void _linkJump(struct Compiler* c) {
+	struct ARMJitLink* link = &c->block->links[c->nLinks++];
+	link->site = _jmp(&c->e);
+}
+
+static void _linkStub(struct Compiler* c, struct ARMJitLink* link) {
+	_movImm64(&c->e, X_RDX, (uintptr_t) link);
+	_jumpTo(c, c->jit->linkDispatch);
+}
+
 static void _emitTrampoline(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	c->jit->enter = (void (*)(struct ARMCore*, void*)) e->p;
@@ -314,8 +341,20 @@ static void _emitTrampoline(struct Compiler* c) {
 	_byte(e, 0xFF); // jmp rsi
 	_byte(e, 0xE6);
 
+	// A link stub passes its link in rdx so the exit gets patched to the block found
+	c->jit->linkDispatch = e->p;
+	_rex(e, true, X_RDX, 0, X_JIT); // mov [r12 + pendingLink], rdx
+	_byte(e, 0x89);
+	_modrmMem(e, X_RDX, X_JIT, JIT_PENDING_LINK);
+	uint8_t* toLookup = _jmp(e);
+
 	// Next block for the PC and mode in the CPU state, if it is compiled and nothing is due
 	c->jit->dispatch = e->p;
+	_rex(e, true, 0, 0, X_JIT); // mov qword [r12 + pendingLink], 0
+	_byte(e, 0xC7);
+	_modrmMem(e, 0, X_JIT, JIT_PENDING_LINK);
+	_imm32(e, 0);
+	_patch(toLookup, e->p);
 	_load(e, X_RAX, X_CPU, OFF_CYCLES);
 	_cmpRegMem(e, X_RAX, X_CPU, OFF_NEXT_EVENT);
 	uint8_t* due = _jcc(e, CC_GE);
@@ -350,13 +389,17 @@ static void _emitTrampoline(struct Compiler* c) {
 	_load(e, X_RSI, X_CPU, OFF_PREFETCH1);
 	_cmpRegMem(e, X_RSI, X_RDX, BLOCK_OP1);
 	uint8_t* otherOp1 = _jcc(e, CC_NE);
+	_load64(e, X_RSI, X_JIT, JIT_PENDING_LINK);
+	_test64(e, X_RSI);
+	uint8_t* noLink = _jcc(e, CC_E);
 	_rex(e, true, X_RDX, 0, X_JIT); // mov [r12 + current], rdx
 	_byte(e, 0x89);
 	_modrmMem(e, X_RDX, X_JIT, JIT_CURRENT);
-	_rex(e, false, 0, 0, X_JIT); // mov byte [r12 + smcHit], 0
-	_byte(e, 0xC6);
-	_modrmMem(e, 0, X_JIT, JIT_SMC_HIT);
-	_byte(e, 0);
+	_mov64(e, X_RDI, X_JIT);
+	_movImm64(e, X_RAX, (uintptr_t) ARMJitLink);
+	_call(e, X_RAX);
+	_load64(e, X_RDX, X_JIT, JIT_CURRENT);
+	_patch(noLink, e->p);
 	_rex(e, false, 0, 0, X_RDX); // jmp [rdx + entry]
 	_byte(e, 0xFF);
 	_modrmMem(e, 4, X_RDX, BLOCK_ENTRY);
@@ -421,7 +464,7 @@ static void _eventCheck(struct Compiler* c, int index) {
 	struct Emitter* e = &c->e;
 	_load(e, X_RAX, X_CPU, OFF_CYCLES);
 	_cmpRegMem(e, X_RAX, X_CPU, OFF_NEXT_EVENT);
-	_exitAt(c, _jcc(e, CC_GE), index);
+	_exitAt(c, _jcc(e, CC_GE), index < 0 ? index : index | EXIT_DUE);
 }
 
 static void _segmentCheck(struct Compiler* c, unsigned index, uint32_t cycles) {
@@ -429,7 +472,7 @@ static void _segmentCheck(struct Compiler* c, unsigned index, uint32_t cycles) {
 	_load(e, X_RAX, X_CPU, OFF_CYCLES);
 	_ri(e, 0, X_RAX, cycles);
 	_cmpRegMem(e, X_RAX, X_CPU, OFF_NEXT_EVENT);
-	_exitAt(c, _jcc(e, CC_GE), index);
+	_exitAt(c, _jcc(e, CC_GE), index | EXIT_DUE);
 }
 
 static void _smcCheck(struct Compiler* c, int index) {
@@ -947,10 +990,18 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_exitAt(c, _jcc(e, CC_NE), EXIT_DIRECT);
 		_load(e, X_RAX, X_CPU, OFF_CYCLES);
 		_cmpRegMem(e, X_RAX, X_CPU, OFF_NEXT_EVENT);
-		_exitAt(c, _jcc(e, CC_GE), EXIT_DIRECT);
+		_exitAt(c, _jcc(e, CC_GE), EXIT_TO_C);
 		_patch(_jmp(e), c->body);
 	} else {
-		_exitJump(c, EXIT_DIRECT);
+		uint32_t target;
+		if (_branchTarget(c, i, &target)) {
+			_load(e, X_RAX, X_CPU, OFF_CYCLES);
+			_cmpRegMem(e, X_RAX, X_CPU, OFF_NEXT_EVENT);
+			_exitAt(c, _jcc(e, CC_GE), EXIT_TO_C);
+			_linkJump(c);
+		} else {
+			_exitJump(c, EXIT_DIRECT);
+		}
 	}
 
 	_patch(sequential, e->p);

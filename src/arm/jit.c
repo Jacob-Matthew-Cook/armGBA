@@ -28,9 +28,22 @@
 #define PATCH_LIMIT 4
 #define CODE_SIZE (32 * 1024 * 1024)
 #define MAX_INSN_BYTES 640
+// Exits jump to the dispatcher, back to C, or store the state before an instruction first.
+// Exits taken because an event is due go back to C.
 #define EXIT_DIRECT -1
 #define EXIT_TO_C -2
+#define EXIT_DUE 0x1000
 #define MAX_EXITS (MAX_BLOCK * 6)
+
+// An exit whose target is known when compiling; once the target is compiled the exit jumps
+// straight to it, and removing the target sends it back to its stub
+struct ARMJitLink {
+	uint8_t* site;
+	uint8_t* stub;
+	struct ARMJitBlock* target;
+	struct ARMJitLink* next;
+	struct ARMJitLink** prev;
+};
 
 struct ARMJitBlock {
 	void* entry;
@@ -42,6 +55,9 @@ struct ARMJitBlock {
 	unsigned coverWords;
 	// Patched words are read at runtime, so writes to them leave the block alone
 	uint32_t coverMask[3];
+	struct ARMJitLink* links;
+	unsigned nLinks;
+	struct ARMJitLink* incoming;
 };
 
 struct ARMJitPage {
@@ -67,6 +83,7 @@ enum {
 	JIT_CURRENT = offsetof(struct ARMJit, current),
 	JIT_SMC_HIT = offsetof(struct ARMJit, smcHit),
 	JIT_PAGES = offsetof(struct ARMJit, pages),
+	JIT_PENDING_LINK = offsetof(struct ARMJit, pendingLink),
 	JIT_FETCHED = offsetof(struct ARMJit, fetched),
 	BLOCK_ENTRY = offsetof(struct ARMJitBlock, entry),
 	BLOCK_PC = offsetof(struct ARMJitBlock, pc),
@@ -106,6 +123,8 @@ struct Compiler {
 		int index;
 	} exits[MAX_EXITS];
 	unsigned nExits;
+	struct ARMJitBlock* block;
+	unsigned nLinks;
 };
 
 static void _exitAt(struct Compiler* c, uint8_t* at, int index) {
@@ -541,6 +560,36 @@ static bool _loopsToStart(struct Compiler* c, unsigned i) {
 	return address + 2 * c->width + offset == c->pc;
 }
 
+// Target of a taken branch at ops[i], when it is known before running it
+static bool _branchTarget(struct Compiler* c, unsigned i, uint32_t* target) {
+	uint32_t op = c->ops[i];
+	uint32_t address = c->pc + c->width * i;
+	if (c->hot[i]) {
+		return false;
+	}
+	if (c->thumb) {
+		if ((op & 0xF000) == 0xD000 && (op & 0x0F00) < 0x0E00) {
+			*target = address + 4 + ((int8_t) op << 1);
+			return true;
+		}
+		if ((op & 0xF800) == 0xE000) {
+			*target = address + 4 + ((int32_t) (op << 21) >> 20);
+			return true;
+		}
+		if ((op & 0xF800) == 0xF800 && i > 0 && !c->hot[i - 1] && (c->ops[i - 1] & 0xF800) == 0xF000) {
+			// BL whose first half is the previous instruction, so LR is known
+			*target = address + 2 + ((int32_t) (c->ops[i - 1] << 21) >> 9) + ((op & 0x7FF) << 1);
+			return true;
+		}
+		return false;
+	}
+	if ((op & 0x0E000000) == 0x0A000000) {
+		*target = address + 8 + ((int32_t) (op << 8) >> 6);
+		return true;
+	}
+	return false;
+}
+
 // Condition checked before calling a handler: ARM conditions and Thumb conditional branches
 static unsigned _fallbackCond(struct Compiler* c, uint32_t op) {
 	if (!c->thumb) {
@@ -612,9 +661,52 @@ static bool _covers(const struct ARMJitBlock* block, unsigned word) {
 	return i < block->coverWords && (block->coverMask[i / 32] & (1u << (i & 31)));
 }
 
+static void _unlink(struct ARMJitBlock* block) {
+	struct ARMJitLink* link = block->incoming;
+	while (link) {
+		struct ARMJitLink* next = link->next;
+		_patchLink(link->site, link->stub);
+		link->target = NULL;
+		link = next;
+	}
+	block->incoming = NULL;
+	unsigned i;
+	for (i = 0; i < block->nLinks; ++i) {
+		link = &block->links[i];
+		if (link->target) {
+			*link->prev = link->next;
+			if (link->next) {
+				link->next->prev = link->prev;
+			}
+			link->target = NULL;
+		}
+	}
+}
+
+void ARMJitLink(struct ARMJit* jit, struct ARMJitLink* link, struct ARMJitBlock* block) {
+	UNUSED(jit);
+	if (link->target) {
+		return;
+	}
+	link->target = block;
+	link->next = block->incoming;
+	link->prev = &block->incoming;
+	if (block->incoming) {
+		block->incoming->prev = &link->next;
+	}
+	block->incoming = link;
+	_patchLink(link->site, block->entry);
+}
+
+static void _freeBlock(struct ARMJitBlock* block) {
+	free(block->links);
+	free(block);
+}
+
 static void _removeBlock(struct ARMJit* jit, struct ARMJitBlock* block) {
 	struct ARMJitPage* page = _page(jit, block->pc, false);
 	page->blocks[(block->pc & 0xFFF) >> 1] = NULL;
+	_unlink(block);
 	unsigned i;
 	for (i = 0; i < block->coverWords; ++i) {
 		if (block->coverMask[i / 32] & (1u << (i & 31))) {
@@ -625,7 +717,7 @@ static void _removeBlock(struct ARMJit* jit, struct ARMJitBlock* block) {
 		jit->smcHit = 1;
 		jit->current = NULL;
 	}
-	free(block);
+	_freeBlock(block);
 }
 
 static void _selfTestAlu(struct ARMJit* jit, unsigned iterations);
@@ -671,7 +763,7 @@ void ARMJitDropBlocks(struct ARMJit* jit) {
 					jit->smcHit = 1;
 					jit->current = NULL;
 				}
-				free(page->blocks[j]);
+				_freeBlock(page->blocks[j]);
 				page->blocks[j] = NULL;
 			}
 		}
@@ -792,8 +884,14 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		ARMJitDropBlocks(jit);
 	}
 
-	struct ARMJitBlock* block = malloc(sizeof(*block));
+	struct ARMJitBlock* block = calloc(1, sizeof(*block));
 	if (!block) {
+		return NULL;
+	}
+	// One linkable exit per instruction at most, plus falling off the end
+	block->links = calloc(count + 1, sizeof(*block->links));
+	if (!block->links) {
+		free(block);
 		return NULL;
 	}
 	static struct Compiler compiler;
@@ -811,6 +909,8 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	c->width = width;
 	c->romCode = (pc >> 24) >= GBA_REGION_ROM0;
 	c->nExits = 0;
+	c->block = block;
+	c->nLinks = 0;
 	if (thumb) {
 		c->aluCycles = 1 + cpu->memory.activeSeqCycles16;
 		c->memCycles = 1 + cpu->memory.activeNonseqCycles16;
@@ -819,6 +919,7 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		c->memCycles = 1 + cpu->memory.activeNonseqCycles32;
 	}
 
+	_blockEntry(c);
 	c->body = c->e.p;
 
 	struct AluOp alus[MAX_SPAN];
@@ -868,19 +969,24 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 			++i;
 		}
 	}
-	_exitJump(c, count);
+	_storeState(c, count);
+	_linkJump(c);
 
 	// Exit stubs set the interpreter state for the next instruction, then go to the
-	// dispatcher. Leaving before the first instruction goes back to C, which steps it.
-	uint8_t* stubs[MAX_SPAN];
+	// dispatcher, or back to C when an event is due (including before the first instruction)
+	uint8_t* stubs[2][MAX_SPAN];
 	memset(stubs, 0, sizeof(stubs));
 	unsigned x;
 	for (x = 0; x < c->nExits; ++x) {
 		int index = c->exits[x].index;
-		if (index >= 0 && !stubs[index]) {
-			stubs[index] = c->e.p;
-			_storeState(c, index);
-			_exitJump(c, index ? EXIT_DIRECT : EXIT_TO_C);
+		if (index >= 0) {
+			bool due = index & EXIT_DUE;
+			unsigned at = index & ~EXIT_DUE;
+			if (!stubs[due][at]) {
+				stubs[due][at] = c->e.p;
+				_storeState(c, at);
+				_exitJump(c, due ? EXIT_TO_C : EXIT_DIRECT);
+			}
 		}
 	}
 	uint8_t* direct = c->e.p;
@@ -889,8 +995,23 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	_jumpTo(c, jit->toC);
 	for (x = 0; x < c->nExits; ++x) {
 		int index = c->exits[x].index;
-		_patch(c->exits[x].at, index == EXIT_DIRECT ? direct : index == EXIT_TO_C ? toC : stubs[index]);
+		uint8_t* target;
+		if (index == EXIT_DIRECT) {
+			target = direct;
+		} else if (index == EXIT_TO_C) {
+			target = toC;
+		} else {
+			target = stubs[(index & EXIT_DUE) != 0][index & ~EXIT_DUE];
+		}
+		_patch(c->exits[x].at, target);
 	}
+	for (x = 0; x < c->nLinks; ++x) {
+		struct ARMJitLink* link = &block->links[x];
+		link->stub = c->e.p;
+		_linkStub(c, link);
+		_patch(link->site, link->stub);
+	}
+	block->nLinks = c->nLinks;
 
 	__builtin___clear_cache((char*) code, (char*) c->e.p);
 	jit->codeUsed += c->e.p - code;
@@ -1058,8 +1179,7 @@ bool ARMJitRun(struct ARMCore* cpu) {
 	if (cpu->prefetch[0] != block->op0 || cpu->prefetch[1] != block->op1) {
 		return false;
 	}
-	jit->current = block;
-	jit->smcHit = 0;
+	jit->pendingLink = NULL;
 	int32_t cycles = cpu->cycles;
 	jit->enter(cpu, block->entry);
 	jit->current = NULL;

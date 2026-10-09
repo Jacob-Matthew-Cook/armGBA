@@ -25,6 +25,7 @@ CXX_GUARD_START
 
 struct ARMCore;
 struct ARMJitBlock;
+struct ARMJitLink;
 struct ARMJitPage;
 
 struct ARMJit {
@@ -39,7 +40,10 @@ struct ARMJit {
 	size_t codeStart;
 	void (*enter)(struct ARMCore*, void*);
 	uint8_t* dispatch;
+	uint8_t* linkDispatch;
 	uint8_t* toC;
+	// Set by a link stub so the dispatcher patches that exit to jump straight to the block
+	struct ARMJitLink* pendingLink;
 	// Runtime copies of patched words, taken when the GBA's pipeline would fetch them
 	uint32_t fetched[ARM_JIT_MAX_SPAN];
 
@@ -57,6 +61,7 @@ void ARMJitFlush(struct ARMJit* jit);
 void ARMJitDropBlocks(struct ARMJit* jit);
 void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word);
 bool ARMJitRun(struct ARMCore* cpu);
+void ARMJitLink(struct ARMJit* jit, struct ARMJitLink* link, struct ARMJitBlock* block);
 
 static inline int ARMJitRamWord(uint32_t address) {
 	switch (address >> 24) {

@@ -197,14 +197,45 @@ static void _jumpTo(struct Compiler* c, const uint8_t* target) {
 	_patch(_b(&c->e), target);
 }
 
+static void _patchLink(uint8_t* site, const uint8_t* target) {
+	uint32_t insn = 0x14000000 | (((target - site) / 4) & 0x3FFFFFF);
+	memcpy(site, &insn, 4);
+	__builtin___clear_cache((char*) site, (char*) site + 4);
+}
+
+// Blocks are entered here from the dispatcher and from linked exits
+static void _blockEntry(struct Compiler* c) {
+	struct Emitter* e = &c->e;
+	_movImm64(e, 0, (uintptr_t) c->block);
+	_emit(e, 0xF9000000 | ((JIT_CURRENT / 8) << 10) | (R_JIT << 5) | 0); // str x0, [x20, #current]
+	_emit(e, 0x39000000 | (JIT_SMC_HIT << 10) | (R_JIT << 5) | 31); // strb wzr, [x20, #smcHit]
+}
+
+static void _linkJump(struct Compiler* c) {
+	struct ARMJitLink* link = &c->block->links[c->nLinks++];
+	link->site = _b(&c->e);
+}
+
+static void _linkStub(struct Compiler* c, struct ARMJitLink* link) {
+	_movImm64(&c->e, 2, (uintptr_t) link);
+	_jumpTo(c, c->jit->linkDispatch);
+}
+
 static void _emitTrampoline(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	c->jit->enter = (void (*)(struct ARMCore*, void*)) e->p;
 	_prologue(c);
 	_emit(e, 0xD61F0000 | (1 << 5)); // br x1
 
+	// A link stub passes its link in x2 so the exit gets patched to the block found
+	c->jit->linkDispatch = e->p;
+	_emit(e, 0xF9000000 | ((JIT_PENDING_LINK / 8) << 10) | (R_JIT << 5) | 2); // str x2, [x20, #pendingLink]
+	uint8_t* toLookup = _b(e);
+
 	// Next block for the PC and mode in the CPU state, if it is compiled and nothing is due
 	c->jit->dispatch = e->p;
+	_emit(e, 0xF9000000 | ((JIT_PENDING_LINK / 8) << 10) | (R_JIT << 5) | 31); // str xzr, [x20, #pendingLink]
+	_patch(toLookup, e->p);
 	uint8_t* toC[8];
 	_ldrW(e, 0, R_CPU, OFF_CYCLES);
 	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
@@ -235,8 +266,15 @@ static void _emitTrampoline(struct Compiler* c) {
 	_ldrW(e, 8, 5, BLOCK_OP1);
 	_cmpW(e, 7, 8);
 	toC[6] = _bCond(e, A64_NE);
+	_ldrX(e, 1, R_JIT, JIT_PENDING_LINK);
+	uint8_t* noLink = _emitSite(e, 0xB4000000 | 1); // cbz x1
 	_emit(e, 0xF9000000 | ((JIT_CURRENT / 8) << 10) | (R_JIT << 5) | 5); // str x5, [x20, #current]
-	_emit(e, 0x39000000 | (JIT_SMC_HIT << 10) | (R_JIT << 5) | 31); // strb wzr, [x20, #smcHit]
+	_movX(e, 0, R_JIT);
+	_movX(e, 2, 5);
+	_movImm64(e, 16, (uintptr_t) ARMJitLink);
+	_blr(e, 16);
+	_ldrX(e, 5, R_JIT, JIT_CURRENT);
+	_patch(noLink, e->p);
 	_ldrX(e, 16, 5, BLOCK_ENTRY);
 	_emit(e, 0xD61F0000 | (16 << 5)); // br x16
 
@@ -308,7 +346,7 @@ static void _eventCheck(struct Compiler* c, int index) {
 	_ldrW(e, 0, R_CPU, OFF_CYCLES);
 	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
 	_cmpW(e, 0, 1);
-	_exitAt(c, _bCond(e, A64_GE), index);
+	_exitAt(c, _bCond(e, A64_GE), index < 0 ? index : index | EXIT_DUE);
 }
 
 static void _segmentCheck(struct Compiler* c, unsigned index, uint32_t cycles) {
@@ -317,7 +355,7 @@ static void _segmentCheck(struct Compiler* c, unsigned index, uint32_t cycles) {
 	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
 	_addWImm(e, 0, 0, cycles);
 	_cmpW(e, 0, 1);
-	_exitAt(c, _bCond(e, A64_GE), index);
+	_exitAt(c, _bCond(e, A64_GE), index | EXIT_DUE);
 }
 
 static void _smcCheck(struct Compiler* c, int index) {
@@ -761,10 +799,19 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_ldrW(e, 0, R_CPU, OFF_CYCLES);
 		_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
 		_cmpW(e, 0, 1);
-		_exitAt(c, _bCond(e, A64_GE), EXIT_DIRECT);
+		_exitAt(c, _bCond(e, A64_GE), EXIT_TO_C);
 		_patch(_b(e), c->body);
 	} else {
-		_exitJump(c, EXIT_DIRECT);
+		uint32_t target;
+		if (_branchTarget(c, i, &target)) {
+			_ldrW(e, 0, R_CPU, OFF_CYCLES);
+			_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
+			_cmpW(e, 0, 1);
+			_exitAt(c, _bCond(e, A64_GE), EXIT_TO_C);
+			_linkJump(c);
+		} else {
+			_exitJump(c, EXIT_DIRECT);
+		}
 	}
 
 	_patch(sequential, e->p);
