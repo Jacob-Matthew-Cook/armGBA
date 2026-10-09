@@ -1004,7 +1004,8 @@ static void _memSlow(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_lea64(e, X_RDX, X_RSP, 0);
 		offset = size == 4 ? offsetof(struct ARMMemory, load32) : size == 2 ? offsetof(struct ARMMemory, load16) : offsetof(struct ARMMemory, load8);
 	} else {
-		_mov(e, X_RDX, X_R9);
+		// Narrow values go sign-extended, as clang expects of int16_t and int8_t arguments
+		_insn(e, 0, size == 4 ? XO_LOAD : size == 2 ? XO_MOVSX16 : XO_MOVSX8, X_RDX, _xr(X_R9));
 		_lea64(e, X_RCX, X_RSP, 0);
 		offset = size == 4 ? offsetof(struct ARMMemory, store32) : size == 2 ? offsetof(struct ARMMemory, store16) : offsetof(struct ARMMemory, store8);
 	}
