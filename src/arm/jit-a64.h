@@ -711,17 +711,214 @@ static void _memResult(struct Compiler* c, const struct MemOp* mem) {
 	_addCyclesReg(c, 3, c->memCycles);
 }
 
-static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
+static int32_t _ramWait(struct Compiler* c, const struct MemOp* mem, bool ewram) {
+	if (!ewram) {
+		return 0;
+	}
+	return (mem->size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16)[GBA_REGION_EWRAM];
+}
+
+// IWRAM or EWRAM once the region matched, leaving the wait in w3. A store into compiled code
+// goes to the returned site instead, with the word's index in w9
+static uint8_t* _memRam(struct Compiler* c, unsigned i, const struct MemOp* mem, bool ewram) {
+	struct Emitter* e = &c->e;
+	unsigned lsb = mem->size == 4 ? 2 : mem->size == 2 ? 1 : 0;
+	_andImm(e, 8, 4, lsb, (ewram ? 18 : 15) - lsb);
+	_memAccess(e, mem->load, mem->size, ewram ? R_EWRAM : R_IWRAM);
+	uint8_t* smc = NULL;
+	if (!mem->load) {
+		_lsrWImm(e, 9, 8, 2);
+		if (ewram) {
+			_movImm32(e, 10, ARM_JIT_IWRAM_WORDS);
+			_addW(e, 9, 9, 10);
+		}
+		_emit(e, 0x38604800 | (9 << 16) | (R_COVER << 5) | 10); // ldrb w10, [x24, w9, uxtw]
+		smc = _cbnzW(e, 10);
+	}
+	_dataWait(c, i, _ramWait(c, mem, ewram) + (mem->load ? 2 : 1));
+	return smc;
+}
+
+static void _memInvalidate(struct Compiler* c, unsigned i, const struct MemOp* mem, bool ewram) {
+	struct Emitter* e = &c->e;
+	_movImm64(e, 0, (uintptr_t) c->jit);
+	_movW(e, 1, 9);
+	_movImm64(e, 16, (uintptr_t) ARMJitInvalidateWord);
+	_blrC(e, 16);
+	_dataWait(c, i, _ramWait(c, mem, ewram) + 1);
+}
+
+// Timer counters, without the generic load and I/O dispatch
+static void _memTimer(struct Compiler* c, unsigned i, uint8_t** miss, uint8_t** slow) {
+	struct Emitter* e = &c->e;
+	_emit(e, 0x7100001F | (GBA_REGION_IO << 10) | (7 << 5)); // cmp w7, #4
+	*miss = _bCond(e, A64_NE);
+	_movImm32(e, 9, 0x00FFFFF3);
+	_emit(e, 0x0A000000 | (9 << 16) | (4 << 5) | 9); // and w9, w4, w9
+	_emit(e, 0x7100001F | (GBA_REG_TM0CNT_LO << 10) | (9 << 5)); // cmp w9, #TM0CNT_LO
+	*slow = _bCond(e, A64_NE);
+	_movImm64(e, 0, (uintptr_t) c->gba);
+	_movW(e, 1, 4);
+	_movImm64(e, 16, (uintptr_t) _readTimer);
+	_blrC(e, 16);
+	_dataWait(c, i, 2);
+}
+
+// VRAM: stores tell the renderer about changed halfwords; byte stores stay with the handlers
+static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss, uint8_t** slow) {
 	struct Emitter* e = &c->e;
 	bool load = mem->load;
 	unsigned size = mem->size;
+	_emit(e, 0x7100001F | (GBA_REGION_VRAM << 10) | (7 << 5)); // cmp w7, #6
+	*miss = _bCond(e, A64_NE);
+	_andImm(e, 8, 4, 0, 17);
+	_movImm32(e, 9, GBA_SIZE_VRAM);
+	_cmpW(e, 8, 9);
+	*slow = _bCond(e, 2); // b.hs
+	_andImm(e, 8, 4, size == 4 ? 2 : size == 2 ? 1 : 0, size == 4 ? 15 : size == 2 ? 16 : 17);
+	_movImm64(e, 10, (uintptr_t) c->gba->video.vram);
+	_strW(e, 4, 31, CYCLE_SLOT + 4);
+	if (load) {
+		_memAccess(e, true, size, 10);
+		_movW(e, R_WB, 0); // writeback is already stored for loads
+	} else {
+		if (size == 4) {
+			_emit(e, 0xB8604800 | (8 << 16) | (10 << 5) | 9); // ldr w9, [x10, w8, uxtw]
+			_cmpW(e, 9, 6);
+		} else {
+			_emit(e, 0x78604800 | (8 << 16) | (10 << 5) | 9); // ldrh w9, [x10, w8, uxtw]
+			_andImm(e, 11, 6, 0, 16);
+			_cmpW(e, 9, 11);
+		}
+		uint8_t* unchanged = _bCond(e, A64_EQ);
+		_memAccess(e, false, size, 10);
+		// Once per block, unless a tile cache wants every address
+		_movImm64(e, 9, (uintptr_t) &c->gba->video.renderer);
+		_ldrX(e, 9, 9, 0);
+		_ldrX(e, 9, 9, offsetof(struct GBAVideoRenderer, cache));
+		uint8_t* cached = _emitSite(e, 0xB5000000 | 9); // cbnz x9
+		_ldrW(e, 9, 31, CYCLE_SLOT + 4);
+		_ubfx(e, 9, 9, 12, 5);
+		_ldrW(e, 10, R_JIT, JIT_VRAM_NOTIFIED);
+		_lsrvW(e, 11, 10, 9);
+		uint8_t* notified = _tbnz(e, 11, 0);
+		_movImm32(e, 11, 1);
+		_emit(e, 0x1AC02000 | (9 << 16) | (11 << 5) | 11); // lslv w11, w11, w9
+		_orrWShift(e, 10, 10, 11, 0);
+		_strW(e, 10, R_JIT, JIT_VRAM_NOTIFIED);
+		_patch(cached, e->p);
+		unsigned call;
+		for (call = 0; call < (size == 4 ? 2 : 1); ++call) {
+			_movImm64(e, 9, (uintptr_t) &c->gba->video.renderer);
+			_ldrX(e, 0, 9, 0);
+			_ldrW(e, 1, 31, CYCLE_SLOT + 4);
+			_andImm(e, 1, 1, size == 4 ? 2 : 1, size == 4 ? 15 : 16);
+			if (size == 4 && call == 0) {
+				_addWImm(e, 1, 1, 2);
+			}
+			_ldrX(e, 16, 0, offsetof(struct GBAVideoRenderer, writeVRAM));
+			_blrC(e, 16);
+		}
+		_patch(notified, e->p);
+		_ldrW(e, 4, 31, CYCLE_SLOT + 4);
+		_patch(unchanged, e->p);
+	}
+	_movImm64(e, 9, (uintptr_t) &c->gba->video.stallMask);
+	_ldrW(e, 9, 9, 0);
+	uint8_t* noStall = _cbzW(e, 9);
+	_movImm64(e, 0, (uintptr_t) c->gba);
+	_movW(e, 1, 4);
+	_movImm32(e, 2, size);
+	_movImm64(e, 16, (uintptr_t) GBAMemoryVRAMWait);
+	_blrC(e, 16);
+	_movW(e, 3, 0);
+	_ldrW(e, 4, 31, CYCLE_SLOT + 4);
+	uint8_t* waited = _b(e);
+	_patch(noStall, e->p);
+	_movImm32(e, 3, size == 4 ? 1 : 0);
+	_patch(waited, e->p);
+	_addWImm(e, 3, 3, load ? 2 : 1);
+	if (load) {
+		_movW(e, 0, R_WB);
+	}
+}
 
-	uint8_t* done[5] = { NULL, NULL, NULL, NULL, NULL };
-	uint8_t* toSlow[3] = { NULL, NULL, NULL };
-	uint8_t* checked[2] = { NULL, NULL };
-	uint8_t* toCart = NULL;
-	uint8_t* toEvent = NULL;
-	unsigned d;
+// Cartridge reads: no prefetch buffer stall for these addresses; region 0x0D is EEPROM
+static void _memCart(struct Compiler* c, const struct MemOp* mem, uint8_t** miss, uint8_t** slow) {
+	struct Emitter* e = &c->e;
+	unsigned size = mem->size;
+	_emit(e, 0x51000000 | (GBA_REGION_ROM0 << 10) | (7 << 5) | 9); // sub w9, w7, #ROM0
+	_emit(e, 0x7100001F | ((GBA_REGION_ROM2 - GBA_REGION_ROM0) << 10) | (9 << 5)); // cmp w9, #4
+	*miss = _bCond(e, 8); // b.hi
+	_andImm(e, 8, 4, size == 4 ? 2 : size == 2 ? 1 : 0, size == 4 ? 23 : size == 2 ? 24 : 25);
+	_movImm32(e, 9, c->gba->memory.romSize);
+	_cmpW(e, 8, 9);
+	*slow = _bCond(e, 2); // b.hs
+	_movImm64(e, 10, (uintptr_t) c->gba->memory.rom);
+	_memAccess(e, true, size, 10);
+	char* cartWaits = size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16;
+	_movImm64(e, 10, (uintptr_t) cartWaits);
+	_emit(e, 0x38604800 | (7 << 16) | (10 << 5) | 3); // ldrb w3, [x10, w7, uxtw]
+	_addWImm(e, 3, 3, 2);
+}
+
+// Everything else goes through the memory handlers
+static void _memSlow(struct Compiler* c, unsigned i, const struct MemOp* mem) {
+	struct Emitter* e = &c->e;
+	unsigned size = mem->size;
+	_storeState(c, i + 1);
+	_strW(e, 31, 31, CYCLE_SLOT); // str wzr, [sp, #CYCLE_SLOT]
+	_movX(e, 0, R_CPU);
+	_movW(e, 1, 4);
+	unsigned offset;
+	if (mem->load) {
+		_addXImm(e, 2, 31, CYCLE_SLOT);
+		offset = size == 4 ? offsetof(struct ARMMemory, load32) : size == 2 ? offsetof(struct ARMMemory, load16) : offsetof(struct ARMMemory, load8);
+	} else {
+		_movW(e, 2, 6);
+		_addXImm(e, 3, 31, CYCLE_SLOT);
+		offset = size == 4 ? offsetof(struct ARMMemory, store32) : size == 2 ? offsetof(struct ARMMemory, store16) : offsetof(struct ARMMemory, store8);
+	}
+	_ldrX(e, 16, R_CPU, OFF_MEMORY + offset);
+	_blrC(e, 16);
+	_ldrW(e, 3, 31, CYCLE_SLOT);
+}
+
+enum {
+	PATH_NONE,
+	PATH_IWRAM,
+	PATH_EWRAM,
+	PATH_VRAM,
+	PATH_CART,
+};
+
+// The region an access checks inline is where its base register pointed when the block was
+// compiled; the full dispatch goes after the block
+static int _memPath(struct Compiler* c, const struct MemOp* mem) {
+	switch (_sourceRegion(c, mem->base)) {
+	case -1:
+	case GBA_REGION_IWRAM:
+		return PATH_IWRAM;
+	case GBA_REGION_EWRAM:
+		return PATH_EWRAM;
+	case GBA_REGION_VRAM:
+		return !c->romCode && (mem->load || mem->size > 1) ? PATH_VRAM : PATH_NONE;
+	case GBA_REGION_ROM0:
+	case GBA_REGION_ROM0_EX:
+	case GBA_REGION_ROM1:
+	case GBA_REGION_ROM1_EX:
+	case GBA_REGION_ROM2:
+		return mem->load ? PATH_CART : PATH_NONE;
+	default:
+		return PATH_NONE;
+	}
+}
+
+static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
+	struct Emitter* e = &c->e;
+	bool load = mem->load;
+	unsigned k = c->nCold;
+	bool cold = false;
 
 	uint8_t* fail = NULL;
 	if (mem->cond != 0xE) {
@@ -773,207 +970,35 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_strW(e, 4, 31, CYCLE_SLOT + 4); // the address decides how LDRSH extends
 	}
 
+	cold = true;
+	c->cold[k].index = i;
+	c->cold[k].mem = *mem;
+	c->cold[k].miss[0] = NULL;
+	c->cold[k].miss[1] = NULL;
+	c->cold[k].smc = NULL;
 	_lsrWImm(e, 7, 4, 24);
-	_emit(e, 0x7100001F | (3 << 10) | (7 << 5)); // cmp w7, #3
-	uint8_t* toEwram = _bCond(e, A64_NE);
-	_andImm(e, 8, 4, size == 4 ? 2 : size == 2 ? 1 : 0, size == 4 ? 13 : size == 2 ? 14 : 15);
-	_memAccess(e, load, size, R_IWRAM);
-	if (!load) {
-		// Writes into compiled code
-		_lsrWImm(e, 9, 8, 2);
-		_emit(e, 0x38604800 | (9 << 16) | (R_COVER << 5) | 10); // ldrb w10, [x24, w9, uxtw]
-		uint8_t* noCode = _cbzW(e, 10);
-		_movImm64(e, 0, (uintptr_t) c->jit);
-		_movW(e, 1, 9);
-		_movImm64(e, 16, (uintptr_t) ARMJitInvalidateWord);
-		_blrC(e, 16);
-		_dataWait(c, i, 1);
-		checked[0] = _b(e);
-		_patch(noCode, e->p);
-	}
-	_dataWait(c, i, load ? 2 : 1);
-	done[0] = _b(e);
-
-	_patch(toEwram, e->p);
-	int32_t ewramWait = (size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16)[GBA_REGION_EWRAM];
-	_emit(e, 0x7100001F | (2 << 10) | (7 << 5)); // cmp w7, #2
-	toCart = _bCond(e, A64_NE);
-	_andImm(e, 8, 4, size == 4 ? 2 : size == 2 ? 1 : 0, size == 4 ? 16 : size == 2 ? 17 : 18);
-	_memAccess(e, load, size, R_EWRAM);
-	if (!load) {
-		_lsrWImm(e, 9, 8, 2);
-		_movImm32(e, 10, ARM_JIT_IWRAM_WORDS);
-		_addW(e, 9, 9, 10);
-		_emit(e, 0x38604800 | (9 << 16) | (R_COVER << 5) | 10); // ldrb w10, [x24, w9, uxtw]
-		uint8_t* noCode = _cbzW(e, 10);
-		_movImm64(e, 0, (uintptr_t) c->jit);
-		_movW(e, 1, 9);
-		_movImm64(e, 16, (uintptr_t) ARMJitInvalidateWord);
-		_blrC(e, 16);
-		_dataWait(c, i, ewramWait + 1);
-		checked[1] = _b(e);
-		_patch(noCode, e->p);
-	}
-	_dataWait(c, i, ewramWait + (load ? 2 : 1));
-	done[1] = _b(e);
-
-	// Timer counters, without the generic load and I/O dispatch
-	_patch(toCart, e->p);
-	toCart = NULL;
-	if (load && size == 2) {
-		_emit(e, 0x7100001F | (GBA_REGION_IO << 10) | (7 << 5)); // cmp w7, #4
-		uint8_t* notIo = _bCond(e, A64_NE);
-		_movImm32(e, 9, 0x00FFFFF3);
-		_emit(e, 0x0A000000 | (9 << 16) | (4 << 5) | 9); // and w9, w4, w9
-		_emit(e, 0x7100001F | (GBA_REG_TM0CNT_LO << 10) | (9 << 5)); // cmp w9, #TM0CNT_LO
-		uint8_t* notTimer = _bCond(e, A64_NE);
-		_movImm64(e, 0, (uintptr_t) c->gba);
-		_movW(e, 1, 4);
-		_movImm64(e, 16, (uintptr_t) _readTimer);
-		_blrC(e, 16);
-		_dataWait(c, i, 2);
-		done[4] = _b(e);
-		_patch(notTimer, e->p);
-		_patch(notIo, e->p);
+	switch (_memPath(c, mem)) {
+	case PATH_IWRAM:
+	case PATH_EWRAM:
+		c->cold[k].smcEwram = _memPath(c, mem) == PATH_EWRAM;
+		_emit(e, 0x7100001F | ((c->cold[k].smcEwram ? GBA_REGION_EWRAM : GBA_REGION_IWRAM) << 10) | (7 << 5)); // cmp w7, #region
+		c->cold[k].miss[0] = _bCond(e, A64_NE);
+		c->cold[k].smc = _memRam(c, i, mem, c->cold[k].smcEwram);
+		break;
+	case PATH_VRAM:
+		_memVram(c, mem, &c->cold[k].miss[0], &c->cold[k].miss[1]);
+		break;
+	case PATH_CART:
+		_memCart(c, mem, &c->cold[k].miss[0], &c->cold[k].miss[1]);
+		break;
+	default:
+		c->cold[k].miss[0] = _b(e);
+		break;
 	}
 
-	// VRAM: stores tell the renderer about changed halfwords; byte stores stay with the handlers
-	if (!c->romCode && (load || size > 1)) {
-		_emit(e, 0x7100001F | (GBA_REGION_VRAM << 10) | (7 << 5)); // cmp w7, #6
-		toCart = _bCond(e, A64_NE);
-		_andImm(e, 8, 4, 0, 17);
-		_movImm32(e, 9, GBA_SIZE_VRAM);
-		_cmpW(e, 8, 9);
-		toSlow[2] = _bCond(e, 2); // b.hs
-		_andImm(e, 8, 4, size == 4 ? 2 : size == 2 ? 1 : 0, size == 4 ? 15 : size == 2 ? 16 : 17);
-		_movImm64(e, 10, (uintptr_t) c->gba->video.vram);
-		_strW(e, 4, 31, CYCLE_SLOT + 4);
-		if (load) {
-			_memAccess(e, true, size, 10);
-			_movW(e, R_WB, 0); // writeback is already stored for loads
-		} else {
-			if (size == 4) {
-				_emit(e, 0xB8604800 | (8 << 16) | (10 << 5) | 9); // ldr w9, [x10, w8, uxtw]
-				_cmpW(e, 9, 6);
-			} else {
-				_emit(e, 0x78604800 | (8 << 16) | (10 << 5) | 9); // ldrh w9, [x10, w8, uxtw]
-				_andImm(e, 11, 6, 0, 16);
-				_cmpW(e, 9, 11);
-			}
-			uint8_t* unchanged = _bCond(e, A64_EQ);
-			_memAccess(e, false, size, 10);
-			// Once per block, unless a tile cache wants every address
-			_movImm64(e, 9, (uintptr_t) &c->gba->video.renderer);
-			_ldrX(e, 9, 9, 0);
-			_ldrX(e, 9, 9, offsetof(struct GBAVideoRenderer, cache));
-			uint8_t* cached = _emitSite(e, 0xB5000000 | 9); // cbnz x9
-			_ldrW(e, 9, 31, CYCLE_SLOT + 4);
-			_ubfx(e, 9, 9, 12, 5);
-			_ldrW(e, 10, R_JIT, JIT_VRAM_NOTIFIED);
-			_lsrvW(e, 11, 10, 9);
-			uint8_t* notified = _tbnz(e, 11, 0);
-			_movImm32(e, 11, 1);
-			_emit(e, 0x1AC02000 | (9 << 16) | (11 << 5) | 11); // lslv w11, w11, w9
-			_orrWShift(e, 10, 10, 11, 0);
-			_strW(e, 10, R_JIT, JIT_VRAM_NOTIFIED);
-			_patch(cached, e->p);
-			unsigned call;
-			for (call = 0; call < (size == 4 ? 2 : 1); ++call) {
-				_movImm64(e, 9, (uintptr_t) &c->gba->video.renderer);
-				_ldrX(e, 0, 9, 0);
-				_ldrW(e, 1, 31, CYCLE_SLOT + 4);
-				_andImm(e, 1, 1, size == 4 ? 2 : 1, size == 4 ? 15 : 16);
-				if (size == 4 && call == 0) {
-					_addWImm(e, 1, 1, 2);
-				}
-				_ldrX(e, 16, 0, offsetof(struct GBAVideoRenderer, writeVRAM));
-				_blrC(e, 16);
-			}
-			_patch(notified, e->p);
-			_ldrW(e, 4, 31, CYCLE_SLOT + 4);
-			_patch(unchanged, e->p);
-		}
-		_movImm64(e, 9, (uintptr_t) &c->gba->video.stallMask);
-		_ldrW(e, 9, 9, 0);
-		uint8_t* noStall = _cbzW(e, 9);
-		_movImm64(e, 0, (uintptr_t) c->gba);
-		_movW(e, 1, 4);
-		_movImm32(e, 2, size);
-		_movImm64(e, 16, (uintptr_t) GBAMemoryVRAMWait);
-		_blrC(e, 16);
-		_movW(e, 3, 0);
-		_ldrW(e, 4, 31, CYCLE_SLOT + 4);
-		uint8_t* waited = _b(e);
-		_patch(noStall, e->p);
-		_movImm32(e, 3, size == 4 ? 1 : 0);
-		_patch(waited, e->p);
-		_addWImm(e, 3, 3, load ? 2 : 1);
-		if (load) {
-			_movW(e, 0, R_WB);
-		}
-		done[3] = _b(e);
-	}
-	if (toCart) {
-		_patch(toCart, e->p);
-	}
-	if (load) {
-		// Cartridge reads: no prefetch buffer stall for these addresses; region 0x0D is EEPROM
-		_emit(e, 0x51000000 | (GBA_REGION_ROM0 << 10) | (7 << 5) | 9); // sub w9, w7, #ROM0
-		_emit(e, 0x7100001F | ((GBA_REGION_ROM2 - GBA_REGION_ROM0) << 10) | (9 << 5)); // cmp w9, #4
-		toSlow[0] = _bCond(e, 8); // b.hi
-		_andImm(e, 8, 4, size == 4 ? 2 : size == 2 ? 1 : 0, size == 4 ? 23 : size == 2 ? 24 : 25);
-		_movImm32(e, 9, c->gba->memory.romSize);
-		_cmpW(e, 8, 9);
-		toSlow[1] = _bCond(e, 2); // b.hs
-		_movImm64(e, 10, (uintptr_t) c->gba->memory.rom);
-		_memAccess(e, true, size, 10);
-		char* cartWaits = size == 4 ? c->gba->memory.waitstatesNonseq32 : c->gba->memory.waitstatesNonseq16;
-		_movImm64(e, 10, (uintptr_t) cartWaits);
-		_emit(e, 0x38604800 | (7 << 16) | (10 << 5) | 3); // ldrb w3, [x10, w7, uxtw]
-		_addWImm(e, 3, 3, 2);
-		done[2] = _b(e);
-	}
-
-	unsigned t;
-	for (t = 0; t < 3; ++t) {
-		if (toSlow[t]) {
-			_patch(toSlow[t], e->p);
-		}
-	}
-	_storeState(c, i + 1);
-	_strW(e, 31, 31, CYCLE_SLOT); // str wzr, [sp, #CYCLE_SLOT]
-	_movX(e, 0, R_CPU);
-	_movW(e, 1, 4);
-	unsigned offset;
-	if (load) {
-		_addXImm(e, 2, 31, CYCLE_SLOT);
-		offset = size == 4 ? offsetof(struct ARMMemory, load32) : size == 2 ? offsetof(struct ARMMemory, load16) : offsetof(struct ARMMemory, load8);
-	} else {
-		_movW(e, 2, 6);
-		_addXImm(e, 3, 31, CYCLE_SLOT);
-		offset = size == 4 ? offsetof(struct ARMMemory, store32) : size == 2 ? offsetof(struct ARMMemory, store16) : offsetof(struct ARMMemory, store8);
-	}
-	_ldrX(e, 16, R_CPU, OFF_MEMORY + offset);
-	_blrC(e, 16);
-	_ldrW(e, 3, 31, CYCLE_SLOT);
-
-	// Only stores that called out can have hit compiled code
-	if (!load) {
-		unsigned k;
-		for (k = 0; k < 2; ++k) {
-			if (checked[k]) {
-				_patch(checked[k], e->p);
-			}
-		}
-		_memResult(c, mem);
-		_smcCheck(c, i + 1);
-		toEvent = _b(e);
-	}
 tail:
-	for (d = 0; d < 5; ++d) {
-		if (done[d]) {
-			_patch(done[d], e->p);
-		}
+	if (cold) {
+		c->cold[k].done = e->p;
 	}
 	_memResult(c, mem);
 	if (fail) {
@@ -982,10 +1007,86 @@ tail:
 		_addCycles(c, c->aluCycles);
 		_patch(after, e->p);
 	}
-	if (toEvent) {
-		_patch(toEvent, e->p);
+	if (cold) {
+		c->cold[k].toEvent = e->p;
+		++c->nCold;
 	}
 	_eventCheck(c, i + 1);
+}
+
+// The rest of a memory access, after the block: every region in turn, then the memory handlers.
+// Stores that called out can have hit compiled code, so they check for that before going back
+static void _emitMemCold(struct Compiler* c, unsigned k) {
+	struct Emitter* e = &c->e;
+	unsigned i = c->cold[k].index;
+	const struct MemOp* mem = &c->cold[k].mem;
+	bool load = mem->load;
+	uint8_t* toChecked[3];
+	unsigned nChecked = 0;
+	uint8_t* toSlow[4];
+	unsigned nSlow = 0;
+	uint8_t* miss;
+	uint8_t* smc;
+	unsigned x;
+
+	if (c->cold[k].smc) {
+		_patch(c->cold[k].smc, e->p);
+		_memInvalidate(c, i, mem, c->cold[k].smcEwram);
+		toChecked[nChecked++] = _b(e);
+	}
+	for (x = 0; x < 2; ++x) {
+		if (c->cold[k].miss[x]) {
+			_patch(c->cold[k].miss[x], e->p);
+		}
+	}
+	for (x = 0; x < 2; ++x) {
+		_emit(e, 0x7100001F | ((x ? GBA_REGION_EWRAM : GBA_REGION_IWRAM) << 10) | (7 << 5)); // cmp w7, #region
+		miss = _bCond(e, A64_NE);
+		smc = _memRam(c, i, mem, x);
+		_jumpTo(c, c->cold[k].done);
+		if (smc) {
+			_patch(smc, e->p);
+			_memInvalidate(c, i, mem, x);
+			toChecked[nChecked++] = _b(e);
+		}
+		_patch(miss, e->p);
+	}
+	if (load && mem->size == 2) {
+		_memTimer(c, i, &miss, &toSlow[nSlow++]);
+		_jumpTo(c, c->cold[k].done);
+		_patch(miss, e->p);
+	}
+	if (!c->romCode && (load || mem->size > 1)) {
+		_memVram(c, mem, &miss, &toSlow[nSlow++]);
+		_jumpTo(c, c->cold[k].done);
+		_patch(miss, e->p);
+	}
+	if (load) {
+		_memCart(c, mem, &toSlow[nSlow], &toSlow[nSlow + 1]);
+		nSlow += 2;
+		_jumpTo(c, c->cold[k].done);
+	}
+	for (x = 0; x < nSlow; ++x) {
+		_patch(toSlow[x], e->p);
+	}
+	_memSlow(c, i, mem);
+	if (load) {
+		_jumpTo(c, c->cold[k].done);
+		return;
+	}
+	for (x = 0; x < nChecked; ++x) {
+		_patch(toChecked[x], e->p);
+	}
+	_memResult(c, mem);
+	_smcCheck(c, i + 1);
+	_jumpTo(c, c->cold[k].toEvent);
+}
+
+static void _emitColdPaths(struct Compiler* c) {
+	unsigned k;
+	for (k = 0; k < c->nCold; ++k) {
+		_emitMemCold(c, k);
+	}
 }
 
 static const uint32_t _conditionLut32[16] = {

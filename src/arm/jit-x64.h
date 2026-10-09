@@ -1650,3 +1650,8 @@ static void _resumeAfterEvents(struct Compiler* c, unsigned index, const uint8_t
 	_patch(site, c->jit->resume);
 	_jumpTo(c, target);
 }
+
+// Every path of a memory access stays inline in this backend
+static void _emitColdPaths(struct Compiler* c) {
+	UNUSED(c);
+}

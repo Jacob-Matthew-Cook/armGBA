@@ -28,7 +28,7 @@
 #define HOT_THRESHOLD 2
 #define PATCH_LIMIT 4
 #define CODE_SIZE (32 * 1024 * 1024)
-#define MAX_INSN_BYTES 640
+#define MAX_INSN_BYTES 2048
 // Exits jump to the dispatcher, back to C, or store the state before an instruction first.
 // Exits taken because an event is due go back to C.
 #define EXIT_DIRECT -1
@@ -120,6 +120,34 @@ struct Emitter {
 	uint8_t* p;
 };
 
+// ARM and Thumb instructions decode to the same operations. A source is a guest register
+// or a value known when compiling (the PC).
+struct Source {
+	bool constant;
+	uint32_t value;
+	unsigned reg;
+};
+
+struct MemOp {
+	unsigned cond;
+	bool load;
+	unsigned size;
+	bool signExtend;
+	unsigned rd;
+	struct Source base;
+	bool immediateOffset;
+	uint32_t offset;
+	struct Source m;
+	unsigned shiftType;
+	unsigned shiftAmount;
+	bool up;
+	bool pre;
+	bool writeback;
+	// A patched instruction: the 12-bit offset and the up bit come from the fetched opcode
+	bool runtimeOffset;
+	unsigned fetchedIndex;
+};
+
 struct Compiler {
 	struct Emitter e;
 	struct ARMJit* jit;
@@ -159,6 +187,20 @@ struct Compiler {
 	uint8_t* loops[MAX_BLOCK];
 	unsigned nLoops;
 	uint8_t* const* fast;
+	// The region each guest register pointed into when the block was compiled, kept through
+	// pointer arithmetic, or -1
+	int regRegion[16];
+	// Memory access paths that go after the block
+	struct {
+		unsigned index;
+		struct MemOp mem;
+		uint8_t* miss[2];
+		uint8_t* smc;
+		bool smcEwram;
+		uint8_t* done;
+		uint8_t* toEvent;
+	} cold[2 * MAX_SPAN];
+	unsigned nCold;
 };
 
 static void _exitAt(struct Compiler* c, uint8_t* at, int index) {
@@ -172,13 +214,6 @@ static bool _isLogical(unsigned opcode) {
 	       opcode == ALU_ORR || opcode == ALU_MOV || opcode == ALU_BIC || opcode == ALU_MVN;
 }
 
-// ARM and Thumb instructions decode to the same operations. A source is a guest register
-// or a value known when compiling (the PC).
-struct Source {
-	bool constant;
-	uint32_t value;
-	unsigned reg;
-};
 
 struct AluOp {
 	unsigned cond;
@@ -199,26 +234,6 @@ struct AluOp {
 	// Whether any flag this sets is read before another instruction overwrites it
 	bool flagsLive;
 	uint32_t cycles;
-};
-
-struct MemOp {
-	unsigned cond;
-	bool load;
-	unsigned size;
-	bool signExtend;
-	unsigned rd;
-	struct Source base;
-	bool immediateOffset;
-	uint32_t offset;
-	struct Source m;
-	unsigned shiftType;
-	unsigned shiftAmount;
-	bool up;
-	bool pre;
-	bool writeback;
-	// A patched instruction: the 12-bit offset and the up bit come from the fetched opcode
-	bool runtimeOffset;
-	unsigned fetchedIndex;
 };
 
 static struct Source _reg(unsigned reg) {
@@ -836,6 +851,53 @@ static void* _hostAddress(struct Compiler* c, uint32_t address) {
 
 // Each backend provides _prologue, _epilogue, _storeState, _addCycles, _segmentCheck,
 // _eventCheck, _exitJump, _patch, _emitAlu, _emitMem and _emitFallback
+// Where each register points, for the region a memory access checks first: pointer arithmetic
+// keeps a register's region, other results lose it
+static int _valueRegion(uint32_t value) {
+	return value >> 24 < 16 ? (int) (value >> 24) : -1;
+}
+
+static int _sourceRegion(struct Compiler* c, struct Source source) {
+	return source.constant ? _valueRegion(source.value) : c->regRegion[source.reg];
+}
+
+static void _setRegion(struct Compiler* c, unsigned reg, int region) {
+	if (reg < ARM_PC) {
+		c->regRegion[reg] = region;
+	}
+}
+
+static void _forgetRegions(struct Compiler* c) {
+	unsigned reg;
+	for (reg = 0; reg < 16; ++reg) {
+		c->regRegion[reg] = -1;
+	}
+}
+
+static void _trackAlu(struct Compiler* c, const struct AluOp* alu) {
+	if (alu->opcode >= ALU_TST && alu->opcode <= ALU_CMN) {
+		return;
+	}
+	int region = -1;
+	if (alu->opcode == ALU_ADD || alu->opcode == ALU_SUB) {
+		region = _sourceRegion(c, alu->n);
+	} else if (alu->opcode == ALU_MOV && alu->immediate) {
+		region = _valueRegion(alu->imm);
+	} else if (alu->opcode == ALU_MOV && !alu->shiftType && !alu->shiftAmount) {
+		region = _sourceRegion(c, alu->m);
+	}
+	_setRegion(c, alu->rd, region);
+}
+
+static void _trackMulti(struct Compiler* c, const struct MultiOp* m) {
+	unsigned reg;
+	for (reg = 0; reg < 16 && m->load; ++reg) {
+		if (m->list & (1 << reg)) {
+			_setRegion(c, reg, -1);
+		}
+	}
+}
+
 #if defined(__aarch64__)
 #include "jit-a64.h"
 #else
@@ -877,10 +939,14 @@ static void _emitPatched(struct Compiler* c, unsigned i) {
 			}
 			other = _fetchedMismatch(c, i, PATCHED_SHAPE, forms[k] & PATCHED_SHAPE);
 			_emitMem(c, i, &mem);
+			if (mem.load) {
+				_setRegion(c, mem.rd, -1);
+			}
 		} else if (!c->thumb && _decodeArmAlu(forms[k], c->pc + c->width * i, c->aluCycles, &alu)) {
 			other = _fetchedMismatch(c, i, 0xFFFFFFFF, forms[k]);
 			alu.flagsLive = true;
 			_emitAlu(c, &alu, alu.keepsShifterCarry);
+			_setRegion(c, alu.rd, -1);
 			_addCycles(c, alu.cycles);
 			_eventCheck(c, i + 1);
 		} else {
@@ -1216,6 +1282,11 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	c->nLinks = 0;
 	c->nCareful = 0;
 	c->nLoops = 0;
+	c->nCold = 0;
+	unsigned reg;
+	for (reg = 0; reg < 16; ++reg) {
+		c->regRegion[reg] = _valueRegion(cpu->gprs[reg]);
+	}
 	c->seq16 = cpu->memory.activeSeqCycles16;
 	c->nonseq16 = cpu->memory.activeNonseqCycles16;
 	c->prefetch = c->gba->memory.prefetch;
@@ -1288,6 +1359,7 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 			for (j = 0; j < run; ++j) {
 				_fetchAhead(c, i + j);
 				_emitAlu(c, &alus[i + j], alus[i + j].keepsShifterCarry && j >= lastAlways);
+				_trackAlu(c, &alus[i + j]);
 			}
 			_addCycles(c, cycles + alus[i + run - 1].cycles);
 			i += run;
@@ -1295,28 +1367,38 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		} else if (_decodeMem(c, i, &mem)) {
 			_fetchAhead(c, i);
 			_emitMem(c, i, &mem);
+			if (mem.load) {
+				_setRegion(c, mem.rd, -1);
+			}
 			++i;
 		} else if (_decodeMul(c, i, &mul)) {
 			_fetchAhead(c, i);
 			_emitMul(c, i, &mul);
+			_setRegion(c, mul.rd, -1);
 			++i;
 		} else if (_decodeMulti(c, i, &multi)) {
 			_fetchAhead(c, i);
 			_emitMulti(c, i, &multi);
+			_trackMulti(c, &multi);
 			++i;
 		} else if (_decodeBranch(c, i, &branch)) {
 			_fetchAhead(c, i);
 			_emitBranch(c, i, &branch);
+			if (branch.link || branch.thumbLink) {
+				_setRegion(c, ARM_LR, -1);
+			}
 			++i;
 		} else {
 			_fetchAhead(c, i);
 			_emitFallback(c, i);
+			_forgetRegions(c);
 			++i;
 		}
 	}
 	fast[count] = c->e.p;
 	_storeState(c, count);
 	_linkJump(c);
+	_emitColdPaths(c);
 
 	// Careful copies of ALU runs: each instruction through its handler, checking for events
 	for (i = 0; i < count; ++i) {
