@@ -279,6 +279,20 @@ static unsigned _prefetchLoads(int32_t seq, int32_t wait) {
 	return loads;
 }
 
+// GBAMemoryStall by the loads left from the last prefetch (0 to 7), as byte tables: lastPrefetchedPc in halfwords past the PC, and -min(wait, stall)
+static void _stallTables(int32_t seq, int32_t wait, uint64_t* advances, uint64_t* stalls) {
+	unsigned first = _prefetchLoads(seq, wait);
+	*advances = 0;
+	*stalls = 0;
+	unsigned previous;
+	for (previous = 0; previous < 8; ++previous) {
+		unsigned loads = first < 8 - previous ? first : 8 - previous;
+		int32_t stall = seq * loads + 1;
+		*advances |= (uint64_t) (loads + previous - 1) << (8 * previous);
+		*stalls |= (uint64_t) (uint8_t) -(stall < wait ? stall : wait) << (8 * previous);
+	}
+}
+
 // PC-relative loads: cartridge words are constants but for the GPIO registers, RAM words load at runtime
 enum {
 	LITERAL_NONE,

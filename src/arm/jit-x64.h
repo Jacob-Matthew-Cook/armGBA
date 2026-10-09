@@ -786,17 +786,9 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	int32_t s = c->seq16;
 	int32_t n = c->nonseq16;
 	uint32_t pc = c->pc + c->width * (i + 2);
-	// Both results depend only on the loads left from the last prefetch (0 to 7), so they come from byte tables
-	unsigned first = _prefetchLoads(s, wait);
-	uint64_t advances = 0;
-	uint64_t stalls = 0;
-	unsigned previous;
-	for (previous = 0; previous < 8; ++previous) {
-		unsigned loads = first < 8 - previous ? first : 8 - previous;
-		int32_t stall = s * loads + 1;
-		advances |= (uint64_t) (loads + previous - 1) << (8 * previous);
-		stalls |= (uint64_t) (uint8_t) -(stall < wait ? stall : wait) << (8 * previous);
-	}
+	uint64_t advances;
+	uint64_t stalls;
+	_stallTables(s, wait, &advances, &stalls);
 	_movImm64(e, X_R11, (uintptr_t) &c->gba->memory);
 	_load(e, X_RSI, X_R11, offsetof(struct GBAMemory, lastPrefetchedPc));
 	_ri(e, G1_SUB, X_RSI, pc);

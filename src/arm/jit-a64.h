@@ -32,8 +32,9 @@ enum {
 	A64_LE = 13,
 };
 
-// Data processing on w registers: rd = rn op rm, with rm optionally shifted left
+// Data processing on w registers, or x registers with A64_X: rd = rn op rm, with rm optionally shifted left
 enum {
+	A64_X = 0x80000000,
 	A64_AND = 0x0A000000, A64_BIC = 0x0A200000, A64_ORR = 0x2A000000, A64_ORN = 0x2A200000, A64_EOR = 0x4A000000, A64_ANDS = 0x6A000000,
 	A64_ADD = 0x0B000000, A64_ADDS = 0x2B000000, A64_SUB = 0x4B000000, A64_SUBS = 0x6B000000,
 	A64_ADC = 0x1A000000, A64_ADCS = 0x3A000000, A64_SBC = 0x5A000000, A64_SBCS = 0x7A000000,
@@ -851,37 +852,30 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	int32_t s = c->seq16;
 	int32_t n = c->nonseq16;
 	uint32_t pc = c->pc + c->width * (i + 2);
-	// Fewer loads when they overlap the last prefetch
+	uint64_t advances;
+	uint64_t stalls;
+	_stallTables(s, wait, &advances, &stalls);
 	_ldrW(e, 10, R_GBA, offsetof(struct GBA, memory.lastPrefetchedPc));
+	// The tables are built while the load is in flight
+	_movImm64(e, 13, advances);
+	_movImm64(e, 14, stalls);
 	_movImm32(e, 11, pc);
 	_dp(e, A64_SUB, 10, 10, 11, 0);
-	_movImm32(e, 12, 0);
+	// w12 = 8 * previous loads, or 0 when the last prefetch is not 0 to 14 bytes ahead
+	_ubfx(e, 12, 10, 1, 3);
+	_lslWImm(e, 12, 12, 3);
 	_cmpWImm(e, 10, 16);
-	uint8_t* far = _bCond(e, A64_HS);
-	_lsrWImm(e, 12, 10, 1);
-	_patch(far, e->p);
-	_movImm32(e, 10, 8);
-	_dp(e, A64_SUB, 10, 10, 12, 0);
-	_movImm32(e, 11, _prefetchLoads(s, wait));
-	_cmpW(e, 10, 11);
-	_csel(e, 11, 10, 11, A64_LO);
+	_csel(e, 12, 12, A64_ZR, A64_LO);
 	// lastPrefetchedPc = pc + 2 * (loads + previous - 1)
-	_addW(e, 10, 11, 12);
-	_addW(e, 10, 10, 10);
-	_movImm32(e, 13, pc - 2);
-	_addW(e, 10, 10, 13);
-	_strW(e, 10, R_GBA, offsetof(struct GBA, memory.lastPrefetchedPc));
-	// stall = s * loads + 1; wait = max(wait, stall) - stall - (n - s)
-	_movImm32(e, 13, s);
-	_madd(e, 10, 11, 13, A64_ZR);
-	_addWImm(e, 10, 10, 1);
-	_movImm32(e, 3, wait - (n - s));
-	_dp(e, A64_SUB, 3, 3, 10, 0);
-	_movImm32(e, 13, wait);
-	_cmpW(e, 10, 13);
-	uint8_t* fits = _bCond(e, A64_LE);
-	_movImm32(e, 3, s - n);
-	_patch(fits, e->p);
+	_dp(e, A64_LSRV | A64_X, 13, 13, 12, 0);
+	_andImm(e, 13, 13, 0, 8);
+	_dp(e, A64_ADD, 13, 11, 13, 1);
+	_strW(e, 13, R_GBA, offsetof(struct GBA, memory.lastPrefetchedPc));
+	// max(wait, stall) - stall - (n - s), as wait - (n - s) - min(wait, stall)
+	_dp(e, A64_LSRV | A64_X, 14, 14, 12, 0);
+	_sxtb(e, 14, 14);
+	int32_t adjust = wait - (n - s);
+	_dpImm(e, adjust >= 0 ? A64_ADD_IMM : A64_SUB_IMM, 3, 14, adjust >= 0 ? adjust : -adjust);
 }
 
 // w3 = the wait of a data access to IWRAM or EWRAM
