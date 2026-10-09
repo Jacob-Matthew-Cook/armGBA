@@ -475,6 +475,14 @@ void GBADMADeserialize(struct GBA* gba, const struct GBASerializedState* state) 
 		}
 		gba->memory.dma[i].destOffset = DMA_OFFSET[GBADMARegisterGetDestControl(gba->memory.dma[i].reg)] * width;
 	}
+	// Sound FIFO DMAs get back the fixed destination and word width the sound hardware gave them
+	GBASerializedMiscFlags miscFlags;
+	LOAD_32(miscFlags, 0, &state->miscFlags);
+	for (i = 1; i < 3; ++i) {
+		if (GBASerializedMiscFlagsGetFifoDma(miscFlags) & (1 << (i - 1))) {
+			GBAAudioScheduleFifoDma(&gba->audio, i, &gba->memory.dma[i]);
+		}
+	}
 	LOAD_32(gba->memory.dma[0].latch, 0, &state->dmaTransferRegister);
 	if (version >= GBASavestateMagic + 0xA) {
 		LOAD_32(gba->memory.dma[1].latch, 0, &state->dmaLatch[0]);

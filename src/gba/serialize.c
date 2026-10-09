@@ -81,6 +81,12 @@ void GBASerialize(struct GBA* gba, struct GBASerializedState* state) {
 	miscFlags = GBASerializedMiscFlagsSetKeyIRQKeys(miscFlags, gba->keysLast);
 	// MULS and MLAS take their carry from the last shift
 	miscFlags = GBASerializedMiscFlagsSetShifterCarry(miscFlags, gba->cpu->shifterCarryOut & 1);
+	// The sound hardware sets up a FIFO DMA on its first request, leaving the game's value in the register
+	for (i = 1; i < 3; ++i) {
+		if (gba->memory.dma[i].reg != gba->memory.io[GBA_REG(DMA0CNT_HI) + i * 6]) {
+			miscFlags = GBASerializedMiscFlagsSetFifoDma(miscFlags, GBASerializedMiscFlagsGetFifoDma(miscFlags) | (1 << (i - 1)));
+		}
+	}
 	STORE_32(miscFlags, 0, &state->miscFlags);
 	STORE_32(gba->biosStall, 0, &state->biosStall);
 
