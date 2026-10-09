@@ -1715,9 +1715,11 @@ void GBAAdjustWaitstates(struct GBA* gba, uint16_t parameters) {
 	struct GBAMemory* memory = &gba->memory;
 	struct ARMCore* cpu = gba->cpu;
 #ifdef M_ARM_JIT
-	if (cpu->jit) {
-		ARMJitDropBlocks(cpu->jit);
-	}
+	char oldWaitstates[4][16];
+	memcpy(oldWaitstates[0], memory->waitstatesSeq16, 16);
+	memcpy(oldWaitstates[1], memory->waitstatesSeq32, 16);
+	memcpy(oldWaitstates[2], memory->waitstatesNonseq16, 16);
+	memcpy(oldWaitstates[3], memory->waitstatesNonseq32, 16);
 #endif
 	int sram = parameters & 0x0003;
 	int ws0 = (parameters & 0x000C) >> 2;
@@ -1783,19 +1785,27 @@ void GBAAdjustWaitstates(struct GBA* gba, uint16_t parameters) {
 	if (gba->performingDMA) {
 		GBADMARecalculateCycles(gba);
 	}
+#ifdef M_ARM_JIT
+	// Cartridge blocks bake in their fetch timing; games often rewrite the same WAITCNT
+	if (cpu->jit && (memcmp(oldWaitstates[0], memory->waitstatesSeq16, 16) || memcmp(oldWaitstates[1], memory->waitstatesSeq32, 16) ||
+	                 memcmp(oldWaitstates[2], memory->waitstatesNonseq16, 16) || memcmp(oldWaitstates[3], memory->waitstatesNonseq32, 16))) {
+		ARMJitDropRegion(cpu->jit, GBA_BASE_ROM0, GBA_BASE_SRAM);
+	}
+#endif
 }
 
 void GBAAdjustEWRAMWaitstates(struct GBA* gba, uint16_t parameters) {
 	struct GBAMemory* memory = &gba->memory;
 	struct ARMCore* cpu = gba->cpu;
-#ifdef M_ARM_JIT
-	if (cpu->jit) {
-		ARMJitDropBlocks(cpu->jit);
-	}
-#endif
 
 	int wait = 15 - ((parameters >> 8) & 0xF);
 	if (wait) {
+#ifdef M_ARM_JIT
+		// EWRAM blocks bake in their fetch timing
+		if (cpu->jit && memory->waitstatesSeq16[GBA_REGION_EWRAM] != wait) {
+			ARMJitDropRegion(cpu->jit, GBA_BASE_EWRAM, GBA_BASE_IWRAM);
+		}
+#endif
 		memory->waitstatesNonseq16[GBA_REGION_EWRAM] = wait;
 		memory->waitstatesSeq16[GBA_REGION_EWRAM] = wait;
 		memory->waitstatesNonseq32[GBA_REGION_EWRAM] = 2 * wait + 1;

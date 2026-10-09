@@ -203,12 +203,20 @@ static void _patchLink(uint8_t* site, const uint8_t* target) {
 	__builtin___clear_cache((char*) site, (char*) site + 4);
 }
 
-// Blocks are entered here from the dispatcher and from linked exits
-static void _blockEntry(struct Compiler* c) {
+// Entering at ops[index]: set the current block and take patched words from the pipeline
+static void _entryStub(struct Compiler* c, unsigned index, const uint8_t* target) {
 	struct Emitter* e = &c->e;
 	_movImm64(e, 0, (uintptr_t) c->block);
 	_emit(e, 0xF9000000 | ((JIT_CURRENT / 8) << 10) | (R_JIT << 5) | 0); // str x0, [x20, #current]
 	_emit(e, 0x39000000 | (JIT_SMC_HIT << 10) | (R_JIT << 5) | 31); // strb wzr, [x20, #smcHit]
+	unsigned i;
+	for (i = 0; i < 2; ++i) {
+		if (c->hot[index + i]) {
+			_ldrW(e, 0, R_CPU, i ? OFF_PREFETCH1 : OFF_PREFETCH0);
+			_strW(e, 0, R_JIT, JIT_FETCHED + 4 * (index + i));
+		}
+	}
+	_jumpTo(c, target);
 }
 
 static void _linkJump(struct Compiler* c) {
@@ -252,19 +260,23 @@ static void _emitTrampoline(struct Compiler* c) {
 	_ubfx(e, 6, 3, 1, 11);
 	_emit(e, 0xF8607800 | (6 << 16) | (5 << 5) | 5); // ldr x5, [x5, x6, lsl #3]
 	toC[2] = _emitSite(e, 0xB4000000 | 5); // cbz x5
-	_ldrW(e, 7, 5, BLOCK_PC);
+	_ldrW(e, 7, 5, ENTRY_PC);
 	_cmpW(e, 7, 3);
 	toC[3] = _bCond(e, A64_NE);
-	_ldrbW(e, 7, 5, BLOCK_THUMB);
+	_ldrbW(e, 7, 5, ENTRY_THUMB);
 	_cmpW(e, 7, 2);
 	toC[4] = _bCond(e, A64_NE);
 	_ldrW(e, 7, R_CPU, OFF_PREFETCH0);
-	_ldrW(e, 8, 5, BLOCK_OP0);
-	_cmpW(e, 7, 8);
+	_ldrW(e, 8, 5, ENTRY_OP0);
+	_emit(e, 0x4A000000 | (8 << 16) | (7 << 5) | 7); // eor w7, w7, w8
+	_ldrW(e, 8, 5, ENTRY_OP_MASK0);
+	_emit(e, 0x6A00001F | (8 << 16) | (7 << 5)); // tst w7, w8
 	toC[5] = _bCond(e, A64_NE);
 	_ldrW(e, 7, R_CPU, OFF_PREFETCH1);
-	_ldrW(e, 8, 5, BLOCK_OP1);
-	_cmpW(e, 7, 8);
+	_ldrW(e, 8, 5, ENTRY_OP1);
+	_emit(e, 0x4A000000 | (8 << 16) | (7 << 5) | 7); // eor w7, w7, w8
+	_ldrW(e, 8, 5, ENTRY_OP_MASK1);
+	_emit(e, 0x6A00001F | (8 << 16) | (7 << 5)); // tst w7, w8
 	toC[6] = _bCond(e, A64_NE);
 	_ldrX(e, 1, R_JIT, JIT_PENDING_LINK);
 	uint8_t* noLink = _emitSite(e, 0xB4000000 | 1); // cbz x1
@@ -275,7 +287,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	_blr(e, 16);
 	_ldrX(e, 5, R_JIT, JIT_CURRENT);
 	_patch(noLink, e->p);
-	_ldrX(e, 16, 5, BLOCK_ENTRY);
+	_ldrX(e, 16, 5, ENTRY_CODE);
 	_emit(e, 0xD61F0000 | (16 << 5)); // br x16
 
 	c->jit->toC = e->p;
@@ -349,13 +361,14 @@ static void _eventCheck(struct Compiler* c, int index) {
 	_exitAt(c, _bCond(e, A64_GE), index < 0 ? index : index | EXIT_DUE);
 }
 
-static void _segmentCheck(struct Compiler* c, unsigned index, uint32_t cycles) {
+// Jumps to the returned site when an event comes due before the last instruction of a run
+static uint8_t* _segmentCheck(struct Compiler* c, uint32_t cycles) {
 	struct Emitter* e = &c->e;
 	_ldrW(e, 0, R_CPU, OFF_CYCLES);
 	_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
 	_addWImm(e, 0, 0, cycles);
 	_cmpW(e, 0, 1);
-	_exitAt(c, _bCond(e, A64_GE), index | EXIT_DUE);
+	return _bCond(e, A64_GE);
 }
 
 static void _smcCheck(struct Compiler* c, int index) {
@@ -589,14 +602,21 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	if (!load) {
 		_loadSource(c, 6, _reg(mem->rd));
 	}
-	if (mem->immediateOffset) {
+	if (mem->runtimeOffset) {
+		_ldrW(e, 1, R_JIT, JIT_FETCHED + 4 * mem->fetchedIndex);
+		_ubfx(e, 9, 1, 23, 1);
+		_andImm(e, 1, 1, 0, 12);
+		uint8_t* up = _cbnzW(e, 9);
+		_emit(e, 0x4B0003E0 | (1 << 16) | 1); // neg w1, w1
+		_patch(up, e->p);
+	} else if (mem->immediateOffset) {
 		_movImm32(e, 1, mem->offset);
 	} else {
 		_loadSource(c, 3, mem->m);
 		_shiftImm(c, mem->shiftType, mem->shiftAmount, false);
 	}
 	_loadSource(c, 4, mem->base);
-	_emit(e, (mem->up ? 0x0B000000 : 0x4B000000) | (1 << 16) | (4 << 5) | 5); // w5 = base +/- offset
+	_emit(e, (mem->up || mem->runtimeOffset ? 0x0B000000 : 0x4B000000) | (1 << 16) | (4 << 5) | 5); // w5 = base +/- offset
 	if (mem->writeback) {
 		_movW(e, R_WB, 5);
 	}
@@ -718,8 +738,44 @@ static const uint32_t _conditionLut32[16] = {
 	0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
 };
 
+// A patched load or store whose patches only change the offset runs inline; anything else
+// goes to the handler
+#define PATCHED_SHAPE 0xFF7FF000
+
+static bool _patchedMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
+	uint32_t address = c->pc + c->width * i;
+	if (c->thumb || !_decodeArmMem(c->ops[i], address, mem) || !mem->immediateOffset || mem->size == 2) {
+		return false;
+	}
+	mem->runtimeOffset = true;
+	mem->fetchedIndex = i;
+	return true;
+}
+
+static void _emitDynamicHandler(struct Compiler* c, unsigned i);
+
 // A patched instruction: run its handler with the opcode the pipeline fetched
 static void _emitDynamic(struct Compiler* c, unsigned i) {
+	struct Emitter* e = &c->e;
+	struct MemOp mem;
+	if (!_patchedMem(c, i, &mem)) {
+		_emitDynamicHandler(c, i);
+		return;
+	}
+	_ldrW(e, 0, R_JIT, JIT_FETCHED + 4 * i);
+	_movImm32(e, 1, PATCHED_SHAPE);
+	_emit(e, 0x0A000000 | (1 << 16) | (0 << 5) | 0); // and w0, w0, w1
+	_movImm32(e, 1, c->ops[i] & PATCHED_SHAPE);
+	_cmpW(e, 0, 1);
+	uint8_t* other = _bCond(e, A64_NE);
+	_emitMem(c, i, &mem);
+	uint8_t* done = _b(e);
+	_patch(other, e->p);
+	_emitDynamicHandler(c, i);
+	_patch(done, e->p);
+}
+
+static void _emitDynamicHandler(struct Compiler* c, unsigned i) {
 	struct Emitter* e = &c->e;
 	uint32_t address = c->pc + c->width * i;
 
@@ -800,7 +856,7 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_ldrW(e, 1, R_CPU, OFF_NEXT_EVENT);
 		_cmpW(e, 0, 1);
 		_exitAt(c, _bCond(e, A64_GE), EXIT_TO_C);
-		_patch(_b(e), c->body);
+		c->loops[c->nLoops++] = _b(e);
 	} else {
 		uint32_t target;
 		if (_branchTarget(c, i, &target)) {

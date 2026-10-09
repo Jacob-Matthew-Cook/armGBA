@@ -311,8 +311,8 @@ static void _patchLink(uint8_t* site, const uint8_t* target) {
 	_patch(site, target);
 }
 
-// Blocks are entered here from the dispatcher and from linked exits
-static void _blockEntry(struct Compiler* c) {
+// Entering at ops[index]: set the current block and take patched words from the pipeline
+static void _entryStub(struct Compiler* c, unsigned index, const uint8_t* target) {
 	struct Emitter* e = &c->e;
 	_movImm64(e, X_RAX, (uintptr_t) c->block);
 	_rex(e, true, X_RAX, 0, X_JIT); // mov [r12 + current], rax
@@ -322,6 +322,14 @@ static void _blockEntry(struct Compiler* c) {
 	_byte(e, 0xC6);
 	_modrmMem(e, 0, X_JIT, JIT_SMC_HIT);
 	_byte(e, 0);
+	unsigned i;
+	for (i = 0; i < 2; ++i) {
+		if (c->hot[index + i]) {
+			_load(e, X_RAX, X_CPU, i ? OFF_PREFETCH1 : OFF_PREFETCH0);
+			_store(e, X_RAX, X_JIT, JIT_FETCHED + 4 * (index + i));
+		}
+	}
+	_jumpTo(c, target);
 }
 
 static void _linkJump(struct Compiler* c) {
@@ -375,19 +383,29 @@ static void _emitTrampoline(struct Compiler* c) {
 	_loadScaled64(e, X_RDX, X_RDX, X_RSI, 0);
 	_test64(e, X_RDX);
 	uint8_t* noBlock = _jcc(e, CC_E);
-	_cmpRegMem(e, X_RCX, X_RDX, BLOCK_PC);
+	_cmpRegMem(e, X_RCX, X_RDX, ENTRY_PC);
 	uint8_t* otherPc = _jcc(e, CC_NE);
 	_rex(e, false, X_RSI, 0, X_RDX); // movzx esi, byte [rdx + thumb]
 	_byte(e, 0x0F);
 	_byte(e, 0xB6);
-	_modrmMem(e, X_RSI, X_RDX, BLOCK_THUMB);
+	_modrmMem(e, X_RSI, X_RDX, ENTRY_THUMB);
 	_rr(e, OP_CMP, X_RSI, X_RAX);
 	uint8_t* otherMode = _jcc(e, CC_NE);
 	_load(e, X_RSI, X_CPU, OFF_PREFETCH0);
-	_cmpRegMem(e, X_RSI, X_RDX, BLOCK_OP0);
+	_rex(e, false, X_RSI, 0, X_RDX); // xor esi, [rdx + op0]
+	_byte(e, 0x33);
+	_modrmMem(e, X_RSI, X_RDX, ENTRY_OP0);
+	_rex(e, false, X_RSI, 0, X_RDX); // and esi, [rdx + opMask0]
+	_byte(e, 0x23);
+	_modrmMem(e, X_RSI, X_RDX, ENTRY_OP_MASK0);
 	uint8_t* otherOp0 = _jcc(e, CC_NE);
 	_load(e, X_RSI, X_CPU, OFF_PREFETCH1);
-	_cmpRegMem(e, X_RSI, X_RDX, BLOCK_OP1);
+	_rex(e, false, X_RSI, 0, X_RDX); // xor esi, [rdx + op1]
+	_byte(e, 0x33);
+	_modrmMem(e, X_RSI, X_RDX, ENTRY_OP1);
+	_rex(e, false, X_RSI, 0, X_RDX); // and esi, [rdx + opMask1]
+	_byte(e, 0x23);
+	_modrmMem(e, X_RSI, X_RDX, ENTRY_OP_MASK1);
 	uint8_t* otherOp1 = _jcc(e, CC_NE);
 	_load64(e, X_RSI, X_JIT, JIT_PENDING_LINK);
 	_test64(e, X_RSI);
@@ -402,7 +420,7 @@ static void _emitTrampoline(struct Compiler* c) {
 	_patch(noLink, e->p);
 	_rex(e, false, 0, 0, X_RDX); // jmp [rdx + entry]
 	_byte(e, 0xFF);
-	_modrmMem(e, 4, X_RDX, BLOCK_ENTRY);
+	_modrmMem(e, 4, X_RDX, ENTRY_CODE);
 
 	c->jit->toC = e->p;
 	_patch(due, e->p);
@@ -467,12 +485,13 @@ static void _eventCheck(struct Compiler* c, int index) {
 	_exitAt(c, _jcc(e, CC_GE), index < 0 ? index : index | EXIT_DUE);
 }
 
-static void _segmentCheck(struct Compiler* c, unsigned index, uint32_t cycles) {
+// Jumps to the returned site when an event comes due before the last instruction of a run
+static uint8_t* _segmentCheck(struct Compiler* c, uint32_t cycles) {
 	struct Emitter* e = &c->e;
 	_load(e, X_RAX, X_CPU, OFF_CYCLES);
 	_ri(e, 0, X_RAX, cycles);
 	_cmpRegMem(e, X_RAX, X_CPU, OFF_NEXT_EVENT);
-	_exitAt(c, _jcc(e, CC_GE), index | EXIT_DUE);
+	return _jcc(e, CC_GE);
 }
 
 static void _smcCheck(struct Compiler* c, int index) {
@@ -757,7 +776,19 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	if (!load) {
 		_loadSource(c, X_R9, _reg(mem->rd));
 	}
-	if (mem->immediateOffset) {
+	if (mem->runtimeOffset) {
+		_load(e, X_RDX, X_JIT, JIT_FETCHED + 4 * mem->fetchedIndex);
+		_rr(e, OP_MOV, X_RCX, X_RDX);
+		_ri(e, 4, X_RDX, 0xFFF);
+		_byte(e, 0x0F); // bt ecx, 23
+		_byte(e, 0xBA);
+		_modrmReg(e, 4, X_RCX);
+		_byte(e, 23);
+		uint8_t* up = _jcc(e, CC_B);
+		_byte(e, 0xF7); // neg edx
+		_modrmReg(e, 3, X_RDX);
+		_patch(up, e->p);
+	} else if (mem->immediateOffset) {
 		_movImm(e, X_RDX, mem->offset);
 	} else {
 		_loadSource(c, X_R11, mem->m);
@@ -765,7 +796,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	}
 	_loadSource(c, X_RSI, mem->base);
 	_rr(e, OP_MOV, X_R10, X_RSI);
-	_rr(e, mem->up ? OP_ADD : OP_SUB, X_R10, X_RDX);
+	_rr(e, mem->up || mem->runtimeOffset ? OP_ADD : OP_SUB, X_R10, X_RDX);
 	if (mem->writeback) {
 		_rr(e, OP_MOV, X_WB, X_R10);
 	}
@@ -905,8 +936,42 @@ static const uint32_t _conditionLut32[16] = {
 	0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
 };
 
+// A patched load or store whose patches only change the offset runs inline; anything else
+// goes to the handler
+#define PATCHED_SHAPE 0xFF7FF000
+
+static bool _patchedMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
+	uint32_t address = c->pc + c->width * i;
+	if (c->thumb || !_decodeArmMem(c->ops[i], address, mem) || !mem->immediateOffset || mem->size == 2) {
+		return false;
+	}
+	mem->runtimeOffset = true;
+	mem->fetchedIndex = i;
+	return true;
+}
+
+static void _emitDynamicHandler(struct Compiler* c, unsigned i);
+
 // A patched instruction: run its handler with the opcode the pipeline fetched
 static void _emitDynamic(struct Compiler* c, unsigned i) {
+	struct Emitter* e = &c->e;
+	struct MemOp mem;
+	if (!_patchedMem(c, i, &mem)) {
+		_emitDynamicHandler(c, i);
+		return;
+	}
+	_load(e, X_RAX, X_JIT, JIT_FETCHED + 4 * i);
+	_ri(e, 4, X_RAX, PATCHED_SHAPE);
+	_ri(e, 7, X_RAX, c->ops[i] & PATCHED_SHAPE);
+	uint8_t* other = _jcc(e, CC_NE);
+	_emitMem(c, i, &mem);
+	uint8_t* done = _jmp(e);
+	_patch(other, e->p);
+	_emitDynamicHandler(c, i);
+	_patch(done, e->p);
+}
+
+static void _emitDynamicHandler(struct Compiler* c, unsigned i) {
 	struct Emitter* e = &c->e;
 	uint32_t address = c->pc + c->width * i;
 
@@ -991,7 +1056,7 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_load(e, X_RAX, X_CPU, OFF_CYCLES);
 		_cmpRegMem(e, X_RAX, X_CPU, OFF_NEXT_EVENT);
 		_exitAt(c, _jcc(e, CC_GE), EXIT_TO_C);
-		_patch(_jmp(e), c->body);
+		c->loops[c->nLoops++] = _jmp(e);
 	} else {
 		uint32_t target;
 		if (_branchTarget(c, i, &target)) {

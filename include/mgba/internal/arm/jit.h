@@ -25,6 +25,7 @@ CXX_GUARD_START
 
 struct ARMCore;
 struct ARMJitBlock;
+struct ARMJitEntry;
 struct ARMJitLink;
 struct ARMJitPage;
 
@@ -47,7 +48,8 @@ struct ARMJit {
 	// Runtime copies of patched words, taken when the GBA's pipeline would fetch them
 	uint32_t fetched[ARM_JIT_MAX_SPAN];
 
-	// Blocks by address, in 4 KiB pages of the bus
+	struct ARMJitBlock* blockList;
+	// Entry points by address, in 4 KiB pages of the bus
 	struct ARMJitPage* pages[ARM_JIT_PAGES];
 	// Number of compiled blocks whose code (or baked-in prefetch) covers each RAM word
 	uint8_t cover[ARM_JIT_RAM_WORDS];
@@ -59,9 +61,10 @@ struct ARMJit* ARMJitCreate(void);
 void ARMJitDestroy(struct ARMJit* jit);
 void ARMJitFlush(struct ARMJit* jit);
 void ARMJitDropBlocks(struct ARMJit* jit);
+void ARMJitDropRegion(struct ARMJit* jit, uint32_t start, uint32_t end);
 void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word);
 bool ARMJitRun(struct ARMCore* cpu);
-void ARMJitLink(struct ARMJit* jit, struct ARMJitLink* link, struct ARMJitBlock* block);
+void ARMJitLink(struct ARMJit* jit, struct ARMJitLink* link, struct ARMJitEntry* entry);
 
 static inline int ARMJitRamWord(uint32_t address) {
 	switch (address >> 24) {

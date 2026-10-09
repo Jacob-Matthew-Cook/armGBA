@@ -33,7 +33,7 @@
 #define EXIT_DIRECT -1
 #define EXIT_TO_C -2
 #define EXIT_DUE 0x1000
-#define MAX_EXITS (MAX_BLOCK * 6)
+#define MAX_EXITS (MAX_BLOCK * 16)
 
 // An exit whose target is known when compiling; once the target is compiled the exit jumps
 // straight to it, and removing the target sends it back to its stub
@@ -45,23 +45,37 @@ struct ARMJitLink {
 	struct ARMJitLink** prev;
 };
 
-struct ARMJitBlock {
-	void* entry;
+// A place a block can be entered: its start, and every instruction boundary it can be left
+// at, so resuming after an event jumps back in instead of compiling another block
+struct ARMJitEntry {
+	void* code;
 	uint32_t pc;
 	uint32_t op0;
 	uint32_t op1;
+	// Patched words are taken from the pipeline instead of checked against it
+	uint32_t opMask0;
+	uint32_t opMask1;
 	bool thumb;
+	struct ARMJitBlock* block;
+};
+
+struct ARMJitBlock {
+	uint32_t pc;
 	int coverStart;
 	unsigned coverWords;
 	// Patched words are read at runtime, so writes to them leave the block alone
 	uint32_t coverMask[3];
+	struct ARMJitEntry* entries;
+	unsigned nEntries;
 	struct ARMJitLink* links;
 	unsigned nLinks;
 	struct ARMJitLink* incoming;
+	struct ARMJitBlock* next;
+	struct ARMJitBlock** prev;
 };
 
 struct ARMJitPage {
-	struct ARMJitBlock* blocks[0x800];
+	struct ARMJitEntry* entries[0x800];
 	uint8_t hits[0x800];
 };
 
@@ -85,11 +99,13 @@ enum {
 	JIT_PAGES = offsetof(struct ARMJit, pages),
 	JIT_PENDING_LINK = offsetof(struct ARMJit, pendingLink),
 	JIT_FETCHED = offsetof(struct ARMJit, fetched),
-	BLOCK_ENTRY = offsetof(struct ARMJitBlock, entry),
-	BLOCK_PC = offsetof(struct ARMJitBlock, pc),
-	BLOCK_OP0 = offsetof(struct ARMJitBlock, op0),
-	BLOCK_OP1 = offsetof(struct ARMJitBlock, op1),
-	BLOCK_THUMB = offsetof(struct ARMJitBlock, thumb),
+	ENTRY_CODE = offsetof(struct ARMJitEntry, code),
+	ENTRY_PC = offsetof(struct ARMJitEntry, pc),
+	ENTRY_OP0 = offsetof(struct ARMJitEntry, op0),
+	ENTRY_OP1 = offsetof(struct ARMJitEntry, op1),
+	ENTRY_OP_MASK0 = offsetof(struct ARMJitEntry, opMask0),
+	ENTRY_OP_MASK1 = offsetof(struct ARMJitEntry, opMask1),
+	ENTRY_THUMB = offsetof(struct ARMJitEntry, thumb),
 };
 
 enum {
@@ -125,6 +141,14 @@ struct Compiler {
 	unsigned nExits;
 	struct ARMJitBlock* block;
 	unsigned nLinks;
+	// Event checks inside ALU runs go to the careful copy; loops go back through entry 0
+	struct {
+		uint8_t* site;
+		unsigned index;
+	} careful[MAX_BLOCK];
+	unsigned nCareful;
+	uint8_t* loops[MAX_BLOCK];
+	unsigned nLoops;
 };
 
 static void _exitAt(struct Compiler* c, uint8_t* at, int index) {
@@ -182,6 +206,9 @@ struct MemOp {
 	bool up;
 	bool pre;
 	bool writeback;
+	// A patched instruction: the 12-bit offset and the up bit come from the fetched opcode
+	bool runtimeOffset;
+	unsigned fetchedIndex;
 };
 
 static struct Source _reg(unsigned reg) {
@@ -683,11 +710,12 @@ static void _unlink(struct ARMJitBlock* block) {
 	}
 }
 
-void ARMJitLink(struct ARMJit* jit, struct ARMJitLink* link, struct ARMJitBlock* block) {
+void ARMJitLink(struct ARMJit* jit, struct ARMJitLink* link, struct ARMJitEntry* entry) {
 	UNUSED(jit);
 	if (link->target) {
 		return;
 	}
+	struct ARMJitBlock* block = entry->block;
 	link->target = block;
 	link->next = block->incoming;
 	link->prev = &block->incoming;
@@ -695,19 +723,29 @@ void ARMJitLink(struct ARMJit* jit, struct ARMJitLink* link, struct ARMJitBlock*
 		block->incoming->prev = &link->next;
 	}
 	block->incoming = link;
-	_patchLink(link->site, block->entry);
+	_patchLink(link->site, entry->code);
 }
 
 static void _freeBlock(struct ARMJitBlock* block) {
+	free(block->entries);
 	free(block->links);
 	free(block);
 }
 
 static void _removeBlock(struct ARMJit* jit, struct ARMJitBlock* block) {
-	struct ARMJitPage* page = _page(jit, block->pc, false);
-	page->blocks[(block->pc & 0xFFF) >> 1] = NULL;
-	_unlink(block);
 	unsigned i;
+	for (i = 0; i < block->nEntries; ++i) {
+		struct ARMJitEntry* entry = &block->entries[i];
+		struct ARMJitPage* page = _page(jit, entry->pc, false);
+		if (page && page->entries[(entry->pc & 0xFFF) >> 1] == entry) {
+			page->entries[(entry->pc & 0xFFF) >> 1] = NULL;
+		}
+	}
+	*block->prev = block->next;
+	if (block->next) {
+		block->next->prev = block->prev;
+	}
+	_unlink(block);
 	for (i = 0; i < block->coverWords; ++i) {
 		if (block->coverMask[i / 32] & (1u << (i & 31))) {
 			--jit->cover[block->coverStart + i];
@@ -751,25 +789,37 @@ void ARMJitDestroy(struct ARMJit* jit) {
 
 // Waitstate changes and a full code buffer drop every block but keep the patch history
 void ARMJitDropBlocks(struct ARMJit* jit) {
-	unsigned i, j;
-	for (i = 0; i < ARM_JIT_PAGES; ++i) {
-		struct ARMJitPage* page = jit->pages[i];
-		if (!page) {
-			continue;
+	struct ARMJitBlock* block = jit->blockList;
+	while (block) {
+		struct ARMJitBlock* next = block->next;
+		if (block == jit->current) {
+			jit->smcHit = 1;
+			jit->current = NULL;
 		}
-		for (j = 0; j < 0x800; ++j) {
-			if (page->blocks[j]) {
-				if (page->blocks[j] == jit->current) {
-					jit->smcHit = 1;
-					jit->current = NULL;
-				}
-				_freeBlock(page->blocks[j]);
-				page->blocks[j] = NULL;
-			}
+		_freeBlock(block);
+		block = next;
+	}
+	jit->blockList = NULL;
+	unsigned i;
+	for (i = 0; i < ARM_JIT_PAGES; ++i) {
+		if (jit->pages[i]) {
+			memset(jit->pages[i]->entries, 0, sizeof(jit->pages[i]->entries));
 		}
 	}
 	memset(jit->cover, 0, sizeof(jit->cover));
 	jit->codeUsed = jit->codeStart;
+}
+
+// Blocks whose PC is in [start, end), for waitstate changes that alter their fetch timing
+void ARMJitDropRegion(struct ARMJit* jit, uint32_t start, uint32_t end) {
+	struct ARMJitBlock* block = jit->blockList;
+	while (block) {
+		struct ARMJitBlock* next = block->next;
+		if (block->pc >= start && block->pc < end) {
+			_removeBlock(jit, block);
+		}
+		block = next;
+	}
 }
 
 void ARMJitFlush(struct ARMJit* jit) {
@@ -800,9 +850,9 @@ void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word) {
 	for (back = 0; back < 4 * MAX_SPAN + 4 && jit->cover[word]; back += 2) {
 		uint32_t start = address + 2 - back;
 		struct ARMJitPage* page = _page(jit, start, false);
-		struct ARMJitBlock* block = page ? page->blocks[(start & 0xFFF) >> 1] : NULL;
-		if (block && block->pc == start && _covers(block, word)) {
-			_removeBlock(jit, block);
+		struct ARMJitEntry* entry = page ? page->entries[(start & 0xFFF) >> 1] : NULL;
+		if (entry && entry->pc == start && _covers(entry->block, word)) {
+			_removeBlock(jit, entry->block);
 		}
 	}
 }
@@ -847,10 +897,6 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	uint32_t ops[MAX_SPAN];
 	bool hot[MAX_SPAN];
 	unsigned count = 0;
-	// The dispatcher checks the first two words against the pipeline, so they can't be patched
-	if (_isPatched(jit, pc) || _isPatched(jit, pc + width)) {
-		return NULL;
-	}
 	while (count < MAX_BLOCK && pc + width * (count + 3) <= end) {
 		uint32_t address = pc + width * count;
 		hot[count] = _isPatched(jit, address);
@@ -876,7 +922,9 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		LOAD_32(ops[count], (pc + width * count) & mask, region);
 		LOAD_32(ops[count + 1], (pc + width * (count + 1)) & mask, region);
 	}
-	if (ops[0] != cpu->prefetch[0] || ops[1] != cpu->prefetch[1]) {
+	uint32_t opMask0 = hot[0] ? 0 : 0xFFFFFFFF;
+	uint32_t opMask1 = hot[1] ? 0 : 0xFFFFFFFF;
+	if (((ops[0] ^ cpu->prefetch[0]) & opMask0) || ((ops[1] ^ cpu->prefetch[1]) & opMask1)) {
 		return NULL;
 	}
 
@@ -890,8 +938,9 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	}
 	// One linkable exit per instruction at most, plus falling off the end
 	block->links = calloc(count + 1, sizeof(*block->links));
-	if (!block->links) {
-		free(block);
+	block->entries = calloc(count + 1, sizeof(*block->entries));
+	if (!block->links || !block->entries) {
+		_freeBlock(block);
 		return NULL;
 	}
 	static struct Compiler compiler;
@@ -911,6 +960,8 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	c->nExits = 0;
 	c->block = block;
 	c->nLinks = 0;
+	c->nCareful = 0;
+	c->nLoops = 0;
 	if (thumb) {
 		c->aluCycles = 1 + cpu->memory.activeSeqCycles16;
 		c->memCycles = 1 + cpu->memory.activeNonseqCycles16;
@@ -918,14 +969,22 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		c->aluCycles = 1 + cpu->memory.activeSeqCycles32;
 		c->memCycles = 1 + cpu->memory.activeNonseqCycles32;
 	}
-
-	_blockEntry(c);
 	c->body = c->e.p;
+
+	// Where each instruction can be entered: the start of each unit (an ALU run or a single
+	// instruction), and inside ALU runs, the careful copy that goes one instruction at a time
+	uint8_t* fast[MAX_SPAN];
+	uint8_t* careful[MAX_SPAN];
+	unsigned runLength[MAX_SPAN];
+	memset(fast, 0, sizeof(fast));
+	memset(careful, 0, sizeof(careful));
+	memset(runLength, 0, sizeof(runLength));
 
 	struct AluOp alus[MAX_SPAN];
 	struct MemOp mem;
 	unsigned i = 0;
 	while (i < count) {
+		fast[i] = c->e.p;
 		if (hot[i]) {
 			_fetchAhead(c, i);
 			_emitDynamic(c, i);
@@ -935,8 +994,8 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 			while (i + run < count && !hot[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
 				++run;
 			}
-			// The interpreter checks for events after every instruction, so only run the
-			// whole segment when none can come due before its last instruction
+			// The interpreter checks for events after every instruction, so the run only goes
+			// at once when none can come due before its last instruction
 			uint32_t cycles = 0;
 			unsigned lastAlways = 0;
 			unsigned j;
@@ -949,7 +1008,10 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 				}
 			}
 			if (run > 1) {
-				_segmentCheck(c, i, cycles);
+				c->careful[c->nCareful].site = _segmentCheck(c, cycles);
+				c->careful[c->nCareful].index = i;
+				++c->nCareful;
+				runLength[i] = run;
 			}
 			_markLiveFlags(&alus[i], run);
 			for (j = 0; j < run; ++j) {
@@ -969,14 +1031,32 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 			++i;
 		}
 	}
+	fast[count] = c->e.p;
 	_storeState(c, count);
 	_linkJump(c);
 
+	// Careful copies of ALU runs: each instruction through its handler, checking for events
+	for (i = 0; i < count; ++i) {
+		if (!runLength[i]) {
+			continue;
+		}
+		unsigned j;
+		for (j = i; j < i + runLength[i]; ++j) {
+			careful[j] = c->e.p;
+			_fetchAhead(c, j);
+			_emitFallback(c, j);
+		}
+		_jumpTo(c, fast[j]);
+	}
+	unsigned x;
+	for (x = 0; x < c->nCareful; ++x) {
+		_patch(c->careful[x].site, careful[c->careful[x].index]);
+	}
+
 	// Exit stubs set the interpreter state for the next instruction, then go to the
-	// dispatcher, or back to C when an event is due (including before the first instruction)
+	// dispatcher, or back to C when an event is due
 	uint8_t* stubs[2][MAX_SPAN];
 	memset(stubs, 0, sizeof(stubs));
-	unsigned x;
 	for (x = 0; x < c->nExits; ++x) {
 		int index = c->exits[x].index;
 		if (index >= 0) {
@@ -1013,14 +1093,32 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 	}
 	block->nLinks = c->nLinks;
 
+	// Entry stubs set the current block and take patched first words from the pipeline
+	block->nEntries = 0;
+	for (i = 0; i < count; ++i) {
+		uint8_t* target = fast[i] ? fast[i] : careful[i];
+		if (!target) {
+			continue;
+		}
+		struct ARMJitEntry* entry = &block->entries[block->nEntries++];
+		entry->code = c->e.p;
+		entry->pc = pc + width * i;
+		entry->op0 = ops[i];
+		entry->op1 = ops[i + 1];
+		entry->opMask0 = hot[i] ? 0 : 0xFFFFFFFF;
+		entry->opMask1 = hot[i + 1] ? 0 : 0xFFFFFFFF;
+		entry->thumb = thumb;
+		entry->block = block;
+		_entryStub(c, i, target);
+	}
+	for (x = 0; x < c->nLoops; ++x) {
+		_patch(c->loops[x], block->entries[0].code);
+	}
+
 	__builtin___clear_cache((char*) code, (char*) c->e.p);
 	jit->codeUsed += c->e.p - code;
 
-	block->entry = code;
 	block->pc = pc;
-	block->op0 = ops[0];
-	block->op1 = ops[1];
-	block->thumb = thumb;
 	block->coverStart = ARMJitRamWord(pc);
 	block->coverWords = 0;
 	memset(block->coverMask, 0, sizeof(block->coverMask));
@@ -1033,7 +1131,20 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 			}
 		}
 	}
-	_page(jit, pc, true)->blocks[(pc & 0xFFF) >> 1] = block;
+	// Other blocks keep the boundaries they already cover
+	for (i = 0; i < block->nEntries; ++i) {
+		struct ARMJitEntry* entry = &block->entries[i];
+		struct ARMJitPage* page = _page(jit, entry->pc, true);
+		if (!page->entries[(entry->pc & 0xFFF) >> 1]) {
+			page->entries[(entry->pc & 0xFFF) >> 1] = entry;
+		}
+	}
+	block->next = jit->blockList;
+	block->prev = &jit->blockList;
+	if (jit->blockList) {
+		jit->blockList->prev = &block->next;
+	}
+	jit->blockList = block;
 	return block;
 }
 
@@ -1155,8 +1266,8 @@ bool ARMJitRun(struct ARMCore* cpu) {
 	uint32_t pc = cpu->gprs[ARM_PC] - (thumb ? WORD_SIZE_THUMB : WORD_SIZE_ARM);
 	struct ARMJitPage* page = _page(jit, pc, false);
 	unsigned index = (pc & 0xFFF) >> 1;
-	struct ARMJitBlock* block = page ? page->blocks[index] : NULL;
-	if (!block || block->pc != pc || block->thumb != thumb) {
+	struct ARMJitEntry* entry = page ? page->entries[index] : NULL;
+	if (!entry || entry->pc != pc || entry->thumb != thumb) {
 		if (!_regionEnd(cpu, pc)) {
 			return false;
 		}
@@ -1167,21 +1278,22 @@ bool ARMJitRun(struct ARMCore* cpu) {
 			++page->hits[index];
 			return false;
 		}
-		if (block) {
-			_removeBlock(jit, block);
+		if (entry) {
+			_removeBlock(jit, entry->block);
 		}
-		block = _compile(jit, cpu, pc, thumb);
+		struct ARMJitBlock* block = _compile(jit, cpu, pc, thumb);
 		if (!block) {
 			page->hits[index] = 0;
 			return false;
 		}
+		entry = &block->entries[0];
 	}
-	if (cpu->prefetch[0] != block->op0 || cpu->prefetch[1] != block->op1) {
+	if (((cpu->prefetch[0] ^ entry->op0) & entry->opMask0) || ((cpu->prefetch[1] ^ entry->op1) & entry->opMask1)) {
 		return false;
 	}
 	jit->pendingLink = NULL;
 	int32_t cycles = cpu->cycles;
-	jit->enter(cpu, block->entry);
+	jit->enter(cpu, entry->code);
 	jit->current = NULL;
 	// A block exits before its first segment when an event is due inside it
 	return cpu->cycles != cycles;
