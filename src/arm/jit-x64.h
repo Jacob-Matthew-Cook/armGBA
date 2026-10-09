@@ -525,10 +525,10 @@ static void _addCycles(struct Compiler* c, uint32_t constant) {
 	_ri(&c->e, G1_ADD, X_CYCLES, constant);
 }
 
-static void _eventCheck(struct Compiler* c, int index) {
+static void _eventCheck(struct Compiler* c, unsigned index) {
 	struct Emitter* e = &c->e;
 	_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
-	_exitAt(c, _jcc(e, CC_GE), index < 0 ? index : index | EXIT_DUE);
+	_exitAt(c, _jcc(e, CC_GE), index | EXIT_DUE);
 }
 
 // Jumps to the returned site when an event comes due before the last instruction of a run
@@ -1075,7 +1075,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	if (load && mem->writeback) {
 		_store(e, X_WB, X_CPU, 4 * mem->base.reg);
 	}
-	if (mem->signExtend) {
+	if (mem->signExtend && mem->size == 2) {
 		_store(e, X_RDI, X_RSP, 4); // the address decides how LDRSH extends
 	}
 
@@ -1191,11 +1191,6 @@ static void _emitMemCold(struct Compiler* c, unsigned k) {
 	_jumpTo(c, c->cold[k].toEvent);
 }
 
-static const uint32_t _conditionLut32[16] = {
-	0xF0F0, 0x0F0F, 0xCCCC, 0x3333, 0xFF00, 0x00FF, 0xAAAA, 0x5555,
-	0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
-};
-
 // Jumps to the returned site unless the word the pipeline fetched for ops[i], masked, is value
 static uint8_t* _fetchedMismatch(struct Compiler* c, unsigned i, uint32_t mask, uint32_t value) {
 	struct Emitter* e = &c->e;
@@ -1229,8 +1224,8 @@ static void _emitDynamicHandler(struct Compiler* c, unsigned i) {
 		_shift(e, SH_SHR, X_RAX, 28);
 		_mov(e, X_RCX, X_RSI);
 		_shift(e, SH_SHR, X_RCX, 28);
-		_movImm64(e, X_RDX, (uintptr_t) _conditionLut32);
-		_insn(e, 0, XO_LOAD, X_RDX, _xmi(X_RDX, X_RCX, 2, 0));
+		_movImm64(e, X_RDX, (uintptr_t) _conditionLut);
+		_insn(e, 0, XO_MOVZX16, X_RDX, _xmi(X_RDX, X_RCX, 1, 0));
 		_insn(e, 0, XO_BT, X_RAX, _xr(X_RDX));
 		uint8_t* toExec = _jcc(e, CC_B);
 		_addCycles(c, c->aluCycles);
@@ -1571,9 +1566,8 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 	_eventCheck(c, i + 1);
 }
 
-// Runs the due events, then comes back to ops[index] unless the resume routine goes elsewhere
-static void _resumeAfterEvents(struct Compiler* c, unsigned index, const uint8_t* target) {
-	UNUSED(index);
+// Runs the due events, then comes back to target unless the resume routine goes elsewhere
+static void _resumeAfterEvents(struct Compiler* c, const uint8_t* target) {
 	_patch(_callSite(&c->e), c->jit->resume);
 	_jumpTo(c, target);
 }

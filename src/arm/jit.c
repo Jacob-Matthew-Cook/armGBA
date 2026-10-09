@@ -13,7 +13,6 @@
 #include <mgba/internal/arm/macros.h>
 #include <mgba/internal/gba/gba.h>
 #include <mgba/internal/gba/io.h>
-#include <mgba-util/memory.h>
 
 #include <stddef.h>
 #include <stdio.h>
@@ -258,7 +257,7 @@ static bool _decodeBranch(struct Compiler* c, unsigned i, struct BranchOp* b) {
 	b->link = !c->thumb && (op & 0x01000000);
 	b->thumbLink = c->thumb && (op & 0xF800) == 0xF800;
 	b->lr = b->thumbLink ? address + 2 + ((int32_t) (c->ops[i - 1] << 21) >> 9) : 0;
-	if (b->cond == 0xF || (b->target >> 24) != (c->pc >> 24) || b->target + 2 * c->width > _regionEnd(c->cpu, c->pc) || b->target < (c->pc & 0xFF000000)) {
+	if (b->cond == 0xF || (b->target >> 24) != (c->pc >> 24) || b->target + 2 * c->width > _regionEnd(c->cpu, c->pc)) {
 		return false;
 	}
 	b->index = -1;
@@ -806,7 +805,7 @@ static void _startCompiler(struct Compiler* c, struct ARMJit* jit, struct ARMCor
 	// Branches back into the block jump straight to their target, so it starts a unit
 	struct BranchOp branch;
 	for (i = 0; i < c->count; ++i) {
-		if (!c->hot[i] && _decodeBranch(c, i, &branch) && branch.index >= 0) {
+		if (_decodeBranch(c, i, &branch) && branch.index >= 0) {
 			c->isTarget[branch.index] = true;
 		}
 	}
@@ -932,7 +931,7 @@ static void _emitExits(struct Compiler* c) {
 			stubs[due][at] = c->e.p;
 			_storeState(c, at);
 			if (due) {
-				_resumeAfterEvents(c, at, _entryCode(c, at));
+				_resumeAfterEvents(c, _entryCode(c, at));
 			} else {
 				_exitJump(c, EXIT_DIRECT);
 			}

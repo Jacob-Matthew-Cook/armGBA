@@ -29,7 +29,6 @@ enum {
 	A64_LO = 3,
 	A64_HI = 8,
 	A64_GE = 10,
-	A64_LE = 13,
 };
 
 // Data processing on w registers, or x registers with A64_X: rd = rn op rm, with rm optionally shifted left for AND to SUBS
@@ -422,8 +421,9 @@ static void _emitTrampoline(struct Compiler* c) {
 	_blr(e, 16);
 	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
 	uint8_t* toC[8];
+	unsigned nToC = 0;
 	_logicImm(e, A64_ANDS_IMM, A64_ZR, 0, 0xFF);
-	toC[0] = _bCond(e, A64_EQ);
+	toC[nToC++] = _bCond(e, A64_EQ);
 	_strX(e, A64_ZR, R_JIT, JIT_PENDING_LINK);
 
 	_patch(toLookup, e->p);
@@ -439,28 +439,28 @@ static void _emitTrampoline(struct Compiler* c) {
 	_ubfx(e, 4, 3, 12, 16);
 	_addXImm(e, 5, R_JIT, JIT_PAGES);
 	_ldstR(e, A64_LDRX_R | A64_LSL | A64_SCALED, 5, 5, 4);
-	toC[1] = _cbzX(e, 5);
+	toC[nToC++] = _cbzX(e, 5);
 	_ubfx(e, 6, 3, 1, 11);
 	_ldstR(e, A64_LDRX_R | A64_LSL | A64_SCALED, 5, 5, 6);
-	toC[2] = _cbzX(e, 5);
+	toC[nToC++] = _cbzX(e, 5);
 	_ldrW(e, 7, 5, ENTRY_PC);
 	_cmpW(e, 7, 3);
-	toC[3] = _bCond(e, A64_NE);
+	toC[nToC++] = _bCond(e, A64_NE);
 	_ldrbW(e, 7, 5, ENTRY_THUMB);
 	_cmpW(e, 7, 2);
-	toC[4] = _bCond(e, A64_NE);
+	toC[nToC++] = _bCond(e, A64_NE);
 	_ldrW(e, 7, R_CPU, OFF_PREFETCH0);
 	_ldrW(e, 8, 5, ENTRY_OP0);
 	_dp(e, A64_EOR, 7, 7, 8, 0);
 	_ldrW(e, 8, 5, ENTRY_OP_MASK0);
 	_dp(e, A64_ANDS, A64_ZR, 7, 8, 0);
-	toC[5] = _bCond(e, A64_NE);
+	toC[nToC++] = _bCond(e, A64_NE);
 	_ldrW(e, 7, R_CPU, OFF_PREFETCH1);
 	_ldrW(e, 8, 5, ENTRY_OP1);
 	_dp(e, A64_EOR, 7, 7, 8, 0);
 	_ldrW(e, 8, 5, ENTRY_OP_MASK1);
 	_dp(e, A64_ANDS, A64_ZR, 7, 8, 0);
-	toC[6] = _bCond(e, A64_NE);
+	toC[nToC++] = _bCond(e, A64_NE);
 	_ldrX(e, 1, R_JIT, JIT_PENDING_LINK);
 	uint8_t* noLink = _cbzX(e, 1);
 	_movX(e, R_WB, 5);
@@ -475,7 +475,7 @@ static void _emitTrampoline(struct Compiler* c) {
 
 	c->jit->toC = e->p;
 	unsigned i;
-	for (i = 0; i < 7; ++i) {
+	for (i = 0; i < nToC; ++i) {
 		_patch(toC[i], e->p);
 	}
 	_epilogue(c);
@@ -566,10 +566,10 @@ static void _addCycles(struct Compiler* c, uint32_t constant) {
 	_addCyclesReg(c, -1, constant);
 }
 
-static void _eventCheck(struct Compiler* c, int index) {
+static void _eventCheck(struct Compiler* c, unsigned index) {
 	struct Emitter* e = &c->e;
 	_cmpW(e, R_CYCLES, R_NEXT);
-	_exitAt(c, _bCond(e, A64_GE), index < 0 ? index : index | EXIT_DUE);
+	_exitAt(c, _bCond(e, A64_GE), index | EXIT_DUE);
 }
 
 // Jumps to the returned site when an event comes due before the last instruction of a run
@@ -1022,7 +1022,6 @@ static void _memVram(struct Compiler* c, const struct MemOp* mem, uint8_t** miss
 	_movImm64(e, 16, (uintptr_t) GBAMemoryVRAMWait);
 	_blrC(e, 16);
 	_movW(e, 3, 0);
-	_ldrW(e, 4, A64_SP, CYCLE_SLOT + 4);
 	uint8_t* waited = _b(e);
 	_patch(noStall, e->p);
 	_movImm32(e, 3, size == 4 ? 1 : 0);
@@ -1135,7 +1134,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	if (load && mem->writeback) {
 		_strW(e, R_WB, R_CPU, 4 * mem->base.reg);
 	}
-	if (mem->signExtend) {
+	if (mem->signExtend && mem->size == 2) {
 		_strW(e, 4, A64_SP, CYCLE_SLOT + 4); // the address decides how LDRSH extends
 	}
 
@@ -1257,11 +1256,6 @@ static void _emitColdPaths(struct Compiler* c) {
 	}
 }
 
-static const uint32_t _conditionLut32[16] = {
-	0xF0F0, 0x0F0F, 0xCCCC, 0x3333, 0xFF00, 0x00FF, 0xAAAA, 0x5555,
-	0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
-};
-
 // Jumps to the returned site unless the word the pipeline fetched for ops[i], masked, is value
 static uint8_t* _fetchedMismatch(struct Compiler* c, unsigned i, uint32_t mask, uint32_t value) {
 	struct Emitter* e = &c->e;
@@ -1294,8 +1288,8 @@ static void _emitDynamicHandler(struct Compiler* c, unsigned i) {
 		_ldrW(e, 9, R_CPU, OFF_CPSR);
 		_lsrWImm(e, 9, 9, 28);
 		_lsrWImm(e, 10, 1, 28);
-		_movImm64(e, 11, (uintptr_t) _conditionLut32);
-		_ldstR(e, A64_LDR_R | A64_UXTW | A64_SCALED, 11, 11, 10);
+		_movImm64(e, 11, (uintptr_t) _conditionLut);
+		_ldstR(e, A64_LDRH_R | A64_UXTW | A64_SCALED, 11, 11, 10);
 		_dp(e, A64_LSRV, 11, 11, 9, 0);
 		uint8_t* toExec = _tbnz(e, 11, 0);
 		_addCycles(c, c->aluCycles);
@@ -1635,9 +1629,8 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 }
 
 
-// Runs the due events, then comes back to ops[index] unless the resume routine goes elsewhere
-static void _resumeAfterEvents(struct Compiler* c, unsigned index, const uint8_t* target) {
-	UNUSED(index);
+// Runs the due events, then comes back to target unless the resume routine goes elsewhere
+static void _resumeAfterEvents(struct Compiler* c, const uint8_t* target) {
 	uint8_t* site = _bl(&c->e);
 	_patch(site, c->jit->resume);
 	_jumpTo(c, target);
