@@ -1071,6 +1071,17 @@ static void _memSlow(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	_ldrX(e, 16, R_CPU, OFF_MEMORY + offset);
 	_blrC(e, 16);
 	_ldrW(e, 3, A64_SP, CYCLE_SLOT);
+	if (!mem->load) {
+		// The interpreter charges a store N - S as the store leaves them, not as compiled
+		unsigned nonseq;
+		unsigned seq;
+		_fetchWaits(c, &nonseq, &seq);
+		_ldrW(e, 9, R_CPU, nonseq);
+		_ldrW(e, 10, R_CPU, seq);
+		_dp(e, A64_SUB, 9, 9, 10, 0);
+		_dp(e, A64_ADD, 3, 3, 9, 0);
+		_dpImm(e, A64_SUB_IMM, 3, 3, c->memCycles - c->aluCycles);
+	}
 }
 
 static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {

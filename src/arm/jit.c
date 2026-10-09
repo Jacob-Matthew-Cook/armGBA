@@ -435,6 +435,12 @@ enum {
 	PATH_CART,
 };
 
+// Where the code's own N and S fetch waits live, which a store to WAITCNT changes for the rest of its instruction
+static void _fetchWaits(const struct Compiler* c, unsigned* nonseq, unsigned* seq) {
+	*nonseq = OFF_MEMORY + (c->thumb ? offsetof(struct ARMMemory, activeNonseqCycles16) : offsetof(struct ARMMemory, activeNonseqCycles32));
+	*seq = OFF_MEMORY + (c->thumb ? offsetof(struct ARMMemory, activeSeqCycles16) : offsetof(struct ARMMemory, activeSeqCycles32));
+}
+
 // An access checks inline only the region its base register pointed into when compiled
 static int _memPath(struct Compiler* c, const struct MemOp* mem) {
 	switch (_sourceRegion(c, mem->base)) {
