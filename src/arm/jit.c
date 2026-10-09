@@ -119,7 +119,63 @@ static bool _isLogical(unsigned opcode) {
 	       opcode == ALU_ORR || opcode == ALU_MOV || opcode == ALU_BIC || opcode == ALU_MVN;
 }
 
-static bool _isInlineAlu(uint32_t op) {
+// ARM and Thumb instructions decode to the same operations. A source is a guest register
+// or a value known when compiling (the PC).
+struct Source {
+	bool constant;
+	uint32_t value;
+	unsigned reg;
+};
+
+struct AluOp {
+	unsigned cond;
+	unsigned opcode;
+	bool s;
+	unsigned rd;
+	struct Source n;
+	// Second operand: an immediate, or a register shifted by an immediate amount
+	bool immediate;
+	uint32_t imm;
+	// Carry out of an immediate: -1 keeps C, otherwise 0 or 1
+	int immCarry;
+	struct Source m;
+	unsigned shiftType;
+	unsigned shiftAmount;
+	// ARM keeps the shifter carry for MULS and MLAS; Thumb never reads it
+	bool keepsShifterCarry;
+	// Whether any flag this sets is read before another instruction overwrites it
+	bool flagsLive;
+	uint32_t cycles;
+};
+
+struct MemOp {
+	unsigned cond;
+	bool load;
+	unsigned size;
+	bool signExtend;
+	unsigned rd;
+	struct Source base;
+	bool immediateOffset;
+	uint32_t offset;
+	struct Source m;
+	unsigned shiftType;
+	unsigned shiftAmount;
+	bool up;
+	bool pre;
+	bool writeback;
+};
+
+static struct Source _reg(unsigned reg) {
+	struct Source source = { false, 0, reg };
+	return source;
+}
+
+static struct Source _const(uint32_t value) {
+	struct Source source = { true, value, 0 };
+	return source;
+}
+
+static bool _decodeArmAlu(uint32_t op, uint32_t address, uint32_t aluCycles, struct AluOp* alu) {
 	if ((op & 0x0C000000) || (op >> 28) == 0xF) {
 		return false;
 	}
@@ -130,10 +186,149 @@ static bool _isInlineAlu(uint32_t op) {
 	if (opcode >= ALU_TST && opcode <= ALU_CMN && !(op & 0x00100000)) {
 		return false; // MRS, MSR
 	}
-	return ((op >> 12) & 0xF) != ARM_PC;
+	if (((op >> 12) & 0xF) == ARM_PC) {
+		return false;
+	}
+	unsigned rn = (op >> 16) & 0xF;
+	unsigned rm = op & 0xF;
+	memset(alu, 0, sizeof(*alu));
+	alu->cond = op >> 28;
+	alu->opcode = opcode;
+	alu->s = op & 0x00100000;
+	alu->rd = (op >> 12) & 0xF;
+	alu->n = rn == ARM_PC ? _const(address + 8) : _reg(rn);
+	if (op & 0x02000000) {
+		unsigned rotate = (op >> 7) & 0x1E;
+		alu->immediate = true;
+		alu->imm = op & 0xFF;
+		alu->immCarry = -1;
+		if (rotate) {
+			alu->imm = (alu->imm >> rotate) | (alu->imm << (32 - rotate));
+			alu->immCarry = alu->imm >> 31;
+		}
+	} else {
+		alu->m = rm == ARM_PC ? _const(address + 8) : _reg(rm);
+		alu->shiftType = (op >> 5) & 3;
+		alu->shiftAmount = (op >> 7) & 0x1F;
+	}
+	alu->keepsShifterCarry = true;
+	alu->cycles = aluCycles;
+	return true;
 }
 
-static bool _isInlineMem(uint32_t op) {
+static void _thumbAlu(struct AluOp* alu, unsigned opcode, bool s, unsigned rd, struct Source n, uint32_t cycles) {
+	memset(alu, 0, sizeof(*alu));
+	alu->cond = 0xE;
+	alu->opcode = opcode;
+	alu->s = s;
+	alu->rd = rd;
+	alu->n = n;
+	alu->cycles = cycles;
+}
+
+static void _thumbImm(struct AluOp* alu, uint32_t imm) {
+	alu->immediate = true;
+	alu->imm = imm;
+	alu->immCarry = -1;
+}
+
+static void _thumbReg(struct AluOp* alu, unsigned reg, unsigned shiftType, unsigned shiftAmount) {
+	alu->m = _reg(reg);
+	alu->shiftType = shiftType;
+	alu->shiftAmount = shiftAmount;
+}
+
+static bool _decodeThumbAlu(uint32_t op, uint32_t address, uint32_t aluCycles, struct AluOp* alu) {
+	unsigned rd = op & 7;
+	unsigned rs = (op >> 3) & 7;
+	switch (op >> 11) {
+	case 0x00: // LSL, LSR, ASR #imm
+	case 0x01:
+	case 0x02:
+		_thumbAlu(alu, ALU_MOV, true, rd, _reg(0), aluCycles);
+		_thumbReg(alu, rs, op >> 11, (op >> 6) & 0x1F);
+		return true;
+	case 0x03: // ADD, SUB with a register or 3-bit immediate
+		_thumbAlu(alu, (op & 0x0200) ? ALU_SUB : ALU_ADD, true, rd, _reg(rs), aluCycles);
+		if (op & 0x0400) {
+			_thumbImm(alu, (op >> 6) & 7);
+		} else {
+			_thumbReg(alu, (op >> 6) & 7, 0, 0);
+		}
+		return true;
+	case 0x04: // MOV, CMP, ADD, SUB with an 8-bit immediate
+	case 0x05:
+	case 0x06:
+	case 0x07: {
+		static const unsigned opcodes[] = { ALU_MOV, ALU_CMP, ALU_ADD, ALU_SUB };
+		rd = (op >> 8) & 7;
+		_thumbAlu(alu, opcodes[(op >> 11) & 3], true, rd, _reg(rd), aluCycles);
+		_thumbImm(alu, op & 0xFF);
+		return true;
+	}
+	case 0x08:
+		if (!(op & 0x0400)) {
+			// AND EOR LSL LSR ASR ADC SBC ROR TST NEG CMP CMN ORR MUL BIC MVN
+			static const int opcodes[] = {
+				ALU_AND, ALU_EOR, -1, -1, -1, ALU_ADC, ALU_SBC, -1,
+				ALU_TST, ALU_RSB, ALU_CMP, ALU_CMN, ALU_ORR, -1, ALU_BIC, ALU_MVN
+			};
+			int opcode = opcodes[(op >> 6) & 0xF];
+			if (opcode < 0) {
+				return false; // Register shifts and MUL
+			}
+			if (opcode == ALU_RSB) {
+				_thumbAlu(alu, ALU_RSB, true, rd, _reg(rs), aluCycles); // NEG
+				_thumbImm(alu, 0);
+			} else {
+				_thumbAlu(alu, opcode, true, rd, _reg(rd), aluCycles);
+				_thumbReg(alu, rs, 0, 0);
+			}
+			return true;
+		}
+		if ((op & 0x0300) != 0x0300) {
+			// ADD, CMP, MOV with high registers
+			unsigned hd = rd | ((op >> 4) & 8);
+			unsigned hm = (op >> 3) & 0xF;
+			static const unsigned opcodes[] = { ALU_ADD, ALU_CMP, ALU_MOV };
+			unsigned opcode = opcodes[(op >> 8) & 3];
+			if (hd == ARM_PC && opcode != ALU_CMP) {
+				return false;
+			}
+			_thumbAlu(alu, opcode, opcode == ALU_CMP, hd, hd == ARM_PC ? _const(address + 4) : _reg(hd), aluCycles);
+			if (hm == ARM_PC) {
+				_thumbImm(alu, address + 4);
+			} else {
+				_thumbReg(alu, hm, 0, 0);
+			}
+			return true;
+		}
+		return false;
+	case 0x14: // ADD rd, PC, #imm
+		_thumbAlu(alu, ALU_MOV, false, (op >> 8) & 7, _reg(0), aluCycles);
+		_thumbImm(alu, ((address + 4) & ~3) + ((op & 0xFF) << 2));
+		return true;
+	case 0x15: // ADD rd, SP, #imm
+		_thumbAlu(alu, ALU_ADD, false, (op >> 8) & 7, _reg(ARM_SP), aluCycles);
+		_thumbImm(alu, (op & 0xFF) << 2);
+		return true;
+	case 0x16:
+		if ((op & 0x0F00) == 0x0000) { // ADD SP, #+/-imm
+			_thumbAlu(alu, (op & 0x80) ? ALU_SUB : ALU_ADD, false, ARM_SP, _reg(ARM_SP), aluCycles);
+			_thumbImm(alu, (op & 0x7F) << 2);
+			return true;
+		}
+		return false;
+	case 0x1E: // BL prefix
+		_thumbAlu(alu, ALU_MOV, false, ARM_LR, _reg(0), aluCycles);
+		_thumbImm(alu, address + 4 + ((int32_t) (op << 21) >> 9));
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool _decodeArmMem(uint32_t op, uint32_t address, struct MemOp* mem) {
 	unsigned cond = op >> 28;
 	if (cond == 0xF) {
 		return false;
@@ -145,16 +340,177 @@ static bool _isInlineMem(uint32_t op) {
 	if (rd == ARM_PC || (rn == ARM_PC && (!p || w))) {
 		return false;
 	}
+	memset(mem, 0, sizeof(*mem));
 	if ((op & 0x0C000000) == 0x04000000) {
-		if ((op & 0x02000010) == 0x02000010) {
-			return false; // Undefined
+		if ((op & 0x02000010) == 0x02000010 || (!p && w)) {
+			return false; // Undefined, LDRT, STRT
 		}
-		return p || !w; // LDRT and STRT stay in the interpreter
+		mem->size = (op & (1 << 22)) ? 1 : 4;
+		if (op & 0x02000000) {
+			// Addressing mode 2 shifts: LSR and ASR #0 mean #32, ROR #0 is RRX
+			mem->m = (op & 0xF) == ARM_PC ? _const(address + 8) : _reg(op & 0xF);
+			mem->shiftType = (op >> 5) & 3;
+			mem->shiftAmount = (op >> 7) & 0x1F;
+		} else {
+			mem->immediateOffset = true;
+			mem->offset = op & 0xFFF;
+		}
+	} else if ((op & 0x0E000090) == 0x00000090 && (op & 0x60) == 0x20 && (p || !w)) {
+		mem->size = 2; // LDRH, STRH
+		if (op & (1 << 22)) {
+			mem->immediateOffset = true;
+			mem->offset = ((op >> 4) & 0xF0) | (op & 0xF);
+		} else {
+			mem->m = (op & 0xF) == ARM_PC ? _const(address + 8) : _reg(op & 0xF);
+		}
+	} else {
+		return false;
 	}
-	if ((op & 0x0E000090) == 0x00000090 && (op & 0x60) == 0x20) {
-		return p || !w; // LDRH, STRH
+	mem->cond = cond;
+	mem->load = op & (1 << 20);
+	mem->rd = rd;
+	mem->base = rn == ARM_PC ? _const(address + 8) : _reg(rn);
+	mem->up = op & (1 << 23);
+	mem->pre = p;
+	mem->writeback = !p || w;
+	return true;
+}
+
+static void _thumbMem(struct MemOp* mem, bool load, unsigned size, unsigned rd, struct Source base) {
+	memset(mem, 0, sizeof(*mem));
+	mem->cond = 0xE;
+	mem->load = load;
+	mem->size = size;
+	mem->rd = rd;
+	mem->base = base;
+	mem->immediateOffset = true;
+	mem->up = true;
+	mem->pre = true;
+}
+
+static bool _decodeThumbMem(uint32_t op, uint32_t address, struct MemOp* mem) {
+	unsigned rd = op & 7;
+	unsigned rn = (op >> 3) & 7;
+	switch (op >> 11) {
+	case 0x09: // LDR rd, [PC, #imm]
+		_thumbMem(mem, true, 4, (op >> 8) & 7, _const((address + 4) & ~3));
+		mem->offset = (op & 0xFF) << 2;
+		return true;
+	case 0x0A: // Register offset
+	case 0x0B: {
+		// STR STRH STRB LDRSB LDR LDRH LDRB LDRSH
+		static const unsigned sizes[] = { 4, 2, 1, 1, 4, 2, 1, 2 };
+		unsigned kind = (op >> 9) & 7;
+		_thumbMem(mem, kind >= 3, sizes[kind], rd, _reg(rn));
+		mem->signExtend = kind == 3 || kind == 7;
+		mem->immediateOffset = false;
+		mem->m = _reg((op >> 6) & 7);
+		return true;
 	}
-	return false;
+	case 0x0C: // STR, LDR #imm
+	case 0x0D:
+		_thumbMem(mem, op & 0x0800, 4, rd, _reg(rn));
+		mem->offset = ((op >> 6) & 0x1F) << 2;
+		return true;
+	case 0x0E: // STRB, LDRB #imm
+	case 0x0F:
+		_thumbMem(mem, op & 0x0800, 1, rd, _reg(rn));
+		mem->offset = (op >> 6) & 0x1F;
+		return true;
+	case 0x10: // STRH, LDRH #imm
+	case 0x11:
+		_thumbMem(mem, op & 0x0800, 2, rd, _reg(rn));
+		mem->offset = ((op >> 6) & 0x1F) << 1;
+		return true;
+	case 0x12: // STR, LDR rd, [SP, #imm]
+	case 0x13:
+		_thumbMem(mem, op & 0x0800, 4, (op >> 8) & 7, _reg(ARM_SP));
+		mem->offset = (op & 0xFF) << 2;
+		return true;
+	default:
+		return false;
+	}
+}
+
+// Flags as bits for liveness: N Z C V, and CPSR bits 24-27, which add and subtract clear
+enum {
+	FLAG_N = 1,
+	FLAG_Z = 2,
+	FLAG_C = 4,
+	FLAG_V = 8,
+	FLAG_LOW = 16,
+	FLAG_ALL = 31,
+};
+
+static unsigned _condReads(unsigned cond) {
+	static const unsigned reads[16] = {
+		FLAG_Z, FLAG_Z, FLAG_C, FLAG_C, FLAG_N, FLAG_N, FLAG_V, FLAG_V,
+		FLAG_C | FLAG_Z, FLAG_C | FLAG_Z, FLAG_N | FLAG_V, FLAG_N | FLAG_V,
+		FLAG_N | FLAG_Z | FLAG_V, FLAG_N | FLAG_Z | FLAG_V, 0, 0
+	};
+	return reads[cond];
+}
+
+// Whether the carry out of the second operand is the old C (no shift, or an unrotated immediate)
+static bool _keepsCarry(const struct AluOp* alu) {
+	if (alu->immediate) {
+		return alu->immCarry < 0;
+	}
+	return alu->shiftType == 0 && alu->shiftAmount == 0;
+}
+
+static unsigned _aluReads(const struct AluOp* alu) {
+	unsigned reads = _condReads(alu->cond);
+	if (alu->opcode == ALU_ADC || alu->opcode == ALU_SBC || alu->opcode == ALU_RSC) {
+		reads |= FLAG_C;
+	}
+	if (!alu->immediate && alu->shiftType == 3 && alu->shiftAmount == 0) {
+		reads |= FLAG_C; // RRX
+	}
+	return reads;
+}
+
+static unsigned _aluWrites(const struct AluOp* alu) {
+	if (!alu->s) {
+		return 0;
+	}
+	if (_isLogical(alu->opcode)) {
+		return FLAG_N | FLAG_Z | (_keepsCarry(alu) ? 0 : FLAG_C);
+	}
+	if (alu->opcode == ALU_SBC || alu->opcode == ALU_RSC) {
+		return FLAG_N | FLAG_Z | FLAG_C | FLAG_V;
+	}
+	return FLAG_ALL;
+}
+
+// Within a run of ALU instructions nothing else can see the flags; everything is live after it
+static void _markLiveFlags(struct AluOp* alus, unsigned count) {
+	unsigned live = FLAG_ALL;
+	unsigned j = count;
+	while (j--) {
+		unsigned writes = _aluWrites(&alus[j]);
+		alus[j].flagsLive = (writes & live) != 0;
+		if (alus[j].cond == 0xE) {
+			live &= ~writes;
+		}
+		live |= _aluReads(&alus[j]);
+	}
+}
+
+static bool _decodeAlu(struct Compiler* c, unsigned i, struct AluOp* alu) {
+	uint32_t address = c->pc + c->width * i;
+	if (c->thumb) {
+		return _decodeThumbAlu(c->ops[i], address, c->aluCycles, alu);
+	}
+	return _decodeArmAlu(c->ops[i], address, c->aluCycles, alu);
+}
+
+static bool _decodeMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
+	uint32_t address = c->pc + c->width * i;
+	if (c->thumb) {
+		return _decodeThumbMem(c->ops[i], address, mem);
+	}
+	return _decodeArmMem(c->ops[i], address, mem);
 }
 
 static void* _handler(struct Compiler* c, uint32_t op) {
@@ -183,6 +539,17 @@ static bool _loopsToStart(struct Compiler* c, unsigned i) {
 		return false;
 	}
 	return address + 2 * c->width + offset == c->pc;
+}
+
+// Condition checked before calling a handler: ARM conditions and Thumb conditional branches
+static unsigned _fallbackCond(struct Compiler* c, uint32_t op) {
+	if (!c->thumb) {
+		return op >> 28;
+	}
+	if ((op & 0xF000) == 0xD000 && (op & 0x0F00) < 0x0E00) {
+		return (op >> 8) & 0xF;
+	}
+	return 0xE;
 }
 
 // Host address of a RAM word compiled from, for reading patched words at runtime
@@ -454,39 +821,46 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 
 	c->body = c->e.p;
 
+	struct AluOp alus[MAX_SPAN];
+	struct MemOp mem;
 	unsigned i = 0;
 	while (i < count) {
 		if (hot[i]) {
 			_fetchAhead(c, i);
 			_emitDynamic(c, i);
 			++i;
-		} else if (!thumb && _isInlineAlu(ops[i])) {
+		} else if (_decodeAlu(c, i, &alus[i])) {
 			unsigned run = 1;
-			while (i + run < count && !hot[i + run] && _isInlineAlu(ops[i + run])) {
+			while (i + run < count && !hot[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
 				++run;
 			}
 			// The interpreter checks for events after every instruction, so only run the
 			// whole segment when none can come due before its last instruction
-			if (run > 1) {
-				_segmentCheck(c, i, c->aluCycles * (run - 1));
-			}
+			uint32_t cycles = 0;
 			unsigned lastAlways = 0;
 			unsigned j;
 			for (j = 0; j < run; ++j) {
-				if ((ops[i + j] >> 28) == 0xE) {
+				if (j < run - 1) {
+					cycles += alus[i + j].cycles;
+				}
+				if (alus[i + j].cond == 0xE) {
 					lastAlways = j;
 				}
 			}
+			if (run > 1) {
+				_segmentCheck(c, i, cycles);
+			}
+			_markLiveFlags(&alus[i], run);
 			for (j = 0; j < run; ++j) {
 				_fetchAhead(c, i + j);
-				_emitAlu(c, i + j, j >= lastAlways);
+				_emitAlu(c, &alus[i + j], alus[i + j].keepsShifterCarry && j >= lastAlways);
 			}
-			_addCycles(c, c->aluCycles * run);
+			_addCycles(c, cycles + alus[i + run - 1].cycles);
 			i += run;
 			_eventCheck(c, i);
-		} else if (!thumb && _isInlineMem(ops[i])) {
+		} else if (_decodeMem(c, i, &mem)) {
 			_fetchAhead(c, i);
-			_emitMem(c, i);
+			_emitMem(c, i, &mem);
 			++i;
 		} else {
 			_fetchAhead(c, i);
@@ -543,20 +917,25 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 }
 
 // Debug: compare inline ALU code with the interpreter on random inputs
-static void _selfTestAlu(struct ARMJit* jit, unsigned iterations) {
+static unsigned _selfTestAluMode(struct ARMJit* jit, unsigned iterations, bool thumb) {
 	static struct Compiler compiler;
 	struct Compiler* c = &compiler;
-	uint32_t seed = 12345;
-	unsigned failures = 0, tested = 0;
+	uint32_t seed = thumb ? 54321 : 12345;
+	unsigned failures = 0;
 	unsigned n;
 	for (n = 0; n < iterations && failures < 20; ++n) {
+		uint32_t address = 0x03001000;
 		uint32_t op;
+		struct AluOp alu;
 		do {
 			seed = seed * 1103515245 + 12345;
 			op = seed;
 			seed = seed * 1103515245 + 12345;
 			op ^= seed << 16;
-		} while (!_isInlineAlu(op));
+			if (thumb) {
+				op &= 0xFFFF;
+			}
+		} while (thumb ? !_decodeThumbAlu(op, address, 1, &alu) : !_decodeArmAlu(op, address, 1, &alu));
 		struct ARMCore a;
 		memset(&a, 0, sizeof(a));
 		unsigned r;
@@ -571,42 +950,42 @@ static void _selfTestAlu(struct ARMJit* jit, unsigned iterations) {
 				a.gprs[r] = 0xFFFFFFFF;
 			}
 		}
-		uint32_t address = 0x03001000;
-		a.gprs[ARM_PC] = address + 8;
+		a.gprs[ARM_PC] = address + (thumb ? 4 : 8);
 		seed = seed * 1103515245 + 12345;
-		a.cpsr.packed = (seed & 0xF0000000) | 0x1F;
+		a.cpsr.packed = (seed & 0xFF000000) | (thumb ? 0x3F : 0x1F);
 		struct ARMCore b = a;
 
-		unsigned cond = op >> 28;
-		if (_conditionLut[cond] & (1 << ((uint32_t) a.cpsr.packed >> 28))) {
+		if (thumb) {
+			_thumbTable[op >> 6](&a, op);
+		} else if (_conditionLut[op >> 28] & (1 << ((uint32_t) a.cpsr.packed >> 28))) {
 			_armTable[((op >> 16) & 0xFF0) | ((op >> 4) & 0x00F)](&a, op);
 		} else {
 			a.cycles += 1;
 		}
 
+		static const bool cold[3];
 		uint32_t ops[3] = { op, 0, 0 };
 		uint8_t* code = &jit->code[jit->codeUsed];
 		c->e.p = code;
 		c->jit = jit;
 		c->gba = NULL;
 		c->pc = address;
-		static const bool cold[3];
 		c->ops = ops;
 		c->hot = cold;
 		c->count = 1;
-		c->thumb = false;
-		c->width = WORD_SIZE_ARM;
+		c->thumb = thumb;
+		c->width = thumb ? WORD_SIZE_THUMB : WORD_SIZE_ARM;
 		c->romCode = false;
 		c->nExits = 0;
 		c->aluCycles = 1;
 		c->memCycles = 1;
+		alu.flagsLive = true;
 		_prologue(c);
-		_emitAlu(c, 0, true);
-		_addCycles(c, 1);
+		_emitAlu(c, &alu, alu.keepsShifterCarry);
+		_addCycles(c, alu.cycles);
 		_epilogue(c);
 		__builtin___clear_cache((char*) code, (char*) c->e.p);
 		((void (*)(struct ARMCore*)) code)(&b);
-		++tested;
 
 		bool bad = a.cpsr.packed != b.cpsr.packed || a.cycles != b.cycles || (a.shifterCarryOut & 1) != (b.shifterCarryOut & 1);
 		for (r = 0; r < 16; ++r) {
@@ -614,7 +993,7 @@ static void _selfTestAlu(struct ARMJit* jit, unsigned iterations) {
 		}
 		if (bad) {
 			++failures;
-			fprintf(stderr, "ALU mismatch op %08X: cpsr %08X/%08X cycles %d/%d", op, a.cpsr.packed, b.cpsr.packed, a.cycles, b.cycles);
+			fprintf(stderr, "%s ALU mismatch op %08X: cpsr %08X/%08X cycles %d/%d", thumb ? "Thumb" : "ARM", op, a.cpsr.packed, b.cpsr.packed, a.cycles, b.cycles);
 			for (r = 0; r < 16; ++r) {
 				if (a.gprs[r] != b.gprs[r]) {
 					fprintf(stderr, " r%u %08X/%08X", r, a.gprs[r], b.gprs[r]);
@@ -623,7 +1002,13 @@ static void _selfTestAlu(struct ARMJit* jit, unsigned iterations) {
 			fprintf(stderr, "\n");
 		}
 	}
-	fprintf(stderr, "ALU self-test: %u tested, %u failures\n", tested, failures);
+	return failures;
+}
+
+static void _selfTestAlu(struct ARMJit* jit, unsigned iterations) {
+	unsigned arm = _selfTestAluMode(jit, iterations, false);
+	unsigned thumb = _selfTestAluMode(jit, iterations, true);
+	fprintf(stderr, "ALU self-test: %u ARM and %u Thumb instructions, %u and %u failures\n", iterations, iterations, arm, thumb);
 }
 
 static void _buildTrampoline(struct ARMJit* jit, struct ARMCore* cpu) {

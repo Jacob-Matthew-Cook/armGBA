@@ -441,11 +441,11 @@ static void _smcCheck(struct Compiler* c, int index) {
 	_exitAt(c, _jcc(e, CC_NE), index);
 }
 
-static void _loadReg(struct Compiler* c, int dst, unsigned reg, uint32_t address) {
-	if (reg == ARM_PC) {
-		_movImm(&c->e, dst, address + 8);
+static void _loadSource(struct Compiler* c, int dst, struct Source source) {
+	if (source.constant) {
+		_movImm(&c->e, dst, source.value);
 	} else {
-		_load(&c->e, dst, X_CPU, 4 * reg);
+		_load(&c->e, dst, X_CPU, 4 * source.reg);
 	}
 }
 
@@ -530,45 +530,35 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 }
 
 // storeCarry: MULS and MLAS take C from the last shifter result, so keep it for them
-static void _emitAlu(struct Compiler* c, unsigned i, bool storeCarry) {
+static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarry) {
 	struct Emitter* e = &c->e;
-	uint32_t op = c->ops[i];
-	uint32_t address = c->pc + 4 * i;
-	unsigned cond = op >> 28;
-	unsigned opcode = (op >> 21) & 0xF;
-	bool s = op & 0x00100000;
-	unsigned rn = (op >> 16) & 0xF;
-	unsigned rd = (op >> 12) & 0xF;
+	unsigned opcode = alu->opcode;
 	bool logical = _isLogical(opcode);
 	bool carryIn = opcode == ALU_ADC || opcode == ALU_SBC || opcode == ALU_RSC;
-	bool carryOut = (s && logical) || storeCarry;
+	bool setFlags = alu->s && alu->flagsLive;
+	bool carryOut = (setFlags && logical) || storeCarry;
 	bool borrow = opcode == ALU_SUB || opcode == ALU_RSB || opcode == ALU_CMP || opcode == ALU_SBC || opcode == ALU_RSC;
 
 	uint8_t* skip = NULL;
-	if (cond != 0xE) {
-		skip = _condJump(c, cond, false);
+	if (alu->cond != 0xE) {
+		skip = _condJump(c, alu->cond, false);
 	}
 
-	if (op & 0x02000000) {
-		unsigned rotate = (op >> 7) & 0x1E;
-		uint32_t value = op & 0xFF;
-		if (rotate) {
-			value = (value >> rotate) | (value << (32 - rotate));
-		}
-		_movImm(e, X_RDX, value);
+	if (alu->immediate) {
+		_movImm(e, X_RDX, alu->imm);
 		if (carryOut) {
-			if (rotate) {
-				_movImm(e, X_R8, value >> 31);
+			if (alu->immCarry >= 0) {
+				_movImm(e, X_R8, alu->immCarry);
 			} else {
 				_loadCarry(c, X_R8);
 			}
 		}
 	} else {
-		_loadReg(c, X_R11, op & 0xF, address);
-		_shiftImm(c, (op >> 5) & 3, (op >> 7) & 0x1F, carryOut);
+		_loadSource(c, X_R11, alu->m);
+		_shiftImm(c, alu->shiftType, alu->shiftAmount, carryOut);
 	}
 	if (opcode != ALU_MOV && opcode != ALU_MVN) {
-		_loadReg(c, X_RSI, rn, address);
+		_loadSource(c, X_RSI, alu->n);
 	}
 
 	switch (opcode) {
@@ -632,7 +622,7 @@ static void _emitAlu(struct Compiler* c, unsigned i, bool storeCarry) {
 		break;
 	}
 
-	if (s) {
+	if (setFlags) {
 		if (logical) {
 			// N and Z from the result, C from the shifter, V and bits 24-27 kept
 			_load(e, X_R9, X_CPU, OFF_CPSR);
@@ -668,14 +658,14 @@ static void _emitAlu(struct Compiler* c, unsigned i, bool storeCarry) {
 			_shift(e, SH_SHL, X_R11, 28);
 			_rr(e, OP_OR, X_RCX, X_R11);
 			_load(e, X_R9, X_CPU, OFF_CPSR);
-			// _additionS and _subtractionS clear the whole flags byte
-			_ri(e, 4, X_R9, carryIn ? 0x0FFFFFFF : 0x00FFFFFF);
+			// Add and subtract clear the whole flags byte; SBC and RSC keep bits 24-27
+			_ri(e, 4, X_R9, carryIn && opcode != ALU_ADC ? 0x0FFFFFFF : 0x00FFFFFF);
 			_rr(e, OP_OR, X_R9, X_RCX);
 		}
 		_store(e, X_R9, X_CPU, OFF_CPSR);
 	}
 	if (opcode < ALU_TST || opcode > ALU_CMN) {
-		_store(e, X_RAX, X_CPU, 4 * rd);
+		_store(e, X_RAX, X_CPU, 4 * alu->rd);
 	}
 	if (storeCarry) {
 		_store(e, X_R8, X_CPU, OFF_SHIFTER_CARRY);
@@ -712,50 +702,36 @@ static void _memAccess(struct Emitter* e, bool load, unsigned size, int base) {
 	}
 }
 
-static void _emitMem(struct Compiler* c, unsigned i) {
+static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 	struct Emitter* e = &c->e;
-	uint32_t op = c->ops[i];
-	uint32_t address = c->pc + 4 * i;
-	unsigned cond = op >> 28;
-	bool load = op & (1 << 20);
-	bool p = op & (1 << 24);
-	bool u = op & (1 << 23);
-	bool w = op & (1 << 21);
-	bool writeback = !p || w;
-	unsigned rn = (op >> 16) & 0xF;
-	unsigned rd = (op >> 12) & 0xF;
-	bool halfword = !(op & 0x0C000000);
-	unsigned size = halfword ? 2 : (op & (1 << 22)) ? 1 : 4;
+	bool load = mem->load;
+	unsigned size = mem->size;
 
 	uint8_t* fail = NULL;
-	if (cond != 0xE) {
-		fail = _condJump(c, cond, false);
+	if (mem->cond != 0xE) {
+		fail = _condJump(c, mem->cond, false);
 	}
 	if (!load) {
-		_loadReg(c, X_R9, rd, address);
+		_loadSource(c, X_R9, _reg(mem->rd));
 	}
-	if (halfword) {
-		if (op & (1 << 22)) {
-			_movImm(e, X_RDX, ((op >> 4) & 0xF0) | (op & 0xF));
-		} else {
-			_loadReg(c, X_RDX, op & 0xF, address);
-		}
-	} else if (op & 0x02000000) {
-		// Addressing mode 2 shifts: LSR and ASR #0 mean #32, ROR #0 is RRX
-		_loadReg(c, X_R11, op & 0xF, address);
-		_shiftImm(c, (op >> 5) & 3, (op >> 7) & 0x1F, false);
+	if (mem->immediateOffset) {
+		_movImm(e, X_RDX, mem->offset);
 	} else {
-		_movImm(e, X_RDX, op & 0xFFF);
+		_loadSource(c, X_R11, mem->m);
+		_shiftImm(c, mem->shiftType, mem->shiftAmount, false);
 	}
-	_loadReg(c, X_RSI, rn, address);
+	_loadSource(c, X_RSI, mem->base);
 	_rr(e, OP_MOV, X_R10, X_RSI);
-	_rr(e, u ? OP_ADD : OP_SUB, X_R10, X_RDX);
-	if (writeback) {
+	_rr(e, mem->up ? OP_ADD : OP_SUB, X_R10, X_RDX);
+	if (mem->writeback) {
 		_rr(e, OP_MOV, X_WB, X_R10);
 	}
-	_rr(e, OP_MOV, X_RDI, p ? X_R10 : X_RSI);
-	if (load && writeback) {
-		_store(e, X_WB, X_CPU, 4 * rn);
+	_rr(e, OP_MOV, X_RDI, mem->pre ? X_R10 : X_RSI);
+	if (load && mem->writeback) {
+		_store(e, X_WB, X_CPU, 4 * mem->base.reg);
+	}
+	if (mem->signExtend) {
+		_store(e, X_RDI, X_RSP, 4); // the address decides how LDRSH extends
 	}
 
 	uint8_t* done[2] = { NULL, NULL };
@@ -841,10 +817,31 @@ slow:
 		_patch(done[0], e->p);
 		_patch(done[1], e->p);
 	}
+	if (mem->signExtend) {
+		uint8_t* halfword = NULL;
+		if (size == 2) {
+			// LDRSH of an odd address sign-extends the rotated byte
+			_byte(e, 0xF6); // test byte [rsp + 4], 1
+			_modrmMem(e, 0, X_RSP, 4);
+			_byte(e, 1);
+			halfword = _jcc(e, CC_E);
+		}
+		_byte(e, 0x0F); // movsx eax, al
+		_byte(e, 0xBE);
+		_modrmReg(e, X_RAX, X_RAX);
+		if (halfword) {
+			uint8_t* extended = _jmp(e);
+			_patch(halfword, e->p);
+			_byte(e, 0x0F); // movsx eax, ax
+			_byte(e, 0xBF);
+			_modrmReg(e, X_RAX, X_RAX);
+			_patch(extended, e->p);
+		}
+	}
 	if (load) {
-		_store(e, X_RAX, X_CPU, 4 * rd);
-	} else if (writeback) {
-		_store(e, X_WB, X_CPU, 4 * rn);
+		_store(e, X_RAX, X_CPU, 4 * mem->rd);
+	} else if (mem->writeback) {
+		_store(e, X_WB, X_CPU, 4 * mem->base.reg);
 	}
 	_addMemReg(e, X_CPU, OFF_CYCLES, X_R10);
 	_addCycles(c, c->memCycles);
@@ -918,7 +915,7 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	struct Emitter* e = &c->e;
 	uint32_t op = c->ops[i];
 	uint32_t address = c->pc + c->width * i;
-	unsigned cond = c->thumb ? 0xE : op >> 28;
+	unsigned cond = _fallbackCond(c, op);
 
 	_storeState(c, i + 1);
 	uint8_t* toCheck = NULL;
