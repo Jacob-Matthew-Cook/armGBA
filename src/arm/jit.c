@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <sys/mman.h>
 
+#include "jit-ops.h"
+
 // Blocks run ARM and Thumb code from BIOS, EWRAM, IWRAM and the cartridge. Every guest
 // instruction keeps the interpreter's
 // exact state: PC, the two prefetched words, cycles, and an event check afterwards.
@@ -80,11 +82,6 @@ struct ARMJitPage {
 	uint8_t hits[0x800];
 };
 
-static const uint16_t _conditionLut[16] = {
-	0xF0F0, 0x0F0F, 0xCCCC, 0x3333, 0xFF00, 0x00FF, 0xAAAA, 0x5555,
-	0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
-};
-
 enum {
 	OFF_PC = offsetof(struct ARMCore, gprs) + 4 * ARM_PC,
 	OFF_CPSR = offsetof(struct ARMCore, cpsr),
@@ -111,41 +108,8 @@ enum {
 	ENTRY_THUMB = offsetof(struct ARMJitEntry, thumb),
 };
 
-enum {
-	ALU_AND, ALU_EOR, ALU_SUB, ALU_RSB, ALU_ADD, ALU_ADC, ALU_SBC, ALU_RSC,
-	ALU_TST, ALU_TEQ, ALU_CMP, ALU_CMN, ALU_ORR, ALU_MOV, ALU_BIC, ALU_MVN
-};
-
 struct Emitter {
 	uint8_t* p;
-};
-
-// ARM and Thumb instructions decode to the same operations. A source is a guest register
-// or a value known when compiling (the PC).
-struct Source {
-	bool constant;
-	uint32_t value;
-	unsigned reg;
-};
-
-struct MemOp {
-	unsigned cond;
-	bool load;
-	unsigned size;
-	bool signExtend;
-	unsigned rd;
-	struct Source base;
-	bool immediateOffset;
-	uint32_t offset;
-	struct Source m;
-	unsigned shiftType;
-	unsigned shiftAmount;
-	bool up;
-	bool pre;
-	bool writeback;
-	// A patched instruction: the 12-bit offset and the up bit come from the fetched opcode
-	bool runtimeOffset;
-	unsigned fetchedIndex;
 };
 
 struct Compiler {
@@ -156,15 +120,14 @@ struct Compiler {
 	uint32_t pc;
 	const uint32_t* region;
 	uint32_t mask;
-	const uint32_t* ops;
+	uint32_t ops[MAX_SPAN];
 	// Patched instructions and prefetch words, decoded at runtime from jit->fetched
-	const bool* hot;
+	bool hot[MAX_SPAN];
 	unsigned count;
 	bool thumb;
 	unsigned width;
 	// Data accesses from cartridge code go through the memory handlers for the prefetch buffer
 	bool romCode;
-	uint8_t* body;
 	uint32_t aluCycles;
 	uint32_t memCycles;
 	// For the prefetch stalls of data accesses from cartridge code
@@ -182,11 +145,14 @@ struct Compiler {
 	struct {
 		uint8_t* site;
 		unsigned index;
-	} careful[MAX_BLOCK];
-	unsigned nCareful;
+	} runs[MAX_BLOCK];
+	unsigned nRuns;
 	uint8_t* loops[MAX_BLOCK];
 	unsigned nLoops;
-	uint8_t* const* fast;
+	uint8_t* fast[MAX_SPAN];
+	uint8_t* careful[MAX_SPAN];
+	unsigned runLength[MAX_SPAN];
+	bool isTarget[MAX_SPAN];
 	// The region each guest register pointed into when the block was compiled, kept through
 	// pointer arithmetic, or -1
 	int regRegion[16];
@@ -209,367 +175,6 @@ static void _exitAt(struct Compiler* c, uint8_t* at, int index) {
 	++c->nExits;
 }
 
-static bool _isLogical(unsigned opcode) {
-	return opcode == ALU_AND || opcode == ALU_EOR || opcode == ALU_TST || opcode == ALU_TEQ ||
-	       opcode == ALU_ORR || opcode == ALU_MOV || opcode == ALU_BIC || opcode == ALU_MVN;
-}
-
-
-struct AluOp {
-	unsigned cond;
-	unsigned opcode;
-	bool s;
-	unsigned rd;
-	struct Source n;
-	// Second operand: an immediate, or a register shifted by an immediate amount
-	bool immediate;
-	uint32_t imm;
-	// Carry out of an immediate: -1 keeps C, otherwise 0 or 1
-	int immCarry;
-	struct Source m;
-	unsigned shiftType;
-	unsigned shiftAmount;
-	// ARM keeps the shifter carry for MULS and MLAS; Thumb never reads it
-	bool keepsShifterCarry;
-	// Whether any flag this sets is read before another instruction overwrites it
-	bool flagsLive;
-	uint32_t cycles;
-};
-
-static struct Source _reg(unsigned reg) {
-	struct Source source = { false, 0, reg };
-	return source;
-}
-
-static struct Source _const(uint32_t value) {
-	struct Source source = { true, value, 0 };
-	return source;
-}
-
-static bool _decodeArmAlu(uint32_t op, uint32_t address, uint32_t aluCycles, struct AluOp* alu) {
-	if ((op & 0x0C000000) || (op >> 28) == 0xF) {
-		return false;
-	}
-	if (!(op & 0x02000000) && (op & 0x10)) {
-		return false; // Register-specified shift, multiply, halfword transfers, BX
-	}
-	unsigned opcode = (op >> 21) & 0xF;
-	if (opcode >= ALU_TST && opcode <= ALU_CMN && !(op & 0x00100000)) {
-		return false; // MRS, MSR
-	}
-	if (((op >> 12) & 0xF) == ARM_PC) {
-		return false;
-	}
-	unsigned rn = (op >> 16) & 0xF;
-	unsigned rm = op & 0xF;
-	memset(alu, 0, sizeof(*alu));
-	alu->cond = op >> 28;
-	alu->opcode = opcode;
-	alu->s = op & 0x00100000;
-	alu->rd = (op >> 12) & 0xF;
-	alu->n = rn == ARM_PC ? _const(address + 8) : _reg(rn);
-	if (op & 0x02000000) {
-		unsigned rotate = (op >> 7) & 0x1E;
-		alu->immediate = true;
-		alu->imm = op & 0xFF;
-		alu->immCarry = -1;
-		if (rotate) {
-			alu->imm = (alu->imm >> rotate) | (alu->imm << (32 - rotate));
-			alu->immCarry = alu->imm >> 31;
-		}
-	} else {
-		alu->m = rm == ARM_PC ? _const(address + 8) : _reg(rm);
-		alu->shiftType = (op >> 5) & 3;
-		alu->shiftAmount = (op >> 7) & 0x1F;
-	}
-	alu->keepsShifterCarry = true;
-	alu->cycles = aluCycles;
-	return true;
-}
-
-static void _thumbAlu(struct AluOp* alu, unsigned opcode, bool s, unsigned rd, struct Source n, uint32_t cycles) {
-	memset(alu, 0, sizeof(*alu));
-	alu->cond = 0xE;
-	alu->opcode = opcode;
-	alu->s = s;
-	alu->rd = rd;
-	alu->n = n;
-	alu->cycles = cycles;
-}
-
-static void _thumbImm(struct AluOp* alu, uint32_t imm) {
-	alu->immediate = true;
-	alu->imm = imm;
-	alu->immCarry = -1;
-}
-
-static void _thumbReg(struct AluOp* alu, unsigned reg, unsigned shiftType, unsigned shiftAmount) {
-	alu->m = _reg(reg);
-	alu->shiftType = shiftType;
-	alu->shiftAmount = shiftAmount;
-}
-
-static bool _decodeThumbAlu(uint32_t op, uint32_t address, uint32_t aluCycles, struct AluOp* alu) {
-	unsigned rd = op & 7;
-	unsigned rs = (op >> 3) & 7;
-	switch (op >> 11) {
-	case 0x00: // LSL, LSR, ASR #imm
-	case 0x01:
-	case 0x02:
-		_thumbAlu(alu, ALU_MOV, true, rd, _reg(0), aluCycles);
-		_thumbReg(alu, rs, op >> 11, (op >> 6) & 0x1F);
-		return true;
-	case 0x03: // ADD, SUB with a register or 3-bit immediate
-		_thumbAlu(alu, (op & 0x0200) ? ALU_SUB : ALU_ADD, true, rd, _reg(rs), aluCycles);
-		if (op & 0x0400) {
-			_thumbImm(alu, (op >> 6) & 7);
-		} else {
-			_thumbReg(alu, (op >> 6) & 7, 0, 0);
-		}
-		return true;
-	case 0x04: // MOV, CMP, ADD, SUB with an 8-bit immediate
-	case 0x05:
-	case 0x06:
-	case 0x07: {
-		static const unsigned opcodes[] = { ALU_MOV, ALU_CMP, ALU_ADD, ALU_SUB };
-		rd = (op >> 8) & 7;
-		_thumbAlu(alu, opcodes[(op >> 11) & 3], true, rd, _reg(rd), aluCycles);
-		_thumbImm(alu, op & 0xFF);
-		return true;
-	}
-	case 0x08:
-		if (!(op & 0x0400)) {
-			// AND EOR LSL LSR ASR ADC SBC ROR TST NEG CMP CMN ORR MUL BIC MVN
-			static const int opcodes[] = {
-				ALU_AND, ALU_EOR, -1, -1, -1, ALU_ADC, ALU_SBC, -1,
-				ALU_TST, ALU_RSB, ALU_CMP, ALU_CMN, ALU_ORR, -1, ALU_BIC, ALU_MVN
-			};
-			int opcode = opcodes[(op >> 6) & 0xF];
-			if (opcode < 0) {
-				return false; // Register shifts and MUL
-			}
-			if (opcode == ALU_RSB) {
-				_thumbAlu(alu, ALU_RSB, true, rd, _reg(rs), aluCycles); // NEG
-				_thumbImm(alu, 0);
-			} else {
-				_thumbAlu(alu, opcode, true, rd, _reg(rd), aluCycles);
-				_thumbReg(alu, rs, 0, 0);
-			}
-			return true;
-		}
-		if ((op & 0x0300) != 0x0300) {
-			// ADD, CMP, MOV with high registers
-			unsigned hd = rd | ((op >> 4) & 8);
-			unsigned hm = (op >> 3) & 0xF;
-			static const unsigned opcodes[] = { ALU_ADD, ALU_CMP, ALU_MOV };
-			unsigned opcode = opcodes[(op >> 8) & 3];
-			if (hd == ARM_PC && opcode != ALU_CMP) {
-				return false;
-			}
-			_thumbAlu(alu, opcode, opcode == ALU_CMP, hd, hd == ARM_PC ? _const(address + 4) : _reg(hd), aluCycles);
-			if (hm == ARM_PC) {
-				_thumbImm(alu, address + 4);
-			} else {
-				_thumbReg(alu, hm, 0, 0);
-			}
-			return true;
-		}
-		return false;
-	case 0x14: // ADD rd, PC, #imm
-		_thumbAlu(alu, ALU_MOV, false, (op >> 8) & 7, _reg(0), aluCycles);
-		_thumbImm(alu, ((address + 4) & ~3) + ((op & 0xFF) << 2));
-		return true;
-	case 0x15: // ADD rd, SP, #imm
-		_thumbAlu(alu, ALU_ADD, false, (op >> 8) & 7, _reg(ARM_SP), aluCycles);
-		_thumbImm(alu, (op & 0xFF) << 2);
-		return true;
-	case 0x16:
-		if ((op & 0x0F00) == 0x0000) { // ADD SP, #+/-imm
-			_thumbAlu(alu, (op & 0x80) ? ALU_SUB : ALU_ADD, false, ARM_SP, _reg(ARM_SP), aluCycles);
-			_thumbImm(alu, (op & 0x7F) << 2);
-			return true;
-		}
-		return false;
-	case 0x1E: // BL prefix
-		_thumbAlu(alu, ALU_MOV, false, ARM_LR, _reg(0), aluCycles);
-		_thumbImm(alu, address + 4 + ((int32_t) (op << 21) >> 9));
-		return true;
-	default:
-		return false;
-	}
-}
-
-static bool _decodeArmMem(uint32_t op, uint32_t address, struct MemOp* mem) {
-	unsigned cond = op >> 28;
-	if (cond == 0xF) {
-		return false;
-	}
-	bool p = op & (1 << 24);
-	bool w = op & (1 << 21);
-	unsigned rn = (op >> 16) & 0xF;
-	unsigned rd = (op >> 12) & 0xF;
-	if (rd == ARM_PC || (rn == ARM_PC && (!p || w))) {
-		return false;
-	}
-	memset(mem, 0, sizeof(*mem));
-	if ((op & 0x0C000000) == 0x04000000) {
-		if ((op & 0x02000010) == 0x02000010 || (!p && w)) {
-			return false; // Undefined, LDRT, STRT
-		}
-		mem->size = (op & (1 << 22)) ? 1 : 4;
-		if (op & 0x02000000) {
-			// Addressing mode 2 shifts: LSR and ASR #0 mean #32, ROR #0 is RRX
-			mem->m = (op & 0xF) == ARM_PC ? _const(address + 8) : _reg(op & 0xF);
-			mem->shiftType = (op >> 5) & 3;
-			mem->shiftAmount = (op >> 7) & 0x1F;
-		} else {
-			mem->immediateOffset = true;
-			mem->offset = op & 0xFFF;
-		}
-	} else if ((op & 0x0E000090) == 0x00000090 && (op & 0x60) && ((op & 0x60) == 0x20 || (op & (1 << 20))) && (p || !w)) {
-		// LDRH, STRH, LDRSB, LDRSH
-		mem->size = (op & 0x60) == 0x40 ? 1 : 2;
-		mem->signExtend = op & 0x40;
-		if (op & (1 << 22)) {
-			mem->immediateOffset = true;
-			mem->offset = ((op >> 4) & 0xF0) | (op & 0xF);
-		} else {
-			mem->m = (op & 0xF) == ARM_PC ? _const(address + 8) : _reg(op & 0xF);
-		}
-	} else {
-		return false;
-	}
-	mem->cond = cond;
-	mem->load = op & (1 << 20);
-	mem->rd = rd;
-	mem->base = rn == ARM_PC ? _const(address + 8) : _reg(rn);
-	mem->up = op & (1 << 23);
-	mem->pre = p;
-	mem->writeback = !p || w;
-	return true;
-}
-
-static void _thumbMem(struct MemOp* mem, bool load, unsigned size, unsigned rd, struct Source base) {
-	memset(mem, 0, sizeof(*mem));
-	mem->cond = 0xE;
-	mem->load = load;
-	mem->size = size;
-	mem->rd = rd;
-	mem->base = base;
-	mem->immediateOffset = true;
-	mem->up = true;
-	mem->pre = true;
-}
-
-static bool _decodeThumbMem(uint32_t op, uint32_t address, struct MemOp* mem) {
-	unsigned rd = op & 7;
-	unsigned rn = (op >> 3) & 7;
-	switch (op >> 11) {
-	case 0x09: // LDR rd, [PC, #imm]
-		_thumbMem(mem, true, 4, (op >> 8) & 7, _const((address + 4) & ~3));
-		mem->offset = (op & 0xFF) << 2;
-		return true;
-	case 0x0A: // Register offset
-	case 0x0B: {
-		// STR STRH STRB LDRSB LDR LDRH LDRB LDRSH
-		static const unsigned sizes[] = { 4, 2, 1, 1, 4, 2, 1, 2 };
-		unsigned kind = (op >> 9) & 7;
-		_thumbMem(mem, kind >= 3, sizes[kind], rd, _reg(rn));
-		mem->signExtend = kind == 3 || kind == 7;
-		mem->immediateOffset = false;
-		mem->m = _reg((op >> 6) & 7);
-		return true;
-	}
-	case 0x0C: // STR, LDR #imm
-	case 0x0D:
-		_thumbMem(mem, op & 0x0800, 4, rd, _reg(rn));
-		mem->offset = ((op >> 6) & 0x1F) << 2;
-		return true;
-	case 0x0E: // STRB, LDRB #imm
-	case 0x0F:
-		_thumbMem(mem, op & 0x0800, 1, rd, _reg(rn));
-		mem->offset = (op >> 6) & 0x1F;
-		return true;
-	case 0x10: // STRH, LDRH #imm
-	case 0x11:
-		_thumbMem(mem, op & 0x0800, 2, rd, _reg(rn));
-		mem->offset = ((op >> 6) & 0x1F) << 1;
-		return true;
-	case 0x12: // STR, LDR rd, [SP, #imm]
-	case 0x13:
-		_thumbMem(mem, op & 0x0800, 4, (op >> 8) & 7, _reg(ARM_SP));
-		mem->offset = (op & 0xFF) << 2;
-		return true;
-	default:
-		return false;
-	}
-}
-
-// Flags as bits for liveness: N Z C V, and CPSR bits 24-27, which add and subtract clear
-enum {
-	FLAG_N = 1,
-	FLAG_Z = 2,
-	FLAG_C = 4,
-	FLAG_V = 8,
-	FLAG_LOW = 16,
-	FLAG_ALL = 31,
-};
-
-static unsigned _condReads(unsigned cond) {
-	static const unsigned reads[16] = {
-		FLAG_Z, FLAG_Z, FLAG_C, FLAG_C, FLAG_N, FLAG_N, FLAG_V, FLAG_V,
-		FLAG_C | FLAG_Z, FLAG_C | FLAG_Z, FLAG_N | FLAG_V, FLAG_N | FLAG_V,
-		FLAG_N | FLAG_Z | FLAG_V, FLAG_N | FLAG_Z | FLAG_V, 0, 0
-	};
-	return reads[cond];
-}
-
-// Whether the carry out of the second operand is the old C (no shift, or an unrotated immediate)
-static bool _keepsCarry(const struct AluOp* alu) {
-	if (alu->immediate) {
-		return alu->immCarry < 0;
-	}
-	return alu->shiftType == 0 && alu->shiftAmount == 0;
-}
-
-static unsigned _aluReads(const struct AluOp* alu) {
-	unsigned reads = _condReads(alu->cond);
-	if (alu->opcode == ALU_ADC || alu->opcode == ALU_SBC || alu->opcode == ALU_RSC) {
-		reads |= FLAG_C;
-	}
-	if (!alu->immediate && alu->shiftType == 3 && alu->shiftAmount == 0) {
-		reads |= FLAG_C; // RRX
-	}
-	return reads;
-}
-
-static unsigned _aluWrites(const struct AluOp* alu) {
-	if (!alu->s) {
-		return 0;
-	}
-	if (_isLogical(alu->opcode)) {
-		return FLAG_N | FLAG_Z | (_keepsCarry(alu) ? 0 : FLAG_C);
-	}
-	if (alu->opcode == ALU_SBC || alu->opcode == ALU_RSC) {
-		return FLAG_N | FLAG_Z | FLAG_C | FLAG_V;
-	}
-	return FLAG_ALL;
-}
-
-// Within a run of ALU instructions nothing else can see the flags; everything is live after it
-static void _markLiveFlags(struct AluOp* alus, unsigned count) {
-	unsigned live = FLAG_ALL;
-	unsigned j = count;
-	while (j--) {
-		unsigned writes = _aluWrites(&alus[j]);
-		alus[j].flagsLive = (writes & live) != 0;
-		if (alus[j].cond == 0xE) {
-			live &= ~writes;
-		}
-		live |= _aluReads(&alus[j]);
-	}
-}
-
 static bool _decodeAlu(struct Compiler* c, unsigned i, struct AluOp* alu) {
 	uint32_t address = c->pc + c->width * i;
 	if (c->thumb) {
@@ -584,13 +189,6 @@ static bool _decodeMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
 		return _decodeThumbMem(c->ops[i], address, mem);
 	}
 	return _decodeArmMem(c->ops[i], address, mem);
-}
-
-static void* _handler(struct Compiler* c, uint32_t op) {
-	if (c->thumb) {
-		return (void*) _thumbTable[op >> 6];
-	}
-	return (void*) _armTable[((op >> 16) & 0xFF0) | ((op >> 4) & 0x00F)];
 }
 
 // Whether a taken branch at ops[i] goes back to the start of this block
@@ -644,103 +242,6 @@ static bool _branchTarget(struct Compiler* c, unsigned i, uint32_t* target) {
 	return false;
 }
 
-// MUL, MLA and Thumb MUL, which take a wait by the multiplier's significant bytes
-struct MulOp {
-	unsigned cond;
-	unsigned rd;
-	unsigned rm;
-	unsigned rs;
-	int rn;
-	bool s;
-};
-
-static bool _decodeMul(struct Compiler* c, unsigned i, struct MulOp* m) {
-	uint32_t op = c->ops[i];
-	if (c->thumb) {
-		if ((op & 0xFFC0) != 0x4340) {
-			return false;
-		}
-		// rd *= rn, waiting by rd
-		m->cond = 0xE;
-		m->rd = op & 7;
-		m->rs = op & 7;
-		m->rm = (op >> 3) & 7;
-		m->rn = -1;
-		m->s = true;
-		return true;
-	}
-	if ((op & 0x0FC000F0) != 0x00000090) {
-		return false;
-	}
-	m->cond = op >> 28;
-	m->rd = (op >> 16) & 0xF;
-	m->rs = (op >> 8) & 0xF;
-	m->rm = op & 0xF;
-	m->rn = (op & 0x00200000) ? (int) ((op >> 12) & 0xF) : -1;
-	m->s = op & 0x00100000;
-	return m->cond != 0xF && m->rd != ARM_PC && m->rs != ARM_PC && m->rm != ARM_PC && m->rn != ARM_PC;
-}
-
-// LDM and STM without PC, the S bit or an empty list; Thumb PUSH, POP, LDMIA and STMIA
-struct MultiOp {
-	unsigned cond;
-	bool load;
-	unsigned rn;
-	unsigned list;
-	bool up;
-	bool pre;
-	bool writeback;
-};
-
-static bool _decodeMulti(struct Compiler* c, unsigned i, struct MultiOp* m) {
-	uint32_t op = c->ops[i];
-	m->cond = 0xE;
-	if (c->thumb) {
-		if ((op & 0xF000) == 0xC000) {
-			m->load = op & 0x0800;
-			m->rn = (op >> 8) & 7;
-			m->list = op & 0xFF;
-			m->up = true;
-			m->pre = false;
-		} else if ((op & 0xFE00) == 0xB400 || (op & 0xFF00) == 0xBC00) {
-			m->load = op & 0x0800;
-			m->rn = ARM_SP;
-			m->list = op & 0xFF;
-			if (op & 0x0100) {
-				m->list |= 1 << ARM_LR;
-			}
-			m->up = m->load;
-			m->pre = !m->load;
-		} else {
-			return false;
-		}
-		m->writeback = !(m->load && (m->list & (1 << m->rn)));
-	} else {
-		if ((op & 0x0E400000) != 0x08000000) {
-			return false;
-		}
-		m->cond = op >> 28;
-		m->load = op & 0x00100000;
-		m->rn = (op >> 16) & 0xF;
-		m->list = op & 0xFFFF;
-		m->up = op & 0x00800000;
-		m->pre = op & 0x01000000;
-		m->writeback = (op & 0x00200000) && !(m->load && (m->list & (1 << m->rn)));
-	}
-	return m->list && !(m->list & (1 << ARM_PC)) && m->rn != ARM_PC && m->cond != 0xF;
-}
-
-// Condition checked before calling a handler: ARM conditions and Thumb conditional branches
-static unsigned _fallbackCond(struct Compiler* c, uint32_t op) {
-	if (!c->thumb) {
-		return op >> 28;
-	}
-	if ((op & 0xF000) == 0xD000 && (op & 0x0F00) < 0x0E00) {
-		return (op >> 8) & 0xF;
-	}
-	return 0xE;
-}
-
 static uint32_t _regionEnd(struct ARMCore* cpu, uint32_t pc);
 
 struct BranchOp {
@@ -761,7 +262,7 @@ static bool _decodeBranch(struct Compiler* c, unsigned i, struct BranchOp* b) {
 	if (!_branchTarget(c, i, &b->target)) {
 		return false;
 	}
-	b->cond = _fallbackCond(c, op);
+	b->cond = _condition(op, c->thumb);
 	b->link = !c->thumb && (op & 0x01000000);
 	b->thumbLink = c->thumb && (op & 0xF800) == 0xF800;
 	b->lr = b->thumbLink ? address + 2 + ((int32_t) (c->ops[i - 1] << 21) >> 9) : 0;
@@ -959,37 +460,6 @@ static void _emitPatched(struct Compiler* c, unsigned i) {
 	for (k = 0; k < nDone; ++k) {
 		_patch(done[k], c->e.p);
 	}
-}
-
-static bool _endsBlock(uint32_t op, bool thumb) {
-	if (thumb) {
-		if ((op & 0xF000) == 0xD000 || (op & 0xF000) == 0xE000 || (op & 0xF800) == 0xF800) {
-			return true; // B, conditional B, SWI, BL suffix, undefined
-		}
-		if ((op & 0xFF00) == 0x4700 || (op & 0xFF00) == 0xBD00 || (op & 0xFF00) == 0xBE00) {
-			return true; // BX, POP with PC, BKPT
-		}
-		return ((op & 0xFF00) == 0x4400 || (op & 0xFF00) == 0x4600) && (op & 0x87) == 0x87; // ADD or MOV to PC
-	}
-	if ((op & 0x0E000000) == 0x0A000000) {
-		return true; // B, BL
-	}
-	if ((op & 0x0FFFFFF0) == 0x012FFF10) {
-		return true; // BX
-	}
-	if ((op & 0x0C000000) == 0x0C000000) {
-		return true; // Coprocessor, SWI
-	}
-	if ((op & 0x0C000000) == 0x00000000 && ((op >> 12) & 0xF) == ARM_PC) {
-		return true;
-	}
-	if ((op & 0x0C100000) == 0x04100000 && ((op >> 12) & 0xF) == ARM_PC) {
-		return true;
-	}
-	if ((op & 0x0E108000) == 0x08108000) {
-		return true; // LDM with PC
-	}
-	return false;
 }
 
 static struct ARMJitPage* _page(struct ARMJit* jit, uint32_t address, bool create) {
@@ -1207,49 +677,32 @@ static uint32_t _regionEnd(struct ARMCore* cpu, uint32_t pc) {
 	}
 }
 
-static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uint32_t pc, bool thumb) {
-	const uint32_t* region = cpu->memory.activeRegion;
-	uint32_t mask = cpu->memory.activeMask;
-	unsigned width = thumb ? WORD_SIZE_THUMB : WORD_SIZE_ARM;
+// The words a block at pc runs through, up to the first that ends it, and the two after
+static bool _readBlock(struct Compiler* c, struct ARMJit* jit, struct ARMCore* cpu, uint32_t pc, bool thumb) {
+	c->region = cpu->memory.activeRegion;
+	c->mask = cpu->memory.activeMask;
+	c->thumb = thumb;
+	c->width = thumb ? WORD_SIZE_THUMB : WORD_SIZE_ARM;
+	c->pc = pc;
 	uint32_t end = _regionEnd(cpu, pc);
-	uint32_t ops[MAX_SPAN];
-	bool hot[MAX_SPAN];
 	unsigned count = 0;
-	while (count < MAX_BLOCK && pc + width * (count + 3) <= end) {
-		uint32_t address = pc + width * count;
-		hot[count] = _isPatched(jit, address);
-		if (thumb) {
-			LOAD_16(ops[count], address & mask, region);
-		} else {
-			LOAD_32(ops[count], address & mask, region);
-		}
+	while (count < MAX_BLOCK && pc + c->width * (count + 3) <= end) {
 		++count;
-		if (!hot[count - 1] && _endsBlock(ops[count - 1], thumb)) {
+		if (!_isPatched(jit, pc + c->width * (count - 1)) && _endsBlock(_opAt(c, pc + c->width * (count - 1)), thumb)) {
 			break;
 		}
 	}
-	if (!count) {
-		return NULL;
+	c->count = count;
+	unsigned i;
+	for (i = 0; i < count + 2; ++i) {
+		c->hot[i] = _isPatched(jit, pc + c->width * i);
+		c->ops[i] = _opAt(c, pc + c->width * i);
 	}
-	hot[count] = _isPatched(jit, pc + width * count);
-	hot[count + 1] = _isPatched(jit, pc + width * (count + 1));
-	if (thumb) {
-		LOAD_16(ops[count], (pc + width * count) & mask, region);
-		LOAD_16(ops[count + 1], (pc + width * (count + 1)) & mask, region);
-	} else {
-		LOAD_32(ops[count], (pc + width * count) & mask, region);
-		LOAD_32(ops[count + 1], (pc + width * (count + 1)) & mask, region);
-	}
-	uint32_t opMask0 = hot[0] ? 0 : 0xFFFFFFFF;
-	uint32_t opMask1 = hot[1] ? 0 : 0xFFFFFFFF;
-	if (((ops[0] ^ cpu->prefetch[0]) & opMask0) || ((ops[1] ^ cpu->prefetch[1]) & opMask1)) {
-		return NULL;
-	}
+	return count && !((c->ops[0] ^ cpu->prefetch[0]) & (c->hot[0] ? 0 : 0xFFFFFFFF)) &&
+	       !((c->ops[1] ^ cpu->prefetch[1]) & (c->hot[1] ? 0 : 0xFFFFFFFF));
+}
 
-	if (jit->codeUsed + count * MAX_INSN_BYTES + 1024 > jit->codeSize) {
-		ARMJitDropBlocks(jit);
-	}
-
+static struct ARMJitBlock* _newBlock(unsigned count) {
 	struct ARMJitBlock* block = calloc(1, sizeof(*block));
 	if (!block) {
 		return NULL;
@@ -1261,199 +714,181 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		_freeBlock(block);
 		return NULL;
 	}
-	static struct Compiler compiler;
-	struct Compiler* c = &compiler;
-	uint8_t* code = &jit->code[jit->codeUsed];
-	c->e.p = code;
+	return block;
+}
+
+static void _startCompiler(struct Compiler* c, struct ARMJit* jit, struct ARMCore* cpu, struct ARMJitBlock* block) {
+	c->e.p = &jit->code[jit->codeUsed];
 	c->jit = jit;
 	c->cpu = cpu;
 	c->gba = (struct GBA*) cpu->master;
-	c->pc = pc;
-	c->region = region;
-	c->mask = mask;
-	c->ops = ops;
-	c->hot = hot;
-	c->count = count;
-	c->thumb = thumb;
-	c->width = width;
-	c->romCode = (pc >> 24) >= GBA_REGION_ROM0;
-	c->nExits = 0;
 	c->block = block;
+	c->romCode = (c->pc >> 24) >= GBA_REGION_ROM0;
+	c->nExits = 0;
 	c->nLinks = 0;
-	c->nCareful = 0;
+	c->nRuns = 0;
 	c->nLoops = 0;
 	c->nCold = 0;
-	unsigned reg;
-	for (reg = 0; reg < 16; ++reg) {
-		c->regRegion[reg] = _valueRegion(cpu->gprs[reg]);
-	}
 	c->seq16 = cpu->memory.activeSeqCycles16;
 	c->nonseq16 = cpu->memory.activeNonseqCycles16;
 	c->prefetch = c->gba->memory.prefetch;
-	if (thumb) {
-		c->aluCycles = 1 + cpu->memory.activeSeqCycles16;
-		c->memCycles = 1 + cpu->memory.activeNonseqCycles16;
-	} else {
-		c->aluCycles = 1 + cpu->memory.activeSeqCycles32;
-		c->memCycles = 1 + cpu->memory.activeNonseqCycles32;
-	}
-	c->body = c->e.p;
-
-	// Where each instruction can be entered: the start of each unit (an ALU run or a single
-	// instruction), and inside ALU runs, the careful copy that goes one instruction at a time
-	uint8_t* fast[MAX_SPAN];
-	uint8_t* careful[MAX_SPAN];
-	unsigned runLength[MAX_SPAN];
-	memset(fast, 0, sizeof(fast));
-	memset(careful, 0, sizeof(careful));
-	memset(runLength, 0, sizeof(runLength));
-
-	// Branches back into the block jump straight to their target, so it starts a unit
-	bool isTarget[MAX_SPAN];
-	memset(isTarget, 0, sizeof(isTarget));
-	struct BranchOp branch;
+	c->aluCycles = 1 + (c->thumb ? cpu->memory.activeSeqCycles16 : cpu->memory.activeSeqCycles32);
+	c->memCycles = 1 + (c->thumb ? cpu->memory.activeNonseqCycles16 : cpu->memory.activeNonseqCycles32);
+	memset(c->fast, 0, sizeof(c->fast));
+	memset(c->careful, 0, sizeof(c->careful));
+	memset(c->runLength, 0, sizeof(c->runLength));
+	memset(c->isTarget, 0, sizeof(c->isTarget));
 	unsigned i;
-	for (i = 0; i < count; ++i) {
-		if (!hot[i] && _decodeBranch(c, i, &branch) && branch.index >= 0) {
-			isTarget[branch.index] = true;
+	for (i = 0; i < 16; ++i) {
+		c->regRegion[i] = _valueRegion(cpu->gprs[i]);
+	}
+	// Branches back into the block jump straight to their target, so it starts a unit
+	struct BranchOp branch;
+	for (i = 0; i < c->count; ++i) {
+		if (!c->hot[i] && _decodeBranch(c, i, &branch) && branch.index >= 0) {
+			c->isTarget[branch.index] = true;
 		}
 	}
-	c->fast = fast;
+}
 
+// ALU instructions run back to back; the interpreter checks for events after each, so the run
+// goes at once only when none can come due before its last instruction
+static unsigned _emitAluRun(struct Compiler* c, unsigned i, struct AluOp* alus) {
+	unsigned run = 1;
+	while (i + run < c->count && !c->hot[i + run] && !c->isTarget[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
+		++run;
+	}
+	uint32_t cycles = 0;
+	unsigned lastAlways = 0;
+	unsigned j;
+	for (j = 0; j < run; ++j) {
+		if (j < run - 1) {
+			cycles += alus[i + j].cycles;
+		}
+		if (alus[i + j].cond == 0xE) {
+			lastAlways = j;
+		}
+	}
+	if (run > 1) {
+		c->runs[c->nRuns].site = _segmentCheck(c, cycles);
+		c->runs[c->nRuns].index = i;
+		++c->nRuns;
+		c->runLength[i] = run;
+	}
+	_markLiveFlags(&alus[i], run);
+	for (j = 0; j < run; ++j) {
+		_fetchAhead(c, i + j);
+		_emitAlu(c, &alus[i + j], alus[i + j].keepsShifterCarry && j >= lastAlways);
+		_trackAlu(c, &alus[i + j]);
+	}
+	_addCycles(c, cycles + alus[i + run - 1].cycles);
+	_eventCheck(c, i + run);
+	return run;
+}
+
+// One unit per ALU run or other instruction, each entered at fast[i]
+static void _emitBody(struct Compiler* c) {
 	struct AluOp alus[MAX_SPAN];
 	struct MemOp mem;
 	struct MultiOp multi;
 	struct MulOp mul;
-	i = 0;
-	while (i < count) {
-		fast[i] = c->e.p;
-		if (hot[i]) {
+	struct BranchOp branch;
+	unsigned i = 0;
+	while (i < c->count) {
+		c->fast[i] = c->e.p;
+		uint32_t op = c->ops[i];
+		if (c->hot[i]) {
 			_fetchAhead(c, i);
 			_emitPatched(c, i);
-			++i;
 		} else if (_decodeAlu(c, i, &alus[i])) {
-			unsigned run = 1;
-			while (i + run < count && !hot[i + run] && !isTarget[i + run] && _decodeAlu(c, i + run, &alus[i + run])) {
-				++run;
-			}
-			// The interpreter checks for events after every instruction, so the run only goes
-			// at once when none can come due before its last instruction
-			uint32_t cycles = 0;
-			unsigned lastAlways = 0;
-			unsigned j;
-			for (j = 0; j < run; ++j) {
-				if (j < run - 1) {
-					cycles += alus[i + j].cycles;
-				}
-				if (alus[i + j].cond == 0xE) {
-					lastAlways = j;
-				}
-			}
-			if (run > 1) {
-				c->careful[c->nCareful].site = _segmentCheck(c, cycles);
-				c->careful[c->nCareful].index = i;
-				++c->nCareful;
-				runLength[i] = run;
-			}
-			_markLiveFlags(&alus[i], run);
-			for (j = 0; j < run; ++j) {
-				_fetchAhead(c, i + j);
-				_emitAlu(c, &alus[i + j], alus[i + j].keepsShifterCarry && j >= lastAlways);
-				_trackAlu(c, &alus[i + j]);
-			}
-			_addCycles(c, cycles + alus[i + run - 1].cycles);
-			i += run;
-			_eventCheck(c, i);
+			i += _emitAluRun(c, i, alus);
+			continue;
 		} else if (_decodeMem(c, i, &mem)) {
 			_fetchAhead(c, i);
 			_emitMem(c, i, &mem);
 			if (mem.load) {
 				_setRegion(c, mem.rd, -1);
 			}
-			++i;
-		} else if (_decodeMul(c, i, &mul)) {
+		} else if (_decodeMul(op, c->thumb, &mul)) {
 			_fetchAhead(c, i);
 			_emitMul(c, i, &mul);
 			_setRegion(c, mul.rd, -1);
-			++i;
-		} else if (_decodeMulti(c, i, &multi)) {
+		} else if (_decodeMulti(op, c->thumb, &multi)) {
 			_fetchAhead(c, i);
 			_emitMulti(c, i, &multi);
 			_trackMulti(c, &multi);
-			++i;
 		} else if (_decodeBranch(c, i, &branch)) {
 			_fetchAhead(c, i);
 			_emitBranch(c, i, &branch);
 			if (branch.link || branch.thumbLink) {
 				_setRegion(c, ARM_LR, -1);
 			}
-			++i;
 		} else {
 			_fetchAhead(c, i);
 			_emitFallback(c, i);
 			_forgetRegions(c);
-			++i;
 		}
+		++i;
 	}
-	fast[count] = c->e.p;
-	_storeState(c, count);
+	c->fast[c->count] = c->e.p;
+	_storeState(c, c->count);
 	_linkJump(c);
-	_emitColdPaths(c);
+}
 
-	// Careful copies of ALU runs: each instruction through its handler, checking for events
-	for (i = 0; i < count; ++i) {
-		if (!runLength[i]) {
+// Careful copies of ALU runs: each instruction through its handler, checking for events
+static void _emitCarefulCopies(struct Compiler* c) {
+	unsigned i;
+	for (i = 0; i < c->count; ++i) {
+		if (!c->runLength[i]) {
 			continue;
 		}
 		unsigned j;
-		for (j = i; j < i + runLength[i]; ++j) {
-			careful[j] = c->e.p;
+		for (j = i; j < i + c->runLength[i]; ++j) {
+			c->careful[j] = c->e.p;
 			_fetchAhead(c, j);
 			_emitFallback(c, j);
 		}
-		_jumpTo(c, fast[j]);
+		_jumpTo(c, c->fast[j]);
 	}
-	unsigned x;
-	for (x = 0; x < c->nCareful; ++x) {
-		_patch(c->careful[x].site, careful[c->careful[x].index]);
+	for (i = 0; i < c->nRuns; ++i) {
+		_patch(c->runs[i].site, c->careful[c->runs[i].index]);
 	}
+}
 
-	// Exit stubs set the interpreter state for the next instruction, then go to the
-	// dispatcher, or back to C when an event is due
+static uint8_t* _entryCode(struct Compiler* c, unsigned i) {
+	return c->fast[i] ? c->fast[i] : c->careful[i];
+}
+
+// Exit stubs set the interpreter state for the next instruction, then go to the dispatcher, or
+// run the due events and come back
+static void _emitExits(struct Compiler* c) {
 	uint8_t* stubs[2][MAX_SPAN];
 	memset(stubs, 0, sizeof(stubs));
+	unsigned x;
 	for (x = 0; x < c->nExits; ++x) {
 		int index = c->exits[x].index;
-		if (index >= 0) {
-			bool due = index & EXIT_DUE;
-			unsigned at = index & ~EXIT_DUE;
-			if (!stubs[due][at]) {
-				stubs[due][at] = c->e.p;
-				_storeState(c, at);
-				if (due) {
-					_resumeAfterEvents(c, at, fast[at] ? fast[at] : careful[at]);
-				} else {
-					_exitJump(c, EXIT_DIRECT);
-				}
+		bool due = index & EXIT_DUE;
+		unsigned at = index & ~EXIT_DUE;
+		if (index >= 0 && !stubs[due][at]) {
+			stubs[due][at] = c->e.p;
+			_storeState(c, at);
+			if (due) {
+				_resumeAfterEvents(c, at, _entryCode(c, at));
+			} else {
+				_exitJump(c, EXIT_DIRECT);
 			}
 		}
 	}
 	uint8_t* direct = c->e.p;
-	_jumpTo(c, jit->dispatch);
+	_jumpTo(c, c->jit->dispatch);
 	uint8_t* toC = c->e.p;
-	_jumpTo(c, jit->events);
+	_jumpTo(c, c->jit->events);
 	for (x = 0; x < c->nExits; ++x) {
 		int index = c->exits[x].index;
-		uint8_t* target;
-		if (index == EXIT_DIRECT) {
-			target = direct;
-		} else if (index == EXIT_TO_C) {
-			target = toC;
-		} else {
-			target = stubs[(index & EXIT_DUE) != 0][index & ~EXIT_DUE];
-		}
+		uint8_t* target = index == EXIT_DIRECT ? direct : index == EXIT_TO_C ? toC : stubs[(index & EXIT_DUE) != 0][index & ~EXIT_DUE];
 		_patch(c->exits[x].at, target);
 	}
+	struct ARMJitBlock* block = c->block;
 	for (x = 0; x < c->nLinks; ++x) {
 		struct ARMJitLink* link = &block->links[x];
 		link->stub = c->e.p;
@@ -1461,41 +896,48 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		_patch(link->site, link->stub);
 	}
 	block->nLinks = c->nLinks;
+}
 
-	// Entry stubs set the current block and take patched first words from the pipeline
+// Entry stubs set the current block and take patched first words from the pipeline
+static void _emitEntries(struct Compiler* c) {
+	struct ARMJitBlock* block = c->block;
 	block->nEntries = 0;
-	for (i = 0; i < count; ++i) {
-		uint8_t* target = fast[i] ? fast[i] : careful[i];
+	unsigned i;
+	for (i = 0; i < c->count; ++i) {
+		uint8_t* target = _entryCode(c, i);
 		if (!target) {
 			continue;
 		}
 		struct ARMJitEntry* entry = &block->entries[block->nEntries++];
 		entry->code = target;
-		entry->pc = pc + width * i;
-		entry->op0 = ops[i];
-		entry->op1 = ops[i + 1];
-		entry->opMask0 = hot[i] ? 0 : 0xFFFFFFFF;
-		entry->opMask1 = hot[i + 1] ? 0 : 0xFFFFFFFF;
-		entry->thumb = thumb;
+		entry->pc = c->pc + c->width * i;
+		entry->op0 = c->ops[i];
+		entry->op1 = c->ops[i + 1];
+		entry->opMask0 = c->hot[i] ? 0 : 0xFFFFFFFF;
+		entry->opMask1 = c->hot[i + 1] ? 0 : 0xFFFFFFFF;
+		entry->thumb = c->thumb;
 		entry->block = block;
-		if (hot[i] || hot[i + 1]) {
+		if (c->hot[i] || c->hot[i + 1]) {
 			entry->code = c->e.p;
 			_entryStub(c, i, target);
 		}
 	}
-	for (x = 0; x < c->nLoops; ++x) {
-		_patch(c->loops[x], block->entries[0].code);
+	for (i = 0; i < c->nLoops; ++i) {
+		_patch(c->loops[i], block->entries[0].code);
 	}
+}
 
-	__builtin___clear_cache((char*) code, (char*) c->e.p);
-	jit->codeUsed += c->e.p - code;
-
-	block->pc = pc;
-	block->coverStart = ARMJitRamWord(pc);
+// The words the block covers, so writing them removes it, and the boundaries it can be entered at
+static void _registerBlock(struct Compiler* c) {
+	struct ARMJit* jit = c->jit;
+	struct ARMJitBlock* block = c->block;
+	block->pc = c->pc;
+	block->coverStart = ARMJitRamWord(c->pc);
 	block->coverWords = 0;
 	memset(block->coverMask, 0, sizeof(block->coverMask));
+	unsigned i;
 	if (block->coverStart >= 0) {
-		block->coverWords = ARMJitRamWord(pc + width * (count + 2) - 1) - block->coverStart + 1;
+		block->coverWords = ARMJitRamWord(c->pc + c->width * (c->count + 2) - 1) - block->coverStart + 1;
 		for (i = 0; i < block->coverWords; ++i) {
 			if (jit->patched[block->coverStart + i] < PATCH_LIMIT) {
 				block->coverMask[i / 32] |= 1u << (i & 31);
@@ -1517,6 +959,31 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		jit->blockList->prev = &block->next;
 	}
 	jit->blockList = block;
+}
+
+static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uint32_t pc, bool thumb) {
+	static struct Compiler compiler;
+	struct Compiler* c = &compiler;
+	if (!_readBlock(c, jit, cpu, pc, thumb)) {
+		return NULL;
+	}
+	if (jit->codeUsed + c->count * MAX_INSN_BYTES + 1024 > jit->codeSize) {
+		ARMJitDropBlocks(jit);
+	}
+	struct ARMJitBlock* block = _newBlock(c->count);
+	if (!block) {
+		return NULL;
+	}
+	_startCompiler(c, jit, cpu, block);
+	uint8_t* code = c->e.p;
+	_emitBody(c);
+	_emitColdPaths(c);
+	_emitCarefulCopies(c);
+	_emitExits(c);
+	_emitEntries(c);
+	__builtin___clear_cache((char*) code, (char*) c->e.p);
+	jit->codeUsed += c->e.p - code;
+	_registerBlock(c);
 	return block;
 }
 
@@ -1567,15 +1034,14 @@ static unsigned _selfTestAluMode(struct ARMJit* jit, unsigned iterations, bool t
 			a.cycles += 1;
 		}
 
-		static const bool cold[3];
-		uint32_t ops[3] = { op, 0, 0 };
 		uint8_t* code = &jit->code[jit->codeUsed];
 		c->e.p = code;
 		c->jit = jit;
 		c->gba = NULL;
 		c->pc = address;
-		c->ops = ops;
-		c->hot = cold;
+		memset(c->ops, 0, sizeof(c->ops));
+		memset(c->hot, 0, sizeof(c->hot));
+		c->ops[0] = op;
 		c->count = 1;
 		c->thumb = thumb;
 		c->width = thumb ? WORD_SIZE_THUMB : WORD_SIZE_ARM;

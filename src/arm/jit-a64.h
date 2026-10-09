@@ -1236,7 +1236,7 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	struct Emitter* e = &c->e;
 	uint32_t op = c->ops[i];
 	uint32_t address = c->pc + c->width * i;
-	unsigned cond = _fallbackCond(c, op);
+	unsigned cond = _condition(op, c->thumb);
 
 	_storeState(c, i + 1);
 	uint8_t* toCheck = NULL;
@@ -1253,7 +1253,7 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 
 	_movX(e, 0, R_CPU);
 	_movImm32(e, 1, op);
-	_movImm64(e, 16, (uintptr_t) _handler(c, op));
+	_movImm64(e, 16, (uintptr_t) _handler(op, c->thumb));
 	_blrC(e, 16);
 	_ldrW(e, 0, R_CPU, OFF_PC);
 	_movImm32(e, 1, address + 2 * c->width);
