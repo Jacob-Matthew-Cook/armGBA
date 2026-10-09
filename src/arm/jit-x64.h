@@ -1135,41 +1135,22 @@ static const uint32_t _conditionLut32[16] = {
 	0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
 };
 
-// A patched load or store whose patches only change the offset runs inline; anything else
-// goes to the handler
-#define PATCHED_SHAPE 0xFF7FF000
-
-static bool _patchedMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
-	uint32_t address = c->pc + c->width * i;
-	if (c->thumb || (c->ops[i] & 0x0C000000) != 0x04000000 || !_decodeArmMem(c->ops[i], address, mem) || !mem->immediateOffset) {
-		return false;
-	}
-	mem->runtimeOffset = true;
-	mem->fetchedIndex = i;
-	return true;
-}
-
-static void _emitDynamicHandler(struct Compiler* c, unsigned i);
-
-// A patched instruction: run its handler with the opcode the pipeline fetched
-static void _emitDynamic(struct Compiler* c, unsigned i) {
+// Jumps to the returned site unless the word the pipeline fetched for ops[i], masked, is value
+static uint8_t* _fetchedMismatch(struct Compiler* c, unsigned i, uint32_t mask, uint32_t value) {
 	struct Emitter* e = &c->e;
-	struct MemOp mem;
-	if (!_patchedMem(c, i, &mem)) {
-		_emitDynamicHandler(c, i);
-		return;
-	}
 	_load(e, X_RAX, X_JIT, JIT_FETCHED + 4 * i);
-	_ri(e, 4, X_RAX, PATCHED_SHAPE);
-	_ri(e, 7, X_RAX, c->ops[i] & PATCHED_SHAPE);
-	uint8_t* other = _jcc(e, CC_NE);
-	_emitMem(c, i, &mem);
-	uint8_t* done = _jmp(e);
-	_patch(other, e->p);
-	_emitDynamicHandler(c, i);
-	_patch(done, e->p);
+	if (mask != 0xFFFFFFFF) {
+		_ri(e, 4, X_RAX, mask);
+	}
+	_ri(e, 7, X_RAX, value);
+	return _jcc(e, CC_NE);
 }
 
+static uint8_t* _forwardJump(struct Compiler* c) {
+	return _jmp(&c->e);
+}
+
+// A patched instruction through its handler, with the opcode the pipeline fetched
 static void _emitDynamicHandler(struct Compiler* c, unsigned i) {
 	struct Emitter* e = &c->e;
 	uint32_t address = c->pc + c->width * i;
@@ -1552,4 +1533,26 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 		_patch(after, e->p);
 	}
 	_eventCheck(c, i + 1);
+}
+
+// Runs the due events, then comes back to ops[index] unless an interrupt moved the PC or
+// code here was written
+static void _resumeAfterEvents(struct Compiler* c, unsigned index, const uint8_t* target) {
+	struct Emitter* e = &c->e;
+	_store(e, X_CYCLES, X_CPU, OFF_CYCLES);
+	_mov64(e, X_RDI, X_CPU);
+	_movImm64(e, X_RAX, (uintptr_t) ARMJitEvents);
+	_call(e, X_RAX);
+	_load(e, X_CYCLES, X_CPU, OFF_CYCLES);
+	_byte(e, 0x84); // test al, al
+	_byte(e, 0xC0);
+	_patch(_jcc(e, CC_E), c->jit->toC);
+	_memImm(e, 7, X_CPU, OFF_PC, c->pc + c->width * (index + 1));
+	_patch(_jcc(e, CC_NE), c->jit->dispatch);
+	_rex(e, false, 0, 0, X_JIT);
+	_byte(e, 0x80); // cmp byte [r12 + smcHit], 0
+	_modrmMem(e, 7, X_JIT, JIT_SMC_HIT);
+	_byte(e, 0);
+	_patch(_jcc(e, CC_NE), c->jit->dispatch);
+	_jumpTo(c, target);
 }

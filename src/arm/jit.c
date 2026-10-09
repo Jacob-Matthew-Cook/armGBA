@@ -796,6 +796,59 @@ static void* _hostAddress(struct Compiler* c, uint32_t address) {
 #include "jit-x64.h"
 #endif
 
+// A patched load or store whose patches only change the offset runs inline
+#define PATCHED_SHAPE 0xFF7FF000
+
+static bool _patchedMem(struct Compiler* c, unsigned i, uint32_t op, struct MemOp* mem) {
+	uint32_t address = c->pc + c->width * i;
+	if (c->thumb || (op & 0x0C000000) != 0x04000000 || !_decodeArmMem(op, address, mem) || !mem->immediateOffset) {
+		return false;
+	}
+	mem->runtimeOffset = true;
+	mem->fetchedIndex = i;
+	return true;
+}
+
+// A patched instruction: inline code for the two forms last written to it, the handler with
+// the opcode the pipeline fetched for anything else
+static void _emitPatched(struct Compiler* c, unsigned i) {
+	uint32_t forms[2] = { c->ops[i], 0 };
+	unsigned nForms = 1;
+	int word = ARMJitRamWord(c->pc + c->width * i);
+	if (!c->thumb && word >= 0 && c->jit->patchOther[word] && c->jit->patchOther[word] != forms[0]) {
+		forms[nForms++] = c->jit->patchOther[word];
+	}
+	uint8_t* done[2];
+	unsigned nDone = 0;
+	unsigned k;
+	for (k = 0; k < nForms; ++k) {
+		struct MemOp mem;
+		struct AluOp alu;
+		uint8_t* other;
+		if (_patchedMem(c, i, forms[k], &mem)) {
+			if (k && !((forms[0] ^ forms[k]) & PATCHED_SHAPE)) {
+				continue;
+			}
+			other = _fetchedMismatch(c, i, PATCHED_SHAPE, forms[k] & PATCHED_SHAPE);
+			_emitMem(c, i, &mem);
+		} else if (!c->thumb && _decodeArmAlu(forms[k], c->pc + c->width * i, c->aluCycles, &alu)) {
+			other = _fetchedMismatch(c, i, 0xFFFFFFFF, forms[k]);
+			alu.flagsLive = true;
+			_emitAlu(c, &alu, alu.keepsShifterCarry);
+			_addCycles(c, alu.cycles);
+			_eventCheck(c, i + 1);
+		} else {
+			continue;
+		}
+		done[nDone++] = _forwardJump(c);
+		_patch(other, c->e.p);
+	}
+	_emitDynamicHandler(c, i);
+	for (k = 0; k < nDone; ++k) {
+		_patch(done[k], c->e.p);
+	}
+}
+
 static bool _endsBlock(uint32_t op, bool thumb) {
 	if (thumb) {
 		if ((op & 0xF000) == 0xD000 || (op & 0xF000) == 0xE000 || (op & 0xF800) == 0xF800) {
@@ -977,6 +1030,8 @@ void ARMJitFlush(struct ARMJit* jit) {
 		}
 	}
 	memset(jit->patched, 0, sizeof(jit->patched));
+	memset(jit->patchValue, 0, sizeof(jit->patchValue));
+	memset(jit->patchOther, 0, sizeof(jit->patchOther));
 }
 
 static uint32_t _ramWordAddress(unsigned word) {
@@ -989,6 +1044,11 @@ static uint32_t _ramWordAddress(unsigned word) {
 void ARMJitInvalidateWord(struct ARMJit* jit, unsigned word) {
 	if (jit->patched[word] < 255) {
 		++jit->patched[word];
+	}
+	uint32_t value = word < ARM_JIT_IWRAM_WORDS ? jit->iwram[word] : jit->ewram[word - ARM_JIT_IWRAM_WORDS];
+	if (value != jit->patchValue[word]) {
+		jit->patchOther[word] = jit->patchValue[word];
+		jit->patchValue[word] = value;
 	}
 	// A block can start up to MAX_SPAN ARM words before the word it covers
 	uint32_t address = _ramWordAddress(word);
@@ -1152,7 +1212,7 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 		fast[i] = c->e.p;
 		if (hot[i]) {
 			_fetchAhead(c, i);
-			_emitDynamic(c, i);
+			_emitPatched(c, i);
 			++i;
 		} else if (_decodeAlu(c, i, &alus[i])) {
 			unsigned run = 1;
@@ -1242,7 +1302,11 @@ static struct ARMJitBlock* _compile(struct ARMJit* jit, struct ARMCore* cpu, uin
 			if (!stubs[due][at]) {
 				stubs[due][at] = c->e.p;
 				_storeState(c, at);
-				_exitJump(c, due ? EXIT_TO_C : EXIT_DIRECT);
+				if (due) {
+					_resumeAfterEvents(c, at, fast[at] ? fast[at] : careful[at]);
+				} else {
+					_exitJump(c, EXIT_DIRECT);
+				}
 			}
 		}
 	}
@@ -1431,6 +1495,8 @@ static void _buildTrampoline(struct ARMJit* jit, struct ARMCore* cpu) {
 	c->jit = jit;
 	c->cpu = cpu;
 	c->gba = (struct GBA*) cpu->master;
+	jit->iwram = c->gba->memory.iwram;
+	jit->ewram = c->gba->memory.wram;
 	_emitTrampoline(c);
 	__builtin___clear_cache((char*) code, (char*) c->e.p);
 	jit->codeStart = c->e.p - code;

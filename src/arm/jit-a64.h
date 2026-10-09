@@ -919,43 +919,24 @@ static const uint32_t _conditionLut32[16] = {
 	0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
 };
 
-// A patched load or store whose patches only change the offset runs inline; anything else
-// goes to the handler
-#define PATCHED_SHAPE 0xFF7FF000
-
-static bool _patchedMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
-	uint32_t address = c->pc + c->width * i;
-	if (c->thumb || (c->ops[i] & 0x0C000000) != 0x04000000 || !_decodeArmMem(c->ops[i], address, mem) || !mem->immediateOffset) {
-		return false;
-	}
-	mem->runtimeOffset = true;
-	mem->fetchedIndex = i;
-	return true;
-}
-
-static void _emitDynamicHandler(struct Compiler* c, unsigned i);
-
-// A patched instruction: run its handler with the opcode the pipeline fetched
-static void _emitDynamic(struct Compiler* c, unsigned i) {
+// Jumps to the returned site unless the word the pipeline fetched for ops[i], masked, is value
+static uint8_t* _fetchedMismatch(struct Compiler* c, unsigned i, uint32_t mask, uint32_t value) {
 	struct Emitter* e = &c->e;
-	struct MemOp mem;
-	if (!_patchedMem(c, i, &mem)) {
-		_emitDynamicHandler(c, i);
-		return;
-	}
 	_ldrW(e, 0, R_JIT, JIT_FETCHED + 4 * i);
-	_movImm32(e, 1, PATCHED_SHAPE);
-	_emit(e, 0x0A000000 | (1 << 16) | (0 << 5) | 0); // and w0, w0, w1
-	_movImm32(e, 1, c->ops[i] & PATCHED_SHAPE);
+	if (mask != 0xFFFFFFFF) {
+		_movImm32(e, 1, mask);
+		_emit(e, 0x0A000000 | (1 << 16) | (0 << 5) | 0); // and w0, w0, w1
+	}
+	_movImm32(e, 1, value);
 	_cmpW(e, 0, 1);
-	uint8_t* other = _bCond(e, A64_NE);
-	_emitMem(c, i, &mem);
-	uint8_t* done = _b(e);
-	_patch(other, e->p);
-	_emitDynamicHandler(c, i);
-	_patch(done, e->p);
+	return _bCond(e, A64_NE);
 }
 
+static uint8_t* _forwardJump(struct Compiler* c) {
+	return _b(&c->e);
+}
+
+// A patched instruction through its handler, with the opcode the pipeline fetched
 static void _emitDynamicHandler(struct Compiler* c, unsigned i) {
 	struct Emitter* e = &c->e;
 	uint32_t address = c->pc + c->width * i;
@@ -1319,4 +1300,32 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 		_patch(after, e->p);
 	}
 	_eventCheck(c, i + 1);
+}
+
+// A branch on cond to code out of b.cond's range
+static void _bCondFar(struct Compiler* c, int cond, const uint8_t* target) {
+	uint8_t* skip = _bCond(&c->e, cond ^ 1);
+	_jumpTo(c, target);
+	_patch(skip, c->e.p);
+}
+
+// Runs the due events, then comes back to ops[index] unless an interrupt moved the PC or
+// code here was written
+static void _resumeAfterEvents(struct Compiler* c, unsigned index, const uint8_t* target) {
+	struct Emitter* e = &c->e;
+	_strW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_movX(e, 0, R_CPU);
+	_movImm64(e, 16, (uintptr_t) ARMJitEvents);
+	_blr(e, 16);
+	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_emit(e, 0x7200001F | (7 << 10)); // tst w0, #0xFF
+	_bCondFar(c, A64_EQ, c->jit->toC);
+	_ldrW(e, 0, R_CPU, OFF_PC);
+	_movImm32(e, 1, c->pc + c->width * (index + 1));
+	_cmpW(e, 0, 1);
+	_bCondFar(c, A64_NE, c->jit->dispatch);
+	_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
+	_emit(e, 0x7100001F | (0 << 5)); // cmp w0, #0
+	_bCondFar(c, A64_NE, c->jit->dispatch);
+	_jumpTo(c, target);
 }

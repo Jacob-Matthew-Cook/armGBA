@@ -59,8 +59,12 @@ struct ARMJit {
 	struct ARMJitPage* pages[ARM_JIT_PAGES];
 	// Number of compiled blocks whose code (or baked-in prefetch) covers each RAM word
 	uint8_t cover[ARM_JIT_RAM_WORDS];
-	// Writes into compiled code, by the word written
+	// Writes into compiled code, by the word written, and the last two values written
 	uint8_t patched[ARM_JIT_RAM_WORDS];
+	uint32_t patchValue[ARM_JIT_RAM_WORDS];
+	uint32_t patchOther[ARM_JIT_RAM_WORDS];
+	const uint32_t* iwram;
+	const uint32_t* ewram;
 };
 
 struct ARMJit* ARMJitCreate(void);
