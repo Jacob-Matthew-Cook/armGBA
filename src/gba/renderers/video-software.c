@@ -943,6 +943,11 @@ void GBAVideoSoftwareRendererPreprocessBuffer(struct GBAVideoSoftwareRenderer* s
 		for (; x & 3; ++x) {
 			softwareRenderer->row[x] = backdrop;
 		}
+#ifdef VIDEO_SIMD
+		for (; x + 8 <= end; x += 8) {
+			_p8Store(&softwareRenderer->row[x], _p8(backdrop));
+		}
+#endif
 		for (; x < end - 3; x += 4) {
 			softwareRenderer->row[x] = backdrop;
 			softwareRenderer->row[x + 1] = backdrop;
