@@ -360,7 +360,7 @@ static void _dmaUnit(struct GBA* gba, int number, struct GBADMA* info) {
 	}
 }
 
-// Memory, and video registers on the I/O side, which take a DMA unit without touching the timing
+// Memory, and video registers and sound FIFOs on the I/O side, which take a DMA unit without touching the timing
 static bool _dmaPlain(uint32_t address, bool dest) {
 	switch (address >> BASE_OFFSET) {
 	case GBA_REGION_EWRAM:
@@ -371,6 +371,9 @@ static bool _dmaPlain(uint32_t address, bool dest) {
 		return true;
 	case GBA_REGION_IO:
 		address &= OFFSET_MASK;
+		if (address == GBA_REG_FIFO_A_LO || address == GBA_REG_FIFO_B_LO) {
+			return dest;
+		}
 		return dest && address < GBA_REG_SOUND1CNT_LO && (address < GBA_REG_DISPSTAT || address > GBA_REG_VCOUNT);
 	case GBA_REGION_ROM0:
 	case GBA_REGION_ROM0_EX:
