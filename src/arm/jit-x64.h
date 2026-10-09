@@ -76,8 +76,9 @@ enum {
 
 // Opcodes taking a ModRM operand; two-byte ones start with 0F
 enum {
-	XO_ADD = 0x01, XO_OR = 0x09, XO_ADC = 0x11, XO_SBB = 0x19, XO_AND = 0x21, XO_SUB = 0x29, XO_XOR = 0x31,
-	XO_CMP = 0x39, XO_ADD_RM = 0x03, XO_OR8_RM = 0x0A, XO_OR_RM = 0x0B, XO_AND_RM = 0x23, XO_XOR_RM = 0x33, XO_CMP_RM = 0x3B, XO_IMUL_IMM = 0x69,
+	XO_ADD = 0x01, XO_OR = 0x09, XO_SUB = 0x29, XO_XOR = 0x31,
+	XO_CMP = 0x39, XO_ADD_RM = 0x03, XO_OR8_RM = 0x0A, XO_OR_RM = 0x0B, XO_ADC_RM = 0x13, XO_SBB_RM = 0x1B,
+	XO_SUB_RM = 0x2B, XO_AND_RM = 0x23, XO_XOR_RM = 0x33, XO_CMP_RM = 0x3B, XO_IMUL_IMM = 0x69,
 	XO_GROUP1_8 = 0x80, XO_GROUP1 = 0x81, XO_GROUP1_IMM8 = 0x83, XO_TEST8 = 0x84, XO_TEST = 0x85,
 	XO_STORE8 = 0x88, XO_STORE = 0x89, XO_LOAD = 0x8B, XO_LEA = 0x8D, XO_SHIFT = 0xC1, XO_MOV8_IMM = 0xC6,
 	XO_MOV_IMM = 0xC7, XO_SHIFT_CL = 0xD3, XO_GROUP3_8 = 0xF6, XO_GROUP3 = 0xF7, XO_GROUP5 = 0xFF,
@@ -87,7 +88,7 @@ enum {
 
 // /digit forms of the group opcodes
 enum {
-	G1_ADD = 0, G1_OR = 1, G1_SBB = 3, G1_AND = 4, G1_SUB = 5, G1_XOR = 6, G1_CMP = 7,
+	G1_ADD = 0, G1_OR = 1, G1_ADC = 2, G1_SBB = 3, G1_AND = 4, G1_SUB = 5, G1_XOR = 6, G1_CMP = 7,
 	G3_TEST = 0, G3_NOT = 2, G3_NEG = 3, G5_CALL = 2, G5_JMP = 4, G8_BT = 4,
 };
 
@@ -625,6 +626,25 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 	}
 }
 
+// Combines eax with a constant or an operand, as the ALU operation does
+static void _combine(struct Emitter* e, unsigned opcode, bool constant, uint32_t value, struct X86Operand rm) {
+	static const struct {
+		uint8_t opcode;
+		uint8_t digit;
+	} forms[16] = {
+		[ALU_AND] = { XO_AND_RM, G1_AND }, [ALU_TST] = { XO_AND_RM, G1_AND }, [ALU_EOR] = { XO_XOR_RM, G1_XOR },
+		[ALU_TEQ] = { XO_XOR_RM, G1_XOR }, [ALU_ORR] = { XO_OR_RM, G1_OR }, [ALU_BIC] = { XO_AND_RM, G1_AND },
+		[ALU_ADD] = { XO_ADD_RM, G1_ADD }, [ALU_CMN] = { XO_ADD_RM, G1_ADD }, [ALU_ADC] = { XO_ADC_RM, G1_ADC },
+		[ALU_SUB] = { XO_SUB_RM, G1_SUB }, [ALU_CMP] = { XO_SUB_RM, G1_SUB }, [ALU_RSB] = { XO_SUB_RM, G1_SUB },
+		[ALU_SBC] = { XO_SBB_RM, G1_SBB }, [ALU_RSC] = { XO_SBB_RM, G1_SBB },
+	};
+	if (constant) {
+		_ri(e, forms[opcode].digit, X_RAX, value);
+	} else {
+		_insn(e, 0, forms[opcode].opcode, X_RAX, rm);
+	}
+}
+
 // storeCarry: MULS and MLAS take C from the last shifter result, so keep it for them
 static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarry) {
 	struct Emitter* e = &c->e;
@@ -640,8 +660,9 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 		skip = _condJump(c, alu->cond, false);
 	}
 
+	// The second operand: an immediate, a guest register in memory, or a shifted value in edx
+	bool direct = !alu->immediate && !alu->m.constant && alu->shiftType == SHIFT_LSL && !alu->shiftAmount;
 	if (alu->immediate) {
-		_movImm(e, X_RDX, alu->imm);
 		if (carryOut) {
 			if (alu->immCarry >= 0) {
 				_movImm(e, X_R8, alu->immCarry);
@@ -649,73 +670,40 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 				_loadCarry(c, X_R8);
 			}
 		}
+	} else if (direct) {
+		if (carryOut) {
+			_loadCarry(c, X_R8);
+		}
 	} else {
 		_loadSource(c, X_R11, alu->m);
 		_shiftImm(c, alu->shiftType, alu->shiftAmount, carryOut);
 	}
-	if (opcode != ALU_MOV && opcode != ALU_MVN) {
-		_loadSource(c, X_RSI, alu->n);
-	}
 
-	switch (opcode) {
-	case ALU_AND:
-	case ALU_TST:
-		_mov(e, X_RAX, X_RSI);
-		_rr(e, XO_AND, X_RAX, X_RDX);
-		break;
-	case ALU_EOR:
-	case ALU_TEQ:
-		_mov(e, X_RAX, X_RSI);
-		_rr(e, XO_XOR, X_RAX, X_RDX);
-		break;
-	case ALU_ORR:
-		_mov(e, X_RAX, X_RSI);
-		_rr(e, XO_OR, X_RAX, X_RDX);
-		break;
-	case ALU_BIC:
+	// eax starts as the first operand, or the second for the reversed operations, and takes the other in place
+	bool reverse = opcode == ALU_RSB || opcode == ALU_RSC || opcode == ALU_BIC || opcode == ALU_MOV || opcode == ALU_MVN;
+	if (!reverse) {
+		_loadSource(c, X_RAX, alu->n);
+	} else if (alu->immediate) {
+		_movImm(e, X_RAX, alu->imm);
+	} else if (direct) {
+		_load(e, X_RAX, X_CPU, 4 * alu->m.reg);
+	} else {
 		_mov(e, X_RAX, X_RDX);
+	}
+	if (opcode == ALU_MVN || opcode == ALU_BIC) {
 		_not(e, X_RAX);
-		_rr(e, XO_AND, X_RAX, X_RSI);
-		break;
-	case ALU_MOV:
-		_mov(e, X_RAX, X_RDX);
-		break;
-	case ALU_MVN:
-		_mov(e, X_RAX, X_RDX);
-		_not(e, X_RAX);
-		break;
-	case ALU_ADD:
-	case ALU_CMN:
-		_mov(e, X_RAX, X_RSI);
-		_rr(e, XO_ADD, X_RAX, X_RDX);
-		break;
-	case ALU_SUB:
-	case ALU_CMP:
-		_mov(e, X_RAX, X_RSI);
-		_rr(e, XO_SUB, X_RAX, X_RDX);
-		break;
-	case ALU_RSB:
-		_mov(e, X_RAX, X_RDX);
-		_rr(e, XO_SUB, X_RAX, X_RSI);
-		break;
-	case ALU_ADC:
-		_mov(e, X_RAX, X_RSI);
-		_carryToCf(e);
-		_rr(e, XO_ADC, X_RAX, X_RDX);
-		break;
-	case ALU_SBC:
+	}
+	if (carryIn) {
 		// x86 subtracts CF as a borrow, which is the inverse of the ARM carry
-		_mov(e, X_RAX, X_RSI);
 		_carryToCf(e);
-		_cmc(e);
-		_rr(e, XO_SBB, X_RAX, X_RDX);
-		break;
-	case ALU_RSC:
-		_mov(e, X_RAX, X_RDX);
-		_carryToCf(e);
-		_cmc(e);
-		_rr(e, XO_SBB, X_RAX, X_RSI);
-		break;
+		if (opcode != ALU_ADC) {
+			_cmc(e);
+		}
+	}
+	if (!reverse) {
+		_combine(e, opcode, alu->immediate, alu->imm, direct ? _xm(X_CPU, 4 * alu->m.reg) : _xr(X_RDX));
+	} else if (opcode != ALU_MOV && opcode != ALU_MVN) {
+		_combine(e, opcode, alu->n.constant, alu->n.value, _xm(X_CPU, 4 * alu->n.reg));
 	}
 
 	if (setFlags) {
