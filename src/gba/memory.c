@@ -1960,6 +1960,16 @@ void GBAMemoryDeserialize(struct GBAMemory* memory, const struct GBASerializedSt
 }
 
 void _pristineCow(struct GBA* gba) {
+#ifdef M_ARM_JIT
+	// Callers write the ROM next, so compiled cartridge code goes stale, and any code if the buffer moves
+	if (gba->cpu->jit) {
+		if (gba->isPristine) {
+			ARMJitDropBlocks(gba->cpu->jit);
+		} else {
+			ARMJitDropRegion(gba->cpu->jit, GBA_BASE_ROM0, GBA_BASE_SRAM);
+		}
+	}
+#endif
 	if (!gba->isPristine) {
 		return;
 	}
