@@ -50,6 +50,7 @@ struct ARMJit {
 	struct ARMJitLink* pendingLink;
 	// Due events run from generated code; it keeps running while the frame loop would
 	uint8_t* events;
+	uint8_t* resume;
 	bool eventsRan;
 	bool inFrame;
 	uint32_t frameCounter;

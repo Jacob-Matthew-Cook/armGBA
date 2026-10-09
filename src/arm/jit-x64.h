@@ -459,6 +459,49 @@ static void _emitTrampoline(struct Compiler* c) {
 	_patch(otherOp0, e->p);
 	_patch(otherOp1, e->p);
 	_epilogue(c);
+
+	// Called by a block's due exit with its state stored: runs the events, then returns there
+	// unless an interrupt moved the PC, code in the block was written or the frame loop stops
+	c->jit->resume = e->p;
+	_load(e, X_WB, X_CPU, OFF_PC);
+	_byte(e, 0x48); // sub rsp, 8
+	_byte(e, 0x83);
+	_byte(e, 0xEC);
+	_byte(e, 0x08);
+	_store(e, X_CYCLES, X_CPU, OFF_CYCLES);
+	_mov64(e, X_RDI, X_CPU);
+	_movImm64(e, X_RAX, (uintptr_t) ARMJitEvents);
+	_call(e, X_RAX);
+	_load(e, X_CYCLES, X_CPU, OFF_CYCLES);
+	_byte(e, 0x84); // test al, al
+	_byte(e, 0xC0);
+	uint8_t* frameDone = _jcc(e, CC_E);
+	_cmpRegMem(e, X_WB, X_CPU, OFF_PC);
+	uint8_t* moved = _jcc(e, CC_NE);
+	_rex(e, false, 0, 0, X_JIT); // cmp byte [r12 + smcHit], 0
+	_byte(e, 0x80);
+	_modrmMem(e, 7, X_JIT, JIT_SMC_HIT);
+	_byte(e, 0);
+	uint8_t* written = _jcc(e, CC_NE);
+	_byte(e, 0x48); // add rsp, 8
+	_byte(e, 0x83);
+	_byte(e, 0xC4);
+	_byte(e, 0x08);
+	_byte(e, 0xC3); // ret
+	// Leaving: drop the padding and the return address
+	_patch(frameDone, e->p);
+	_byte(e, 0x48); // add rsp, 16
+	_byte(e, 0x83);
+	_byte(e, 0xC4);
+	_byte(e, 0x10);
+	_jumpTo(c, c->jit->toC);
+	_patch(moved, e->p);
+	_patch(written, e->p);
+	_byte(e, 0x48); // add rsp, 16
+	_byte(e, 0x83);
+	_byte(e, 0xC4);
+	_byte(e, 0x10);
+	_jumpTo(c, c->jit->dispatch);
 }
 
 static void _exitJump(struct Compiler* c, int index) {
@@ -1597,24 +1640,13 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 	_eventCheck(c, i + 1);
 }
 
-// Runs the due events, then comes back to ops[index] unless an interrupt moved the PC or
-// code here was written
+// Runs the due events, then comes back to ops[index] unless the resume routine goes elsewhere
 static void _resumeAfterEvents(struct Compiler* c, unsigned index, const uint8_t* target) {
 	struct Emitter* e = &c->e;
-	_store(e, X_CYCLES, X_CPU, OFF_CYCLES);
-	_mov64(e, X_RDI, X_CPU);
-	_movImm64(e, X_RAX, (uintptr_t) ARMJitEvents);
-	_call(e, X_RAX);
-	_load(e, X_CYCLES, X_CPU, OFF_CYCLES);
-	_byte(e, 0x84); // test al, al
-	_byte(e, 0xC0);
-	_patch(_jcc(e, CC_E), c->jit->toC);
-	_memImm(e, 7, X_CPU, OFF_PC, c->pc + c->width * (index + 1));
-	_patch(_jcc(e, CC_NE), c->jit->dispatch);
-	_rex(e, false, 0, 0, X_JIT);
-	_byte(e, 0x80); // cmp byte [r12 + smcHit], 0
-	_modrmMem(e, 7, X_JIT, JIT_SMC_HIT);
-	_byte(e, 0);
-	_patch(_jcc(e, CC_NE), c->jit->dispatch);
+	UNUSED(index);
+	_byte(e, 0xE8); // call resume
+	uint8_t* site = e->p;
+	_imm32(e, 0);
+	_patch(site, c->jit->resume);
 	_jumpTo(c, target);
 }

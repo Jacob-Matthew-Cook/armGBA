@@ -38,7 +38,7 @@ static void _patch(uint8_t* at, const uint8_t* target) {
 	int32_t offset = (target - at) / 4;
 	uint32_t insn;
 	memcpy(&insn, at, 4);
-	if ((insn & 0xFC000000) == 0x14000000) {
+	if ((insn & 0x7C000000) == 0x14000000) { // B, BL
 		insn |= offset & 0x3FFFFFF;
 	} else if ((insn & 0x7E000000) == 0x36000000) {
 		insn |= (offset & 0x3FFF) << 5;
@@ -320,6 +320,25 @@ static void _emitTrampoline(struct Compiler* c) {
 		_patch(toC[i], e->p);
 	}
 	_epilogue(c);
+
+	// Called by a block's due exit with its state stored: runs the events, then returns there
+	// unless an interrupt moved the PC, code in the block was written or the frame loop stops
+	c->jit->resume = e->p;
+	_ldrW(e, R_WB, R_CPU, OFF_PC);
+	_movX(e, 26, 30);
+	_strW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_movX(e, 0, R_CPU);
+	_movImm64(e, 16, (uintptr_t) ARMJitEvents);
+	_blr(e, 16);
+	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
+	_emit(e, 0x7200001F | (7 << 10)); // tst w0, #0xFF
+	_patch(_bCond(e, A64_EQ), c->jit->toC);
+	_ldrW(e, 0, R_CPU, OFF_PC);
+	_cmpW(e, 0, R_WB);
+	_patch(_bCond(e, A64_NE), c->jit->dispatch);
+	_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
+	_patch(_cbnzW(e, 0), c->jit->dispatch);
+	_emit(e, 0xD65F0000 | (26 << 5)); // ret x26
 }
 
 static void _exitJump(struct Compiler* c, int index) {
@@ -1352,30 +1371,11 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 	_eventCheck(c, i + 1);
 }
 
-// A branch on cond to code out of b.cond's range
-static void _bCondFar(struct Compiler* c, int cond, const uint8_t* target) {
-	uint8_t* skip = _bCond(&c->e, cond ^ 1);
-	_jumpTo(c, target);
-	_patch(skip, c->e.p);
-}
 
-// Runs the due events, then comes back to ops[index] unless an interrupt moved the PC or
-// code here was written
+// Runs the due events, then comes back to ops[index] unless the resume routine goes elsewhere
 static void _resumeAfterEvents(struct Compiler* c, unsigned index, const uint8_t* target) {
-	struct Emitter* e = &c->e;
-	_strW(e, R_CYCLES, R_CPU, OFF_CYCLES);
-	_movX(e, 0, R_CPU);
-	_movImm64(e, 16, (uintptr_t) ARMJitEvents);
-	_blr(e, 16);
-	_ldrW(e, R_CYCLES, R_CPU, OFF_CYCLES);
-	_emit(e, 0x7200001F | (7 << 10)); // tst w0, #0xFF
-	_bCondFar(c, A64_EQ, c->jit->toC);
-	_ldrW(e, 0, R_CPU, OFF_PC);
-	_movImm32(e, 1, c->pc + c->width * (index + 1));
-	_cmpW(e, 0, 1);
-	_bCondFar(c, A64_NE, c->jit->dispatch);
-	_ldrbW(e, 0, R_JIT, JIT_SMC_HIT);
-	_emit(e, 0x7100001F | (0 << 5)); // cmp w0, #0
-	_bCondFar(c, A64_NE, c->jit->dispatch);
+	UNUSED(index);
+	uint8_t* site = _emitSite(&c->e, 0x94000000); // bl resume
+	_patch(site, c->jit->resume);
 	_jumpTo(c, target);
 }
