@@ -193,20 +193,25 @@ static inline v16 _mix5Bit8(v16 a, v16 b, v16 weightA, v16 weightB) {
 // _compositeBlendNoObjwin, or _compositeNoBlendNoObjwin, for the eight pixels where write is set
 static inline void _composite8(struct GBAVideoSoftwareRenderer* renderer, uint32_t* pixel, const v32 current[2],
                                const v32 color[2], const v32 write[2], bool blend) {
-	v16 mixed = _v16(0);
-	if (blend) {
-		mixed = _mix5Bit8(_v16Narrow(current[0], current[1]), _v16Narrow(color[0], color[1]), _v16(renderer->blda), _v16(renderer->bldb));
-	}
+	v32 behind[2];
+	v32 mix[2];
 	unsigned h;
 	for (h = 0; h < 2; ++h) {
-		v32 behind = _v32Ge(color[h], current[h]);
+		behind[h] = _v32Ge(color[h], current[h]);
+		mix[h] = _v32And(_v32And(write[h], behind[h]), _v32And(_v32Test(current[h], _v32(FLAG_TARGET_1)), _v32Test(color[h], _v32(FLAG_TARGET_2))));
+	}
+	// Most blending rows mix no pixel
+	v16 mixed = _v16(0);
+	if (blend && _v32Any(mix[0], mix[1])) {
+		mixed = _mix5Bit8(_v16Narrow(current[0], current[1]), _v16Narrow(color[0], color[1]), _v16(renderer->blda), _v16(renderer->bldb));
+	}
+	for (h = 0; h < 2; ++h) {
 		v32 below = _v32And(current[h], _v32(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN));
 		v32 out;
 		if (blend) {
-			v32 mix = _v32And(behind, _v32And(_v32Test(current[h], _v32(FLAG_TARGET_1)), _v32Test(color[h], _v32(FLAG_TARGET_2))));
-			out = _v32Select(behind, _v32Select(mix, _v16Widen(mixed, h), below), _v32Bic(color[h], _v32(FLAG_TARGET_2)));
+			out = _v32Select(behind[h], _v32Select(mix[h], _v16Widen(mixed, h), below), _v32Bic(color[h], _v32(FLAG_TARGET_2)));
 		} else {
-			out = _v32Select(behind, below, color[h]);
+			out = _v32Select(behind[h], below, color[h]);
 		}
 		_v32Store(pixel + 4 * h, _v32Select(write[h], out, current[h]));
 	}
