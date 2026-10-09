@@ -1,11 +1,18 @@
 armGBA
 ======
 
-armGBA is a fork of [mGBA](https://mgba.io/) ([libretro/mgba](https://github.com/libretro/mgba)) that adds an AArch64 recompiler for ARM handhelds. It keeps mGBA's accuracy: a game run with the recompiler gives the same savestate, frame for frame, as the same run on mGBA's interpreter.
+armGBA is a fork of [mGBA](https://mgba.io/) ([libretro/mgba](https://github.com/libretro/mgba)) that adds a recompiler for ARM handhelds. It keeps mGBA's accuracy: with the recompiler, a game gives the same savestate and the same picture, frame for frame, as on stock mGBA. That is checked on 16 games.
 
-Status: early. The recompiler covers ARM code running from IWRAM. Thumb code and code running from the cartridge still use the interpreter. Speed on real hardware has not been measured yet.
+The recompiler covers ARM and Thumb code running from IWRAM, EWRAM, the cartridge and the BIOS, including code a game rewrites while it runs. It builds for AArch64 and x86-64 Linux.
 
-Turn it on with the `mgba_jit` core option (AArch64 Linux builds only).
+Core options, both off by default:
+
+- `mgba_jit` (Recompiler): AArch64 and x86-64 Linux builds.
+- `mgba_threaded_video` (Threaded Rendering): draws each frame on another CPU core. Linux builds.
+
+Hold L2 or R2 to fast-forward at the frontend's fast-forward speed. Frontends without the libretro fast-forward override keep mGBA's turbo L and R on those buttons.
+
+Speed on handhelds has not been measured yet. On an x86-64 PC with both options on, the emulation thread runs about 1.8 to 2.5 times faster than stock mGBA in the games tested, with rendering on a second core.
 
 mGBA is by Jeffrey Pfau and contributors and is licensed under the MPL 2.0, as is armGBA.
 
