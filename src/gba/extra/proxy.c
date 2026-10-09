@@ -284,6 +284,22 @@ uint16_t GBAVideoProxyRendererWriteVideoRegister(struct GBAVideoRenderer* render
 	case GBA_REG_BG3VOFS:
 		value &= 0x01FF;
 		break;
+	case GBA_REG_WININ:
+	case GBA_REG_WINOUT:
+		value &= 0x3F3F;
+		break;
+	case GBA_REG_BLDCNT:
+		value &= 0x3FFF;
+		break;
+	case GBA_REG_BLDALPHA:
+		value &= 0x1F1F;
+		break;
+	case GBA_REG_BLDY:
+		value &= 0x1F;
+		if (value > 0x10) {
+			value = 0x10;
+		}
+		break;
 	}
 	if (address > GBA_REG_BLDY) {
 		return value;

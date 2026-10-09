@@ -1239,6 +1239,12 @@ static void _reloadSettings(void) {
 		mCoreConfigSetDefaultIntValue(&core->config, "jit", strcmp(var.value, "enabled") == 0);
 	}
 
+	var.key = "mgba_threaded_video";
+	var.value = 0;
+	if (environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+		mCoreConfigSetDefaultIntValue(&core->config, "threadedVideo", strcmp(var.value, "enabled") == 0);
+	}
+
 	var.key = "mgba_idle_optimization";
 	var.value = 0;
 	if (environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
@@ -1699,6 +1705,10 @@ void retro_run(void) {
 	}
 
 	if (!skipFrame) {
+		// A renderer on another thread finishes the frame here
+		const void* pixels;
+		size_t stride;
+		core->getPixels(core, &pixels, &stride);
 #if defined(COLOR_16_BIT) && defined(COLOR_5_6_5)
 		if (videoPostProcess) {
 			videoPostProcess(width, height);

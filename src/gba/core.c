@@ -205,8 +205,10 @@ struct GBACore {
 #endif
 #ifndef MINIMAL_CORE
 	struct GBAVideoProxyRenderer vlProxy;
-	struct GBAVideoProxyRenderer proxyRenderer;
 	struct mVideoLogContext* logContext;
+#endif
+#if !defined(MINIMAL_CORE) || !defined(DISABLE_THREADING)
+	struct GBAVideoProxyRenderer proxyRenderer;
 #endif
 	struct mCoreCallbacks logCallbacks;
 #ifndef DISABLE_THREADING
@@ -297,6 +299,8 @@ static bool _GBACoreInit(struct mCore* core) {
 #endif
 #ifndef MINIMAL_CORE
 	gbacore->vlProxy.logger = NULL;
+#endif
+#if !defined(MINIMAL_CORE) || !defined(DISABLE_THREADING)
 	gbacore->proxyRenderer.logger = NULL;
 #endif
 
@@ -492,7 +496,7 @@ static void _GBACoreReloadConfigOption(struct mCore* core, const char* option, c
 			gbacore->glRenderer.scale = 1;
 		}
 #endif
-#ifndef MINIMAL_CORE
+#if !defined(MINIMAL_CORE) || !defined(DISABLE_THREADING)
 		if (renderer && core->videoLogger) {
 			GBAVideoProxyRendererCreate(&gbacore->proxyRenderer, renderer, core->videoLogger);
 			renderer = &gbacore->proxyRenderer.d;
@@ -503,7 +507,7 @@ static void _GBACoreReloadConfigOption(struct mCore* core, const char* option, c
 		}
 	}
 
-#ifndef MINIMAL_CORE
+#if !defined(MINIMAL_CORE) || !defined(DISABLE_THREADING)
 	if (strcmp("threadedVideo.flushScanline", option) == 0) {
 		int flushScanline = -1;
 		mCoreConfigGetIntValue(config, "threadedVideo.flushScanline", &flushScanline);
@@ -782,7 +786,7 @@ static void _GBACoreReset(struct mCore* core) {
 			}
 		}
 #endif
-#ifndef MINIMAL_CORE
+#if !defined(MINIMAL_CORE) || !defined(DISABLE_THREADING)
 		if (renderer && core->videoLogger) {
 			GBAVideoProxyRendererCreate(&gbacore->proxyRenderer, renderer, core->videoLogger);
 			renderer = &gbacore->proxyRenderer.d;

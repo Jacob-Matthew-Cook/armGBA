@@ -29,11 +29,13 @@ static const struct mVLDescriptor {
 	enum mPlatform platform;
 	struct mCore* (*open)(void);
 } _descriptors[] = {
+#ifndef MINIMAL_CORE
 #ifdef M_CORE_GBA
 	{ mPLATFORM_GBA, GBAVideoLogPlayerCreate },
 #endif
 #ifdef M_CORE_GB
 	{ mPLATFORM_GB, GBVideoLogPlayerCreate },
+#endif
 #endif
 	{ mPLATFORM_NONE, 0 }
 };
@@ -519,7 +521,9 @@ struct mVideoLogContext* mVideoLogContextCreate(struct mCore* core) {
 		vf->seek(vf, 0, SEEK_SET);
 		vf->read(vf, context->initialState, context->initialStateSize);
 		vf->close(vf);
+#ifndef MINIMAL_CORE
 		core->startVideoLog(core, context);
+#endif
 	}
 
 	context->activeChannel = 0;
@@ -739,9 +743,11 @@ void mVideoLogContextDestroy(struct mCore* core, struct mVideoLogContext* contex
 		context->backing->write(context->backing, &header, sizeof(header));
 	}
 
+#ifndef MINIMAL_CORE
 	if (core) {
 		core->endVideoLog(core);
 	}
+#endif
 	if (context->initialState) {
 		mappedMemoryFree(context->initialState, context->initialStateSize);
 	}

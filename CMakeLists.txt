@@ -1045,6 +1045,13 @@ if(BUILD_LIBRETRO)
 	endif()
 	# math.h M_PI is not guaranteed on newlib; common.h's fallback is float
 	list(APPEND LIBRETRO_EXTRA_DEFINES "M_PI=3.14159265358979323846")
+	if(HAVE_PTHREAD_CREATE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+		# Rendering on another thread; the core thread and its lockstep helpers stay out
+		list(APPEND LIBRETRO_CORE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/feature/thread-proxy.c ${CMAKE_CURRENT_SOURCE_DIR}/src/feature/video-logger.c ${CMAKE_CURRENT_SOURCE_DIR}/src/gba/extra/proxy.c)
+		list(FILTER LIBRETRO_CORE_SRC EXCLUDE REGEX "/core/(thread|lockstep)\\.c$")
+	else()
+		list(APPEND LIBRETRO_EXTRA_DEFINES DISABLE_THREADING)
+	endif()
 	# Embedded toolchains aren't covered by the OS detection above and need a
 	# VFile backend selected here: consoles use stdio vfs-file — their newlibs
 	# lack e.g. ftruncate — except vita and 3DS, which have dedicated backends
@@ -1102,7 +1109,7 @@ if(BUILD_LIBRETRO)
 	add_dependencies(${BINARY_NAME}_libretro ${BINARY_NAME}-version-info)
 	# The make-era libretro builds all used the gnu dialect (-std=gnu99) plus
 	# _GNU_SOURCE; newlib toolchains hide POSIX declarations under strict c11
-	set_target_properties(${BINARY_NAME}_libretro PROPERTIES PREFIX "" C_EXTENSIONS ON COMPILE_DEFINITIONS "__LIBRETRO__;_GNU_SOURCE;${LIBRETRO_COLOR_DEFINES};DISABLE_THREADING;MGBA_STANDALONE;${OS_DEFINES};${FUNCTION_DEFINES};ENABLE_VFS;ENABLE_DIRECTORIES;MINIMAL_CORE=2;${LIBRETRO_EXTRA_DEFINES}")
+	set_target_properties(${BINARY_NAME}_libretro PROPERTIES PREFIX "" C_EXTENSIONS ON COMPILE_DEFINITIONS "__LIBRETRO__;_GNU_SOURCE;${LIBRETRO_COLOR_DEFINES};MGBA_STANDALONE;${OS_DEFINES};${FUNCTION_DEFINES};ENABLE_VFS;ENABLE_DIRECTORIES;MINIMAL_CORE=2;${LIBRETRO_EXTRA_DEFINES}")
 	if(LIBRETRO_EXTRA_FLAGS)
 		target_compile_options(${BINARY_NAME}_libretro PRIVATE ${LIBRETRO_EXTRA_FLAGS})
 	endif()

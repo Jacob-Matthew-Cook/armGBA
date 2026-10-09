@@ -308,9 +308,25 @@ struct retro_core_option_v2_definition option_defs_us[] = {
 #if (defined(__aarch64__) || defined(__x86_64__)) && !defined(__APPLE__) && !defined(_WIN32)
    {
       "mgba_jit",
-      "Recompiler (IWRAM ARM code)",
+      "Recompiler",
       NULL,
-      "Recompile ARM code that runs from IWRAM. Timing matches the interpreter.",
+      "Recompile ARM and Thumb code. Timing matches the interpreter.",
+      NULL,
+      "performance",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled"
+   },
+#endif
+#ifndef DISABLE_THREADING
+   {
+      "mgba_threaded_video",
+      "Threaded Rendering",
+      NULL,
+      "Draw each frame on another CPU core while emulation continues. The picture matches single-threaded rendering. Applies on content load.",
       NULL,
       "performance",
       {

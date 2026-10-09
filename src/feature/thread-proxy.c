@@ -173,7 +173,9 @@ static void _unlock(struct mVideoLogger* logger) {
 static void _wake(struct mVideoLogger* logger, int y) {
 	struct mVideoThreadProxy* proxyRenderer = (struct mVideoThreadProxy*) logger;
 	if ((y & 15) == 15) {
+		MutexLock(&proxyRenderer->mutex);
 		ConditionWake(&proxyRenderer->toThreadCond);
+		MutexUnlock(&proxyRenderer->mutex);
 	}
 }
 
@@ -184,7 +186,10 @@ static THREAD_ENTRY _proxyThread(void* logger) {
 	MutexLock(&proxyRenderer->mutex);
 	ConditionWake(&proxyRenderer->fromThreadCond);
 	while (proxyRenderer->threadState != PROXY_THREAD_STOPPED) {
-		ConditionWait(&proxyRenderer->toThreadCond, &proxyRenderer->mutex);
+		// Data written while the last batch ran was announced while nobody waited
+		if (!proxyRenderer->event && !RingFIFOSize(&proxyRenderer->dirtyQueue)) {
+			ConditionWait(&proxyRenderer->toThreadCond, &proxyRenderer->mutex);
+		}
 		if (proxyRenderer->threadState == PROXY_THREAD_STOPPED) {
 			break;
 		}
