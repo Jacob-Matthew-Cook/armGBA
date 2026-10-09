@@ -42,7 +42,7 @@ mLOG_DECLARE_CATEGORY(GBA_STATE);
  *   | bits 21 - 23: Duty index
  *   | bits 24 - 31: Reserved
  * | 0x00134 - 0x00137: Next frame
- * | 0x00138 - 0x0013B: Reserved
+ * | 0x00138 - 0x0013B: Frequency
  * | 0x0013C - 0x0013F: Sweep state
  *   | bits 0 - 2: Timesteps
  *   | bits 3 - 7: Reserved
@@ -54,12 +54,13 @@ mLOG_DECLARE_CATEGORY(GBA_STATE);
  *   | bits 6 - 20: Reserved
  *   | bits 21 - 23: Duty index
  *   | bits 24 - 31: Reserved
- * | 0x00148 - 0x0014F: Reserved
+ * | 0x00148 - 0x0014B: Frequency
+ * | 0x0014C - 0x0014F: Reserved
  * | 0x00150 - 0x00153: Last update
  * 0x00154 - 0x0017B: Audio channel 3 state
  * | 0x00154 - 0x00173: Wave banks
  * | 0x00174 - 0x00175: Remaining length
- * | 0x00176 - 0x00177: Reserved
+ * | 0x00176 - 0x00177: Frequency
  * | 0x00178 - 0x0017B: Next event
  * 0x0017C - 0x0018B: Audio channel 4 state
  * | 0x0017C - 0x0017F: Linear feedback shift register state
@@ -109,8 +110,12 @@ mLOG_DECLARE_CATEGORY(GBA_STATE);
  *   | bits 0 - 3: Current sample index
  *   | bits 4 - 5: Channel A DMA source
  *   | bits 6 - 7: Channel B DMA source
- *   | bits 8 - 31: Reserved
- * | 0x001E8 - 0x001EF: Reserved
+ *   | bits 8 - 10: Channel A FIFO read position
+ *   | bits 11 - 13: Channel B FIFO read position
+ *   | bit 14: Are channel 1 sweep steps remaining saved?
+ *   | bits 15 - 31: Reserved
+ * | 0x001E8 - 0x001EB: Channel 1 - 4 current samples
+ * | 0x001EC - 0x001EF: Channel 1 sweep steps remaining
  * 0x001F0 - 0x001FF: Video miscellaneous state
  * | 0x001F0 - 0x001F3: Reserved
  * | 0x001F4 - 0x001F7: Next event
@@ -286,6 +291,9 @@ DECL_BITFIELD(GBASerializedAudioFlags2, uint32_t);
 DECL_BITS(GBASerializedAudioFlags2, SampleIndex, 0, 4);
 DECL_BITS(GBASerializedAudioFlags2, ChASource, 4, 2);
 DECL_BITS(GBASerializedAudioFlags2, ChBSource, 6, 2);
+DECL_BITS(GBASerializedAudioFlags2, FIFOReadA, 8, 3);
+DECL_BITS(GBASerializedAudioFlags2, FIFOReadB, 11, 3);
+DECL_BIT(GBASerializedAudioFlags2, SweepStepSaved, 14);
 
 DECL_BITFIELD(GBASerializedVideoFlags, uint32_t);
 DECL_BITS(GBASerializedVideoFlags, Mode, 0, 2);
@@ -366,7 +374,8 @@ struct GBASerializedState {
 		GBSerializedAudioFlags flags;
 		int32_t lastSample;
 		GBASerializedAudioFlags2 gbaFlags2;
-		int32_t reserved[2];
+		int8_t psgSamples[4];
+		int32_t sweepStep;
 	} audio;
 
 	struct {

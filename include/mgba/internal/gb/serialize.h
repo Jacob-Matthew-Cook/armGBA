@@ -225,19 +225,20 @@ struct GBSerializedPSGState {
 	struct {
 		GBSerializedAudioEnvelope envelope;
 		int32_t nextFrame;
-		int32_t reserved;
+		uint32_t frequency;
 		GBSerializedAudioSweep sweep;
 		uint32_t lastUpdate;
 	} ch1;
 	struct {
 		GBSerializedAudioEnvelope envelope;
-		int32_t reserved[2];
+		uint32_t frequency;
+		int32_t reserved;
 		uint32_t lastUpdate;
 	} ch2;
 	struct {
 		uint32_t wavebanks[8];
 		int16_t length;
-		int16_t reserved;
+		uint16_t rate;
 		uint32_t nextEvent;
 	} ch3;
 	struct {

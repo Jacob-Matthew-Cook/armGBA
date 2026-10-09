@@ -432,6 +432,15 @@ static void _sample(struct mTiming* timing, void* user, uint32_t cyclesLate) {
 
 void GBAAudioSerialize(const struct GBAAudio* audio, struct GBASerializedState* state) {
 	GBAudioPSGSerialize(&audio->psg, &state->audio.psg, &state->audio.flags);
+	// The frequencies are write-only, so the saved I/O registers don't have them
+	STORE_32(audio->psg.ch1.control.frequency, 0, &state->audio.psg.ch1.frequency);
+	STORE_32(audio->psg.ch2.control.frequency, 0, &state->audio.psg.ch2.frequency);
+	STORE_16(audio->psg.ch3.rate, 0, &state->audio.psg.ch3.rate);
+	state->audio.psgSamples[0] = audio->psg.ch1.sample;
+	state->audio.psgSamples[1] = audio->psg.ch2.sample;
+	state->audio.psgSamples[2] = audio->psg.ch3.sample;
+	state->audio.psgSamples[3] = audio->psg.ch4.sample;
+	STORE_32(audio->psg.ch1.sweep.step, 0, &state->audio.sweepStep);
 
 	STORE_32(audio->chA.internalSample, 0, &state->audio.internalA);
 	STORE_32(audio->chB.internalSample, 0, &state->audio.internalB);
@@ -487,14 +496,16 @@ void GBAAudioSerialize(const struct GBAAudio* audio, struct GBASerializedState* 
 	// add 1 and use a non-zero value to mark its presence in the state file
 	flags2 = GBASerializedAudioFlags2SetChASource(flags2, audio->chA.dmaSource + 1);
 	flags2 = GBASerializedAudioFlags2SetChBSource(flags2, audio->chB.dmaSource + 1);
+	flags2 = GBASerializedAudioFlags2SetFIFOReadA(flags2, audio->chA.fifoRead);
+	flags2 = GBASerializedAudioFlags2SetFIFOReadB(flags2, audio->chB.fifoRead);
+	flags2 = GBASerializedAudioFlags2FillSweepStepSaved(flags2);
 	STORE_32(flags2, 0, &state->audio.gbaFlags2);
 
 	STORE_32(audio->sampleEvent.when - mTimingCurrentTime(&audio->p->timing), 0, &state->audio.nextSample);
 }
 
 void GBAAudioDeserialize(struct GBAAudio* audio, const struct GBASerializedState* state) {
-	GBAudioPSGDeserialize(&audio->psg, &state->audio.psg, &state->audio.flags);
-
+	// The register writes run the channels up to now, so the saved channel state goes on after them
 	uint16_t reg;
 	LOAD_16(reg, GBA_REG_SOUND1CNT_X, state->io);
 	GBAIOWrite(audio->p, GBA_REG_SOUND1CNT_X, reg & 0x7FFF);
@@ -504,6 +515,24 @@ void GBAAudioDeserialize(struct GBAAudio* audio, const struct GBASerializedState
 	GBAIOWrite(audio->p, GBA_REG_SOUND3CNT_X, reg & 0x7FFF);
 	LOAD_16(reg, GBA_REG_SOUND4CNT_HI, state->io);
 	GBAIOWrite(audio->p, GBA_REG_SOUND4CNT_HI, reg & 0x7FFF);
+	LOAD_16(audio->p->memory.io[GBA_REG(SOUNDCNT_X)], GBA_REG_SOUNDCNT_X, state->io);
+
+	GBAudioPSGDeserialize(&audio->psg, &state->audio.psg, &state->audio.flags);
+	LOAD_32(audio->psg.ch1.control.frequency, 0, &state->audio.psg.ch1.frequency);
+	LOAD_32(audio->psg.ch2.control.frequency, 0, &state->audio.psg.ch2.frequency);
+	LOAD_16(audio->psg.ch3.rate, 0, &state->audio.psg.ch3.rate);
+	audio->psg.ch1.sample = state->audio.psgSamples[0];
+	audio->psg.ch2.sample = state->audio.psgSamples[1];
+	audio->psg.ch3.sample = state->audio.psgSamples[2];
+	audio->psg.ch4.sample = state->audio.psgSamples[3];
+	GBASerializedAudioFlags2 flags2;
+	LOAD_32(flags2, 0, &state->audio.gbaFlags2);
+	if (GBASerializedAudioFlags2IsSweepStepSaved(flags2)) {
+		LOAD_32(audio->psg.ch1.sweep.step, 0, &state->audio.sweepStep);
+	} else {
+		// Older states leave this out, so the count starts over as on a trigger
+		audio->psg.ch1.sweep.step = audio->psg.ch1.sweep.time;
+	}
 
 	LOAD_32(audio->chA.internalSample, 0, &state->audio.internalA);
 	LOAD_32(audio->chB.internalSample, 0, &state->audio.internalB);
@@ -517,26 +546,25 @@ void GBAAudioDeserialize(struct GBAAudio* audio, const struct GBASerializedState
 	}
 	LOAD_32(audio->lastSample, 0, &state->audio.lastSample);
 
-	int readA = 0;
-	int readB = 0;
+	// The words go back in their old slots, since a FIFO reset leaves them there
+	audio->chA.fifoRead = GBASerializedAudioFlags2GetFIFOReadA(flags2);
+	audio->chB.fifoRead = GBASerializedAudioFlags2GetFIFOReadB(flags2);
+	int readA = audio->chA.fifoRead;
+	int readB = audio->chB.fifoRead;
 	for (i = 0; i < GBA_AUDIO_FIFO_SIZE; ++i) {
 		LOAD_32(audio->chA.fifo[readA], i << 2, state->audio.fifoA);
 		LOAD_32(audio->chB.fifo[readB], i << 2, state->audio.fifoB);
-		++readA;
-		++readB;
+		readA = (readA + 1) % GBA_AUDIO_FIFO_SIZE;
+		readB = (readB + 1) % GBA_AUDIO_FIFO_SIZE;
 	}
-	audio->chA.fifoRead = 0;
-	audio->chB.fifoRead = 0;
 
 	GBASerializedAudioFlags flags;
 	LOAD_16(flags, 0, &state->audio.gbaFlags);
-	audio->chA.fifoWrite = GBASerializedAudioFlagsGetFIFOSamplesA(flags);
-	audio->chB.fifoWrite = GBASerializedAudioFlagsGetFIFOSamplesB(flags);
+	audio->chA.fifoWrite = (audio->chA.fifoRead + GBASerializedAudioFlagsGetFIFOSamplesA(flags)) % GBA_AUDIO_FIFO_SIZE;
+	audio->chB.fifoWrite = (audio->chB.fifoRead + GBASerializedAudioFlagsGetFIFOSamplesB(flags)) % GBA_AUDIO_FIFO_SIZE;
 	audio->chA.internalRemaining = GBASerializedAudioFlagsGetFIFOInternalSamplesA(flags);
 	audio->chB.internalRemaining = GBASerializedAudioFlagsGetFIFOInternalSamplesB(flags);
 
-	GBASerializedAudioFlags2 flags2;
-	LOAD_32(flags2, 0, &state->audio.gbaFlags2);
 	audio->sampleIndex = GBASerializedAudioFlags2GetSampleIndex(flags2);
 	// This flag was introduced in 0.11 and will only ever be 0, 1 or 2, so we
 	// add 1 and use a non-zero value to mark its presence in the state file
