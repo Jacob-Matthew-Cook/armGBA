@@ -5,7 +5,7 @@ armGBA is a fork of [mGBA](https://mgba.io/) ([libretro/mgba](https://github.com
 
 The recompiler covers ARM and Thumb code running from IWRAM, EWRAM, the cartridge and the BIOS, including code a game rewrites while it runs. It builds for AArch64 and x86-64 Linux.
 
-Core options, both off by default:
+Core options, both on by default:
 
 - `mgba_jit` (Recompiler): AArch64 and x86-64 Linux builds.
 - `mgba_threaded_video` (Threaded Rendering): draws each frame on another CPU core. Linux builds.

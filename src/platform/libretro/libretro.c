@@ -1235,17 +1235,16 @@ static void _reloadSettings(void) {
 	_loadAudioLowPassFilterSettings();
 	_loadFrameskipSettings(&opts);
 
+	// The recompiler and threaded rendering are on unless turned off
 	var.key = "mgba_jit";
 	var.value = 0;
-	if (environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-		mCoreConfigSetDefaultIntValue(&core->config, "jit", strcmp(var.value, "enabled") == 0);
-	}
+	environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
+	mCoreConfigSetDefaultIntValue(&core->config, "jit", !var.value || strcmp(var.value, "enabled") == 0);
 
 	var.key = "mgba_threaded_video";
 	var.value = 0;
-	if (environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-		mCoreConfigSetDefaultIntValue(&core->config, "threadedVideo", strcmp(var.value, "enabled") == 0);
-	}
+	environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
+	mCoreConfigSetDefaultIntValue(&core->config, "threadedVideo", !var.value || strcmp(var.value, "enabled") == 0);
 
 	var.key = "mgba_idle_optimization";
 	var.value = 0;
