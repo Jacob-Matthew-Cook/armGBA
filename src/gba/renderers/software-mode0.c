@@ -7,22 +7,10 @@
 
 #include <mgba/internal/gba/gba.h>
 
-#if defined(__ARM_NEON) && defined(__aarch64__) && defined(COLOR_16_BIT) && defined(COLOR_5_6_5)
-#include <arm_neon.h>
-
+#ifdef VIDEO_NEON
 static inline uint16x8_t _paletteLookup(const mColor* palette, uint8x8_t index) {
 	uint8x16x2_t bytes = vld2q_u8((const uint8_t*) palette);
 	return vorrq_u16(vmovl_u8(vqtbl1_u8(bytes.val[0], index)), vshlq_n_u16(vmovl_u8(vqtbl1_u8(bytes.val[1], index)), 8));
-}
-
-// mColorMix5Bit for eight colors
-static inline uint16x8_t _mix5Bit(uint16x8_t a, uint16x8_t b, uint16x8_t weightA, uint16x8_t weightB) {
-	uint16x8_t mask = vdupq_n_u16(0x1F);
-	uint16x8_t max = vdupq_n_u16(0x1F);
-	uint16x8_t red = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vshrq_n_u16(a, 11), weightA), vshrq_n_u16(b, 11), weightB), 4), max);
-	uint16x8_t green = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vandq_u16(vshrq_n_u16(a, 6), mask), weightA), vandq_u16(vshrq_n_u16(b, 6), mask), weightB), 4), max);
-	uint16x8_t blue = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vandq_u16(a, mask), weightA), vandq_u16(b, mask), weightB), 4), max);
-	return vorrq_u16(vorrq_u16(vshlq_n_u16(red, 11), vshlq_n_u16(green, 6)), blue);
 }
 
 // A whole 16-color tile row at once, as eight BACKGROUND_DRAW_PIXEL_16 with COMPOSITE_16_NO_OBJWIN
@@ -41,30 +29,16 @@ static inline void _drawTile16(struct GBAVideoSoftwareRenderer* renderer, uint32
 		uint16x8_t normal = _paletteLookup(&renderer->normalPalette[paletteData], index);
 		color = vbslq_u16(vcombine_u16(vmovn_u32(reblend[0]), vmovn_u32(reblend[1])), normal, color);
 	}
-	uint16x8_t mixed = vdupq_n_u16(0);
-	if (blend) {
-		uint16x8_t below = vcombine_u16(vmovn_u32(current[0]), vmovn_u32(current[1]));
-		mixed = _mix5Bit(below, color, vdupq_n_u16(renderer->blda), vdupq_n_u16(renderer->bldb));
-	}
 	uint16x8_t index16 = vmovl_u8(index);
+	uint32x4_t colors[2];
+	uint32x4_t write[2];
 	unsigned h;
 	for (h = 0; h < 2; ++h) {
-		uint32x4_t cur = current[h];
-		uint32x4_t col = vorrq_u32(vmovl_u16(h ? vget_high_u16(color) : vget_low_u16(color)), vdupq_n_u32(flags));
 		uint32x4_t idx = vmovl_u16(h ? vget_high_u16(index16) : vget_low_u16(index16));
-		uint32x4_t write = vandq_u32(vtstq_u32(idx, idx), vtstq_u32(cur, vdupq_n_u32(0xFE000000)));
-		uint32x4_t behind = vcgeq_u32(col, cur);
-		uint32x4_t below = vandq_u32(cur, vdupq_n_u32(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN));
-		uint32x4_t out;
-		if (blend) {
-			uint32x4_t mix = vandq_u32(behind, vandq_u32(vtstq_u32(cur, vdupq_n_u32(FLAG_TARGET_1)), vtstq_u32(col, vdupq_n_u32(FLAG_TARGET_2))));
-			uint32x4_t mixedColor = vmovl_u16(h ? vget_high_u16(mixed) : vget_low_u16(mixed));
-			out = vbslq_u32(behind, vbslq_u32(mix, mixedColor, below), vbicq_u32(col, vdupq_n_u32(FLAG_TARGET_2)));
-		} else {
-			out = vbslq_u32(behind, below, col);
-		}
-		vst1q_u32(pixel + 4 * h, vbslq_u32(write, out, cur));
+		colors[h] = vorrq_u32(vmovl_u16(h ? vget_high_u16(color) : vget_low_u16(color)), vdupq_n_u32(flags));
+		write[h] = vandq_u32(vtstq_u32(idx, idx), vtstq_u32(current[h], vdupq_n_u32(0xFE000000)));
 	}
+	_composite8(renderer, pixel, current, colors, write, blend);
 }
 
 #define _BLENDS_Blend true

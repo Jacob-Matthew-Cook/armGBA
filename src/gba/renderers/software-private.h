@@ -84,6 +84,45 @@ static inline void _compositeNoBlendNoObjwin(struct GBAVideoSoftwareRenderer* re
 	*pixel = color;
 }
 
+#if defined(__ARM_NEON) && defined(__aarch64__) && defined(COLOR_16_BIT) && defined(COLOR_5_6_5)
+#include <arm_neon.h>
+#define VIDEO_NEON 1
+
+// mColorMix5Bit for eight colors
+static inline uint16x8_t _mix5Bit8(uint16x8_t a, uint16x8_t b, uint16x8_t weightA, uint16x8_t weightB) {
+	uint16x8_t mask = vdupq_n_u16(0x1F);
+	uint16x8_t red = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vshrq_n_u16(a, 11), weightA), vshrq_n_u16(b, 11), weightB), 4), mask);
+	uint16x8_t green = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vandq_u16(vshrq_n_u16(a, 6), mask), weightA), vandq_u16(vshrq_n_u16(b, 6), mask), weightB), 4), mask);
+	uint16x8_t blue = vminq_u16(vshrq_n_u16(vmlaq_u16(vmulq_u16(vandq_u16(a, mask), weightA), vandq_u16(b, mask), weightB), 4), mask);
+	return vorrq_u16(vorrq_u16(vshlq_n_u16(red, 11), vshlq_n_u16(green, 6)), blue);
+}
+
+// _compositeBlendNoObjwin, or _compositeNoBlendNoObjwin, for the eight pixels where write is set
+static inline void _composite8(struct GBAVideoSoftwareRenderer* renderer, uint32_t* pixel, const uint32x4_t current[2],
+                               const uint32x4_t color[2], const uint32x4_t write[2], bool blend) {
+	uint16x8_t mixed = vdupq_n_u16(0);
+	if (blend) {
+		mixed = _mix5Bit8(vcombine_u16(vmovn_u32(current[0]), vmovn_u32(current[1])),
+		                  vcombine_u16(vmovn_u32(color[0]), vmovn_u32(color[1])),
+		                  vdupq_n_u16(renderer->blda), vdupq_n_u16(renderer->bldb));
+	}
+	unsigned h;
+	for (h = 0; h < 2; ++h) {
+		uint32x4_t behind = vcgeq_u32(color[h], current[h]);
+		uint32x4_t below = vandq_u32(current[h], vdupq_n_u32(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN));
+		uint32x4_t out;
+		if (blend) {
+			uint32x4_t mix = vandq_u32(behind, vandq_u32(vtstq_u32(current[h], vdupq_n_u32(FLAG_TARGET_1)), vtstq_u32(color[h], vdupq_n_u32(FLAG_TARGET_2))));
+			uint32x4_t mixedColor = vmovl_u16(h ? vget_high_u16(mixed) : vget_low_u16(mixed));
+			out = vbslq_u32(behind, vbslq_u32(mix, mixedColor, below), vbicq_u32(color[h], vdupq_n_u32(FLAG_TARGET_2)));
+		} else {
+			out = vbslq_u32(behind, below, color[h]);
+		}
+		vst1q_u32(pixel + 4 * h, vbslq_u32(write[h], out, current[h]));
+	}
+}
+#endif
+
 #define COMPOSITE_16_OBJWIN(BLEND, IDX)  \
 	if (background->objwinForceEnable || (!(current & FLAG_OBJWIN)) == background->objwinOnly) { \
 		unsigned color; \
