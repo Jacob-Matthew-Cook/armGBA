@@ -1352,11 +1352,11 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	_ldrW(e, 0, R_CPU, OFF_PC);
 	_movImm32(e, 1, address + 2 * c->width);
 	_cmpW(e, 0, 1);
-	uint8_t* branched = _bCond(e, A64_NE);
-	uint8_t* sequential = _b(e);
-
-	_patch(branched, e->p);
-	if (_loopsToStart(c, i)) {
+	uint8_t* sequential = _bCond(e, A64_EQ);
+	struct BranchOp branch;
+	if (!_branchTarget(c, i, &branch)) {
+		_exitJump(c, EXIT_DIRECT);
+	} else if (branch.target == c->pc) {
 		// A taken branch back to the start of this block keeps running here
 		_movImm32(e, 1, c->pc + c->width);
 		_cmpW(e, 0, 1);
@@ -1367,16 +1367,10 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_exitAt(c, _bCond(e, A64_GE), EXIT_EVENTS);
 		c->loops[c->nLoops++] = _b(e);
 	} else {
-		uint32_t target;
-		if (_branchTarget(c, i, &target)) {
-			_cmpW(e, R_CYCLES, R_NEXT);
-			_exitAt(c, _bCond(e, A64_GE), EXIT_EVENTS);
-			_linkJump(c);
-		} else {
-			_exitJump(c, EXIT_DIRECT);
-		}
+		_cmpW(e, R_CYCLES, R_NEXT);
+		_exitAt(c, _bCond(e, A64_GE), EXIT_EVENTS);
+		_linkJump(c);
 	}
-
 	_patch(sequential, e->p);
 	if (toCheck) {
 		_patch(toCheck, e->p);

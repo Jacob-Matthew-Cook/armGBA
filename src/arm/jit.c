@@ -184,55 +184,6 @@ static bool _decodeMem(struct Compiler* c, unsigned i, struct MemOp* mem) {
 	return _decodeArmMem(c->ops[i], address, mem);
 }
 
-static bool _loopsToStart(struct Compiler* c, unsigned i) {
-	uint32_t op = c->ops[i];
-	uint32_t address = c->pc + c->width * i;
-	int32_t offset;
-	if (c->thumb) {
-		if ((op & 0xF000) == 0xD000 && (op & 0x0F00) < 0x0E00) {
-			offset = (int8_t) op << 1;
-		} else if ((op & 0xF800) == 0xE000) {
-			offset = (int32_t) (op << 21) >> 20;
-		} else {
-			return false;
-		}
-	} else if ((op & 0x0E000000) == 0x0A000000) {
-		offset = (int32_t) (op << 8) >> 6;
-	} else {
-		return false;
-	}
-	return address + 2 * c->width + offset == c->pc;
-}
-
-static bool _branchTarget(struct Compiler* c, unsigned i, uint32_t* target) {
-	uint32_t op = c->ops[i];
-	uint32_t address = c->pc + c->width * i;
-	if (c->hot[i]) {
-		return false;
-	}
-	if (c->thumb) {
-		if ((op & 0xF000) == 0xD000 && (op & 0x0F00) < 0x0E00) {
-			*target = address + 4 + ((int8_t) op << 1);
-			return true;
-		}
-		if ((op & 0xF800) == 0xE000) {
-			*target = address + 4 + ((int32_t) (op << 21) >> 20);
-			return true;
-		}
-		if ((op & 0xF800) == 0xF800 && i > 0 && !c->hot[i - 1] && (c->ops[i - 1] & 0xF800) == 0xF000) {
-			// BL whose first half is the previous instruction, so LR is known
-			*target = address + 2 + ((int32_t) (c->ops[i - 1] << 21) >> 9) + ((op & 0x7FF) << 1);
-			return true;
-		}
-		return false;
-	}
-	if ((op & 0x0E000000) == 0x0A000000) {
-		*target = address + 8 + ((int32_t) (op << 8) >> 6);
-		return true;
-	}
-	return false;
-}
-
 static uint32_t _regionEnd(struct ARMCore* cpu, uint32_t pc);
 
 struct BranchOp {
@@ -246,18 +197,41 @@ struct BranchOp {
 	int index;
 };
 
-// A branch to a known address in the same region, which needs no region change
-static bool _decodeBranch(struct Compiler* c, unsigned i, struct BranchOp* b) {
+// B, BL and conditional branches whose target is known when compiling
+static bool _branchTarget(struct Compiler* c, unsigned i, struct BranchOp* b) {
 	uint32_t op = c->ops[i];
 	uint32_t address = c->pc + c->width * i;
-	if (!_branchTarget(c, i, &b->target)) {
+	if (c->hot[i]) {
+		return false;
+	}
+	b->link = false;
+	b->thumbLink = false;
+	b->lr = 0;
+	if (!c->thumb) {
+		if ((op & 0x0E000000) != 0x0A000000) {
+			return false;
+		}
+		b->link = op & 0x01000000;
+		b->target = address + 8 + ((int32_t) (op << 8) >> 6);
+	} else if ((op & 0xF000) == 0xD000 && (op & 0x0F00) < 0x0E00) {
+		b->target = address + 4 + ((int8_t) op << 1);
+	} else if ((op & 0xF800) == 0xE000) {
+		b->target = address + 4 + ((int32_t) (op << 21) >> 20);
+	} else if ((op & 0xF800) == 0xF800 && i > 0 && !c->hot[i - 1] && (c->ops[i - 1] & 0xF800) == 0xF000) {
+		// BL whose first half is the previous instruction, so LR is known
+		b->thumbLink = true;
+		b->lr = address + 2 + ((int32_t) (c->ops[i - 1] << 21) >> 9);
+		b->target = b->lr + ((op & 0x7FF) << 1);
+	} else {
 		return false;
 	}
 	b->cond = _condition(op, c->thumb);
-	b->link = !c->thumb && (op & 0x01000000);
-	b->thumbLink = c->thumb && (op & 0xF800) == 0xF800;
-	b->lr = b->thumbLink ? address + 2 + ((int32_t) (c->ops[i - 1] << 21) >> 9) : 0;
-	if (b->cond == 0xF || (b->target >> 24) != (c->pc >> 24) || b->target + 2 * c->width > _regionEnd(c->cpu, c->pc)) {
+	return true;
+}
+
+// A branch to a known address in the same region, which needs no region change
+static bool _decodeBranch(struct Compiler* c, unsigned i, struct BranchOp* b) {
+	if (!_branchTarget(c, i, b) || b->cond == 0xF || (b->target >> 24) != (c->pc >> 24) || b->target + 2 * c->width > _regionEnd(c->cpu, c->pc)) {
 		return false;
 	}
 	b->index = -1;

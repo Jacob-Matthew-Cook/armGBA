@@ -1288,11 +1288,11 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	_callC(e, X_RAX);
 	_load(e, X_RAX, X_CPU, OFF_PC);
 	_ri(e, G1_CMP, X_RAX, address + 2 * c->width);
-	uint8_t* branched = _jcc(e, CC_NE);
-	uint8_t* sequential = _jmp(e);
-
-	_patch(branched, e->p);
-	if (_loopsToStart(c, i)) {
+	uint8_t* sequential = _jcc(e, CC_E);
+	struct BranchOp branch;
+	if (!_branchTarget(c, i, &branch)) {
+		_exitJump(c, EXIT_DIRECT);
+	} else if (branch.target == c->pc) {
 		// A taken branch back to the start of this block keeps running here
 		_ri(e, G1_CMP, X_RAX, c->pc + c->width);
 		_exitAt(c, _jcc(e, CC_NE), EXIT_DIRECT);
@@ -1302,16 +1302,10 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 		_exitAt(c, _jcc(e, CC_GE), EXIT_EVENTS);
 		c->loops[c->nLoops++] = _jmp(e);
 	} else {
-		uint32_t target;
-		if (_branchTarget(c, i, &target)) {
-			_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
-			_exitAt(c, _jcc(e, CC_GE), EXIT_EVENTS);
-			_linkJump(c);
-		} else {
-			_exitJump(c, EXIT_DIRECT);
-		}
+		_cmpRegMem(e, X_CYCLES, X_CPU, OFF_NEXT_EVENT);
+		_exitAt(c, _jcc(e, CC_GE), EXIT_EVENTS);
+		_linkJump(c);
 	}
-
 	_patch(sequential, e->p);
 	if (toCheck) {
 		_patch(toCheck, e->p);
