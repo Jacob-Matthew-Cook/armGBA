@@ -594,6 +594,13 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 		skip = _bCond(e, alu->cond ^ 1);
 	}
 
+	// Both registers load before either is used, so the in-order core waits on one load at most
+	if (!alu->immediate) {
+		_loadSource(c, 3, alu->m);
+	}
+	if (opcode != ALU_MOV && opcode != ALU_MVN) {
+		_loadSource(c, 0, alu->n);
+	}
 	// Immediates go into the host instruction when they fit
 	uint32_t hostImm = alu->immediate ? _aluImm(opcode, s, alu->imm) : 0;
 	if (alu->immediate) {
@@ -610,11 +617,7 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 			}
 		}
 	} else {
-		_loadSource(c, 3, alu->m);
 		_shiftImm(c, alu->shiftType, alu->shiftAmount, carryOut);
-	}
-	if (opcode != ALU_MOV && opcode != ALU_MVN) {
-		_loadSource(c, 0, alu->n);
 	}
 	if (carryIn) {
 		_loadFlags(c);
@@ -1016,6 +1019,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_dataWait(c, i, literalWait);
 		goto tail;
 	}
+	_loadSource(c, 4, mem->base);
 	if (!load) {
 		_loadSource(c, 6, _reg(mem->rd));
 	}
@@ -1032,7 +1036,6 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_loadSource(c, 3, mem->m);
 		_shiftImm(c, mem->shiftType, mem->shiftAmount, false);
 	}
-	_loadSource(c, 4, mem->base);
 	_emit(e, (mem->up || mem->runtimeOffset ? 0x0B000000 : 0x4B000000) | (1 << 16) | (4 << 5) | 5); // w5 = base +/- offset
 	if (mem->writeback) {
 		_movW(e, R_WB, 5);
