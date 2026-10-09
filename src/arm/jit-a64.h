@@ -980,19 +980,42 @@ static void _memInvalidate(struct Compiler* c, unsigned i, const struct MemOp* m
 	_dataWait(c, i, _ramWait(c, mem, ewram) + 1);
 }
 
-// Timer counters, without the generic load and I/O dispatch
-static void _memTimer(struct Compiler* c, unsigned i, uint8_t** miss, uint8_t** slow) {
+// Video status, which GBAIORead only reads after clearing the idle loop flag
+static void _memStatus(struct Compiler* c, const struct MemOp* mem) {
+	struct Emitter* e = &c->e;
+	_movImm32(e, 10, offsetof(struct GBA, haltPending));
+	_ldstR(e, A64_STRB_R | A64_UXTW, A64_ZR, R_GBA, 10);
+	_andImm(e, 8, 4, 0, 3);
+	_addXImm(e, 10, R_GBA, offsetof(struct GBA, memory.io));
+	_memAccess(e, true, mem->size, 10);
+}
+
+// I/O reads without the generic load and I/O dispatch: DISPSTAT and VCOUNT, then timer counters
+static void _memIo(struct Compiler* c, unsigned i, const struct MemOp* mem, uint8_t** miss, uint8_t** slow) {
 	struct Emitter* e = &c->e;
 	_cmpWImm(e, 7, GBA_REGION_IO);
 	*miss = _bCond(e, A64_NE);
-	_movImm32(e, 9, 0x00FFFFF3);
+	_movImm32(e, 9, mem->size == 2 ? 0x00FFFFFD : 0x00FFFFFC);
 	_dp(e, A64_AND, 9, 4, 9, 0);
-	_cmpWImm(e, 9, GBA_REG_TM0CNT_LO);
-	*slow = _bCond(e, A64_NE);
-	_movX(e, 0, R_GBA);
-	_movW(e, 1, 4);
-	_movImm64(e, 16, (uintptr_t) _readTimer);
-	_blrC(e, 16);
+	_cmpWImm(e, 9, GBA_REG_DISPSTAT);
+	if (mem->size == 1) {
+		*slow = _bCond(e, A64_NE);
+		_memStatus(c, mem);
+	} else {
+		uint8_t* timer = _bCond(e, A64_NE);
+		_memStatus(c, mem);
+		uint8_t* done = _b(e);
+		_patch(timer, e->p);
+		_movImm32(e, 9, 0x00FFFFF3);
+		_dp(e, A64_AND, 9, 4, 9, 0);
+		_cmpWImm(e, 9, GBA_REG_TM0CNT_LO);
+		*slow = _bCond(e, A64_NE);
+		_movX(e, 0, R_GBA);
+		_movW(e, 1, 4);
+		_movImm64(e, 16, (uintptr_t) _readTimer);
+		_blrC(e, 16);
+		_patch(done, e->p);
+	}
 	_dataWait(c, i, 2);
 }
 
@@ -1253,8 +1276,8 @@ static void _emitMemCold(struct Compiler* c, unsigned k) {
 		}
 		_patch(miss, e->p);
 	}
-	if (load && mem->size == 2) {
-		_memTimer(c, i, &miss, &toSlow[nSlow++]);
+	if (load && mem->size <= 2) {
+		_memIo(c, i, mem, &miss, &toSlow[nSlow++]);
 		_jumpTo(c, c->cold[k].done);
 		_patch(miss, e->p);
 	}
