@@ -1228,12 +1228,14 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_loadSource(c, 3, mem->m);
 		_shiftImm(c, mem->shiftType, mem->shiftAmount, false);
 	}
-	_dp(e, mem->up || mem->runtimeOffset ? A64_ADD : A64_SUB, 5, 4, 1, 0);
+	// Without writeback a pre-indexed access needs only the sum, so it replaces the base
+	bool sumOnly = mem->pre && !mem->writeback;
+	_dp(e, mem->up || mem->runtimeOffset ? A64_ADD : A64_SUB, sumOnly ? 4 : 5, 4, 1, 0);
 	if (mem->writeback) {
 		_movW(e, R_WB, 5);
-	}
-	if (mem->pre) {
-		_movW(e, 4, 5);
+		if (mem->pre) {
+			_movW(e, 4, 5);
+		}
 	}
 	if (load && mem->writeback) {
 		_strW(e, R_WB, R_CPU, 4 * mem->base.reg);
