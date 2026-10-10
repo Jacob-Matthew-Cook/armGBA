@@ -65,6 +65,7 @@ static void GBAVideoBatchRendererPutPixels(struct GBAVideoRenderer* renderer, si
 
 void GBAVideoBatchRendererCreate(struct GBAVideoBatchRenderer* renderer) {
 	memset(renderer, 0, sizeof(*renderer));
+	renderer->cpuFrom = -1;
 	_timed = getenv("ARMGBA_BATCH_TIME");
 	renderer->d.init = GBAVideoBatchRendererInit;
 	renderer->d.reset = GBAVideoBatchRendererReset;
@@ -103,8 +104,24 @@ static void _startFrame(struct GBAVideoBatchRenderer* batch) {
 	batch->oamDirty = true;
 	batch->drawnY = 0;
 	batch->nextY = 0;
+	batch->splits = 0;
+	batch->splitPages = 0;
+	batch->cpuFrom = -1;
 	if (batch->gl) {
 		GBAVideoBatchGLStartFrame(batch);
+	}
+}
+
+// Frames that rewrite VRAM all through drawing finish on the CPU: the software renderer already holds the same state
+static void _startCPU(struct GBAVideoBatchRenderer* batch, int y) {
+	struct GBAVideoSoftwareRenderer* sw = &batch->sw;
+	batch->cpuFrom = y;
+	int i;
+	for (i = 0; i < 512; ++i) {
+		sw->d.writePalette(&sw->d, i << 1, batch->d.palette[i]);
+	}
+	for (i = 0; i < 4; ++i) {
+		sw->bg[i].yCache = -1;
 	}
 }
 
@@ -173,6 +190,9 @@ static void GBAVideoBatchRendererWriteVRAM(struct GBAVideoRenderer* renderer, ui
 	struct GBAVideoBatchRenderer* batch = (struct GBAVideoBatchRenderer*) renderer;
 	unsigned page = (address >> 12) % BATCH_VRAM_PAGES;
 	batch->vramDirty |= 1U << page;
+	if (batch->cpuFrom >= 0) {
+		batch->sw.d.writeVRAM(&batch->sw.d, address);
+	}
 	if (batch->check) {
 		batch->check->d.writeVRAM(&batch->check->d, address);
 	}
@@ -190,10 +210,20 @@ static void GBAVideoBatchRendererWriteOAM(struct GBAVideoRenderer* renderer, uin
 static void GBAVideoBatchRendererWritePalette(struct GBAVideoRenderer* renderer, uint32_t address, uint16_t value) {
 	struct GBAVideoBatchRenderer* batch = (struct GBAVideoBatchRenderer*) renderer;
 	batch->paletteDirty = true;
+	if (batch->cpuFrom >= 0) {
+		batch->sw.d.writePalette(&batch->sw.d, address, value);
+	}
 	if (batch->check) {
 		batch->check->d.writePalette(&batch->check->d, address, value);
 	}
 }
+
+// Seen across 37 games: the BIOS intro's first, the rest by how many games use them
+const uint8_t GBAVideoBatchCommonFeatures[] = {
+	0x7F, 0x00, 0x2D, 0x2C, 0x29, 0x28, 0x19, 0x10, 0x20, 0x18, 0x08, 0x60, 0x24, 0x50, 0x30, 0x1C,
+	0x14, 0x11, 0x3C, 0x38, 0x68, 0x64, 0x61, 0x51, 0x48, 0x40, 0x34, 0x31, 0x21, 0x1A, 0x04, 0x01,
+};
+const size_t GBAVideoBatchCommonFeaturesSize = sizeof(GBAVideoBatchCommonFeatures);
 
 // The pixel function the shader runs, compiled as C
 typedef unsigned int uint;
@@ -246,6 +276,15 @@ static void _draw(struct GBAVideoBatchRenderer* batch, int endY) {
 	if (endY > batch->drawnY) {
 		++_stats[0];
 	}
+#ifdef BUILD_BATCH_VULKAN
+	if (batch->vk) {
+		if (endY > batch->drawnY) {
+			GBAVideoBatchVKSegment(batch, batch->drawnY, endY);
+		}
+		batch->drawnY = endY;
+		return;
+	}
+#endif
 	if (batch->gl) {
 		if (endY > batch->drawnY) {
 			double t = _timed ? _now() : 0;
@@ -272,6 +311,16 @@ static void _draw(struct GBAVideoBatchRenderer* batch, int endY) {
 static void _uploadVRAM(struct GBAVideoBatchRenderer* batch, uint32_t pages) {
 	batch->vramDirty &= ~pages;
 	double t = _timed ? _now() : 0;
+#ifdef BUILD_BATCH_VULKAN
+	if (batch->vk) {
+		_stats[1] += __builtin_popcount(pages);
+		GBAVideoBatchVKUploadVRAM(batch, pages);
+		if (_timed) {
+			_timing[2] += _now() - t;
+		}
+		return;
+	}
+#endif
 	if (batch->gl) {
 		GBAVideoBatchGLUploadVRAM(batch, pages);
 	}
@@ -761,6 +810,12 @@ static void _drawScanline(struct GBAVideoRenderer* renderer, int y) {
 	if (batch->check) {
 		batch->check->d.drawScanline(&batch->check->d, y);
 	}
+	if (batch->cpuFrom >= 0) {
+		memset(sw->scanlineDirty, 0xFF, sizeof(sw->scanlineDirty));
+		sw->d.drawScanline(&sw->d, y);
+		batch->nextY = y + 1;
+		return;
+	}
 
 	unsigned i;
 	sw->nextY = y == GBA_VIDEO_VERTICAL_PIXELS - 1 ? 0 : y + 1;
@@ -792,6 +847,11 @@ static void _drawScanline(struct GBAVideoRenderer* renderer, int y) {
 	if (stale) {
 		_draw(batch, y);
 		_uploadVRAM(batch, stale);
+		++batch->splits;
+		batch->splitPages += __builtin_popcount(stale);
+		if (!batch->gl && (batch->splits >= BATCH_MAX_SPLITS || batch->splitPages >= BATCH_MAX_SPLIT_PAGES)) {
+			_startCPU(batch, y + 1);
+		}
 	}
 
 	if (GBARegisterDISPCNTGetMode(sw->dispcnt) != 0) {
@@ -878,7 +938,16 @@ static void _compare(struct GBAVideoBatchRenderer* batch) {
 
 static void GBAVideoBatchRendererFinishFrame(struct GBAVideoRenderer* renderer) {
 	struct GBAVideoBatchRenderer* batch = (struct GBAVideoBatchRenderer*) renderer;
-	_draw(batch, batch->nextY);
+	_draw(batch, batch->cpuFrom >= 0 ? batch->cpuFrom : batch->nextY);
+#ifdef BUILD_BATCH_VULKAN
+	if (batch->vk) {
+		double t = _timed ? _now() : 0;
+		GBAVideoBatchVKFinishFrame(batch);
+		if (_timed) {
+			_timing[1] += _now() - t;
+		}
+	}
+#endif
 	batch->sw.d.finishFrame(&batch->sw.d);
 	if (batch->check) {
 		batch->check->d.finishFrame(&batch->check->d);

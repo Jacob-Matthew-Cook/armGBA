@@ -28,6 +28,7 @@ set(SOURCE_FILES
 	renderers/software-obj.c
 	renderers/video-batch.c
 	renderers/video-batch-gl.c
+	renderers/video-batch-vk.c
 	renderers/video-software.c
 	savedata.c
 	serialize.c

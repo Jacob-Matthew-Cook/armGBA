@@ -483,6 +483,39 @@ if(BUILD_GLES2 OR BUILD_GLES3)
 	list(APPEND FEATURE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/opengl/gles2.c)
 endif()
 
+# The GBA batch renderer's Vulkan shaders, preprocessed like C and compiled to SPIR-V here
+find_program(GLSLANG_VALIDATOR glslangValidator)
+find_path(VULKAN_INCLUDE_DIR NAMES vulkan/vulkan.h)
+if(M_CORE_GBA AND GLSLANG_VALIDATOR AND VULKAN_INCLUDE_DIR)
+	set(BATCH_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/gba/renderers)
+	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${BATCH_SHADER_DIR}/video-batch-pixel.h ${BATCH_SHADER_DIR}/video-batch-vk.frag)
+	file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders)
+	execute_process(COMMAND ${CMAKE_C_COMPILER} -E -P -x c -I${CMAKE_CURRENT_SOURCE_DIR}/src ${BATCH_SHADER_DIR}/video-batch-vk.frag
+		OUTPUT_VARIABLE BATCH_FRAGMENT RESULT_VARIABLE BATCH_RESULT)
+	if(BATCH_RESULT EQUAL 0)
+		file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders/batch.frag "#version 450\n${BATCH_FRAGMENT}")
+		file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders/batch.vert "#version 450\nvoid main() {\n\tgl_Position = vec4(float((gl_VertexIndex & 1) << 2) - 1.0, float((gl_VertexIndex & 2) << 1) - 1.0, 0.0, 1.0);\n}\n")
+		execute_process(COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.0 --vn _batchFragmentSpirv -o ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders/video-batch-frag.h ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders/batch.frag
+			RESULT_VARIABLE BATCH_RESULT OUTPUT_QUIET)
+	endif()
+	if(BATCH_RESULT EQUAL 0)
+		file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders/copy.frag "#version 450\nlayout(std430, set = 0, binding = 0) readonly buffer Frame {\n\tuint frameWords[];\n};\nlayout(location = 0) out vec4 outColor;\nvoid main() {\n\tint index = int(gl_FragCoord.y) * 240 + int(gl_FragCoord.x);\n\tuint color = (frameWords[225280 + (index >> 1)] >> ((index & 1) * 16)) & 0xFFFFu;\n\tuvec3 rgb = uvec3(color >> 11, (color >> 6) & 0x1Fu, color & 0x1Fu);\n\toutColor = vec4(vec3((rgb << 3) | (rgb >> 2)) / 255.0, 1.0);\n}\n")
+		execute_process(COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.0 --vn _batchCopySpirv -o ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders/video-batch-copy.h ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders/copy.frag
+			RESULT_VARIABLE BATCH_RESULT OUTPUT_QUIET)
+	endif()
+	if(BATCH_RESULT EQUAL 0)
+		execute_process(COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.0 --vn _batchVertexSpirv -o ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders/video-batch-vert.h ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders/batch.vert
+			RESULT_VARIABLE BATCH_RESULT OUTPUT_QUIET)
+	endif()
+	if(BATCH_RESULT EQUAL 0)
+		list(APPEND FEATURE_DEFINES BUILD_BATCH_VULKAN)
+		set(BATCH_VULKAN_DEFINES BUILD_BATCH_VULKAN)
+		include_directories(${VULKAN_INCLUDE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/batch-shaders)
+	else()
+		message(WARNING "Batch renderer Vulkan shaders failed to build")
+	endif()
+endif()
+
 if(NOT BUILD_GLES2 AND NOT BUILD_GLES3 AND NOT LIBMGBA_ONLY)
 	set(OPENGLES2_LIBRARY "" CACHE PATH "" FORCE)
 endif()
@@ -1109,7 +1142,7 @@ if(BUILD_LIBRETRO)
 	add_dependencies(${BINARY_NAME}_libretro ${BINARY_NAME}-version-info)
 	# The make-era libretro builds all used the gnu dialect (-std=gnu99) plus
 	# _GNU_SOURCE; newlib toolchains hide POSIX declarations under strict c11
-	set_target_properties(${BINARY_NAME}_libretro PROPERTIES PREFIX "" C_EXTENSIONS ON COMPILE_DEFINITIONS "__LIBRETRO__;_GNU_SOURCE;${LIBRETRO_COLOR_DEFINES};MGBA_STANDALONE;${OS_DEFINES};${FUNCTION_DEFINES};ENABLE_VFS;ENABLE_DIRECTORIES;MINIMAL_CORE=2;${LIBRETRO_EXTRA_DEFINES}")
+	set_target_properties(${BINARY_NAME}_libretro PROPERTIES PREFIX "" C_EXTENSIONS ON COMPILE_DEFINITIONS "__LIBRETRO__;_GNU_SOURCE;${LIBRETRO_COLOR_DEFINES};MGBA_STANDALONE;${OS_DEFINES};${FUNCTION_DEFINES};ENABLE_VFS;ENABLE_DIRECTORIES;MINIMAL_CORE=2;${LIBRETRO_EXTRA_DEFINES};${BATCH_VULKAN_DEFINES}")
 	if(LIBRETRO_EXTRA_FLAGS)
 		target_compile_options(${BINARY_NAME}_libretro PRIVATE ${LIBRETRO_EXTRA_FLAGS})
 	endif()

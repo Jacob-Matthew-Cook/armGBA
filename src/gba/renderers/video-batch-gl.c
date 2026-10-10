@@ -233,10 +233,13 @@ bool GBAVideoBatchRendererInitGL(struct GBAVideoBatchRenderer* batch, void* (*ge
 	struct GBAVideoBatchGL* gl = calloc(1, sizeof(*gl));
 	BATCH_GL_FUNCTIONS(BATCH_GL_LOAD)
 	gl->getFramebuffer = getFramebuffer;
-	// The shader that does everything, and the one most frames need
-	if (!_program(gl, BATCH_FEATURE_ALL) || !_program(gl, 0)) {
+	if (!_program(gl, BATCH_FEATURE_ALL)) {
 		free(gl);
 		return false;
+	}
+	size_t i;
+	for (i = 0; i < GBAVideoBatchCommonFeaturesSize; ++i) {
+		_program(gl, GBAVideoBatchCommonFeatures[i]);
 	}
 
 	gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);

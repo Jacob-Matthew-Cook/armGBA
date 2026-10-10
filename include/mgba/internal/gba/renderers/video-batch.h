@@ -18,6 +18,9 @@ CXX_GUARD_START
 #define BATCH_SPRITE_WORDS 8
 #define BATCH_VRAM_PAGES (GBA_SIZE_VRAM >> 12)
 #define BATCH_MAGIC 0x68637462
+// Past this much VRAM rewriting during one frame, the rest of the frame is drawn on the CPU
+#define BATCH_MAX_SPLITS 16
+#define BATCH_MAX_SPLIT_PAGES 128
 
 // What a scanline needs beyond plain tiles and sprites; the GPU draws with a shader that leaves out the rest
 enum {
@@ -31,7 +34,12 @@ enum {
 	BATCH_FEATURE_ALL = 127
 };
 
+// The feature sets games turned out to need, compiled when the core loads instead of mid-game
+extern const uint8_t GBAVideoBatchCommonFeatures[];
+extern const size_t GBAVideoBatchCommonFeaturesSize;
+
 struct GBAVideoBatchGL;
+struct GBAVideoBatchVK;
 
 struct GBAVideoBatchSprite {
 	uint16_t entry;
@@ -43,8 +51,9 @@ struct GBAVideoBatchSprite {
 struct GBAVideoBatchRenderer {
 	struct GBAVideoRenderer d;
 
-	// Draws with OpenGL ES 3 when set, on the CPU otherwise
+	// Draws with Vulkan or OpenGL ES 3 when set, on the CPU otherwise
 	struct GBAVideoBatchGL* gl;
+	struct GBAVideoBatchVK* vk;
 
 	// Keeps the windows, affine steps, layer enables and sprite list; draws nothing
 	struct GBAVideoSoftwareRenderer sw;
@@ -70,6 +79,9 @@ struct GBAVideoBatchRenderer {
 	uint32_t vramDirty;
 	int drawnY;
 	int nextY;
+	int splits;
+	int splitPages;
+	int cpuFrom;
 
 	// Optional: a full software renderer fed the same writes, compared every frame
 	struct GBAVideoSoftwareRenderer* check;
@@ -86,6 +98,30 @@ void GBAVideoBatchRendererDeinitGL(struct GBAVideoBatchRenderer* renderer);
 void GBAVideoBatchGLUploadVRAM(struct GBAVideoBatchRenderer* renderer, uint32_t pages);
 void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* renderer, int startY, int endY);
 void GBAVideoBatchGLStartFrame(struct GBAVideoBatchRenderer* renderer);
+
+#ifdef BUILD_BATCH_VULKAN
+#include <vulkan/vulkan.h>
+
+// What the frontend lends: its device, and a way to show an image drawn by a command buffer it submits
+struct GBAVideoBatchVulkanHost {
+	VkInstance instance;
+	VkPhysicalDevice gpu;
+	VkDevice device;
+	PFN_vkGetInstanceProcAddr getInstanceProcAddr;
+	PFN_vkGetDeviceProcAddr getDeviceProcAddr;
+	uint32_t queueFamily;
+	void* context;
+	uint32_t (*syncIndex)(void* context);
+	uint32_t (*syncIndexMask)(void* context);
+	void (*present)(void* context, VkImageView view, const VkImageViewCreateInfo* viewInfo, VkCommandBuffer commands);
+};
+
+bool GBAVideoBatchRendererInitVulkan(struct GBAVideoBatchRenderer* renderer, const struct GBAVideoBatchVulkanHost* host);
+void GBAVideoBatchRendererDeinitVulkan(struct GBAVideoBatchRenderer* renderer);
+void GBAVideoBatchVKUploadVRAM(struct GBAVideoBatchRenderer* renderer, uint32_t pages);
+void GBAVideoBatchVKSegment(struct GBAVideoBatchRenderer* renderer, int startY, int endY);
+void GBAVideoBatchVKFinishFrame(struct GBAVideoBatchRenderer* renderer);
+#endif
 
 CXX_GUARD_END
 

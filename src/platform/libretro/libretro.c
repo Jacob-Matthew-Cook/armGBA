@@ -25,6 +25,9 @@
 #include <mgba/gba/interface.h>
 #include <mgba/internal/gba/gba.h>
 #include <mgba/internal/gba/renderers/video-batch.h>
+#ifdef BUILD_BATCH_VULKAN
+#include "libretro_vulkan.h"
+#endif
 #endif
 #include <mgba-util/memory.h>
 #include <mgba-util/vfs.h>
@@ -105,6 +108,58 @@ static void _gpuContextDestroy(void) {
 	}
 	gpuReady = false;
 }
+
+#ifdef BUILD_BATCH_VULKAN
+static const struct retro_hw_render_interface_vulkan* vulkan = NULL;
+
+static uint32_t _vulkanSyncIndex(void* context) {
+	UNUSED(context);
+	return vulkan->get_sync_index(vulkan->handle);
+}
+
+static uint32_t _vulkanSyncIndexMask(void* context) {
+	UNUSED(context);
+	return vulkan->get_sync_index_mask(vulkan->handle);
+}
+
+static void _vulkanPresent(void* context, VkImageView view, const VkImageViewCreateInfo* viewInfo, VkCommandBuffer commands) {
+	UNUSED(context);
+	// The frontend keeps a pointer to this until the next frame
+	static struct retro_vulkan_image image;
+	image.image_view = view;
+	image.image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	image.create_info = *viewInfo;
+	vulkan->set_image(vulkan->handle, &image, 0, NULL, VK_QUEUE_FAMILY_IGNORED);
+	vulkan->set_command_buffers(vulkan->handle, 1, &commands);
+}
+
+static void _vulkanContextReset(void) {
+	gpuReady = false;
+	if (!gpuRenderer || !environCallback(RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE, (void*) &vulkan) || !vulkan ||
+	    vulkan->interface_type != RETRO_HW_RENDER_INTERFACE_VULKAN || vulkan->interface_version != RETRO_HW_RENDER_INTERFACE_VULKAN_VERSION) {
+		return;
+	}
+	struct GBAVideoBatchVulkanHost host = {
+		.instance = vulkan->instance,
+		.gpu = vulkan->gpu,
+		.device = vulkan->device,
+		.getInstanceProcAddr = vulkan->get_instance_proc_addr,
+		.getDeviceProcAddr = vulkan->get_device_proc_addr,
+		.queueFamily = vulkan->queue_index,
+		.syncIndex = _vulkanSyncIndex,
+		.syncIndexMask = _vulkanSyncIndexMask,
+		.present = _vulkanPresent,
+	};
+	gpuReady = GBAVideoBatchRendererInitVulkan(gpuRenderer, &host);
+}
+
+static void _vulkanContextDestroy(void) {
+	if (gpuRenderer) {
+		GBAVideoBatchRendererDeinitVulkan(gpuRenderer);
+	}
+	gpuReady = false;
+}
+#endif
 #endif
 static struct LibretroAudioConverter audioConverter;
 static int16_t *audioSampleBuffer = NULL;
@@ -2094,13 +2149,26 @@ bool retro_load_game(const struct retro_game_info* game) {
 #ifdef M_CORE_GBA
 	struct retro_variable gpuVar = { .key = "mgba_gpu_renderer", .value = 0 };
 	if (core->platform(core) == mPLATFORM_GBA && environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &gpuVar) && gpuVar.value && strcmp(gpuVar.value, "enabled") == 0) {
+		// Whichever API the frontend draws with
+		unsigned preferred = RETRO_HW_CONTEXT_NONE;
+		environCallback(RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER, &preferred);
 		memset(&hwRender, 0, sizeof(hwRender));
-		hwRender.context_type = RETRO_HW_CONTEXT_OPENGLES3;
-		hwRender.version_major = 3;
-		hwRender.version_minor = 0;
-		hwRender.context_reset = _gpuContextReset;
-		hwRender.context_destroy = _gpuContextDestroy;
-		hwRender.bottom_left_origin = true;
+#ifdef BUILD_BATCH_VULKAN
+		if (preferred == RETRO_HW_CONTEXT_VULKAN) {
+			hwRender.context_type = RETRO_HW_CONTEXT_VULKAN;
+			hwRender.version_major = VK_API_VERSION_1_0;
+			hwRender.context_reset = _vulkanContextReset;
+			hwRender.context_destroy = _vulkanContextDestroy;
+		} else
+#endif
+		{
+			hwRender.context_type = RETRO_HW_CONTEXT_OPENGLES3;
+			hwRender.version_major = 3;
+			hwRender.version_minor = 0;
+			hwRender.context_reset = _gpuContextReset;
+			hwRender.context_destroy = _gpuContextDestroy;
+			hwRender.bottom_left_origin = true;
+		}
 		if (environCallback(RETRO_ENVIRONMENT_SET_HW_RENDER, &hwRender)) {
 			gpuRenderer = GBACoreBatchRenderer(core);
 		}
@@ -2221,6 +2289,9 @@ void retro_unload_game(void) {
 #ifdef M_CORE_GBA
 	if (gpuRenderer) {
 		GBAVideoBatchRendererDeinitGL(gpuRenderer);
+#ifdef BUILD_BATCH_VULKAN
+		GBAVideoBatchRendererDeinitVulkan(gpuRenderer);
+#endif
 		gpuRenderer = NULL;
 		gpuReady = false;
 	}
