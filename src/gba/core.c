@@ -24,6 +24,7 @@
 #include <mgba/internal/gba/renderers/gl.h>
 #endif
 #include <mgba/internal/gba/renderers/proxy.h>
+#include <mgba/internal/gba/renderers/video-batch.h>
 #include <mgba/internal/gba/renderers/video-software.h>
 #include <mgba/internal/gba/savedata.h>
 #include <mgba/internal/gba/serialize.h>
@@ -200,6 +201,7 @@ struct GBACore {
 	struct mCore d;
 	struct GBAVideoRenderer dummyRenderer;
 	struct GBAVideoSoftwareRenderer renderer;
+	struct GBAVideoBatchRenderer* batch;
 #ifdef BUILD_GLES3
 	struct GBAVideoGLRenderer glRenderer;
 #endif
@@ -289,6 +291,21 @@ static bool _GBACoreInit(struct mCore* core) {
 	GBAVideoSoftwareRendererCreate(&gbacore->renderer);
 	gbacore->renderer.outputBuffer = NULL;
 
+	// Development switch: ARMGBA_BATCH=1 draws with the batch renderer, =check also compares it with the software renderer
+	const char* batch = getenv("ARMGBA_BATCH");
+	gbacore->batch = NULL;
+	if (batch && batch[0]) {
+		gbacore->batch = malloc(sizeof(*gbacore->batch));
+		GBAVideoBatchRendererCreate(gbacore->batch);
+		if (!strcmp(batch, "check")) {
+			gbacore->batch->check = malloc(sizeof(*gbacore->batch->check));
+			GBAVideoSoftwareRendererCreate(gbacore->batch->check);
+			gbacore->batch->checkBuffer = calloc(GBA_VIDEO_HORIZONTAL_PIXELS * GBA_VIDEO_VERTICAL_PIXELS, sizeof(mColor));
+			const char* log = getenv("ARMGBA_BATCH_LOG");
+			gbacore->batch->checkLog = log ? fopen(log, "w") : stderr;
+		}
+	}
+
 #ifdef BUILD_GLES3
 	GBAVideoGLRendererCreate(&gbacore->glRenderer);
 	gbacore->glRenderer.outputTex = -1;
@@ -321,6 +338,17 @@ static void _GBACoreDeinit(struct mCore* core) {
 #endif
 	ARMDeinit(core->cpu);
 	GBADestroy(core->board);
+	if (((struct GBACore*) core)->batch) {
+		struct GBACore* gbacore = (struct GBACore*) core;
+		if (gbacore->batch->check) {
+			if (gbacore->batch->checkLog && gbacore->batch->checkLog != stderr) {
+				fclose(gbacore->batch->checkLog);
+			}
+			free(gbacore->batch->checkBuffer);
+			free(gbacore->batch->check);
+		}
+		free(gbacore->batch);
+	}
 	mappedMemoryFree(core->cpu, sizeof(struct ARMCore));
 	mappedMemoryFree(core->board, sizeof(struct GBA));
 #if defined(ENABLE_VFS) && defined(ENABLE_DIRECTORIES)
@@ -485,7 +513,7 @@ static void _GBACoreReloadConfigOption(struct mCore* core, const char* option, c
 	if (strcmp("hwaccelVideo", option) == 0) {
 		struct GBAVideoRenderer* renderer = NULL;
 		if (gbacore->renderer.outputBuffer) {
-			renderer = &gbacore->renderer.d;
+			renderer = gbacore->batch ? &gbacore->batch->d : &gbacore->renderer.d;
 		}
 #ifdef BUILD_GLES3
 		bool value;
@@ -565,6 +593,10 @@ static void _GBACoreSetVideoBuffer(struct mCore* core, mColor* buffer, size_t st
 	struct GBACore* gbacore = (struct GBACore*) core;
 	gbacore->renderer.outputBuffer = buffer;
 	gbacore->renderer.outputBufferStride = stride;
+	if (gbacore->batch) {
+		gbacore->batch->outputBuffer = buffer;
+		gbacore->batch->outputBufferStride = stride;
+	}
 	memset(gbacore->renderer.scanlineDirty, 0xFFFFFFFF, sizeof(gbacore->renderer.scanlineDirty));
 }
 
@@ -769,7 +801,7 @@ static void _GBACoreReset(struct mCore* core) {
 	) {
 		struct GBAVideoRenderer* renderer = NULL;
 		if (gbacore->renderer.outputBuffer) {
-			renderer = &gbacore->renderer.d;
+			renderer = gbacore->batch ? &gbacore->batch->d : &gbacore->renderer.d;
 		}
 #ifdef BUILD_GLES3
 		if (gbacore->glRenderer.outputTex != (unsigned) -1 && mCoreConfigGetBoolValue(&core->config, "hwaccelVideo", &value) && value) {
