@@ -14,7 +14,7 @@ CXX_GUARD_START
 #include <mgba/internal/gba/renderers/video-software.h>
 
 // Scanlines are recorded as they come and drawn together, one pixel at a time, when VRAM changes or the frame ends
-#define BATCH_LINE_WORDS 64
+#define BATCH_LINE_WORDS 128
 #define BATCH_SPRITE_WORDS 8
 #define BATCH_VRAM_PAGES (GBA_SIZE_VRAM >> 12)
 #define BATCH_MAGIC 0x68637462
@@ -33,6 +33,13 @@ enum {
 
 struct GBAVideoBatchGL;
 
+struct GBAVideoBatchSprite {
+	uint16_t entry;
+	int16_t cycles;
+	int16_t index;
+	uint8_t features;
+};
+
 struct GBAVideoBatchRenderer {
 	struct GBAVideoRenderer d;
 
@@ -46,8 +53,12 @@ struct GBAVideoBatchRenderer {
 	int outputBufferStride;
 
 	uint32_t lines[GBA_VIDEO_VERTICAL_PIXELS][BATCH_LINE_WORDS];
-	uint16_t spriteLists[GBA_VIDEO_VERTICAL_PIXELS][128];
 	uint8_t features[GBA_VIDEO_VERTICAL_PIXELS];
+	uint64_t spriteCoverage[GBA_VIDEO_VERTICAL_PIXELS][2];
+	struct GBAVideoBatchSprite spriteInfo[128];
+	uint32_t programKey[2];
+	uint32_t programs[MAX_WINDOW][5];
+	int nPrograms;
 	uint16_t palettes[GBA_VIDEO_VERTICAL_PIXELS][512];
 	uint32_t sprites[GBA_VIDEO_VERTICAL_PIXELS][128][BATCH_SPRITE_WORDS];
 	uint16_t vram[GBA_SIZE_VRAM / 2];

@@ -893,21 +893,8 @@ void GBAVideoSoftwareRendererStepWindow(struct GBAVideoSoftwareRenderer* softwar
 	}
 }
 
-void GBAVideoSoftwareRendererPreprocessBuffer(struct GBAVideoSoftwareRenderer* softwareRenderer) {
-	int x;
-#ifdef VIDEO_SIMD
-	for (x = 0; x < GBA_VIDEO_HORIZONTAL_PIXELS; x += 8) {
-		_p8Store(&softwareRenderer->spriteLayer[x], _p8(FLAG_UNWRITTEN));
-	}
-#else
-	for (x = 0; x < GBA_VIDEO_HORIZONTAL_PIXELS; x += 4) {
-		softwareRenderer->spriteLayer[x] = FLAG_UNWRITTEN;
-		softwareRenderer->spriteLayer[x + 1] = FLAG_UNWRITTEN;
-		softwareRenderer->spriteLayer[x + 2] = FLAG_UNWRITTEN;
-		softwareRenderer->spriteLayer[x + 3] = FLAG_UNWRITTEN;
-	}
-#endif
-
+// The window segments and layer enables of a scanline, without touching its pixels
+void GBAVideoSoftwareRendererPrepareScanline(struct GBAVideoSoftwareRenderer* softwareRenderer) {
 	softwareRenderer->windows[0].endX = GBA_VIDEO_HORIZONTAL_PIXELS;
 	softwareRenderer->nWindows = 1;
 	if (GBARegisterDISPCNTIsWin0Enable(softwareRenderer->dispcnt) || GBARegisterDISPCNTIsWin1Enable(softwareRenderer->dispcnt) || GBARegisterDISPCNTIsObjwinEnable(softwareRenderer->dispcnt)) {
@@ -923,6 +910,24 @@ void GBAVideoSoftwareRendererPreprocessBuffer(struct GBAVideoSoftwareRenderer* s
 	}
 
 	GBAVideoSoftwareRendererUpdateDISPCNT(softwareRenderer);
+}
+
+void GBAVideoSoftwareRendererPreprocessBuffer(struct GBAVideoSoftwareRenderer* softwareRenderer) {
+	int x;
+#ifdef VIDEO_SIMD
+	for (x = 0; x < GBA_VIDEO_HORIZONTAL_PIXELS; x += 8) {
+		_p8Store(&softwareRenderer->spriteLayer[x], _p8(FLAG_UNWRITTEN));
+	}
+#else
+	for (x = 0; x < GBA_VIDEO_HORIZONTAL_PIXELS; x += 4) {
+		softwareRenderer->spriteLayer[x] = FLAG_UNWRITTEN;
+		softwareRenderer->spriteLayer[x + 1] = FLAG_UNWRITTEN;
+		softwareRenderer->spriteLayer[x + 2] = FLAG_UNWRITTEN;
+		softwareRenderer->spriteLayer[x + 3] = FLAG_UNWRITTEN;
+	}
+#endif
+
+	GBAVideoSoftwareRendererPrepareScanline(softwareRenderer);
 
 	if (softwareRenderer->lastHighlightAmount != softwareRenderer->d.highlightAmount) {
 		softwareRenderer->lastHighlightAmount = softwareRenderer->d.highlightAmount;

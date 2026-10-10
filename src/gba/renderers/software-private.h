@@ -30,6 +30,7 @@ void GBAVideoSoftwareRendererDrawBackgroundMode5(struct GBAVideoSoftwareRenderer
 
 void GBAVideoSoftwareRendererStepWindow(struct GBAVideoSoftwareRenderer* renderer, int y);
 void GBAVideoSoftwareRendererPreprocessBuffer(struct GBAVideoSoftwareRenderer* renderer);
+void GBAVideoSoftwareRendererPrepareScanline(struct GBAVideoSoftwareRenderer* renderer);
 
 int GBAVideoSoftwareRendererPreprocessSprite(struct GBAVideoSoftwareRenderer* renderer, struct GBAObj* sprite, int index, int y);
 void GBAVideoSoftwareRendererPostprocessSprite(struct GBAVideoSoftwareRenderer* renderer, unsigned priority);

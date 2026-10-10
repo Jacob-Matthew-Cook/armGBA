@@ -12,15 +12,19 @@
 
 // One scanline as the pixel function reads it, in texels of four words:
 // 0: segment ends, head, blend and rows, sprite count, mosaic and object window
-// 1 + 2s, 2 + 2s: window segment s and the backgrounds it draws, front to back
-// 11 + i: where background i reads this line
+// 1 + i: where background i reads this line
+// 5, 6: the first window segment and the backgrounds it draws, front to back
+// 7 to 22: the sprites, two to a word
+// 21 + 2s, 22 + 2s: window segment s from the second on
 enum {
 	L_ENDS = 0,
 	L_HEAD,
 	L_MISC,
 	L_OBJ,
-	L_PROGRAM = 4,
-	L_PARAMS = 44,
+	L_PARAMS = 4,
+	L_PROGRAM = 20,
+	L_SPRITES = 28,
+	L_PROGRAM_MORE = 84,
 };
 
 #define HEAD_FORCE_TARGET_1 0x00040000
@@ -204,12 +208,6 @@ static inline uvec4 _fetch4(const uint32_t* words) {
 	return v;
 }
 
-static inline uvec4 _fetchList(int y, int texel) {
-	const uint16_t* entries = &_frame->spriteLists[y][texel * 4];
-	uvec4 v = { entries[0], entries[1], entries[2], entries[3] };
-	return v;
-}
-
 #define BATCH_SHARED(...) __VA_ARGS__
 #define BATCH_FN static inline
 #define FEATURE_OBJWIN true
@@ -224,7 +222,6 @@ static inline uvec4 _fetchList(int y, int texel) {
 #define iabs(X) abs(X)
 #define FETCH_LINE(Y, T) _fetch4(&_frame->lines[Y][(T) * 4])
 #define FETCH_SPRITE(R, T) _fetch4(&_frame->sprites[R][(T) >> 1][((T) & 1) * 4])
-#define FETCH_LIST(Y, T) _fetchList(Y, T)
 #define FETCH_PAL(R, E) ((uint) _frame->palettes[R][E])
 #define FETCH_VRAM16(H) ((uint) _frame->vram[(H) < 0xC000u ? (H) : 0xBFFFu])
 #include "gba/renderers/video-batch-pixel.h"
@@ -242,7 +239,6 @@ static inline uvec4 _fetchList(int y, int texel) {
 #undef iabs
 #undef FETCH_LINE
 #undef FETCH_SPRITE
-#undef FETCH_LIST
 #undef FETCH_PAL
 #undef FETCH_VRAM16
 
@@ -275,14 +271,9 @@ static void _draw(struct GBAVideoBatchRenderer* batch, int endY) {
 
 static void _uploadVRAM(struct GBAVideoBatchRenderer* batch, uint32_t pages) {
 	batch->vramDirty &= ~pages;
+	double t = _timed ? _now() : 0;
 	if (batch->gl) {
-		_stats[1] += __builtin_popcount(pages);
-		double t = _timed ? _now() : 0;
 		GBAVideoBatchGLUploadVRAM(batch, pages);
-		if (_timed) {
-			_timing[2] += _now() - t;
-		}
-		return;
 	}
 	while (pages) {
 		unsigned page = __builtin_ctz(pages);
@@ -290,6 +281,13 @@ static void _uploadVRAM(struct GBAVideoBatchRenderer* batch, uint32_t pages) {
 		++_stats[1];
 		memcpy(&batch->vram[page << 11], &batch->d.vram[page << 11], 4096);
 	}
+	if (_timed) {
+		_timing[2] += _now() - t;
+	}
+}
+
+static inline uint16_t* _spriteEntries(const struct GBAVideoBatchRenderer* batch, int y) {
+	return (uint16_t*) &batch->lines[y][L_SPRITES];
 }
 
 static uint32_t _pages(uint32_t start, uint32_t size) {
@@ -395,7 +393,7 @@ static uint32_t _readPages(const struct GBAVideoBatchRenderer* batch, int y, boo
 			const uint32_t (*sprites)[BATCH_SPRITE_WORDS] = batch->sprites[line[L_MISC] >> 24];
 			int i;
 			for (i = 0; i < nSprites; ++i) {
-				pages |= _spritePages(batch, sprites[batch->spriteLists[y][i] & 0xFF]);
+				pages |= _spritePages(batch, sprites[_spriteEntries(batch, y)[i] & 0xFF]);
 			}
 		}
 	}
@@ -440,36 +438,21 @@ static uint32_t _readPages(const struct GBAVideoBatchRenderer* batch, int y, boo
 	return pages;
 }
 
-// The sprites the software renderer would draw on this line, with the 32-pixel columns each can reach,
-// and whether any of them blends again afterwards
-static int _spriteList(struct GBAVideoBatchRenderer* batch, int y, bool target2, bool* forceTarget1) {
+// Which sprites cover each line, and what each adds to a line's list, worked out when OAM changes
+static void _spriteCoverage(struct GBAVideoBatchRenderer* batch) {
 	struct GBAVideoSoftwareRenderer* sw = &batch->sw;
-	uint16_t* list = batch->spriteLists[y];
-	int cycles = GBARegisterDISPCNTIsHblankIntervalFree(sw->dispcnt) ? OBJ_HBLANK_FREE_LENGTH : OBJ_LENGTH;
-	bool objwinEnable = GBARegisterDISPCNTIsObjwinEnable(sw->dispcnt);
-	int mosaicH = GBAMosaicControlGetObjH(sw->mosaic) + 1;
-	int n = 0;
-	int lastIndex = 0;
+	memset(batch->spriteCoverage, 0, sizeof(batch->spriteCoverage));
 	int i;
 	for (i = 0; i < sw->oamMax; ++i) {
 		struct GBAVideoRendererSprite* sprite = &sw->sprites[i];
-		cycles -= 2 * (sprite->index - lastIndex);
-		lastIndex = sprite->index;
-		if (cycles <= 0) {
-			break;
-		}
-		if (y < sprite->y || y >= sprite->endY) {
-			continue;
-		}
-		cycles -= sprite->cycles;
-
+		struct GBAVideoBatchSprite* info = &batch->spriteInfo[i];
 		GBAObjAttributesA a = sprite->obj.a;
 		int width = GBAVideoObjSizes[GBAObjAttributesAGetShape(a) * 4 + GBAObjAttributesBGetSize(sprite->obj.b)][0];
 		int32_t x = (uint32_t) GBAObjAttributesBGetX(sprite->obj.b) << 23;
 		x >>= 23;
 		int end = x + (width << (GBAObjAttributesAIsTransformed(a) && GBAObjAttributesAIsDoubleSize(a)));
 		if (GBAObjAttributesAIsMosaic(a)) {
-			end += mosaicH - 1;
+			end += 15;
 		}
 		if (x < 0) {
 			x = 0;
@@ -477,30 +460,73 @@ static int _spriteList(struct GBAVideoBatchRenderer* batch, int y, bool target2,
 		if (end > GBA_VIDEO_HORIZONTAL_PIXELS) {
 			end = GBA_VIDEO_HORIZONTAL_PIXELS;
 		}
-		if (x < end) {
-			list[n] = i | ((((2U << ((end - 1) >> 5)) - (1U << (x >> 5))) & 0xFF) << 8);
-			++n;
+		info->entry = x < end ? i | ((((2U << ((end - 1) >> 5)) - (1U << (x >> 5))) & 0xFF) << 8) : 0;
+		info->cycles = sprite->cycles;
+		info->index = sprite->index;
+		info->features = 0;
+		if (GBAObjAttributesAIsTransformed(a)) {
+			info->features |= BATCH_FEATURE_AFFINE_SPRITES;
 		}
+		if (GBAObjAttributesAGetMode(a) == OBJ_MODE_SEMITRANSPARENT) {
+			info->features |= BATCH_FEATURE_BLEND;
+		}
+		int y = sprite->y < 0 ? 0 : sprite->y;
+		int endY = sprite->endY > GBA_VIDEO_VERTICAL_PIXELS ? GBA_VIDEO_VERTICAL_PIXELS : sprite->endY;
+		for (; y < endY; ++y) {
+			batch->spriteCoverage[y][i >> 6] |= 1ULL << (i & 63);
+		}
+	}
+}
 
-		if (*forceTarget1 || !target2) {
+// Whether a sprite drawn on this line makes the line blend again afterwards
+static bool _forcesTarget1(const struct GBAVideoSoftwareRenderer* sw, const struct GBAVideoRendererSprite* sprite) {
+	bool objwinEnable = GBARegisterDISPCNTIsObjwinEnable(sw->dispcnt);
+	GBAObjAttributesA a = sprite->obj.a;
+	if (GBARegisterDISPCNTGetMode(sw->dispcnt) >= 3 && GBAObjAttributesCGetTile(sprite->obj.c) < 512) {
+		return false;
+	}
+	int w;
+	for (w = 0; w < sw->nWindows; ++w) {
+		struct WindowControl control = sw->windows[w].control;
+		if (!GBAWindowControlIsObjEnable(control.packed) && !objwinEnable) {
 			continue;
 		}
-		if (GBARegisterDISPCNTGetMode(sw->dispcnt) >= 3 && GBAObjAttributesCGetTile(sprite->obj.c) < 512) {
+		if (GBAObjAttributesAGetMode(a) == OBJ_MODE_OBJWIN && control.priority < sw->objwin.priority) {
 			continue;
 		}
-		int w;
-		for (w = 0; w < sw->nWindows; ++w) {
-			struct WindowControl control = sw->windows[w].control;
-			if (!GBAWindowControlIsObjEnable(control.packed) && !objwinEnable) {
-				continue;
+		bool objwinSlowPath = objwinEnable && GBAWindowControlIsBlendEnable(sw->objwin.packed) != GBAWindowControlIsBlendEnable(control.packed);
+		if (GBAObjAttributesAGetMode(a) == OBJ_MODE_SEMITRANSPARENT || (sw->target1Obj && sw->blendEffect == BLEND_ALPHA) || objwinSlowPath) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// The sprites the software renderer would draw on this line, with the 32-pixel columns each can reach.
+// Its cycle budget only drops at drawn sprites and by twice the OAM index reached, so only the sprites on the line matter.
+static int _spriteList(struct GBAVideoBatchRenderer* batch, int y, bool target2, bool* forceTarget1, unsigned* features) {
+	struct GBAVideoSoftwareRenderer* sw = &batch->sw;
+	uint16_t* list = _spriteEntries(batch, y);
+	int budget = GBARegisterDISPCNTIsHblankIntervalFree(sw->dispcnt) ? OBJ_HBLANK_FREE_LENGTH : OBJ_LENGTH;
+	int n = 0;
+	int half;
+	for (half = 0; half < 2; ++half) {
+		uint64_t covering = batch->spriteCoverage[y][half];
+		while (covering) {
+			int i = half * 64 + __builtin_ctzll(covering);
+			covering &= covering - 1;
+			const struct GBAVideoBatchSprite* info = &batch->spriteInfo[i];
+			if (budget - 2 * info->index <= 0) {
+				return n;
 			}
-			if (GBAObjAttributesAGetMode(a) == OBJ_MODE_OBJWIN && control.priority < sw->objwin.priority) {
-				continue;
+			budget -= info->cycles;
+			if (info->entry) {
+				list[n] = info->entry;
+				++n;
 			}
-			bool objwinSlowPath = objwinEnable && GBAWindowControlIsBlendEnable(sw->objwin.packed) != GBAWindowControlIsBlendEnable(control.packed);
-			if (GBAObjAttributesAGetMode(a) == OBJ_MODE_SEMITRANSPARENT || (sw->target1Obj && sw->blendEffect == BLEND_ALPHA) || objwinSlowPath) {
-				*forceTarget1 = true;
-				break;
+			*features |= info->features;
+			if (target2 && !*forceTarget1) {
+				*forceTarget1 = _forcesTarget1(sw, &sw->sprites[i]);
 			}
 		}
 	}
@@ -585,6 +611,7 @@ static void _recordLine(struct GBAVideoBatchRenderer* batch, int y) {
 	}
 	int nSprites = 0;
 	bool forceTarget1 = false;
+	unsigned features = 0;
 	if (GBARegisterDISPCNTIsObjEnable(sw->dispcnt)) {
 		if (sw->oamDirty) {
 			sw->oamMax = GBAVideoRendererCleanOAM(sw->d.oam->obj, sw->sprites, sw->objOffsetY);
@@ -606,8 +633,9 @@ static void _recordLine(struct GBAVideoBatchRenderer* batch, int y) {
 			}
 			++batch->nSprites;
 			batch->oamDirty = false;
+			_spriteCoverage(batch);
 		}
-		nSprites = _spriteList(batch, y, target2, &forceTarget1);
+		nSprites = _spriteList(batch, y, target2, &forceTarget1, &features);
 	}
 
 	uint32_t ends = 0xFFFFFFFF;
@@ -622,16 +650,8 @@ static void _recordLine(struct GBAVideoBatchRenderer* batch, int y) {
 	               (sw->target2Obj ? HEAD_TARGET_2_OBJ : 0) | (sw->target2Bd ? HEAD_TARGET_2_BD : 0) |
 	               (target2 ? HEAD_TARGET_2_ANY : 0) | (anyTarget1 ? HEAD_TARGET_1_ANY : 0);
 	line[L_MISC] = sw->blda | (sw->bldb << 5) | (sw->bldy << 10) | ((batch->nPalettes - 1) << 16) | ((uint32_t) (batch->nSprites ? batch->nSprites - 1 : 0) << 24);
-	static int experiment = -1;
-	if (experiment < 0) {
-		experiment = getenv("ARMGBA_BATCH_EXPERIMENT") ? atoi(getenv("ARMGBA_BATCH_EXPERIMENT")) : 0;
-	}
-	if (experiment & 1) {
-		nSprites = 0;
-	}
 	line[L_OBJ] = nSprites | ((uint32_t) sw->mosaic << 8) | ((uint32_t) sw->objwin.packed << 24);
 
-	unsigned features = 0;
 	if (GBARegisterDISPCNTIsObjwinEnable(sw->dispcnt)) {
 		features |= BATCH_FEATURE_OBJWIN;
 	}
@@ -650,23 +670,36 @@ static void _recordLine(struct GBAVideoBatchRenderer* batch, int y) {
 	if (sw->nWindows > 1) {
 		features |= BATCH_FEATURE_WINDOWS;
 	}
-	for (i = 0; i < nSprites; ++i) {
-		GBAObjAttributesA a = sw->sprites[batch->spriteLists[y][i] & 0xFF].obj.a;
-		if (GBAObjAttributesAIsTransformed(a)) {
-			features |= BATCH_FEATURE_AFFINE_SPRITES;
-		}
-		if (GBAObjAttributesAGetMode(a) == OBJ_MODE_SEMITRANSPARENT) {
-			features |= BATCH_FEATURE_BLEND;
-		}
-	}
 	batch->features[y] = features;
+	// The programs only change with the registers and enables they come from
+	uint32_t key[2] = { sw->dispcnt | (sw->blendEffect << 16) | ((sw->blda == 0x10 && sw->bldb == 0) << 18) | (sw->objwin.packed << 24), 0 };
+	for (i = 0; i < 4; ++i) {
+		const struct GBAVideoSoftwareBackground* bg = &sw->bg[i];
+		key[1] |= ((bg->enabled == ENABLED_MAX) | (bg->priority << 1) | (bg->target1 << 3) | (bg->target2 << 4)) << (i * 8);
+	}
+	if (key[0] != batch->programKey[0] || key[1] != batch->programKey[1]) {
+		batch->programKey[0] = key[0];
+		batch->programKey[1] = key[1];
+		batch->nPrograms = 0;
+	}
 	for (w = 0; w < sw->nWindows; ++w) {
-		uint32_t* program = &line[L_PROGRAM + w * 8];
-		int slots = _program(sw, sw->windows[w].control, &program[1]);
-		if (experiment & 2) {
-			slots = 0;
+		uint32_t* program = &line[w ? L_PROGRAM_MORE + w * 8 : L_PROGRAM];
+		int cached;
+		for (cached = 0; cached < batch->nPrograms; ++cached) {
+			if ((batch->programs[cached][0] & 0xFFFF) == (uint32_t) (sw->windows[w].control.packed | ((uint8_t) sw->windows[w].control.priority << 8))) {
+				break;
+			}
 		}
+		if (cached < batch->nPrograms) {
+			memcpy(program, batch->programs[cached], sizeof(batch->programs[cached]));
+			continue;
+		}
+		int slots = _program(sw, sw->windows[w].control, &program[1]);
 		program[0] = sw->windows[w].control.packed | ((uint8_t) sw->windows[w].control.priority << 8) | ((uint8_t) sw->objwin.priority << 16) | (slots << 24);
+		if (batch->nPrograms < MAX_WINDOW) {
+			memcpy(batch->programs[batch->nPrograms], program, sizeof(batch->programs[0]));
+			++batch->nPrograms;
+		}
 	}
 
 	int mode = GBARegisterDISPCNTGetMode(sw->dispcnt);
@@ -739,7 +772,7 @@ static void _drawScanline(struct GBAVideoRenderer* renderer, int y) {
 		batch->features[y] = 0;
 		return;
 	}
-	GBAVideoSoftwareRendererPreprocessBuffer(sw);
+	GBAVideoSoftwareRendererPrepareScanline(sw);
 	_recordLine(batch, y);
 
 	if (getenv("ARMGBA_BATCH_TRACE") && batch->frame == (unsigned) atoi(getenv("ARMGBA_BATCH_TRACE")) && (y == 0 || y == 100)) {

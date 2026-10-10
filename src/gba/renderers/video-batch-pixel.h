@@ -153,8 +153,9 @@ BATCH_FN uint spritePixel(int x, int y, int start, int end, uint control, int co
 	uint column = 0x100u << U(x >> 5);
 	int i;
 	for (i = 0; i < n; ++i) {
-		uvec4 list = FETCH_LIST(y, i >> 2);
-		uint entry = (i & 3) == 0 ? list.x : (i & 3) == 1 ? list.y : (i & 3) == 2 ? list.z : list.w;
+		uvec4 list = FETCH_LINE(y, 7 + (i >> 3));
+		uint pair = ((i >> 1) & 3) == 0 ? list.x : ((i >> 1) & 3) == 1 ? list.y : ((i >> 1) & 3) == 2 ? list.z : list.w;
+		uint entry = (i & 1) == 0 ? pair & 0xFFFFu : pair >> 16;
 		if ((entry & column) == 0u) {
 			continue;
 		}
@@ -546,8 +547,9 @@ BATCH_FN uint batchPixel(int x, int y) {
 			end = 240;
 		}
 	}
-	uvec4 program = FETCH_LINE(y, 1 + 2 * segment);
-	uvec4 programMore = FETCH_LINE(y, 2 + 2 * segment);
+	int programTexel = segment == 0 ? 5 : 21 + 2 * segment;
+	uvec4 program = FETCH_LINE(y, programTexel);
+	uvec4 programMore = FETCH_LINE(y, programTexel + 1);
 	uint control = program.x & 0xFFu;
 	bool winBlend = bit(control, 5);
 
@@ -583,7 +585,7 @@ BATCH_FN uint batchPixel(int x, int y) {
 		if ((row & 0xFA000000u) == 0u || (!FEATURE_BLEND && (row & FLAG_UNWRITTEN) != FLAG_UNWRITTEN)) {
 			break;
 		}
-		row = backgroundPixel(x, slot, FETCH_LINE(y, 11 + I(slot & 3u)), head, misc, paletteRow, row);
+		row = backgroundPixel(x, slot, FETCH_LINE(y, 1 + I(slot & 3u)), head, misc, paletteRow, row);
 	}
 	if (spritePending && (FEATURE_BLEND || (row & FLAG_UNWRITTEN) == FLAG_UNWRITTEN)) {
 		row = compositeSprite(sprite, row, control, objwin, objwinEnable, blda, bldb);
