@@ -86,7 +86,6 @@ void GBAVideoBatchRendererDeinitGL(struct GBAVideoBatchRenderer* renderer);
 void GBAVideoBatchGLUploadVRAM(struct GBAVideoBatchRenderer* renderer, uint32_t pages);
 void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* renderer, int startY, int endY);
 void GBAVideoBatchGLStartFrame(struct GBAVideoBatchRenderer* renderer);
-void GBAVideoBatchGLFinish(struct GBAVideoBatchRenderer* renderer);
 
 CXX_GUARD_END
 

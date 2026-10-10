@@ -879,11 +879,6 @@ static void _compare(struct GBAVideoBatchRenderer* batch) {
 static void GBAVideoBatchRendererFinishFrame(struct GBAVideoRenderer* renderer) {
 	struct GBAVideoBatchRenderer* batch = (struct GBAVideoBatchRenderer*) renderer;
 	_draw(batch, batch->nextY);
-	if (_timed && batch->gl && getenv("ARMGBA_BATCH_FINISH")) {
-		double t = _now();
-		GBAVideoBatchGLFinish(batch);
-		_timing[3] += _now() - t;
-	}
 	batch->sw.d.finishFrame(&batch->sw.d);
 	if (batch->check) {
 		batch->check->d.finishFrame(&batch->check->d);
@@ -893,7 +888,7 @@ static void GBAVideoBatchRendererFinishFrame(struct GBAVideoRenderer* renderer) 
 	}
 	++batch->frame;
 	if (_timed && !(batch->frame % 1200)) {
-		fprintf(stderr, "batch timing per frame: record %.1f us, draw %.1f us, upload %.1f us, finish %.1f us, %.2f draws, %.2f pages\n", _timing[0] * 1e6 / 1200, _timing[1] * 1e6 / 1200, _timing[2] * 1e6 / 1200, _timing[3] * 1e6 / 1200, (_stats[0] - _stats[6]) / 1200.0, (_stats[1] - _stats[7]) / 1200.0);
+		fprintf(stderr, "batch timing per frame: record %.1f us, draw %.1f us, upload %.1f us, %.2f draws, %.2f pages\n", _timing[0] * 1e6 / 1200, _timing[1] * 1e6 / 1200, _timing[2] * 1e6 / 1200, (_stats[0] - _stats[6]) / 1200.0, (_stats[1] - _stats[7]) / 1200.0);
 		memset(_timing, 0, sizeof(_timing));
 		_stats[6] = _stats[0];
 		_stats[7] = _stats[1];

@@ -60,7 +60,6 @@
 	X(void, Disable, (unsigned)) \
 	X(void, DrawArrays, (unsigned, int, int)) \
 	X(void, Enable, (unsigned)) \
-	X(void, Finish, (void)) \
 	X(void, GenTextures, (int, unsigned*)) \
 	X(void, GenVertexArrays, (int, unsigned*)) \
 	X(void, GetProgramInfoLog, (unsigned, int, int*, char*)) \
@@ -291,22 +290,8 @@ void GBAVideoBatchGLUploadVRAM(struct GBAVideoBatchRenderer* batch, uint32_t pag
 	}
 }
 
-#include <time.h>
-static double _glNow(void) {
-	struct timespec t;
-	clock_gettime(CLOCK_MONOTONIC, &t);
-	return t.tv_sec + t.tv_nsec * 1e-9;
-}
-static double _glTime[6];
-static unsigned _glDraws;
-
 void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int endY) {
 	struct GBAVideoBatchGL* gl = batch->gl;
-	static int timed = -1;
-	if (timed < 0) {
-		timed = getenv("ARMGBA_BATCH_GLTIME") != NULL;
-	}
-	double t0 = timed ? _glNow() : 0;
 	gl->slot = (gl->slot + 1) % BATCH_GL_RING;
 	gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 	gl->PixelStorei(GL_UNPACK_ALIGNMENT, 2);
@@ -324,7 +309,6 @@ void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int en
 		pages &= ~(((1U << count) - 1) << first);
 		gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, first, 2048, count, GL_RED_INTEGER, GL_UNSIGNED_SHORT, &batch->vram[first << 11]);
 	}
-	double t1 = timed ? _glNow() : 0;
 
 	// Only as much of each line as this batch uses: one window segment, and the longest sprite list
 	unsigned features = 0;
@@ -364,7 +348,7 @@ void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int en
 	_unpack(gl, TEX_LINES);
 	gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, startY, width, endY - startY, GL_RGBA_INTEGER, GL_UNSIGNED_INT, batch->lines[startY]);
 	gl->PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-	double t2 = timed ? _glNow() : 0;
+
 	if (palettes[0] <= palettes[1]) {
 		_unpack(gl, TEX_PALETTES);
 		gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, palettes[0], 512, palettes[1] - palettes[0] + 1, GL_RED_INTEGER, GL_UNSIGNED_SHORT, batch->palettes[palettes[0]]);
@@ -374,7 +358,6 @@ void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int en
 		gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, sprites[0], 256, sprites[1] - sprites[0] + 1, GL_RGBA_INTEGER, GL_UNSIGNED_INT, batch->sprites[sprites[0]]);
 	}
 
-	double t3 = timed ? _glNow() : 0;
 	int i;
 	for (i = 0; i < TEX_MAX; ++i) {
 		gl->ActiveTexture(GL_TEXTURE0 + i);
@@ -397,32 +380,8 @@ void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int en
 	gl->Viewport(0, 0, GBA_VIDEO_HORIZONTAL_PIXELS, GBA_VIDEO_VERTICAL_PIXELS);
 	gl->Enable(GL_SCISSOR_TEST);
 	gl->Scissor(0, GBA_VIDEO_VERTICAL_PIXELS - endY, GBA_VIDEO_HORIZONTAL_PIXELS, endY - startY);
-	static int repeat = -1;
-	if (repeat < 0) {
-		repeat = getenv("ARMGBA_BATCH_REPEAT") ? atoi(getenv("ARMGBA_BATCH_REPEAT")) : 1;
-	}
-	double t4 = timed ? _glNow() : 0;
-	for (i = 0; i < repeat; ++i) {
-		gl->DrawArrays(GL_TRIANGLES, 0, 3);
-	}
+	gl->DrawArrays(GL_TRIANGLES, 0, 3);
 	gl->Disable(GL_SCISSOR_TEST);
-	if (timed) {
-		double t5 = _glNow();
-		_glTime[0] += t1 - t0;
-		_glTime[1] += t2 - t1;
-		_glTime[2] += t3 - t2;
-		_glTime[3] += t4 - t3;
-		_glTime[4] += t5 - t4;
-		if (++_glDraws == 2000) {
-			fprintf(stderr, "per draw: vram %.1f us, lines %.1f us, palettes+sprites %.1f us, state %.1f us, draw %.1f us\n", _glTime[0] * 500, _glTime[1] * 500, _glTime[2] * 500, _glTime[3] * 500, _glTime[4] * 500);
-			memset(_glTime, 0, sizeof(_glTime));
-			_glDraws = 0;
-		}
-	}
-}
-
-void GBAVideoBatchGLFinish(struct GBAVideoBatchRenderer* batch) {
-	batch->gl->Finish();
 }
 
 void GBAVideoBatchGLStartFrame(struct GBAVideoBatchRenderer* batch) {
