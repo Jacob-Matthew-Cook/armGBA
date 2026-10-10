@@ -916,6 +916,19 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	uint64_t stalls;
 	_stallTables(s, wait, &advances, &stalls);
 	_ldrW(e, 10, R_GBA, offsetof(struct GBA, memory.lastPrefetchedPc));
+	int32_t adjust = wait - (n - s);
+	if (advances == 0x0706050403020100ULL && stalls == (uint8_t) stalls * 0x0101010101010101ULL) {
+		// Short waits: the prefetch moves on by the loads it had done, and the stall is one value
+		_movImm32(e, 11, pc);
+		_dp(e, A64_SUB, 10, 10, 11, 0);
+		_ubfx(e, 12, 10, 1, 3);
+		_cmpWImm(e, 10, 16);
+		_csel(e, 12, 12, A64_ZR, A64_LO);
+		_dp(e, A64_ADD, 13, 11, 12, 1);
+		_strW(e, 13, R_GBA, offsetof(struct GBA, memory.lastPrefetchedPc));
+		_movImm32(e, 3, (int8_t) stalls + adjust);
+		return;
+	}
 	// The tables are built while the load is in flight
 	_movImm64(e, 13, advances);
 	_movImm64(e, 14, stalls);
@@ -934,7 +947,6 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 	// max(wait, stall) - stall - (n - s), as wait - (n - s) - min(wait, stall)
 	_dp(e, A64_LSRV | A64_X, 14, 14, 12, 0);
 	_sxtb(e, 14, 14);
-	int32_t adjust = wait - (n - s);
 	_dpImm(e, adjust >= 0 ? A64_ADD_IMM : A64_SUB_IMM, 3, 14, adjust >= 0 ? adjust : -adjust);
 }
 
