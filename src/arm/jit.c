@@ -150,6 +150,11 @@ struct Compiler {
 	bool isTarget[MAX_SPAN];
 	// The region each register pointed into when compiled, or -1
 	int regRegion[16];
+	// Within an ALU run, the host register holding each guest register's value, or 0; memory keeps every write too
+	bool inRun;
+	uint8_t cached[16];
+	uint32_t slotUsed[16];
+	uint32_t useClock;
 	// Memory access paths that go after the block
 	struct {
 		unsigned index;
@@ -776,6 +781,8 @@ static void _startEmitting(struct Compiler* c, struct ARMJit* jit, struct ARMCor
 	c->jit = jit;
 	c->cpu = cpu;
 	c->gba = cpu ? (struct GBA*) cpu->master : NULL;
+	memset(c->cached, 0, sizeof(c->cached));
+	c->inRun = false;
 }
 
 static void _startBlock(struct Compiler* c, struct ARMJitBlock* block) {
@@ -829,11 +836,19 @@ static unsigned _emitAluRun(struct Compiler* c, unsigned i, struct AluOp* alus) 
 		c->runLength[i] = run;
 	}
 	_markLiveFlags(&alus[i], run);
+	_markLaterReads(&alus[i], run);
+	// Nothing enters or leaves a run midway, so guest values can stay in host registers through it
+	memset(c->cached, 0, sizeof(c->cached));
+	memset(c->slotUsed, 0, sizeof(c->slotUsed));
+	c->useClock = 0;
+	c->inRun = true;
 	for (j = 0; j < run; ++j) {
 		_fetchAhead(c, i + j);
 		_emitAlu(c, &alus[i + j], alus[i + j].keepsShifterCarry && j >= lastAlways);
 		_trackAlu(c, &alus[i + j]);
 	}
+	c->inRun = false;
+	memset(c->cached, 0, sizeof(c->cached));
 	_addCycles(c, run * c->aluCycles);
 	_eventCheck(c, i + run);
 	return run;

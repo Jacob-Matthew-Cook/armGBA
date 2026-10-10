@@ -653,6 +653,70 @@ static void _loadSource(struct Compiler* c, int rt, struct Source source) {
 	}
 }
 
+// Registers no ALU code uses, for guest values within an ALU run
+static const uint8_t _cacheRegs[] = { 5, 6, 7, 8, 11, 12, 13, 14 };
+
+// A register for a guest value, taking the one least recently used, but none the current instruction uses
+static int _cacheTake(struct Compiler* c, unsigned reg) {
+	unsigned best = 0;
+	unsigned k;
+	for (k = 1; k < sizeof(_cacheRegs); ++k) {
+		if (c->slotUsed[k] < c->slotUsed[best]) {
+			best = k;
+		}
+	}
+	int host = _cacheRegs[best];
+	unsigned r;
+	for (r = 0; r < 16; ++r) {
+		if (c->cached[r] == host) {
+			c->cached[r] = 0;
+		}
+	}
+	c->cached[reg] = host;
+	c->slotUsed[best] = c->useClock;
+	return host;
+}
+
+static void _cacheTouch(struct Compiler* c, int host) {
+	unsigned k;
+	for (k = 0; k < sizeof(_cacheRegs); ++k) {
+		if (_cacheRegs[k] == host) {
+			c->slotUsed[k] = c->useClock;
+		}
+	}
+}
+
+// The register holding a source: its run copy, or scratch; code that may be skipped takes no new copy
+static int _sourceReg(struct Compiler* c, int scratch, struct Source source, bool keep) {
+	if (source.constant) {
+		_movImm32(&c->e, scratch, source.value);
+		return scratch;
+	}
+	int host = c->cached[source.reg];
+	if (host) {
+		_cacheTouch(c, host);
+		return host;
+	}
+	if (keep) {
+		host = _cacheTake(c, source.reg);
+		_ldrW(&c->e, host, R_CPU, 4 * source.reg);
+		return host;
+	}
+	_ldrW(&c->e, scratch, R_CPU, 4 * source.reg);
+	return scratch;
+}
+
+// Keeps a result for later instructions in the run; when skippable, only a copy that already exists
+static void _cacheResult(struct Compiler* c, unsigned reg, int value, bool keep) {
+	int host = c->cached[reg];
+	if (!host && keep) {
+		host = _cacheTake(c, reg);
+	}
+	if (host) {
+		_movW(&c->e, host, value);
+	}
+}
+
 // Host NZCV = guest NZCV, using w9 and w10
 static void _loadFlags(struct Compiler* c) {
 	struct Emitter* e = &c->e;
@@ -666,20 +730,20 @@ static void _loadCarry(struct Compiler* c, int rd) {
 	_ubfx(&c->e, rd, 9, 29, 1);
 }
 
-// Barrel shifter for an immediate shift amount on w3: value in w1, carry out in w2 if wanted
-static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool carry) {
+// Barrel shifter for an immediate shift amount on a source register: value in w1, carry out in w2 if wanted
+static void _shiftImm(struct Compiler* c, int source, unsigned type, unsigned amount, bool carry) {
 	struct Emitter* e = &c->e;
 	switch (type) {
 	case SHIFT_LSL:
 		if (!amount) {
-			_movW(e, 1, 3);
+			_movW(e, 1, source);
 			if (carry) {
 				_loadCarry(c, 2);
 			}
 		} else {
-			_lslWImm(e, 1, 3, amount);
+			_lslWImm(e, 1, source, amount);
 			if (carry) {
-				_ubfx(e, 2, 3, 32 - amount, 1);
+				_ubfx(e, 2, source, 32 - amount, 1);
 			}
 		}
 		break;
@@ -687,40 +751,40 @@ static void _shiftImm(struct Compiler* c, unsigned type, unsigned amount, bool c
 		if (!amount) {
 			_movImm32(e, 1, 0);
 			if (carry) {
-				_lsrWImm(e, 2, 3, 31);
+				_lsrWImm(e, 2, source, 31);
 			}
 		} else {
-			_lsrWImm(e, 1, 3, amount);
+			_lsrWImm(e, 1, source, amount);
 			if (carry) {
-				_ubfx(e, 2, 3, amount - 1, 1);
+				_ubfx(e, 2, source, amount - 1, 1);
 			}
 		}
 		break;
 	case SHIFT_ASR:
 		if (!amount) {
-			_asrWImm(e, 1, 3, 31);
+			_asrWImm(e, 1, source, 31);
 			if (carry) {
-				_lsrWImm(e, 2, 3, 31);
+				_lsrWImm(e, 2, source, 31);
 			}
 		} else {
-			_asrWImm(e, 1, 3, amount);
+			_asrWImm(e, 1, source, amount);
 			if (carry) {
-				_ubfx(e, 2, 3, amount - 1, 1);
+				_ubfx(e, 2, source, amount - 1, 1);
 			}
 		}
 		break;
 	case SHIFT_ROR:
 		if (!amount) {
 			_loadCarry(c, 2);
-			_lsrWImm(e, 1, 3, 1);
+			_lsrWImm(e, 1, source, 1);
 			_dp(e, A64_ORR, 1, 1, 2, 31);
 			if (carry) {
-				_andImm(e, 2, 3, 0, 1);
+				_andImm(e, 2, source, 0, 1);
 			}
 		} else {
-			_rorWImm(e, 1, 3, amount);
+			_rorWImm(e, 1, source, amount);
 			if (carry) {
-				_ubfx(e, 2, 3, amount - 1, 1);
+				_ubfx(e, 2, source, amount - 1, 1);
 			}
 		}
 		break;
@@ -780,6 +844,10 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 	bool carryIn = opcode == ALU_ADC || opcode == ALU_SBC || opcode == ALU_RSC;
 	bool setFlags = s && alu->flagsLive;
 	bool carryOut = (setFlags && logical) || storeCarry;
+	// Copies are kept only in runs, for values read again: other ALU code, like the forms of a patched word, has no single path through it
+	bool keep = alu->cond == 0xE && c->inRun;
+	bool writesRd = opcode < ALU_TST || opcode > ALU_CMN;
+	++c->useClock;
 
 	uint8_t* skip = NULL;
 	if (alu->cond != 0xE) {
@@ -788,11 +856,13 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 	}
 
 	// Both registers load before either is used, so the in-order core waits on one load at most
+	int rm = 3;
+	int rn = 0;
 	if (!alu->immediate) {
-		_loadSource(c, 3, alu->m);
+		rm = _sourceReg(c, 3, alu->m, keep && (alu->readLater >> alu->m.reg & 1) && !(writesRd && alu->rd == alu->m.reg));
 	}
 	if (opcode != ALU_MOV && opcode != ALU_MVN) {
-		_loadSource(c, 0, alu->n);
+		rn = _sourceReg(c, 0, alu->n, keep && (alu->readLater >> alu->n.reg & 1) && !(writesRd && alu->rd == alu->n.reg));
 	}
 	// Immediates go into the host instruction when they fit
 	uint32_t hostImm = alu->immediate ? _aluImm(opcode, s, alu->imm) : 0;
@@ -810,32 +880,34 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 			}
 		}
 	} else {
-		_shiftImm(c, alu->shiftType, alu->shiftAmount, carryOut);
+		_shiftImm(c, rm, alu->shiftType, alu->shiftAmount, carryOut);
 	}
 	if (carryIn) {
 		_loadFlags(c);
 	}
 
+	// A register MOV leaves its value where the shifter put it
+	int result = 3;
 	if (hostImm) {
-		_emit(e, hostImm);
+		_emit(e, hostImm | (rn << 5));
 	} else switch (opcode) {
 	case ALU_AND:
 	case ALU_TST:
-		_dp(e, A64_AND, 3, 0, 1, 0);
+		_dp(e, A64_AND, 3, rn, 1, 0);
 		break;
 	case ALU_EOR:
 	case ALU_TEQ:
-		_dp(e, A64_EOR, 3, 0, 1, 0);
+		_dp(e, A64_EOR, 3, rn, 1, 0);
 		break;
 	case ALU_ORR:
-		_dp(e, A64_ORR, 3, 0, 1, 0);
+		_dp(e, A64_ORR, 3, rn, 1, 0);
 		break;
 	case ALU_BIC:
-		_dp(e, A64_BIC, 3, 0, 1, 0);
+		_dp(e, A64_BIC, 3, rn, 1, 0);
 		break;
 	case ALU_MOV:
 		if (!alu->immediate) {
-			_movW(e, 3, 1);
+			result = 1;
 		}
 		break;
 	case ALU_MVN:
@@ -845,30 +917,30 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 		break;
 	case ALU_ADD:
 	case ALU_CMN:
-		_dp(e, s ? A64_ADDS : A64_ADD, 3, 0, 1, 0);
+		_dp(e, s ? A64_ADDS : A64_ADD, 3, rn, 1, 0);
 		break;
 	case ALU_SUB:
 	case ALU_CMP:
-		_dp(e, s ? A64_SUBS : A64_SUB, 3, 0, 1, 0);
+		_dp(e, s ? A64_SUBS : A64_SUB, 3, rn, 1, 0);
 		break;
 	case ALU_RSB:
-		_dp(e, s ? A64_SUBS : A64_SUB, 3, 1, 0, 0);
+		_dp(e, s ? A64_SUBS : A64_SUB, 3, 1, rn, 0);
 		break;
 	case ALU_ADC:
-		_dp(e, s ? A64_ADCS : A64_ADC, 3, 0, 1, 0);
+		_dp(e, s ? A64_ADCS : A64_ADC, 3, rn, 1, 0);
 		break;
 	case ALU_SBC:
-		_dp(e, s ? A64_SBCS : A64_SBC, 3, 0, 1, 0);
+		_dp(e, s ? A64_SBCS : A64_SBC, 3, rn, 1, 0);
 		break;
 	case ALU_RSC:
-		_dp(e, s ? A64_SBCS : A64_SBC, 3, 1, 0, 0);
+		_dp(e, s ? A64_SBCS : A64_SBC, 3, 1, rn, 0);
 		break;
 	}
 
 	if (setFlags) {
 		if (logical) {
 			// N and Z from the result, C from the shifter, V and bits 24-27 kept
-			_mergeNZ(e, 3, 4, 29);
+			_mergeNZ(e, result, 4, 29);
 			_dp(e, A64_ORR, 9, 9, 2, 29);
 		} else {
 			_mrsNzcv(e, 4);
@@ -883,8 +955,9 @@ static void _emitAlu(struct Compiler* c, const struct AluOp* alu, bool storeCarr
 		}
 		_strW(e, 9, R_CPU, OFF_CPSR);
 	}
-	if (opcode < ALU_TST || opcode > ALU_CMN) {
-		_strW(e, 3, R_CPU, 4 * alu->rd);
+	if (writesRd) {
+		_strW(e, result, R_CPU, 4 * alu->rd);
+		_cacheResult(c, alu->rd, result, keep && (alu->readLater >> alu->rd & 1));
 	}
 	if (storeCarry) {
 		_strW(e, 2, R_CPU, OFF_SHIFTER_CARRY);
@@ -1226,7 +1299,7 @@ static void _emitMem(struct Compiler* c, unsigned i, const struct MemOp* mem) {
 		_movImm32(e, 1, mem->offset);
 	} else {
 		_loadSource(c, 3, mem->m);
-		_shiftImm(c, mem->shiftType, mem->shiftAmount, false);
+		_shiftImm(c, 3, mem->shiftType, mem->shiftAmount, false);
 	}
 	// Without writeback a pre-indexed access needs only the sum, so it replaces the base
 	bool sumOnly = mem->pre && !mem->writeback;

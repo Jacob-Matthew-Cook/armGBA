@@ -68,6 +68,8 @@ struct AluOp {
 	bool keepsShifterCarry;
 	// Whether any flag this sets is read before another instruction overwrites it
 	bool flagsLive;
+	// Registers a later instruction of the run reads before writing them again
+	uint16_t readLater;
 };
 
 static struct Source _reg(unsigned reg) {
@@ -400,6 +402,29 @@ static void _markLiveFlags(struct AluOp* alus, unsigned count) {
 			live &= ~writes;
 		}
 		live |= _aluReads(&alus[j]);
+	}
+}
+
+static uint16_t _aluRegsRead(const struct AluOp* alu) {
+	uint16_t regs = 0;
+	if (alu->opcode != ALU_MOV && alu->opcode != ALU_MVN && !alu->n.constant) {
+		regs |= 1 << alu->n.reg;
+	}
+	if (!alu->immediate && !alu->m.constant) {
+		regs |= 1 << alu->m.reg;
+	}
+	return regs;
+}
+
+static void _markLaterReads(struct AluOp* alus, unsigned count) {
+	uint16_t later = 0;
+	unsigned j = count;
+	while (j--) {
+		alus[j].readLater = later;
+		if (alus[j].cond == 0xE && (alus[j].opcode < ALU_TST || alus[j].opcode > ALU_CMN)) {
+			later &= ~(1 << alus[j].rd);
+		}
+		later |= _aluRegsRead(&alus[j]);
 	}
 }
 
