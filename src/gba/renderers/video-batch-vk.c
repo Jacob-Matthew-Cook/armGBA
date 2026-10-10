@@ -400,8 +400,9 @@ static VkPipeline _pipeline(struct GBAVideoBatchVK* vk, unsigned features) {
 	return pipeline ? pipeline : vk->pipelines[BATCH_FEATURE_ALL];
 }
 
-// Builds every other pipeline while the game runs: the ones games use most first, then the rest
+// Builds every pipeline while the game runs: the one that does everything, the ones games use most, then the rest
 static void _compileAll(struct GBAVideoBatchVK* vk) {
+	_compile(vk, BATCH_FEATURE_ALL);
 	size_t i;
 	for (i = 0; i < GBAVideoBatchCommonFeaturesSize; ++i) {
 #ifndef DISABLE_THREADING
@@ -523,10 +524,7 @@ bool GBAVideoBatchRendererInitVulkan(struct GBAVideoBatchRenderer* batch, const 
 	if (_setup(vk)) {
 		vk->copy = _createPipeline(vk, vk->copyFragment, 0);
 	}
-	if (vk->copy) {
-		_compile(vk, BATCH_FEATURE_ALL);
-	}
-	if (!vk->copy || !vk->pipelines[BATCH_FEATURE_ALL]) {
+	if (!vk->copy) {
 		mLOG(GBA_VIDEO, ERROR, "Batch renderer: Vulkan setup failed");
 		GBAVideoBatchRendererDeinitVulkan(batch);
 		return false;
@@ -546,6 +544,7 @@ bool GBAVideoBatchRendererInitVulkan(struct GBAVideoBatchRenderer* batch, const 
 	// Frame numbers start past the frames in flight, so no slot looks recently used
 	vk->frame = MAX_FRAMES + 2;
 	batch->vramDirty = (1U << BATCH_VRAM_PAGES) - 1;
+	GBAVideoBatchRendererRestartFrame(batch);
 	return true;
 }
 
@@ -657,6 +656,10 @@ static unsigned _freeSlot(struct GBAVideoBatchVK* vk) {
 		}
 	}
 	return vk->pageSlot[0];
+}
+
+bool GBAVideoBatchVKReady(struct GBAVideoBatchRenderer* batch) {
+	return __atomic_load_n(&batch->vk->pipelines[BATCH_FEATURE_ALL], __ATOMIC_ACQUIRE);
 }
 
 void GBAVideoBatchVKUploadVRAM(struct GBAVideoBatchRenderer* batch, uint32_t pages) {

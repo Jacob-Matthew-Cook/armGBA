@@ -92,12 +92,15 @@ struct GBAVideoBatchRenderer {
 
 void GBAVideoBatchRendererCreate(struct GBAVideoBatchRenderer* renderer);
 void GBAVideoBatchRendererReloadVRAM(struct GBAVideoBatchRenderer* renderer);
+void GBAVideoBatchRendererRestartFrame(struct GBAVideoBatchRenderer* renderer);
 
 bool GBAVideoBatchRendererInitGL(struct GBAVideoBatchRenderer* renderer, void* (*getProc)(const char*), uintptr_t (*getFramebuffer)(void));
 void GBAVideoBatchRendererDeinitGL(struct GBAVideoBatchRenderer* renderer);
 void GBAVideoBatchGLUploadVRAM(struct GBAVideoBatchRenderer* renderer, uint32_t pages);
 void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* renderer, int startY, int endY);
 void GBAVideoBatchGLStartFrame(struct GBAVideoBatchRenderer* renderer);
+bool GBAVideoBatchGLReady(struct GBAVideoBatchRenderer* renderer);
+void GBAVideoBatchGLDrawCPU(struct GBAVideoBatchRenderer* renderer, int startY, int endY);
 
 #ifdef BUILD_BATCH_VULKAN
 #include <vulkan/vulkan.h>
@@ -118,6 +121,7 @@ struct GBAVideoBatchVulkanHost {
 
 bool GBAVideoBatchRendererInitVulkan(struct GBAVideoBatchRenderer* renderer, const struct GBAVideoBatchVulkanHost* host);
 void GBAVideoBatchRendererDeinitVulkan(struct GBAVideoBatchRenderer* renderer);
+bool GBAVideoBatchVKReady(struct GBAVideoBatchRenderer* renderer);
 void GBAVideoBatchVKUploadVRAM(struct GBAVideoBatchRenderer* renderer, uint32_t pages);
 void GBAVideoBatchVKSegment(struct GBAVideoBatchRenderer* renderer, int startY, int endY);
 void GBAVideoBatchVKFinishFrame(struct GBAVideoBatchRenderer* renderer);

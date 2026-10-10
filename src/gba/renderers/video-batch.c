@@ -112,6 +112,25 @@ static void _startFrame(struct GBAVideoBatchRenderer* batch) {
 	}
 }
 
+static void _startCPU(struct GBAVideoBatchRenderer* batch, int y);
+
+// Until the GPU's shaders are built, whole frames are drawn on the CPU
+static void _startFrameOnTarget(struct GBAVideoBatchRenderer* batch) {
+	_startFrame(batch);
+	bool ready = true;
+	if (batch->gl) {
+		ready = GBAVideoBatchGLReady(batch);
+	}
+#ifdef BUILD_BATCH_VULKAN
+	if (batch->vk) {
+		ready = GBAVideoBatchVKReady(batch);
+	}
+#endif
+	if (!ready) {
+		_startCPU(batch, 0);
+	}
+}
+
 // Frames that rewrite VRAM all through drawing finish on the CPU: the software renderer already holds the same state
 static void _startCPU(struct GBAVideoBatchRenderer* batch, int y) {
 	struct GBAVideoSoftwareRenderer* sw = &batch->sw;
@@ -149,7 +168,7 @@ static void GBAVideoBatchRendererReset(struct GBAVideoRenderer* renderer) {
 		batch->check->d.reset(&batch->check->d);
 	}
 	batch->vramDirty = (1U << BATCH_VRAM_PAGES) - 1;
-	_startFrame(batch);
+	_startFrameOnTarget(batch);
 }
 
 static void GBAVideoBatchRendererDeinit(struct GBAVideoRenderer* renderer) {
@@ -849,7 +868,7 @@ static void _drawScanline(struct GBAVideoRenderer* renderer, int y) {
 		_uploadVRAM(batch, stale);
 		++batch->splits;
 		batch->splitPages += __builtin_popcount(stale);
-		if (!batch->gl && (batch->splits >= BATCH_MAX_SPLITS || batch->splitPages >= BATCH_MAX_SPLIT_PAGES)) {
+		if (batch->splits >= BATCH_MAX_SPLITS || batch->splitPages >= BATCH_MAX_SPLIT_PAGES) {
 			_startCPU(batch, y + 1);
 		}
 	}
@@ -939,6 +958,9 @@ static void _compare(struct GBAVideoBatchRenderer* batch) {
 static void GBAVideoBatchRendererFinishFrame(struct GBAVideoRenderer* renderer) {
 	struct GBAVideoBatchRenderer* batch = (struct GBAVideoBatchRenderer*) renderer;
 	_draw(batch, batch->cpuFrom >= 0 ? batch->cpuFrom : batch->nextY);
+	if (batch->gl && batch->cpuFrom >= 0 && batch->cpuFrom < batch->nextY) {
+		GBAVideoBatchGLDrawCPU(batch, batch->cpuFrom, batch->nextY);
+	}
 #ifdef BUILD_BATCH_VULKAN
 	if (batch->vk) {
 		double t = _timed ? _now() : 0;
@@ -972,7 +994,15 @@ static void GBAVideoBatchRendererFinishFrame(struct GBAVideoRenderer* renderer) 
 		fprintf(batch->checkLog, "stats %u frames: %.2f draws/frame (max %u), %.2f pages/frame, %.2f palettes/frame, %.2f sprite tables/frame\n", batch->frame,
 		        _stats[0] / (double) batch->frame, _stats[4], _stats[1] / (double) batch->frame, _stats[2] / (double) batch->frame, _stats[3] / (double) batch->frame);
 	}
-	_startFrame(batch);
+	_startFrameOnTarget(batch);
+}
+
+// A GPU backend came or went between frames
+void GBAVideoBatchRendererRestartFrame(struct GBAVideoBatchRenderer* batch) {
+	// Before the renderer is attached to the emulated memory, its reset starts the first frame instead
+	if (!batch->nextY && batch->d.palette) {
+		_startFrameOnTarget(batch);
+	}
 }
 
 static void GBAVideoBatchRendererGetPixels(struct GBAVideoRenderer* renderer, size_t* stride, const void** pixels) {

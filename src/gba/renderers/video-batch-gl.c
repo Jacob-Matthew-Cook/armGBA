@@ -40,6 +40,9 @@
 #define GL_DITHER 0x0BD0
 #define GL_TRIANGLES 0x0004
 #define GL_TRUE 1
+#define GL_EXTENSIONS 0x1F03
+#define GL_NUM_EXTENSIONS 0x821D
+#define GL_COMPLETION_STATUS_KHR 0x91B1
 
 #define BATCH_GL_FUNCTIONS(X) \
 	X(void, ActiveTexture, (unsigned)) \
@@ -66,6 +69,8 @@
 	X(void, GetProgramiv, (unsigned, unsigned, int*)) \
 	X(void, GetShaderInfoLog, (unsigned, int, int*, char*)) \
 	X(void, GetShaderiv, (unsigned, unsigned, int*)) \
+	X(void, GetIntegerv, (unsigned, int*)) \
+	X(const unsigned char*, GetStringi, (unsigned, unsigned)) \
 	X(int, GetUniformLocation, (unsigned, const char*)) \
 	X(void, LinkProgram, (unsigned)) \
 	X(void, PixelStorei, (unsigned, int)) \
@@ -92,6 +97,7 @@ enum {
 	TEX_LINES,
 	TEX_PALETTES,
 	TEX_SPRITES,
+	TEX_CPU,
 	TEX_MAX
 };
 
@@ -105,6 +111,10 @@ struct GBAVideoBatchGL {
 	uint32_t vramStale[BATCH_GL_RING];
 	int slot;
 	unsigned programs[BATCH_FEATURE_ALL + 1];
+	unsigned pending[BATCH_FEATURE_ALL + 1][3];
+	bool failed[BATCH_FEATURE_ALL + 1];
+	unsigned copy;
+	void (*MaxShaderCompilerThreadsKHR)(unsigned);
 	unsigned vao;
 };
 
@@ -184,10 +194,10 @@ static void _texture(struct GBAVideoBatchGL* gl, int slot, int unit, int interna
 	gl->TexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, NULL);
 }
 
-// The shader for one set of features, compiled the first time a frame needs it
-static unsigned _program(struct GBAVideoBatchGL* gl, unsigned features) {
-	if (gl->programs[features]) {
-		return gl->programs[features];
+// Starts building the shader for one set of features; with KHR_parallel_shader_compile the driver builds it in the background
+static void _startProgram(struct GBAVideoBatchGL* gl, unsigned features) {
+	if (gl->programs[features] || gl->pending[features][0] || gl->failed[features]) {
+		return;
 	}
 	static const char* const names[] = { "OBJWIN", "MOSAIC", "AFFINE_SPRITES", "AFFINE_BG", "BRIGHTNESS", "BLEND", "WINDOWS" };
 	char defines[512] = "";
@@ -199,9 +209,82 @@ static unsigned _program(struct GBAVideoBatchGL* gl, unsigned features) {
 	size_t length = strlen(_fragmentPrelude) + used + strlen(_fragmentShared) + strlen(_fragmentMain) + 1;
 	char* source = malloc(length);
 	snprintf(source, length, "%s%s%s%s", _fragmentPrelude, defines, _fragmentShared, _fragmentMain);
-	unsigned vertex = _compile(gl, GL_VERTEX_SHADER, _vertexShader);
-	unsigned fragment = _compile(gl, GL_FRAGMENT_SHADER, source);
+	const char* sources[2] = { _vertexShader, source };
+	unsigned* pending = gl->pending[features];
+	pending[0] = gl->CreateProgram();
+	for (i = 0; i < 2; ++i) {
+		pending[i + 1] = gl->CreateShader(i ? GL_FRAGMENT_SHADER : GL_VERTEX_SHADER);
+		gl->ShaderSource(pending[i + 1], 1, &sources[i], NULL);
+		gl->CompileShader(pending[i + 1]);
+		gl->AttachShader(pending[0], pending[i + 1]);
+	}
 	free(source);
+	gl->LinkProgram(pending[0]);
+}
+
+// The shader for one set of features once it is built, without waiting for it where the driver can say
+static unsigned _program(struct GBAVideoBatchGL* gl, unsigned features) {
+	if (gl->programs[features] || gl->failed[features]) {
+		return gl->programs[features];
+	}
+	_startProgram(gl, features);
+	unsigned* pending = gl->pending[features];
+	int done = 1;
+	if (gl->MaxShaderCompilerThreadsKHR) {
+		gl->GetProgramiv(pending[0], GL_COMPLETION_STATUS_KHR, &done);
+	}
+	if (!done) {
+		return 0;
+	}
+	int ok = 0;
+	gl->GetProgramiv(pending[0], GL_LINK_STATUS, &ok);
+	if (!ok) {
+		char log[1024];
+		int i;
+		for (i = 1; i < 3; ++i) {
+			gl->GetShaderiv(pending[i], GL_COMPILE_STATUS, &ok);
+			if (!ok) {
+				gl->GetShaderInfoLog(pending[i], sizeof(log), NULL, log);
+				mLOG(GBA_VIDEO, ERROR, "Batch renderer shader: %s", log);
+			}
+		}
+		gl->GetProgramInfoLog(pending[0], sizeof(log), NULL, log);
+		mLOG(GBA_VIDEO, ERROR, "Batch renderer program: %s", log);
+		gl->DeleteProgram(pending[0]);
+		gl->failed[features] = true;
+	} else {
+		gl->UseProgram(pending[0]);
+		static const char* const samplers[TEX_CPU] = { "vram", "lines", "palettes", "sprites" };
+		unsigned i;
+		for (i = 0; i < TEX_CPU; ++i) {
+			gl->Uniform1i(gl->GetUniformLocation(pending[0], samplers[i]), i);
+		}
+		gl->programs[features] = pending[0];
+	}
+	gl->DeleteShader(pending[1]);
+	gl->DeleteShader(pending[2]);
+	memset(pending, 0, sizeof(gl->pending[features]));
+	return gl->programs[features];
+}
+
+// Lines the CPU drew, shown as they are
+static const char* const _copyShader =
+	"#version 300 es\n"
+	"precision highp float;\n"
+	"precision highp int;\n"
+	"precision highp usampler2D;\n"
+	"uniform usampler2D cpu;\n"
+	"out vec4 outColor;\n"
+	"void main() {\n"
+	"	ivec2 position = ivec2(gl_FragCoord.xy);\n"
+	"	uint color = texelFetch(cpu, ivec2(position.x, 159 - position.y), 0).r;\n"
+	"	uvec3 rgb = uvec3(color >> 11, (color >> 6) & 0x1Fu, color & 0x1Fu);\n"
+	"	outColor = vec4(vec3((rgb << 3) | (rgb >> 2)) / 255.0, 1.0);\n"
+	"}\n";
+
+static unsigned _copyProgram(struct GBAVideoBatchGL* gl) {
+	unsigned vertex = _compile(gl, GL_VERTEX_SHADER, _vertexShader);
+	unsigned fragment = _compile(gl, GL_FRAGMENT_SHADER, _copyShader);
 	if (!vertex || !fragment) {
 		return 0;
 	}
@@ -214,32 +297,46 @@ static unsigned _program(struct GBAVideoBatchGL* gl, unsigned features) {
 	int ok = 0;
 	gl->GetProgramiv(program, GL_LINK_STATUS, &ok);
 	if (!ok) {
-		char log[1024];
-		gl->GetProgramInfoLog(program, sizeof(log), NULL, log);
-		mLOG(GBA_VIDEO, ERROR, "Batch renderer program: %s", log);
 		gl->DeleteProgram(program);
 		return 0;
 	}
 	gl->UseProgram(program);
-	static const char* const samplers[TEX_MAX] = { "vram", "lines", "palettes", "sprites" };
-	for (i = 0; i < TEX_MAX; ++i) {
-		gl->Uniform1i(gl->GetUniformLocation(program, samplers[i]), i);
-	}
-	gl->programs[features] = program;
+	gl->Uniform1i(gl->GetUniformLocation(program, "cpu"), TEX_CPU);
 	return program;
+}
+
+static bool _hasExtension(struct GBAVideoBatchGL* gl, const char* name) {
+	int n = 0;
+	gl->GetIntegerv(GL_NUM_EXTENSIONS, &n);
+	int i;
+	for (i = 0; i < n; ++i) {
+		if (!strcmp((const char*) gl->GetStringi(GL_EXTENSIONS, i), name)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 bool GBAVideoBatchRendererInitGL(struct GBAVideoBatchRenderer* batch, void* (*getProc)(const char*), uintptr_t (*getFramebuffer)(void)) {
 	struct GBAVideoBatchGL* gl = calloc(1, sizeof(*gl));
 	BATCH_GL_FUNCTIONS(BATCH_GL_LOAD)
 	gl->getFramebuffer = getFramebuffer;
-	if (!_program(gl, BATCH_FEATURE_ALL)) {
+	gl->copy = _copyProgram(gl);
+	if (!gl->copy) {
 		free(gl);
 		return false;
 	}
+	if (_hasExtension(gl, "GL_KHR_parallel_shader_compile")) {
+		gl->MaxShaderCompilerThreadsKHR = (void (*)(unsigned)) getProc("glMaxShaderCompilerThreadsKHR");
+	}
+	if (gl->MaxShaderCompilerThreadsKHR) {
+		gl->MaxShaderCompilerThreadsKHR(0xFFFFFFFF);
+	}
+	// Frames are drawn on the CPU until the shader that does everything is ready
+	_startProgram(gl, BATCH_FEATURE_ALL);
 	size_t i;
 	for (i = 0; i < GBAVideoBatchCommonFeaturesSize; ++i) {
-		_program(gl, GBAVideoBatchCommonFeatures[i]);
+		_startProgram(gl, GBAVideoBatchCommonFeatures[i]);
 	}
 
 	gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -250,12 +347,14 @@ bool GBAVideoBatchRendererInitGL(struct GBAVideoBatchRenderer* batch, void* (*ge
 		_texture(gl, slot, TEX_LINES, GL_RGBA32UI, BATCH_LINE_WORDS / 4, GBA_VIDEO_VERTICAL_PIXELS, GL_RGBA_INTEGER, GL_UNSIGNED_INT);
 		_texture(gl, slot, TEX_PALETTES, GL_R16UI, 512, GBA_VIDEO_VERTICAL_PIXELS, GL_RED_INTEGER, GL_UNSIGNED_SHORT);
 		_texture(gl, slot, TEX_SPRITES, GL_RGBA32UI, 256, GBA_VIDEO_VERTICAL_PIXELS, GL_RGBA_INTEGER, GL_UNSIGNED_INT);
+		_texture(gl, slot, TEX_CPU, GL_R16UI, GBA_VIDEO_HORIZONTAL_PIXELS, GBA_VIDEO_VERTICAL_PIXELS, GL_RED_INTEGER, GL_UNSIGNED_SHORT);
 		gl->vramStale[slot] = (1U << BATCH_VRAM_PAGES) - 1;
 	}
 	gl->GenVertexArrays(1, &gl->vao);
 
 	batch->gl = gl;
 	batch->vramDirty = (1U << BATCH_VRAM_PAGES) - 1;
+	GBAVideoBatchRendererRestartFrame(batch);
 	return true;
 }
 
@@ -274,7 +373,13 @@ void GBAVideoBatchRendererDeinitGL(struct GBAVideoBatchRenderer* batch) {
 		if (gl->programs[i]) {
 			gl->DeleteProgram(gl->programs[i]);
 		}
+		if (gl->pending[i][0]) {
+			gl->DeleteProgram(gl->pending[i][0]);
+			gl->DeleteShader(gl->pending[i][1]);
+			gl->DeleteShader(gl->pending[i][2]);
+		}
 	}
+	gl->DeleteProgram(gl->copy);
 	free(gl);
 	batch->gl = NULL;
 }
@@ -291,6 +396,19 @@ void GBAVideoBatchGLUploadVRAM(struct GBAVideoBatchRenderer* batch, uint32_t pag
 	for (slot = 0; slot < BATCH_GL_RING; ++slot) {
 		gl->vramStale[slot] |= pages;
 	}
+}
+
+// Where and how every draw lands
+static void _target(struct GBAVideoBatchGL* gl) {
+	gl->BindFramebuffer(GL_FRAMEBUFFER, gl->getFramebuffer());
+	gl->BindVertexArray(gl->vao);
+	gl->Disable(GL_BLEND);
+	gl->Disable(GL_DEPTH_TEST);
+	gl->Disable(GL_STENCIL_TEST);
+	gl->Disable(GL_CULL_FACE);
+	gl->Disable(GL_DITHER);
+	gl->ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	gl->Viewport(0, 0, GBA_VIDEO_HORIZONTAL_PIXELS, GBA_VIDEO_VERTICAL_PIXELS);
 }
 
 void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int endY) {
@@ -371,16 +489,8 @@ void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int en
 	if (!program) {
 		program = gl->programs[BATCH_FEATURE_ALL];
 	}
-	gl->BindFramebuffer(GL_FRAMEBUFFER, gl->getFramebuffer());
+	_target(gl);
 	gl->UseProgram(program);
-	gl->BindVertexArray(gl->vao);
-	gl->Disable(GL_BLEND);
-	gl->Disable(GL_DEPTH_TEST);
-	gl->Disable(GL_STENCIL_TEST);
-	gl->Disable(GL_CULL_FACE);
-	gl->Disable(GL_DITHER);
-	gl->ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-	gl->Viewport(0, 0, GBA_VIDEO_HORIZONTAL_PIXELS, GBA_VIDEO_VERTICAL_PIXELS);
 	gl->Enable(GL_SCISSOR_TEST);
 	gl->Scissor(0, GBA_VIDEO_VERTICAL_PIXELS - endY, GBA_VIDEO_HORIZONTAL_PIXELS, endY - startY);
 	gl->DrawArrays(GL_TRIANGLES, 0, 3);
@@ -389,4 +499,29 @@ void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int en
 
 void GBAVideoBatchGLStartFrame(struct GBAVideoBatchRenderer* batch) {
 	UNUSED(batch);
+}
+
+bool GBAVideoBatchGLReady(struct GBAVideoBatchRenderer* batch) {
+	return _program(batch->gl, BATCH_FEATURE_ALL);
+}
+
+// Lines the CPU drew this frame, from the output buffer
+void GBAVideoBatchGLDrawCPU(struct GBAVideoBatchRenderer* batch, int startY, int endY) {
+	struct GBAVideoBatchGL* gl = batch->gl;
+	gl->slot = (gl->slot + 1) % BATCH_GL_RING;
+	gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+	gl->PixelStorei(GL_UNPACK_ALIGNMENT, 2);
+	gl->PixelStorei(GL_UNPACK_ROW_LENGTH, batch->outputBufferStride);
+	gl->PixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+	gl->PixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+	_unpack(gl, TEX_CPU);
+	gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, startY, GBA_VIDEO_HORIZONTAL_PIXELS, endY - startY, GL_RED_INTEGER, GL_UNSIGNED_SHORT, &batch->outputBuffer[batch->outputBufferStride * startY]);
+	gl->PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+	gl->BindSampler(TEX_CPU, 0);
+	_target(gl);
+	gl->UseProgram(gl->copy);
+	gl->Enable(GL_SCISSOR_TEST);
+	gl->Scissor(0, GBA_VIDEO_VERTICAL_PIXELS - endY, GBA_VIDEO_HORIZONTAL_PIXELS, endY - startY);
+	gl->DrawArrays(GL_TRIANGLES, 0, 3);
+	gl->Disable(GL_SCISSOR_TEST);
 }
