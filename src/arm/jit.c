@@ -93,6 +93,7 @@ enum {
 	JIT_PAGES = offsetof(struct ARMJit, pages),
 	JIT_PENDING_LINK = offsetof(struct ARMJit, pendingLink),
 	JIT_FETCHED = offsetof(struct ARMJit, fetched),
+	JIT_STALL_TABLES = offsetof(struct ARMJit, stallTables),
 	ENTRY_CODE = offsetof(struct ARMJitEntry, code),
 	ENTRY_PC = offsetof(struct ARMJitEntry, pc),
 	ENTRY_OP0 = offsetof(struct ARMJitEntry, op0),
@@ -589,6 +590,13 @@ struct ARMJit* ARMJitCreate(void) {
 		return NULL;
 	}
 	jit->codeSize = CODE_SIZE;
+	int32_t seq;
+	int32_t wait;
+	for (seq = 0; seq < ARM_JIT_STALL_SEQ; ++seq) {
+		for (wait = 0; wait < ARM_JIT_STALL_WAIT; ++wait) {
+			_stallTables(seq, wait, &jit->stallTables[seq][wait][0], &jit->stallTables[seq][wait][1]);
+		}
+	}
 	if (getenv("MGBA_JIT_SELFTEST")) {
 		_selfTestAlu(jit, atoi(getenv("MGBA_JIT_SELFTEST")));
 	}

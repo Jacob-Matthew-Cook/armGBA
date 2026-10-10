@@ -929,9 +929,14 @@ static void _romStall(struct Compiler* c, unsigned i, int32_t wait) {
 		_movImm32(e, 3, (int8_t) stalls + adjust);
 		return;
 	}
-	// The tables are built while the load is in flight
-	_movImm64(e, 13, advances);
-	_movImm64(e, 14, stalls);
+	// The tables load, or are built, while the load is in flight
+	if (s >= 0 && s < ARM_JIT_STALL_SEQ && wait >= 0 && wait < ARM_JIT_STALL_WAIT) {
+		_ldrX(e, 13, R_JIT, JIT_STALL_TABLES + 8 * (2 * (s * ARM_JIT_STALL_WAIT + wait)));
+		_ldrX(e, 14, R_JIT, JIT_STALL_TABLES + 8 * (2 * (s * ARM_JIT_STALL_WAIT + wait) + 1));
+	} else {
+		_movImm64(e, 13, advances);
+		_movImm64(e, 14, stalls);
+	}
 	_movImm32(e, 11, pc);
 	_dp(e, A64_SUB, 10, 10, 11, 0);
 	// w12 = 8 * previous loads, or 0 when the last prefetch is not 0 to 14 bytes ahead

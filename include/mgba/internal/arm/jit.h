@@ -22,6 +22,8 @@ CXX_GUARD_START
 #define ARM_JIT_RAM_WORDS (ARM_JIT_IWRAM_WORDS + ARM_JIT_EWRAM_WORDS)
 #define ARM_JIT_PAGES 0x10000
 #define ARM_JIT_MAX_SPAN 66
+#define ARM_JIT_STALL_SEQ 10
+#define ARM_JIT_STALL_WAIT 16
 
 struct ARMCore;
 struct ARMJitBlock;
@@ -56,6 +58,8 @@ struct ARMJit {
 	uint32_t frameStart;
 	// Runtime copies of patched words, taken when the GBA's pipeline would fetch them
 	uint32_t fetched[ARM_JIT_MAX_SPAN];
+	// Prefetch byte tables by sequential and data wait, so generated code loads them instead of building them
+	uint64_t stallTables[ARM_JIT_STALL_SEQ][ARM_JIT_STALL_WAIT][2];
 
 	struct ARMJitBlock* blockList;
 	// Entry points by address, in 4 KiB pages of the bus
