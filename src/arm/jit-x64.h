@@ -1343,6 +1343,11 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	_eventCheck(c, i + 1);
 }
 
+static void _emitBx(struct Compiler* c, unsigned i, unsigned rm) {
+	UNUSED(rm);
+	_emitFallback(c, i);
+}
+
 // The pipeline at a branch target: RAM words as they are now, others as compiled
 static void _storeTargetPipeline(struct Compiler* c, uint32_t target) {
 	struct Emitter* e = &c->e;

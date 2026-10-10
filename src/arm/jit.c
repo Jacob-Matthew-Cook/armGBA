@@ -891,6 +891,10 @@ static void _emitBody(struct Compiler* c) {
 			if (branch.link || branch.thumbLink) {
 				_setRegion(c, ARM_LR, -1);
 			}
+		} else if (c->thumb && (op & 0xFF87) == 0x4700 && ((op >> 3) & 0xF) != ARM_PC) {
+			_fetchAhead(c, i);
+			_emitBx(c, i, (op >> 3) & 0xF);
+			_forgetRegions(c);
 		} else {
 			_fetchAhead(c, i);
 			_emitFallback(c, i);

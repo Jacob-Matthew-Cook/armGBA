@@ -1542,6 +1542,67 @@ static void _emitFallback(struct Compiler* c, unsigned i) {
 	_eventCheck(c, i + 1);
 }
 
+// Thumb BX to the same mode and memory region: what the interpreter does when its region switch has nothing to switch, then the lookup
+static void _emitBx(struct Compiler* c, unsigned i, unsigned rm) {
+	struct Emitter* e = &c->e;
+	unsigned region = c->pc >> 24;
+	bool rom = region >= GBA_REGION_ROM0 && region <= GBA_REGION_ROM2_EX;
+	if (!c->thumb || !c->gba || (!rom && region != GBA_REGION_IWRAM && region != GBA_REGION_EWRAM)) {
+		_emitFallback(c, i);
+		return;
+	}
+	uint8_t* slow[6];
+	unsigned nSlow = 0;
+	_ldrW(e, 0, R_CPU, 4 * rm);
+	slow[nSlow++] = _tbz(e, 0, 0);
+	_lsrWImm(e, 1, 0, 24);
+	_cmpWImm(e, 1, region);
+	slow[nSlow++] = _bCond(e, A64_NE);
+	// No idle loop handling to do
+	_ldrW(e, 2, R_GBA, offsetof(struct GBA, idleOptimization));
+	_cmpWImm(e, 2, IDLE_LOOP_DETECT);
+	slow[nSlow++] = _bCond(e, A64_GE);
+	_andImm(e, 0, 0, 1, 31);
+	_ldrW(e, 2, R_GBA, offsetof(struct GBA, idleLoop));
+	_cmpW(e, 0, 2);
+	slow[nSlow++] = _bCond(e, A64_EQ);
+	int base;
+	if (rom) {
+		_andImm(e, 3, 0, 0, 25);
+		_ldrW(e, 2, R_GBA, offsetof(struct GBA, memory.romSize));
+		_cmpW(e, 3, 2);
+		slow[nSlow++] = _bCond(e, A64_HS);
+		_ldrW(e, 9, R_GBA, offsetof(struct GBA, memory.romMask));
+		_ldrX(e, 10, R_GBA, offsetof(struct GBA, memory.rom));
+		_dp(e, A64_AND, 3, 0, 9, 0);
+		_dpImm(e, A64_ADD_IMM, 4, 0, WORD_SIZE_THUMB);
+		_dp(e, A64_AND, 4, 4, 9, 0);
+		base = 10;
+	} else {
+		unsigned bits = region == GBA_REGION_IWRAM ? 15 : 18;
+		_andImm(e, 3, 0, 0, bits);
+		_dpImm(e, A64_ADD_IMM, 4, 0, WORD_SIZE_THUMB);
+		_andImm(e, 4, 4, 0, bits);
+		base = region == GBA_REGION_IWRAM ? R_IWRAM : R_EWRAM;
+	}
+	_strW(e, 0, R_GBA, offsetof(struct GBA, lastJump));
+	_strW(e, A64_ZR, R_GBA, offsetof(struct GBA, memory.lastPrefetchedPc));
+	_ldstR(e, A64_LDRH_R | A64_UXTW, 5, base, 3);
+	_ldstR(e, A64_LDRH_R | A64_UXTW, 6, base, 4);
+	_strW(e, 5, R_CPU, OFF_PREFETCH0);
+	_strW(e, 6, R_CPU, OFF_PREFETCH1);
+	_dpImm(e, A64_ADD_IMM, 0, 0, WORD_SIZE_THUMB);
+	_strW(e, 0, R_CPU, OFF_PC);
+	// The prefetch, then the refill's nonsequential and sequential fetches, as for a branch
+	_addCycles(c, 2 * c->aluCycles + c->memCycles);
+	_exitJump(c, EXIT_DIRECT);
+	unsigned k;
+	for (k = 0; k < nSlow; ++k) {
+		_patch(slow[k], e->p);
+	}
+	_emitFallback(c, i);
+}
+
 // The pipeline at a branch target: RAM words as they are now, others as compiled
 static void _storeTargetPipeline(struct Compiler* c, uint32_t target) {
 	struct Emitter* e = &c->e;
