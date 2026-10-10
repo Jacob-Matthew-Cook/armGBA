@@ -7,8 +7,12 @@
 
 #ifdef BUILD_BATCH_VULKAN
 #include <mgba/core/log.h>
+#include <mgba-util/threading.h>
 
 #include <time.h>
+#ifdef __linux__
+#include <unistd.h>
+#endif
 
 #include "video-batch-copy.h"
 #include "video-batch-frag.h"
@@ -114,6 +118,11 @@ struct GBAVideoBatchVK {
 	VkShaderModule copyFragment;
 	VkPipeline pipelines[BATCH_FEATURE_ALL + 1];
 	VkPipeline copy;
+#ifndef DISABLE_THREADING
+	Thread compiler;
+	bool compiling;
+	bool stopCompiling;
+#endif
 	struct GBAVideoBatchVKFrame frames[MAX_FRAMES];
 	int nFrames;
 	VkBuffer vram;
@@ -371,19 +380,60 @@ static bool _setup(struct GBAVideoBatchVK* vk) {
 
 static VkPipeline _createPipeline(struct GBAVideoBatchVK* vk, VkShaderModule fragment, unsigned features);
 
-// The pipeline for one set of features, made the first time a frame needs it
-static VkPipeline _pipeline(struct GBAVideoBatchVK* vk, unsigned features) {
-	if (!vk->pipelines[features]) {
-		struct timespec start, end;
-		clock_gettime(CLOCK_MONOTONIC, &start);
-		vk->pipelines[features] = _createPipeline(vk, vk->fragment, features);
-		clock_gettime(CLOCK_MONOTONIC, &end);
-		if (getenv("ARMGBA_BATCH_TIME")) {
-			fprintf(stderr, "pipeline %02X: %.1f ms\n", features, (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_nsec - start.tv_nsec) * 1e-6);
-		}
+static void _compile(struct GBAVideoBatchVK* vk, unsigned features) {
+	if (__atomic_load_n(&vk->pipelines[features], __ATOMIC_ACQUIRE)) {
+		return;
 	}
-	return vk->pipelines[features];
+	struct timespec start, end;
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	VkPipeline pipeline = _createPipeline(vk, vk->fragment, features);
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	if (getenv("ARMGBA_BATCH_TIME")) {
+		fprintf(stderr, "pipeline %02X: %.1f ms\n", features, (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_nsec - start.tv_nsec) * 1e-6);
+	}
+	__atomic_store_n(&vk->pipelines[features], pipeline, __ATOMIC_RELEASE);
 }
+
+// The pipeline for one set of features, or the one that does everything until that is built
+static VkPipeline _pipeline(struct GBAVideoBatchVK* vk, unsigned features) {
+	VkPipeline pipeline = __atomic_load_n(&vk->pipelines[features], __ATOMIC_ACQUIRE);
+	return pipeline ? pipeline : vk->pipelines[BATCH_FEATURE_ALL];
+}
+
+// Builds every other pipeline while the game runs: the ones games use most first, then the rest
+static void _compileAll(struct GBAVideoBatchVK* vk) {
+	size_t i;
+	for (i = 0; i < GBAVideoBatchCommonFeaturesSize; ++i) {
+#ifndef DISABLE_THREADING
+		if (__atomic_load_n(&vk->stopCompiling, __ATOMIC_ACQUIRE)) {
+			return;
+		}
+#endif
+		_compile(vk, GBAVideoBatchCommonFeatures[i]);
+	}
+	unsigned features;
+	for (features = 0; features < BATCH_FEATURE_ALL; ++features) {
+#ifndef DISABLE_THREADING
+		if (__atomic_load_n(&vk->stopCompiling, __ATOMIC_ACQUIRE)) {
+			return;
+		}
+#endif
+		_compile(vk, features);
+	}
+}
+
+#ifndef DISABLE_THREADING
+static THREAD_ENTRY _compilerThread(void* context) {
+	ThreadSetName("Batch shaders");
+#ifdef __linux__
+	// Below the emulator's own threads; the result is only a hint
+	int ignored = nice(10);
+	UNUSED(ignored);
+#endif
+	_compileAll(context);
+	THREAD_EXIT(0);
+}
+#endif
 
 static VkPipeline _createPipeline(struct GBAVideoBatchVK* vk, VkShaderModule fragment, unsigned features) {
 	VkBool32 values[7];
@@ -473,7 +523,10 @@ bool GBAVideoBatchRendererInitVulkan(struct GBAVideoBatchRenderer* batch, const 
 	if (_setup(vk)) {
 		vk->copy = _createPipeline(vk, vk->copyFragment, 0);
 	}
-	if (!vk->copy || !_pipeline(vk, BATCH_FEATURE_ALL)) {
+	if (vk->copy) {
+		_compile(vk, BATCH_FEATURE_ALL);
+	}
+	if (!vk->copy || !vk->pipelines[BATCH_FEATURE_ALL]) {
 		mLOG(GBA_VIDEO, ERROR, "Batch renderer: Vulkan setup failed");
 		GBAVideoBatchRendererDeinitVulkan(batch);
 		return false;
@@ -482,9 +535,12 @@ bool GBAVideoBatchRendererInitVulkan(struct GBAVideoBatchRenderer* batch, const 
 	for (i = 0; i < BATCH_VRAM_PAGES; ++i) {
 		vk->pageSlot[i] = i;
 	}
-	size_t common;
-	for (common = 0; common < GBAVideoBatchCommonFeaturesSize; ++common) {
-		_pipeline(vk, GBAVideoBatchCommonFeatures[common]);
+#ifndef DISABLE_THREADING
+	vk->compiling = !ThreadCreate(&vk->compiler, _compilerThread, vk);
+	if (!vk->compiling)
+#endif
+	{
+		_compileAll(vk);
 	}
 	vk->nextSlot = BATCH_VRAM_PAGES;
 	// Frame numbers start past the frames in flight, so no slot looks recently used
@@ -499,6 +555,12 @@ void GBAVideoBatchRendererDeinitVulkan(struct GBAVideoBatchRenderer* batch) {
 		return;
 	}
 	VkDevice device = vk->host.device;
+#ifndef DISABLE_THREADING
+	if (vk->compiling) {
+		__atomic_store_n(&vk->stopCompiling, true, __ATOMIC_RELEASE);
+		ThreadJoin(&vk->compiler);
+	}
+#endif
 	vk->DeviceWaitIdle(device);
 	int i;
 	for (i = 0; i <= BATCH_FEATURE_ALL; ++i) {
@@ -678,9 +740,6 @@ void GBAVideoBatchVKFinishFrame(struct GBAVideoBatchRenderer* batch) {
 	for (i = 0; i < vk->nSegments; ++i) {
 		const struct GBAVideoBatchSegment* segment = &vk->segments[i];
 		VkPipeline pipeline = _pipeline(vk, segment->features);
-		if (!pipeline) {
-			pipeline = vk->pipelines[BATCH_FEATURE_ALL];
-		}
 		if (pipeline != bound) {
 			vk->CmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 			bound = pipeline;
