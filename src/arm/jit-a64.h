@@ -298,6 +298,10 @@ static void _madd(struct Emitter* e, int rd, int rn, int rm, int ra) {
 	_emit(e, 0x1B000000 | (rm << 16) | (ra << 10) | (rn << 5) | rd);
 }
 
+static void _clzW(struct Emitter* e, int rd, int rn) {
+	_emit(e, 0x5AC01000 | (rn << 5) | rd);
+}
+
 static void _csel(struct Emitter* e, int rd, int rn, int rm, int cond) {
 	_emit(e, 0x1A800000 | (rm << 16) | (cond << 12) | (rn << 5) | rd);
 }
@@ -1658,17 +1662,15 @@ static void _emitMul(struct Compiler* c, unsigned i, const struct MulOp* m) {
 		_loadFlags(c);
 		fail = _bCond(e, m->cond ^ 1);
 	}
-	// One more cycle for each significant byte past the first, counting leading ones as zeros
+	// One more cycle for each significant byte past the first, counting leading ones as zeros: (31 - clz(x | 0xFF)) / 8
 	_ldrW(e, 1, R_CPU, 4 * m->rs);
 	_asrWImm(e, 9, 1, 31);
 	_dp(e, A64_EOR, 9, 9, 1, 0);
-	_movImm32(e, 3, m->rn >= 0 ? 2 : 1);
-	unsigned k;
-	for (k = 1; k < 4; ++k) {
-		_lsrWImm(e, 10, 9, 8 * k);
-		_cmpWImm(e, 10, 0);
-		_cinc(e, 3, 3, A64_NE);
-	}
+	_logicImm(e, A64_ORR_IMM, 10, 9, 0xFF);
+	_clzW(e, 10, 10);
+	_logicImm(e, A64_EOR_IMM, 10, 10, 31);
+	_lsrWImm(e, 10, 10, 3);
+	_dpImm(e, A64_ADD_IMM, 3, 10, m->rn >= 0 ? 2 : 1);
 	if (c->romCode && c->prefetch) {
 		_movImm32(e, 0, c->pc + c->width * (i + 2));
 		_strW(e, 0, R_CPU, OFF_PC);
