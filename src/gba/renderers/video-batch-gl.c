@@ -15,6 +15,7 @@
 #define GL_NEAREST 0x2600
 #define GL_R8UI 0x8232
 #define GL_R16UI 0x8234
+#define GL_RGBA16UI 0x8D76
 #define GL_RGBA32UI 0x8D70
 #define GL_RED_INTEGER 0x8D94
 #define GL_RGBA_INTEGER 0x8D99
@@ -59,6 +60,7 @@
 	X(void, Disable, (unsigned)) \
 	X(void, DrawArrays, (unsigned, int, int)) \
 	X(void, Enable, (unsigned)) \
+	X(void, Finish, (void)) \
 	X(void, GenTextures, (int, unsigned*)) \
 	X(void, GenVertexArrays, (int, unsigned*)) \
 	X(void, GetProgramInfoLog, (unsigned, int, int*, char*)) \
@@ -99,7 +101,7 @@ struct GBAVideoBatchGL {
 	BATCH_GL_FUNCTIONS(BATCH_GL_DECLARE)
 	uintptr_t (*getFramebuffer)(void);
 	unsigned textures[TEX_MAX];
-	unsigned program;
+	unsigned programs[BATCH_FEATURE_ALL + 1];
 	unsigned vao;
 	int nPalettes;
 	int nSprites;
@@ -112,8 +114,8 @@ static const char* const _vertexShader =
 	"	gl_Position = vec4(corner, 0.0, 1.0);\n"
 	"}\n";
 
-// The batch renderer's _pixel, line for line
-static const char* const _fragmentShader =
+// The batch renderer's pixel function, shared with the C reference
+static const char* const _fragmentPrelude =
 	"#version 300 es\n"
 	"precision highp float;\n"
 	"precision highp int;\n"
@@ -124,658 +126,37 @@ static const char* const _fragmentShader =
 	"uniform usampler2D sprites;\n"
 	"uniform usampler2D lists;\n"
 	"out vec4 outColor;\n"
+	"#define BATCH_FN\n"
+	"#define U(X) uint(X)\n"
+	"#define I(X) int(X)\n"
+	"#define iabs(X) abs(X)\n"
+	"#define FLAG_PRIORITY 0xC0000000u\n"
+	"#define FLAG_IS_BACKGROUND 0x08000000u\n"
+	"#define FLAG_UNWRITTEN 0xFC000000u\n"
+	"#define FLAG_REBLEND 0x04000000u\n"
+	"#define FLAG_TARGET_1 0x02000000u\n"
+	"#define FLAG_TARGET_2 0x01000000u\n"
+	"#define FLAG_OBJWIN 0x01000000u\n"
+	"#define FLAG_ORDER_MASK 0xF8000000u\n"
+	"#define BLEND_ALPHA 1\n"
+	"#define BLEND_BRIGHTEN 2\n"
+	"#define BLEND_DARKEN 3\n"
+	"#define FETCH_LINE(Y, T) texelFetch(lines, ivec2(T, Y), 0)\n"
+	"#define FETCH_SPRITE(R, T) texelFetch(sprites, ivec2(T, R), 0)\n"
+	"#define FETCH_LIST(Y, T) texelFetch(lists, ivec2(T, Y), 0)\n"
+	"#define FETCH_PAL(R, E) texelFetch(palettes, ivec2(E, R), 0).r\n"
+	"#define FETCH_VRAM16(H) texelFetch(vram, ivec2(int(min(H, 0xBFFFu) & 2047u), int(min(H, 0xBFFFu) >> 11)), 0).r\n";
 
-	"const uint FLAG_PRIORITY = 0xC0000000u;\n"
-	"const uint FLAG_IS_BACKGROUND = 0x08000000u;\n"
-	"const uint FLAG_UNWRITTEN = 0xFC000000u;\n"
-	"const uint FLAG_REBLEND = 0x04000000u;\n"
-	"const uint FLAG_TARGET_1 = 0x02000000u;\n"
-	"const uint FLAG_TARGET_2 = 0x01000000u;\n"
-	"const uint FLAG_OBJWIN = 0x01000000u;\n"
-	"const uint FLAG_ORDER_MASK = 0xF8000000u;\n"
-	"const int BLEND_ALPHA = 1;\n"
-	"const int BLEND_BRIGHTEN = 2;\n"
-	"const int BLEND_DARKEN = 3;\n"
-	"const ivec2 SIZES[16] = ivec2[16](ivec2(8, 8), ivec2(16, 16), ivec2(32, 32), ivec2(64, 64), ivec2(16, 8), ivec2(32, 8), ivec2(32, 16), ivec2(64, 32),\n"
-	"	ivec2(8, 16), ivec2(8, 32), ivec2(16, 32), ivec2(32, 64), ivec2(0, 0), ivec2(0, 0), ivec2(0, 0), ivec2(0, 0));\n"
+#define BATCH_SHARED(...) #__VA_ARGS__
+static const char* const _fragmentShared =
+#include "gba/renderers/video-batch-pixel.h"
+;
+#undef BATCH_SHARED
 
-	"int cdiv(int a, int b) {\n"
-	"	int q = abs(a) / abs(b);\n"
-	"	return (a < 0) != (b < 0) ? -q : q;\n"
-	"}\n"
-	"int cmod(int a, int b) {\n"
-	"	return a - cdiv(a, b) * b;\n"
-	"}\n"
-	"uint vram16(uint address) {\n"
-	"	uint index = min(address >> 1, 0xBFFFu);\n"
-	"	return texelFetch(vram, ivec2(int(index & 2047u), int(index >> 11)), 0).r;\n"
-	"}\n"
-	"uint vram8(uint address) {\n"
-	"	return (vram16(address) >> ((address & 1u) << 3)) & 0xFFu;\n"
-	"}\n"
-	"uint color555(uint value) {\n"
-	"	return ((value & 0x1Fu) << 11) | ((value & 0x3E0u) << 1) | ((value & 0x7C00u) >> 10);\n"
-	"}\n"
-	"uint brighten(uint color, uint y) {\n"
-	"	uint c = 0u;\n"
-	"	uint a = color & 0x1Fu;\n"
-	"	c |= (a + ((0x1Fu - a) * y) / 16u) & 0x1Fu;\n"
-	"	a = color & 0x7C0u;\n"
-	"	c |= (a + ((0x7C0u - a) * y) / 16u) & 0x7C0u;\n"
-	"	a = color & 0xF800u;\n"
-	"	c |= (a + ((0xF800u - a) * y) / 16u) & 0xF800u;\n"
-	"	return c;\n"
-	"}\n"
-	"uint darken(uint color, uint y) {\n"
-	"	uint c = 0u;\n"
-	"	uint a = color & 0x1Fu;\n"
-	"	c |= (a - (a * y) / 16u) & 0x1Fu;\n"
-	"	a = color & 0x7C0u;\n"
-	"	c |= (a - (a * y) / 16u) & 0x7C0u;\n"
-	"	a = color & 0xF800u;\n"
-	"	c |= (a - (a * y) / 16u) & 0xF800u;\n"
-	"	return c;\n"
-	"}\n"
-	"uint variant(uint color, int effect, uint bldy) {\n"
-	"	if (effect == BLEND_BRIGHTEN) {\n"
-	"		return brighten(color, bldy);\n"
-	"	}\n"
-	"	if (effect == BLEND_DARKEN) {\n"
-	"		return darken(color, bldy);\n"
-	"	}\n"
-	"	return color;\n"
-	"}\n"
-	"uint mix5(uint weightA, uint colorA, uint weightB, uint colorB) {\n"
-	"	uint a = (colorA & 0xF81Fu) | ((colorA & 0x7C0u) << 16);\n"
-	"	uint b = (colorB & 0xF81Fu) | ((colorB & 0x7C0u) << 16);\n"
-	"	uint c = (a * weightA + b * weightB) / 16u;\n"
-	"	if ((c & 0x08000000u) != 0u) {\n"
-	"		c = (c & ~0x0FC00000u) | 0x07C00000u;\n"
-	"	}\n"
-	"	if ((c & 0x0020u) != 0u) {\n"
-	"		c = (c & ~0x003Fu) | 0x001Fu;\n"
-	"	}\n"
-	"	if ((c & 0x10000u) != 0u) {\n"
-	"		c = (c & ~0x1F800u) | 0xF800u;\n"
-	"	}\n"
-	"	return (c & 0xF81Fu) | ((c >> 16) & 0x07C0u);\n"
-	"}\n"
-	"uint blendObjwin(uint blda, uint bldb, uint color, uint current) {\n"
-	"	if (color >= current) {\n"
-	"		if ((current & FLAG_TARGET_1) != 0u && (color & FLAG_TARGET_2) != 0u) {\n"
-	"			return mix5(blda, current, bldb, color);\n"
-	"		}\n"
-	"		return current & (0x00FFFFFFu | FLAG_REBLEND | FLAG_OBJWIN);\n"
-	"	}\n"
-	"	return (color & ~FLAG_TARGET_2) | (current & FLAG_OBJWIN);\n"
-	"}\n"
-	"uint blendNoObjwin(uint blda, uint bldb, uint color, uint current) {\n"
-	"	if (color >= current) {\n"
-	"		if ((current & FLAG_TARGET_1) != 0u && (color & FLAG_TARGET_2) != 0u) {\n"
-	"			return mix5(blda, current, bldb, color);\n"
-	"		}\n"
-	"		return current & (0x00FFFFFFu | FLAG_REBLEND | FLAG_OBJWIN);\n"
-	"	}\n"
-	"	return color & ~FLAG_TARGET_2;\n"
-	"}\n"
-	"uint noBlendObjwin(uint color, uint current) {\n"
-	"	if (color < current) {\n"
-	"		return color | (current & FLAG_OBJWIN);\n"
-	"	}\n"
-	"	return current & (0x00FFFFFFu | FLAG_REBLEND | FLAG_OBJWIN);\n"
-	"}\n"
-	"uint noBlendNoObjwin(uint color, uint current) {\n"
-	"	if (color >= current) {\n"
-	"		return current & (0x00FFFFFFu | FLAG_REBLEND | FLAG_OBJWIN);\n"
-	"	}\n"
-	"	return color;\n"
-	"}\n"
-	"bool bit(uint value, int b) {\n"
-	"	return ((value >> b) & 1u) != 0u;\n"
-	"}\n"
-
-	"uint pixel(int x, int y) {\n"
-	"	uvec4 l0 = texelFetch(lines, ivec2(0, y), 0);\n"
-	"	uvec4 l1 = texelFetch(lines, ivec2(1, y), 0);\n"
-	"	uvec4 l2 = texelFetch(lines, ivec2(2, y), 0);\n"
-	"	uint head = l0.x;\n"
-	"	if (bit(head, 23)) {\n"
-	"		return 0xFFDFu;\n"
-	"	}\n"
-	"	uint dispcnt = head & 0xFFFFu;\n"
-	"	int mode = int(dispcnt & 7u);\n"
-	"	int effect = int((head >> 16) & 3u);\n"
-	"	uint blda = l0.y & 0x1Fu;\n"
-	"	uint bldb = (l0.y >> 5) & 0x1Fu;\n"
-	"	uint bldy = (l0.y >> 10) & 0x1Fu;\n"
-	"	uint mosaic = l0.y >> 16;\n"
-	"	int paletteRow = int(l0.w & 0xFFFFu);\n"
-	"	bool target1Obj = bit(head, 19);\n"
-	"	bool brightness = effect == BLEND_BRIGHTEN || effect == BLEND_DARKEN;\n"
-
-	"	int nWindows = int(l0.z & 0xFFu);\n"
-	"	uint objwin = (l0.z >> 8) & 0xFFu;\n"
-	"	int objwinPriority = int(l0.z << 8) >> 24;\n"
-	"	uint segments[5] = uint[5](l1.x, l1.y, l1.z, l1.w, l2.x);\n"
-	"	int start = 0;\n"
-	"	uint segment = segments[0];\n"
-	"	for (int w = 0; w < nWindows - 1 && x >= int(segment & 0xFFu); ++w) {\n"
-	"		start = int(segment & 0xFFu);\n"
-	"		segment = segments[w + 1];\n"
-	"	}\n"
-	"	int end = int(segment & 0xFFu);\n"
-	"	uint control = (segment >> 8) & 0xFFu;\n"
-	"	int controlPriority = int(segment << 8) >> 24;\n"
-	"	bool objwinEnable = bit(dispcnt, 15);\n"
-	"	bool winBlend = bit(control, 5);\n"
-	"	bool objwinBlend = bit(objwin, 5);\n"
-
-	"	uvec4 bgs[8];\n"
-	"	for (int i = 0; i < 8; ++i) {\n"
-	"		bgs[i] = texelFetch(lines, ivec2(3 + i, y), 0);\n"
-	"	}\n"
-	"	bool target2 = bit(head, 22);\n"
-	"	bool anyTarget1 = false;\n"
-	"	for (int i = 0; i < 4; ++i) {\n"
-	"		uint bg = bgs[i * 2].x;\n"
-	"		if (bit(bg, 17) && bit(bg, 1)) {\n"
-	"			target2 = true;\n"
-	"		}\n"
-	"		if (bit(bg, 16)) {\n"
-	"			anyTarget1 = true;\n"
-	"		}\n"
-	"	}\n"
-
-	"	uint backdrop = color555(texelFetch(palettes, ivec2(0, paletteRow), 0).r);\n"
-	"	if (bit(head, 20) && brightness && winBlend) {\n"
-	"		backdrop = variant(backdrop, effect, bldy);\n"
-	"	}\n"
-	"	uint row = FLAG_UNWRITTEN | FLAG_PRIORITY | FLAG_IS_BACKGROUND | backdrop;\n"
-	"	uint spriteLayer = FLAG_UNWRITTEN;\n"
-
-	"	if (bit(dispcnt, 12) && (bit(control, 4) || objwinEnable)) {\n"
-	"		int spriteRow = int(l0.w >> 16);\n"
-	"		int mosaicV = int((mosaic >> 12) & 0xFu) + 1;\n"
-	"		int mosaicY = y - y % mosaicV;\n"
-	"		int n = int(head >> 24);\n"
-	"		bool mapping1D = bit(dispcnt, 6);\n"
-	"		for (int i = 0; i < n; ++i) {\n"
-	"			int index = int(texelFetch(lists, ivec2(i, y), 0).r);\n"
-	"			uvec4 s0 = texelFetch(sprites, ivec2(index * 2, spriteRow), 0);\n"
-	"			uvec4 s1 = texelFetch(sprites, ivec2(index * 2 + 1, spriteRow), 0);\n"
-	"			uint a = s0.x & 0xFFFFu;\n"
-	"			uint b = s0.x >> 16;\n"
-	"			uint c = s0.y;\n"
-	"			int spriteY = int(s0.z << 16) >> 16;\n"
-	"			int spriteEndY = int(s0.z) >> 16;\n"
-	"			int localY = y;\n"
-	"			bool spriteMosaic = bit(a, 12);\n"
-	"			if (spriteMosaic && mosaicV > 1) {\n"
-	"				localY = mosaicY;\n"
-	"				if (localY < spriteY && spriteY < 160) {\n"
-	"					localY = spriteY;\n"
-	"				}\n"
-	"				if (localY >= (spriteEndY & 0xFF)) {\n"
-	"					localY = spriteEndY - 1;\n"
-	"				}\n"
-	"			}\n"
-	"			ivec2 size = SIZES[int((a >> 14) * 4u + (b >> 14))];\n"
-	"			int width = size.x;\n"
-	"			int height = size.y;\n"
-	"			int objMode = int((a >> 10) & 3u);\n"
-	"			bool is256 = bit(a, 13);\n"
-	"			uint flags = ((c >> 10) & 3u) << 30;\n"
-	"			if ((winBlend && target1Obj && effect == BLEND_ALPHA) || objMode == 1) {\n"
-	"				flags |= FLAG_TARGET_1;\n"
-	"			}\n"
-	"			if (objMode == 2) {\n"
-	"				flags |= FLAG_OBJWIN;\n"
-	"			}\n"
-	"			if ((flags & FLAG_OBJWIN) != 0u && controlPriority < objwinPriority) {\n"
-	"				continue;\n"
-	"			}\n"
-	"			int spriteX = int((b & 0x1FFu) << 23) >> 23;\n"
-	"			uint align = is256 && !mapping1D ? 1u : 0u;\n"
-	"			uint tile = c & 0x3FFu;\n"
-	"			uint charBase = (tile & ~align) * 0x20u;\n"
-	"			uint maskLo = mapping1D ? 0x7FFEu : 0x3FEu;\n"
-	"			uint maskHi = mapping1D ? 0u : charBase & 0x7C00u;\n"
-	"			if (mode >= 3 && tile < 512u) {\n"
-	"				continue;\n"
-	"			}\n"
-	"			bool objwinSlowPath = objwinEnable && objwinBlend != winBlend;\n"
-	"			bool spriteVariant = target1Obj && winBlend && brightness;\n"
-	"			if (objMode == 1 || (target1Obj && effect == BLEND_ALPHA) || objwinSlowPath) {\n"
-	"				if (target2) {\n"
-	"					flags |= FLAG_REBLEND;\n"
-	"					spriteVariant = false;\n"
-	"				} else {\n"
-	"					flags &= ~FLAG_TARGET_1;\n"
-	"				}\n"
-	"			}\n"
-	"			bool objwinVariant = spriteVariant && objwinBlend;\n"
-	"			uint paletteBase = 0x100u;\n"
-	"			if (!is256) {\n"
-	"				paletteBase += (c >> 12) << 4;\n"
-	"			}\n"
-	"			int inY = localY - int(a & 0xFFu);\n"
-	"			int stride = mapping1D ? (width >> (is256 ? 0 : 1)) : 0x80;\n"
-	"			int localX;\n"
-	"			int tileY;\n"
-	"			if (bit(a, 8)) {\n"
-	"				int doubleSize = int((a >> 9) & 1u);\n"
-	"				int totalWidth = width << doubleSize;\n"
-	"				int totalHeight = height << doubleSize;\n"
-	"				int pa = int(s0.w << 16) >> 16;\n"
-	"				int pb = int(s0.w) >> 16;\n"
-	"				int pc = int(s1.x << 16) >> 16;\n"
-	"				int pd = int(s1.x) >> 16;\n"
-	"				if (inY < 0) {\n"
-	"					inY += 256;\n"
-	"				}\n"
-	"				int outX = spriteX >= start ? spriteX : start;\n"
-	"				int condition = spriteX + totalWidth;\n"
-	"				int inX = outX - spriteX;\n"
-	"				if (end < condition) {\n"
-	"					condition = end;\n"
-	"				}\n"
-	"				int mosaicH = 1;\n"
-	"				if (spriteMosaic) {\n"
-	"					mosaicH = int((mosaic >> 8) & 0xFu) + 1;\n"
-	"					if (condition != end && cmod(condition, mosaicH) != 0) {\n"
-	"						condition += mosaicH - cmod(condition, mosaicH);\n"
-	"					}\n"
-	"				}\n"
-	"				int xAccum = pa * (inX - 1 - (totalWidth >> 1)) + pb * (inY - (totalHeight >> 1)) + (width << 7);\n"
-	"				int yAccum = pc * (inX - 1 - (totalWidth >> 1)) + pd * (inY - (totalHeight >> 1)) + (height << 7);\n"
-	"				if (pa != 0) {\n"
-	"					int skip = 0;\n"
-	"					if ((xAccum >> 8) < 0) {\n"
-	"						skip = cdiv(-xAccum - 1, pa);\n"
-	"					} else if ((xAccum >> 8) >= width) {\n"
-	"						skip = cdiv((width << 8) - xAccum, pa);\n"
-	"					}\n"
-	"					xAccum += pa * skip;\n"
-	"					yAccum += pc * skip;\n"
-	"					outX += skip;\n"
-	"				}\n"
-	"				if (pc != 0) {\n"
-	"					int skip = 0;\n"
-	"					if ((yAccum >> 8) < 0) {\n"
-	"						skip = cdiv(-yAccum - 1, pc);\n"
-	"					} else if ((yAccum >> 8) >= height) {\n"
-	"						skip = cdiv((height << 8) - yAccum, pc);\n"
-	"					}\n"
-	"					xAccum += pa * skip;\n"
-	"					yAccum += pc * skip;\n"
-	"					outX += skip;\n"
-	"				}\n"
-	"				if (outX < start || outX >= condition || x < outX || x >= condition) {\n"
-	"					continue;\n"
-	"				}\n"
-	"				uint widthMask = ~uint(width - 1);\n"
-	"				uint heightMask = ~uint(height - 1);\n"
-	"				int step;\n"
-	"				if ((flags & FLAG_OBJWIN) != 0u || mosaicH <= 1) {\n"
-	"					if ((uint((xAccum + pa) >> 8) & widthMask) != 0u || (uint((yAccum + pc) >> 8) & heightMask) != 0u) {\n"
-	"						continue;\n"
-	"					}\n"
-	"					step = x - outX + 1;\n"
-	"				} else {\n"
-	"					int sampleX = x - x % mosaicH;\n"
-	"					step = sampleX >= outX ? sampleX - outX + 1 : 0;\n"
-	"				}\n"
-	"				localX = (xAccum + pa * step) >> 8;\n"
-	"				tileY = (yAccum + pc * step) >> 8;\n"
-	"				if ((uint(localX) & widthMask) != 0u || (uint(tileY) & heightMask) != 0u) {\n"
-	"					continue;\n"
-	"				}\n"
-	"			} else {\n"
-	"				int outX = spriteX >= start ? spriteX : start;\n"
-	"				int condition = spriteX + width;\n"
-	"				int mosaicH = 1;\n"
-	"				if (spriteMosaic) {\n"
-	"					mosaicH = int((mosaic >> 8) & 0xFu) + 1;\n"
-	"					if (cmod(condition, mosaicH) != 0) {\n"
-	"						condition += mosaicH - cmod(condition, mosaicH);\n"
-	"					}\n"
-	"				}\n"
-	"				if (int(a & 0xFFu) + height - 256 >= 0) {\n"
-	"					inY += 256;\n"
-	"				}\n"
-	"				if (bit(b, 13)) {\n"
-	"					inY = height - inY - 1;\n"
-	"				}\n"
-	"				if (end < condition) {\n"
-	"					condition = end;\n"
-	"				}\n"
-	"				if (x < outX || x >= condition) {\n"
-	"					continue;\n"
-	"				}\n"
-	"				int inX = x - spriteX;\n"
-	"				int xOffset = 1;\n"
-	"				if (bit(b, 12)) {\n"
-	"					inX = width - inX - 1;\n"
-	"					xOffset = -1;\n"
-	"				}\n"
-	"				localX = inX;\n"
-	"				if ((flags & FLAG_OBJWIN) == 0u && mosaicH > 1) {\n"
-	"					localX = clamp(inX - xOffset * (x % mosaicH), 0, width - 1);\n"
-	"				}\n"
-	"				tileY = inY;\n"
-	"			}\n"
-
-	"			uint tileData;\n"
-	"			if (!is256) {\n"
-	"				uint xBase = uint((localX & ~7) * 4 + ((localX >> 1) & 2));\n"
-	"				uint yBase = uint((tileY & ~7) * stride + (tileY & 7) * 4) + maskHi;\n"
-	"				tileData = vram16(0x10000u + ((yBase + ((xBase + charBase) & maskLo)) & 0x7FFEu));\n"
-	"				tileData = (tileData >> ((localX & 3) << 2)) & 0xFu;\n"
-	"			} else {\n"
-	"				uint xBase = uint((localX & ~7) * 8 + (localX & 6));\n"
-	"				uint yBase = uint((tileY & ~7) * stride + (tileY & 7) * 8) + maskHi;\n"
-	"				tileData = vram16(0x10000u + ((yBase + ((xBase + charBase) & maskLo)) & 0x7FFEu));\n"
-	"				tileData = (tileData >> ((localX & 1) << 3)) & 0xFFu;\n"
-	"			}\n"
-
-	"			uint current = spriteLayer;\n"
-	"			uint reordered = (current & ~(FLAG_ORDER_MASK | FLAG_REBLEND | FLAG_TARGET_1)) | (flags & (FLAG_ORDER_MASK | FLAG_REBLEND | FLAG_TARGET_1));\n"
-	"			if ((flags & FLAG_OBJWIN) != 0u) {\n"
-	"				if (tileData != 0u) {\n"
-	"					row |= FLAG_OBJWIN;\n"
-	"				} else if (current != FLAG_UNWRITTEN && (current & FLAG_ORDER_MASK) > flags) {\n"
-	"					spriteLayer = reordered;\n"
-	"				}\n"
-	"			} else if ((current & FLAG_ORDER_MASK) > flags) {\n"
-	"				if (tileData != 0u) {\n"
-	"					uint color = color555(texelFetch(palettes, ivec2(int(paletteBase + tileData), paletteRow), 0).r);\n"
-	"					if ((objwinSlowPath && (row & FLAG_OBJWIN) != 0u) ? objwinVariant : spriteVariant) {\n"
-	"						color = variant(color, effect, bldy);\n"
-	"					}\n"
-	"					spriteLayer = color | flags;\n"
-	"				} else if (current != FLAG_UNWRITTEN) {\n"
-	"					spriteLayer = reordered;\n"
-	"				}\n"
-	"			}\n"
-	"		}\n"
-	"	}\n"
-
-	"	for (uint priority = 0u; priority < 4u; ++priority) {\n"
-	"		uint sprite = spriteLayer & ~FLAG_OBJWIN;\n"
-	"		if ((sprite & FLAG_UNWRITTEN) != FLAG_UNWRITTEN && (sprite >> 30) == priority) {\n"
-	"			if (bit(head, 21)) {\n"
-	"				sprite |= FLAG_TARGET_2;\n"
-	"			}\n"
-	"			if (objwinEnable) {\n"
-	"				bool objwinDisable = !bit(objwin, 4);\n"
-	"				bool objwinOnly = !objwinDisable && !bit(control, 4);\n"
-	"				if (objwinDisable && !bit(control, 4)) {\n"
-	"				} else if (objwinDisable ? (row & FLAG_OBJWIN) == 0u : (!objwinOnly || (row & FLAG_OBJWIN) != 0u)) {\n"
-	"					row = blendObjwin(blda, bldb, sprite, row);\n"
-	"				}\n"
-	"			} else if (bit(control, 4)) {\n"
-	"				row = blendNoObjwin(blda, bldb, sprite, row);\n"
-	"			}\n"
-	"		}\n"
-
-	"		for (int index = 0; index < 4; ++index) {\n"
-	"			uvec4 bgA = bgs[index * 2];\n"
-	"			uvec4 bgB = bgs[index * 2 + 1];\n"
-	"			uint bgControl = bgA.x;\n"
-	"			if (!bit(bgControl, 0) || ((bgControl >> 2) & 3u) != priority) {\n"
-	"				continue;\n"
-	"			}\n"
-	"			bool windowed = bit(control, index);\n"
-	"			bool objwinBg = bit(objwin, index);\n"
-	"			if (!windowed && !(objwinEnable && objwinBg)) {\n"
-	"				continue;\n"
-	"			}\n"
-	"			int bgMode;\n"
-	"			if (index < 2) {\n"
-	"				if (mode >= 2) {\n"
-	"					continue;\n"
-	"				}\n"
-	"				bgMode = 0;\n"
-	"			} else if (index == 2) {\n"
-	"				if (mode > 5) {\n"
-	"					continue;\n"
-	"				}\n"
-	"				bgMode = mode == 1 ? 2 : mode;\n"
-	"			} else {\n"
-	"				if (mode != 0 && mode != 2) {\n"
-	"					continue;\n"
-	"				}\n"
-	"				bgMode = mode;\n"
-	"			}\n"
-
-	"			bool target1 = bit(bgControl, 16);\n"
-	"			uint flags = (priority << 30) | (uint(index) << 28) | FLAG_IS_BACKGROUND;\n"
-	"			if (bit(bgControl, 17)) {\n"
-	"				flags |= FLAG_TARGET_2;\n"
-	"			}\n"
-	"			uint objwinFlags = flags;\n"
-	"			if (effect == BLEND_ALPHA) {\n"
-	"				if (blda == 0x10u && bldb == 0u) {\n"
-	"					flags &= ~FLAG_TARGET_2;\n"
-	"					objwinFlags &= ~FLAG_TARGET_2;\n"
-	"				} else if (target1) {\n"
-	"					if (winBlend) {\n"
-	"						flags |= FLAG_TARGET_1;\n"
-	"					}\n"
-	"					if (objwinBlend) {\n"
-	"						objwinFlags |= FLAG_TARGET_1;\n"
-	"					}\n"
-	"				}\n"
-	"			}\n"
-	"			bool bgVariant = target1 && winBlend && brightness;\n"
-	"			bool objwinVariant = objwinEnable && target1 && objwinBlend && brightness;\n"
-	"			bool objwinForceEnable = objwinBg && windowed;\n"
-	"			bool objwinOnly = !objwinBg;\n"
-	"			bool bgMosaic = bit(bgControl, 14);\n"
-	"			int mosaicV = int((mosaic >> 4) & 0xFu) + 1;\n"
-	"			int mosaicH = int(mosaic & 0xFu) + 1;\n"
-
-	"			if (bgMode >= 2) {\n"
-	"				int sx = int(bgA.z);\n"
-	"				int sy = int(bgA.w);\n"
-	"				int dx = int(bgB.x << 16) >> 16;\n"
-	"				int dy = int(bgB.x) >> 16;\n"
-	"				int sampleX = x;\n"
-	"				if (bgMosaic) {\n"
-	"					sx -= (y % mosaicV) * (int(bgB.y << 16) >> 16);\n"
-	"					sy -= (y % mosaicV) * (int(bgB.y) >> 16);\n"
-	"					sampleX = x - x % mosaicH;\n"
-	"				}\n"
-	"				int localX = sx + sampleX * dx;\n"
-	"				int localY = sy + sampleX * dy;\n"
-	"				if (bgMode == 3 || bgMode == 5) {\n"
-	"					int width = bgMode == 3 ? 240 : 160;\n"
-	"					int height = bgMode == 3 ? 160 : 128;\n"
-	"					if (localX < 0 || localY < 0 || (localX >> 8) >= width || (localY >> 8) >= height) {\n"
-	"						continue;\n"
-	"					}\n"
-	"					uint color;\n"
-	"					if (bgMode == 3) {\n"
-	"						color = color555(vram16(uint(((localX >> 8) + (localY >> 8) * 240) << 1)));\n"
-	"					} else {\n"
-	"						uint offset = bit(dispcnt, 4) ? 0xA000u : 0u;\n"
-	"						color = color555(vram16(offset + uint((localX >> 8) * 2 + (localY >> 8) * 320)));\n"
-	"					}\n"
-	"					if (!objwinEnable || ((row & FLAG_OBJWIN) == 0u) != objwinOnly) {\n"
-	"						uint mergedFlags = (row & FLAG_OBJWIN) != 0u ? objwinFlags : flags;\n"
-	"						if (bgVariant) {\n"
-	"							color = variant(color, effect, bldy);\n"
-	"						}\n"
-	"						row = blendObjwin(blda, bldb, color | mergedFlags, row);\n"
-	"					}\n"
-	"					continue;\n"
-	"				}\n"
-	"				if (bgMode == 4) {\n"
-	"					if (localX < 0 || localY < 0 || (localX >> 8) >= 240 || (localY >> 8) >= 160) {\n"
-	"						continue;\n"
-	"					}\n"
-	"					uint offset = bit(dispcnt, 4) ? 0xA000u : 0u;\n"
-	"					uint entry = vram8(offset + uint((localX >> 8) + (localY >> 8) * 240));\n"
-	"					if (entry == 0u || (row & 0xFE000000u) == 0u) {\n"
-	"						continue;\n"
-	"					}\n"
-	"					uint color = color555(texelFetch(palettes, ivec2(int(entry), paletteRow), 0).r);\n"
-	"					if (!objwinEnable) {\n"
-	"						if (bgVariant) {\n"
-	"							color = variant(color, effect, bldy);\n"
-	"						}\n"
-	"						row = blendNoObjwin(blda, bldb, color | flags, row);\n"
-	"					} else if (objwinForceEnable || ((row & FLAG_OBJWIN) == 0u) == objwinOnly) {\n"
-	"						if ((row & FLAG_OBJWIN) != 0u ? objwinVariant : bgVariant) {\n"
-	"							color = variant(color, effect, bldy);\n"
-	"						}\n"
-	"						row = blendObjwin(blda, bldb, color | ((row & FLAG_OBJWIN) != 0u ? objwinFlags : flags), row);\n"
-	"					}\n"
-	"					continue;\n"
-	"				}\n"
-	"			}\n"
-
-	"			uint pixelData;\n"
-	"			uint paletteData = 0u;\n"
-	"			if (bgMode == 0) {\n"
-	"				int sampleX = x;\n"
-	"				int inY = y;\n"
-	"				if (bgMosaic) {\n"
-	"					if ((mosaic & 0xFu) != 0u) {\n"
-	"						sampleX = x - x % mosaicH;\n"
-	"					}\n"
-	"					inY -= inY % mosaicV;\n"
-	"				}\n"
-	"				int inX = (sampleX + int(bgA.y & 0xFFFFu)) & 0x1FF;\n"
-	"				inY += int(bgA.y >> 16);\n"
-	"				uint size = (bgControl >> 11) & 3u;\n"
-	"				uint yBase = uint(inY & 0xF8);\n"
-	"				if (size == 2u) {\n"
-	"					yBase += uint(inY & 0x100);\n"
-	"				} else if (size == 3u) {\n"
-	"					yBase += uint(inY & 0x100) << 1;\n"
-	"				}\n"
-	"				yBase = ((((bgControl >> 6) & 0x1Fu) << 11) >> 1) + (yBase << 2);\n"
-	"				uint xBase = uint(inX & 0xF8);\n"
-	"				if ((size & 1u) != 0u) {\n"
-	"					xBase += uint(inX & 0x100) << 5;\n"
-	"				}\n"
-	"				uint mapData = vram16((yBase + (xBase >> 3)) << 1);\n"
-	"				int localY = inY & 7;\n"
-	"				if (bit(mapData, 11)) {\n"
-	"					localY = 7 - localY;\n"
-	"				}\n"
-	"				int column = inX & 7;\n"
-	"				if (bit(mapData, 10)) {\n"
-	"					column = 7 - column;\n"
-	"				}\n"
-	"				uint charBase = ((bgControl >> 4) & 3u) << 14;\n"
-	"				if (!bit(bgControl, 13)) {\n"
-	"					charBase += ((mapData & 0x3FFu) << 5) + uint(localY << 2);\n"
-	"					if (charBase >= 0x10000u) {\n"
-	"						continue;\n"
-	"					}\n"
-	"					pixelData = vram8(charBase + uint(column >> 1));\n"
-	"					pixelData = (column & 1) != 0 ? pixelData >> 4 : pixelData & 0xFu;\n"
-	"					paletteData = (mapData >> 12) << 4;\n"
-	"				} else {\n"
-	"					charBase += ((mapData & 0x3FFu) << 6) + uint(localY << 3);\n"
-	"					if (charBase >= 0x10000u) {\n"
-	"						continue;\n"
-	"					}\n"
-	"					pixelData = vram8(charBase + uint(column));\n"
-	"				}\n"
-	"			} else {\n"
-	"				int sx = int(bgA.z);\n"
-	"				int sy = int(bgA.w);\n"
-	"				int dx = int(bgB.x << 16) >> 16;\n"
-	"				int dy = int(bgB.x) >> 16;\n"
-	"				int sampleX = x;\n"
-	"				if (bgMosaic) {\n"
-	"					sx -= (y % mosaicV) * (int(bgB.y << 16) >> 16);\n"
-	"					sy -= (y % mosaicV) * (int(bgB.y) >> 16);\n"
-	"					sampleX = x - x % mosaicH;\n"
-	"				}\n"
-	"				int localX = sx + sampleX * dx;\n"
-	"				int localY = sy + sampleX * dy;\n"
-	"				int size = int((bgControl >> 11) & 3u);\n"
-	"				int sizeAdjusted = 0x8000 << size;\n"
-	"				if (bit(bgControl, 15)) {\n"
-	"					localX &= sizeAdjusted - 1;\n"
-	"					localY &= sizeAdjusted - 1;\n"
-	"				} else if (((localX | localY) & ~(sizeAdjusted - 1)) != 0) {\n"
-	"					continue;\n"
-	"				}\n"
-	"				uint screenBase = ((bgControl >> 6) & 0x1Fu) << 11;\n"
-	"				uint charBase = ((bgControl >> 4) & 3u) << 14;\n"
-	"				uint mapData = vram8(screenBase + uint(localX >> 11) + (uint((localY >> 7) & 0x7F0) << size));\n"
-	"				pixelData = vram8(charBase + (mapData << 6) + uint((localY & 0x700) >> 5) + uint((localX & 0x700) >> 8));\n"
-	"			}\n"
-
-	"			if (pixelData == 0u || (row & 0xFE000000u) == 0u) {\n"
-	"				continue;\n"
-	"			}\n"
-	"			uint color = color555(texelFetch(palettes, ivec2(int(paletteData | pixelData), paletteRow), 0).r);\n"
-	"			bool reblend = (row & (FLAG_IS_BACKGROUND | FLAG_REBLEND)) == FLAG_REBLEND;\n"
-	"			if (!objwinEnable) {\n"
-	"				if (bgVariant && !reblend) {\n"
-	"					color = variant(color, effect, bldy);\n"
-	"				}\n"
-	"				if ((flags & FLAG_TARGET_2) != 0u) {\n"
-	"					row = blendNoObjwin(blda, bldb, color | flags, row);\n"
-	"				} else {\n"
-	"					row = noBlendNoObjwin(color | flags, row);\n"
-	"				}\n"
-	"			} else if (objwinForceEnable || ((row & FLAG_OBJWIN) == 0u) == objwinOnly) {\n"
-	"				uint mergedFlags = flags;\n"
-	"				if ((row & FLAG_OBJWIN) != 0u) {\n"
-	"					mergedFlags = objwinFlags;\n"
-	"					if (objwinVariant) {\n"
-	"						color = variant(color, effect, bldy);\n"
-	"					}\n"
-	"				} else if (bgVariant && !reblend) {\n"
-	"					color = variant(color, effect, bldy);\n"
-	"				}\n"
-	"				if ((flags & FLAG_TARGET_2) != 0u) {\n"
-	"					row = blendObjwin(blda, bldb, color | mergedFlags, row);\n"
-	"				} else {\n"
-	"					row = noBlendObjwin(color | mergedFlags, row);\n"
-	"				}\n"
-	"			}\n"
-	"		}\n"
-	"	}\n"
-
-	"	if ((bit(head, 18) || anyTarget1) && bit(head, 22)) {\n"
-	"		if ((row & FLAG_TARGET_1) != 0u) {\n"
-	"			uint color = color555(texelFetch(palettes, ivec2(0, paletteRow), 0).r);\n"
-	"			if (bit(head, 20) && brightness && winBlend) {\n"
-	"				color = variant(color, effect, bldy);\n"
-	"			}\n"
-	"			row = mix5(bldb, color, blda, row);\n"
-	"		}\n"
-	"	}\n"
-	"	if (bit(head, 18) && brightness) {\n"
-	"		uint mask = FLAG_REBLEND | FLAG_IS_BACKGROUND;\n"
-	"		uint match = FLAG_REBLEND;\n"
-	"		bool apply = true;\n"
-	"		if (objwinEnable && objwinBlend != winBlend) {\n"
-	"			mask |= FLAG_OBJWIN;\n"
-	"			if (objwinBlend) {\n"
-	"				match |= FLAG_OBJWIN;\n"
-	"			}\n"
-	"		} else if (!winBlend) {\n"
-	"			apply = false;\n"
-	"		}\n"
-	"		if (apply && (row & mask) == match) {\n"
-	"			row = variant(row, effect, bldy);\n"
-	"		}\n"
-	"	}\n"
-	"	return row & 0xFFFFu;\n"
-	"}\n"
-
-	"void main() {\n"
+static const char* const _fragmentMain =
+	"\nvoid main() {\n"
 	"	ivec2 position = ivec2(gl_FragCoord.xy);\n"
-	"	uint color = pixel(position.x, 159 - position.y);\n"
+	"	uint color = batchPixel(position.x, 159 - position.y);\n"
 	"	uvec3 rgb = uvec3(color >> 11, (color >> 6) & 0x1Fu, color & 0x1Fu);\n"
 	"	outColor = vec4(vec3((rgb << 3) | (rgb >> 2)) / 255.0, 1.0);\n"
 	"}\n";
@@ -804,38 +185,59 @@ static void _texture(struct GBAVideoBatchGL* gl, int unit, int internalFormat, i
 	gl->TexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, NULL);
 }
 
+// The shader for one set of features, compiled the first time a frame needs it
+static unsigned _program(struct GBAVideoBatchGL* gl, unsigned features) {
+	if (gl->programs[features]) {
+		return gl->programs[features];
+	}
+	static const char* const names[] = { "OBJWIN", "MOSAIC", "AFFINE_SPRITES", "AFFINE_BG", "BRIGHTNESS", "BLEND", "WINDOWS" };
+	char defines[512] = "";
+	size_t used = 0;
+	unsigned i;
+	for (i = 0; i < sizeof(names) / sizeof(*names); ++i) {
+		used += snprintf(&defines[used], sizeof(defines) - used, "#define FEATURE_%s %s\n", names[i], features & (1 << i) ? "true" : "false");
+	}
+	size_t length = strlen(_fragmentPrelude) + used + strlen(_fragmentShared) + strlen(_fragmentMain) + 1;
+	char* source = malloc(length);
+	snprintf(source, length, "%s%s%s%s", _fragmentPrelude, defines, _fragmentShared, _fragmentMain);
+	unsigned vertex = _compile(gl, GL_VERTEX_SHADER, _vertexShader);
+	unsigned fragment = _compile(gl, GL_FRAGMENT_SHADER, source);
+	free(source);
+	if (!vertex || !fragment) {
+		return 0;
+	}
+	unsigned program = gl->CreateProgram();
+	gl->AttachShader(program, vertex);
+	gl->AttachShader(program, fragment);
+	gl->LinkProgram(program);
+	gl->DeleteShader(vertex);
+	gl->DeleteShader(fragment);
+	int ok = 0;
+	gl->GetProgramiv(program, GL_LINK_STATUS, &ok);
+	if (!ok) {
+		char log[1024];
+		gl->GetProgramInfoLog(program, sizeof(log), NULL, log);
+		mLOG(GBA_VIDEO, ERROR, "Batch renderer program: %s", log);
+		gl->DeleteProgram(program);
+		return 0;
+	}
+	gl->UseProgram(program);
+	static const char* const samplers[TEX_MAX] = { "vram", "lines", "palettes", "sprites", "lists" };
+	for (i = 0; i < TEX_MAX; ++i) {
+		gl->Uniform1i(gl->GetUniformLocation(program, samplers[i]), i);
+	}
+	gl->programs[features] = program;
+	return program;
+}
+
 bool GBAVideoBatchRendererInitGL(struct GBAVideoBatchRenderer* batch, void* (*getProc)(const char*), uintptr_t (*getFramebuffer)(void)) {
 	struct GBAVideoBatchGL* gl = calloc(1, sizeof(*gl));
 	BATCH_GL_FUNCTIONS(BATCH_GL_LOAD)
 	gl->getFramebuffer = getFramebuffer;
-
-	unsigned vertex = _compile(gl, GL_VERTEX_SHADER, _vertexShader);
-	unsigned fragment = _compile(gl, GL_FRAGMENT_SHADER, _fragmentShader);
-	if (!vertex || !fragment) {
+	// The shader that does everything, and the one most frames need
+	if (!_program(gl, BATCH_FEATURE_ALL) || !_program(gl, 0)) {
 		free(gl);
 		return false;
-	}
-	gl->program = gl->CreateProgram();
-	gl->AttachShader(gl->program, vertex);
-	gl->AttachShader(gl->program, fragment);
-	gl->LinkProgram(gl->program);
-	gl->DeleteShader(vertex);
-	gl->DeleteShader(fragment);
-	int ok = 0;
-	gl->GetProgramiv(gl->program, GL_LINK_STATUS, &ok);
-	if (!ok) {
-		char log[1024];
-		gl->GetProgramInfoLog(gl->program, sizeof(log), NULL, log);
-		mLOG(GBA_VIDEO, ERROR, "Batch renderer program: %s", log);
-		gl->DeleteProgram(gl->program);
-		free(gl);
-		return false;
-	}
-	gl->UseProgram(gl->program);
-	static const char* const names[TEX_MAX] = { "vram", "lines", "palettes", "sprites", "lists" };
-	int i;
-	for (i = 0; i < TEX_MAX; ++i) {
-		gl->Uniform1i(gl->GetUniformLocation(gl->program, names[i]), i);
 	}
 
 	gl->GenTextures(TEX_MAX, gl->textures);
@@ -844,7 +246,7 @@ bool GBAVideoBatchRendererInitGL(struct GBAVideoBatchRenderer* batch, void* (*ge
 	_texture(gl, TEX_LINES, GL_RGBA32UI, BATCH_LINE_WORDS / 4, GBA_VIDEO_VERTICAL_PIXELS, GL_RGBA_INTEGER, GL_UNSIGNED_INT);
 	_texture(gl, TEX_PALETTES, GL_R16UI, 512, GBA_VIDEO_VERTICAL_PIXELS, GL_RED_INTEGER, GL_UNSIGNED_SHORT);
 	_texture(gl, TEX_SPRITES, GL_RGBA32UI, 256, GBA_VIDEO_VERTICAL_PIXELS, GL_RGBA_INTEGER, GL_UNSIGNED_INT);
-	_texture(gl, TEX_LISTS, GL_R8UI, 128, GBA_VIDEO_VERTICAL_PIXELS, GL_RED_INTEGER, GL_UNSIGNED_BYTE);
+	_texture(gl, TEX_LISTS, GL_RGBA16UI, 32, GBA_VIDEO_VERTICAL_PIXELS, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT);
 	gl->GenVertexArrays(1, &gl->vao);
 
 	batch->gl = gl;
@@ -859,7 +261,12 @@ void GBAVideoBatchRendererDeinitGL(struct GBAVideoBatchRenderer* batch) {
 	}
 	gl->DeleteTextures(TEX_MAX, gl->textures);
 	gl->DeleteVertexArrays(1, &gl->vao);
-	gl->DeleteProgram(gl->program);
+	unsigned i;
+	for (i = 0; i <= BATCH_FEATURE_ALL; ++i) {
+		if (gl->programs[i]) {
+			gl->DeleteProgram(gl->programs[i]);
+		}
+	}
 	free(gl);
 	batch->gl = NULL;
 }
@@ -895,7 +302,7 @@ void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int en
 	_unpack(gl, TEX_LINES);
 	gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, startY, BATCH_LINE_WORDS / 4, endY - startY, GL_RGBA_INTEGER, GL_UNSIGNED_INT, batch->lines[startY]);
 	_unpack(gl, TEX_LISTS);
-	gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, startY, 128, endY - startY, GL_RED_INTEGER, GL_UNSIGNED_BYTE, batch->spriteLists[startY]);
+	gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, startY, 32, endY - startY, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT, batch->spriteLists[startY]);
 	if (batch->nPalettes > gl->nPalettes) {
 		_unpack(gl, TEX_PALETTES);
 		gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, gl->nPalettes, 512, batch->nPalettes - gl->nPalettes, GL_RED_INTEGER, GL_UNSIGNED_SHORT, batch->palettes[gl->nPalettes]);
@@ -913,8 +320,17 @@ void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int en
 		gl->BindTexture(GL_TEXTURE_2D, gl->textures[i]);
 		gl->BindSampler(i, 0);
 	}
+	unsigned features = 0;
+	int y;
+	for (y = startY; y < endY; ++y) {
+		features |= batch->features[y];
+	}
+	unsigned program = _program(gl, features);
+	if (!program) {
+		program = gl->programs[BATCH_FEATURE_ALL];
+	}
 	gl->BindFramebuffer(GL_FRAMEBUFFER, gl->getFramebuffer());
-	gl->UseProgram(gl->program);
+	gl->UseProgram(program);
 	gl->BindVertexArray(gl->vao);
 	gl->Disable(GL_BLEND);
 	gl->Disable(GL_DEPTH_TEST);
@@ -925,8 +341,18 @@ void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* batch, int startY, int en
 	gl->Viewport(0, 0, GBA_VIDEO_HORIZONTAL_PIXELS, GBA_VIDEO_VERTICAL_PIXELS);
 	gl->Enable(GL_SCISSOR_TEST);
 	gl->Scissor(0, GBA_VIDEO_VERTICAL_PIXELS - endY, GBA_VIDEO_HORIZONTAL_PIXELS, endY - startY);
-	gl->DrawArrays(GL_TRIANGLES, 0, 3);
+	static int repeat = -1;
+	if (repeat < 0) {
+		repeat = getenv("ARMGBA_BATCH_REPEAT") ? atoi(getenv("ARMGBA_BATCH_REPEAT")) : 1;
+	}
+	for (i = 0; i < repeat; ++i) {
+		gl->DrawArrays(GL_TRIANGLES, 0, 3);
+	}
 	gl->Disable(GL_SCISSOR_TEST);
+}
+
+void GBAVideoBatchGLFinish(struct GBAVideoBatchRenderer* batch) {
+	batch->gl->Finish();
 }
 
 void GBAVideoBatchGLStartFrame(struct GBAVideoBatchRenderer* batch) {

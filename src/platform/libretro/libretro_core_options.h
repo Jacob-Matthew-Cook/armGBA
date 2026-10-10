@@ -338,6 +338,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
    },
 #endif
    {
+      "mgba_gpu_renderer",
+      "GPU Rendering (GBA)",
+      NULL,
+      "Draw each frame on the GPU with OpenGL ES 3, freeing the CPU. The picture matches software rendering. Needs a GL video driver; replaces threaded rendering. Applies on content load.",
+      NULL,
+      "performance",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled"
+   },
+   {
       "mgba_idle_optimization",
       "Idle Loop Removal",
       NULL,

@@ -10,46 +10,39 @@
 #include <mgba/internal/gba/gba.h>
 #include <mgba/internal/gba/renderers/common.h>
 
-// One scanline as the pixel function reads it
+// One scanline as the pixel function reads it, in texels of four words:
+// 0: segment ends, head, blend and rows, sprite count, mosaic and object window
+// 1 + 2s, 2 + 2s: window segment s and the backgrounds it draws, front to back
+// 11 + i: where background i reads this line
 enum {
-	L_HEAD = 0,
-	L_BLEND,
-	L_WINDOWS,
-	L_ROWS,
-	L_SEGMENT,
-	L_BG = 12,
+	L_ENDS = 0,
+	L_HEAD,
+	L_MISC,
+	L_OBJ,
+	L_PROGRAM = 4,
+	L_PARAMS = 44,
 };
 
-enum {
-	BG_CONTROL = 0,
-	BG_OFFSET,
-	BG_SX,
-	BG_SY,
-	BG_D,
-	BG_DM,
-	BG_WORDS = 8
-};
-
-#define HEAD_EFFECT(H) (((H) >> 16) & 3)
 #define HEAD_FORCE_TARGET_1 0x00040000
 #define HEAD_TARGET_1_OBJ 0x00080000
 #define HEAD_TARGET_1_BD 0x00100000
 #define HEAD_TARGET_2_OBJ 0x00200000
 #define HEAD_TARGET_2_BD 0x00400000
 #define HEAD_BLANK 0x00800000
-#define HEAD_SPRITES(H) ((H) >> 24)
+#define HEAD_TARGET_2_ANY 0x01000000
+#define HEAD_TARGET_1_ANY 0x02000000
 
-#define CONTROL_ENABLED 0x1
-#define CONTROL_PRESENT 0x2
-#define CONTROL_PRIORITY(C) (((C) >> 2) & 3)
-#define CONTROL_CHAR_BASE(C) ((((C) >> 4) & 3) << 14)
-#define CONTROL_SCREEN_BASE(C) ((((C) >> 6) & 0x1F) << 11)
-#define CONTROL_SIZE(C) (((C) >> 11) & 3)
-#define CONTROL_256 0x2000
-#define CONTROL_MOSAIC 0x4000
-#define CONTROL_OVERFLOW 0x8000
-#define CONTROL_TARGET_1 0x10000
-#define CONTROL_TARGET_2 0x20000
+static unsigned _stats[8];
+
+#include <time.h>
+static double _timing[4];
+static bool _timed;
+
+static inline double _now(void) {
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return t.tv_sec + t.tv_nsec * 1e-9;
+}
 
 static void GBAVideoBatchRendererInit(struct GBAVideoRenderer* renderer);
 static void GBAVideoBatchRendererReset(struct GBAVideoRenderer* renderer);
@@ -68,6 +61,7 @@ static void GBAVideoBatchRendererPutPixels(struct GBAVideoRenderer* renderer, si
 
 void GBAVideoBatchRendererCreate(struct GBAVideoBatchRenderer* renderer) {
 	memset(renderer, 0, sizeof(*renderer));
+	_timed = getenv("ARMGBA_BATCH_TIME");
 	renderer->d.init = GBAVideoBatchRendererInit;
 	renderer->d.reset = GBAVideoBatchRendererReset;
 	renderer->d.deinit = GBAVideoBatchRendererDeinit;
@@ -197,590 +191,60 @@ static void GBAVideoBatchRendererWritePalette(struct GBAVideoRenderer* renderer,
 	}
 }
 
-static inline unsigned _color(uint16_t value) {
-	return mColorFrom555(value);
+// The pixel function the shader runs, compiled as C
+typedef unsigned int uint;
+typedef struct {
+	uint x, y, z, w;
+} uvec4;
+
+static const struct GBAVideoBatchRenderer* _frame;
+
+static inline uvec4 _fetch4(const uint32_t* words) {
+	uvec4 v = { words[0], words[1], words[2], words[3] };
+	return v;
 }
 
-static inline unsigned _variant(unsigned color, int effect, int bldy) {
-	if (effect == BLEND_BRIGHTEN) {
-		return _brighten(color, bldy);
-	}
-	if (effect == BLEND_DARKEN) {
-		return _darken(color, bldy);
-	}
-	return color;
+static inline uvec4 _fetchList(int y, int texel) {
+	const uint16_t* entries = &_frame->spriteLists[y][texel * 4];
+	uvec4 v = { entries[0], entries[1], entries[2], entries[3] };
+	return v;
 }
 
-static inline uint32_t _batchBlendObjwin(unsigned blda, unsigned bldb, uint32_t color, uint32_t current) {
-	if (color >= current) {
-		if (current & FLAG_TARGET_1 && color & FLAG_TARGET_2) {
-			return mColorMix5Bit(blda, current, bldb, color);
-		}
-		return current & (0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN);
-	}
-	return (color & ~FLAG_TARGET_2) | (current & FLAG_OBJWIN);
-}
-
-static inline uint32_t _batchBlendNoObjwin(unsigned blda, unsigned bldb, uint32_t color, uint32_t current) {
-	if (color >= current) {
-		if (current & FLAG_TARGET_1 && color & FLAG_TARGET_2) {
-			return mColorMix5Bit(blda, current, bldb, color);
-		}
-		return current & (0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN);
-	}
-	return color & ~FLAG_TARGET_2;
-}
-
-static inline uint32_t _batchNoBlendObjwin(uint32_t color, uint32_t current) {
-	if (color < current) {
-		return color | (current & FLAG_OBJWIN);
-	}
-	return current & (0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN);
-}
-
-static inline uint32_t _batchNoBlendNoObjwin(uint32_t color, uint32_t current) {
-	if (color >= current) {
-		return current & (0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN);
-	}
-	return color;
-}
-
-#define VRAM16(B, A) ((B)->vram[(A) >> 1])
-#define VRAM8(B, A) ((uint8_t) (VRAM16(B, A) >> (((A) & 1) << 3)))
-
-// Everything the software renderer works out for one pixel, in the order it draws
-static mColor _pixel(const struct GBAVideoBatchRenderer* batch, int x, int y) {
-	const uint32_t* line = batch->lines[y];
-	uint32_t head = line[L_HEAD];
-	if (head & HEAD_BLANK) {
-		return M_COLOR_WHITE;
-	}
-	GBARegisterDISPCNT dispcnt = head;
-	int mode = GBARegisterDISPCNTGetMode(dispcnt);
-	int effect = HEAD_EFFECT(head);
-	unsigned blda = line[L_BLEND] & 0x1F;
-	unsigned bldb = (line[L_BLEND] >> 5) & 0x1F;
-	int bldy = (line[L_BLEND] >> 10) & 0x1F;
-	GBAMosaicControl mosaic = line[L_BLEND] >> 16;
-	const uint16_t* palette = batch->palettes[line[L_ROWS] & 0xFFFF];
-	bool target1Obj = head & HEAD_TARGET_1_OBJ;
-	bool brightness = effect == BLEND_BRIGHTEN || effect == BLEND_DARKEN;
-
-	int nWindows = line[L_WINDOWS] & 0xFF;
-	GBAWindowControl objwin = line[L_WINDOWS] >> 8;
-	int objwinPriority = (int8_t) (line[L_WINDOWS] >> 16);
-	int start = 0;
-	int w;
-	uint32_t segment = line[L_SEGMENT];
-	for (w = 0; w < nWindows - 1 && x >= (int) (segment & 0xFF); ++w) {
-		start = segment & 0xFF;
-		segment = line[L_SEGMENT + w + 1];
-	}
-	int end = segment & 0xFF;
-	GBAWindowControl control = segment >> 8;
-	int controlPriority = (int8_t) (segment >> 16);
-	bool objwinEnable = GBARegisterDISPCNTIsObjwinEnable(dispcnt);
-	bool winBlend = GBAWindowControlIsBlendEnable(control);
-	bool objwinBlend = GBAWindowControlIsBlendEnable(objwin);
-
-	bool target2 = head & HEAD_TARGET_2_BD;
-	bool anyTarget1 = false;
-	int i;
-	for (i = 0; i < 4; ++i) {
-		uint32_t bg = line[L_BG + i * BG_WORDS + BG_CONTROL];
-		if ((bg & CONTROL_TARGET_2) && (bg & CONTROL_PRESENT)) {
-			target2 = true;
-		}
-		if (bg & CONTROL_TARGET_1) {
-			anyTarget1 = true;
-		}
-	}
-
-	unsigned backdrop = _color(palette[0]);
-	if ((head & HEAD_TARGET_1_BD) && brightness && winBlend) {
-		backdrop = _variant(backdrop, effect, bldy);
-	}
-	uint32_t row = FLAG_UNWRITTEN | FLAG_PRIORITY | FLAG_IS_BACKGROUND | backdrop;
-	uint32_t spriteLayer = FLAG_UNWRITTEN;
-
-	if (GBARegisterDISPCNTIsObjEnable(dispcnt) && (GBAWindowControlIsObjEnable(control) || objwinEnable)) {
-		const uint8_t* list = batch->spriteLists[y];
-		const uint32_t (*sprites)[BATCH_SPRITE_WORDS] = batch->sprites[line[L_ROWS] >> 16];
-		int mosaicV = GBAMosaicControlGetObjV(mosaic) + 1;
-		int mosaicY = y - (y % mosaicV);
-		int n = HEAD_SPRITES(head);
-		for (i = 0; i < n; ++i) {
-			const uint32_t* sprite = sprites[list[i]];
-			GBAObjAttributesA a = sprite[0];
-			GBAObjAttributesB b = sprite[0] >> 16;
-			GBAObjAttributesC c = sprite[1];
-			int spriteY = (int16_t) sprite[2];
-			int spriteEndY = (int16_t) (sprite[2] >> 16);
-			int localY = y;
-			if (GBAObjAttributesAIsMosaic(a) && mosaicV > 1) {
-				localY = mosaicY;
-				if (localY < spriteY && spriteY < GBA_VIDEO_VERTICAL_PIXELS) {
-					localY = spriteY;
-				}
-				if (localY >= (spriteEndY & 0xFF)) {
-					localY = spriteEndY - 1;
-				}
-			}
-
-			int width = GBAVideoObjSizes[GBAObjAttributesAGetShape(a) * 4 + GBAObjAttributesBGetSize(b)][0];
-			int height = GBAVideoObjSizes[GBAObjAttributesAGetShape(a) * 4 + GBAObjAttributesBGetSize(b)][1];
-			uint32_t flags = GBAObjAttributesCGetPriority(c) << OFFSET_PRIORITY;
-			flags |= FLAG_TARGET_1 * ((winBlend && target1Obj && effect == BLEND_ALPHA) || GBAObjAttributesAGetMode(a) == OBJ_MODE_SEMITRANSPARENT);
-			flags |= FLAG_OBJWIN * (GBAObjAttributesAGetMode(a) == OBJ_MODE_OBJWIN);
-			if ((flags & FLAG_OBJWIN) && controlPriority < objwinPriority) {
-				continue;
-			}
-			int32_t spriteX = (uint32_t) GBAObjAttributesBGetX(b) << 23;
-			spriteX >>= 23;
-			unsigned align = GBAObjAttributesAIs256Color(a) && !GBARegisterDISPCNTIsObjCharacterMapping(dispcnt);
-			unsigned charBase = (GBAObjAttributesCGetTile(c) & ~align) * 0x20;
-			unsigned maskLo = GBARegisterDISPCNTIsObjCharacterMapping(dispcnt) ? 0x7FFE : 0x3FE;
-			unsigned maskHi = GBARegisterDISPCNTIsObjCharacterMapping(dispcnt) ? 0 : charBase & 0x7C00;
-			if (mode >= 3 && GBAObjAttributesCGetTile(c) < 512) {
-				continue;
-			}
-			bool objwinSlowPath = objwinEnable && objwinBlend != winBlend;
-			bool variant = target1Obj && winBlend && brightness;
-			if (GBAObjAttributesAGetMode(a) == OBJ_MODE_SEMITRANSPARENT || (target1Obj && effect == BLEND_ALPHA) || objwinSlowPath) {
-				if (target2) {
-					flags |= FLAG_REBLEND;
-					variant = false;
-				} else {
-					flags &= ~FLAG_TARGET_1;
-				}
-			}
-			bool objwinVariant = variant && objwinBlend;
-			unsigned paletteBase = 0x100;
-			if (!GBAObjAttributesAIs256Color(a)) {
-				paletteBase += GBAObjAttributesCGetPalette(c) << 4;
-			}
-			int inY = localY - (int) GBAObjAttributesAGetY(a);
-			int stride = GBARegisterDISPCNTIsObjCharacterMapping(dispcnt) ? (width >> !GBAObjAttributesAIs256Color(a)) : 0x80;
-
-			int localX;
-			int tileY;
-			if (GBAObjAttributesAIsTransformed(a)) {
-				int totalWidth = width << GBAObjAttributesAGetDoubleSize(a);
-				int totalHeight = height << GBAObjAttributesAGetDoubleSize(a);
-				int pa = (int16_t) sprite[3];
-				int pb = (int16_t) (sprite[3] >> 16);
-				int pc = (int16_t) sprite[4];
-				int pd = (int16_t) (sprite[4] >> 16);
-				if (inY < 0) {
-					inY += 256;
-				}
-				int outX = spriteX >= start ? spriteX : start;
-				int condition = spriteX + totalWidth;
-				int inX = outX - spriteX;
-				if (end < condition) {
-					condition = end;
-				}
-				int mosaicH = 1;
-				if (GBAObjAttributesAIsMosaic(a)) {
-					mosaicH = GBAMosaicControlGetObjH(mosaic) + 1;
-					if (condition != end && condition % mosaicH) {
-						condition += mosaicH - (condition % mosaicH);
-					}
-				}
-				int xAccum = pa * (inX - 1 - (totalWidth >> 1)) + pb * (inY - (totalHeight >> 1)) + (width << 7);
-				int yAccum = pc * (inX - 1 - (totalWidth >> 1)) + pd * (inY - (totalHeight >> 1)) + (height << 7);
-				if (pa) {
-					int32_t skip = 0;
-					if ((xAccum >> 8) < 0) {
-						skip = (-xAccum - 1) / pa;
-					} else if ((xAccum >> 8) >= width) {
-						skip = ((width << 8) - xAccum) / pa;
-					}
-					xAccum += pa * skip;
-					yAccum += pc * skip;
-					outX += skip;
-				}
-				if (pc) {
-					int32_t skip = 0;
-					if ((yAccum >> 8) < 0) {
-						skip = (-yAccum - 1) / pc;
-					} else if ((yAccum >> 8) >= height) {
-						skip = ((height << 8) - yAccum) / pc;
-					}
-					xAccum += pa * skip;
-					yAccum += pc * skip;
-					outX += skip;
-				}
-				if (outX < start || outX >= condition || x < outX || x >= condition) {
-					continue;
-				}
-				unsigned widthMask = ~(width - 1);
-				unsigned heightMask = ~(height - 1);
-				int step;
-				if ((flags & FLAG_OBJWIN) || mosaicH <= 1) {
-					// Drawing stops at the first pixel outside the sprite
-					if (((xAccum + pa) >> 8) & widthMask || ((yAccum + pc) >> 8) & heightMask) {
-						continue;
-					}
-					step = x - outX + 1;
-				} else {
-					int sampleX = x - (x % mosaicH);
-					step = sampleX >= outX ? sampleX - outX + 1 : 0;
-				}
-				localX = (xAccum + pa * step) >> 8;
-				tileY = (yAccum + pc * step) >> 8;
-				if (localX & widthMask || tileY & heightMask) {
-					continue;
-				}
-			} else {
-				int outX = spriteX >= start ? spriteX : start;
-				int condition = spriteX + width;
-				int mosaicH = 1;
-				if (GBAObjAttributesAIsMosaic(a)) {
-					mosaicH = GBAMosaicControlGetObjH(mosaic) + 1;
-					if (condition % mosaicH) {
-						condition += mosaicH - (condition % mosaicH);
-					}
-				}
-				if ((int) GBAObjAttributesAGetY(a) + height - 256 >= 0) {
-					inY += 256;
-				}
-				if (GBAObjAttributesBIsVFlip(b)) {
-					inY = height - inY - 1;
-				}
-				if (end < condition) {
-					condition = end;
-				}
-				if (x < outX || x >= condition) {
-					continue;
-				}
-				int inX = x - spriteX;
-				int xOffset = 1;
-				if (GBAObjAttributesBIsHFlip(b)) {
-					inX = width - inX - 1;
-					xOffset = -1;
-				}
-				localX = inX;
-				if (!(flags & FLAG_OBJWIN) && mosaicH > 1) {
-					localX = inX - xOffset * (x % mosaicH);
-					if (localX < 0) {
-						localX = 0;
-					} else if (localX > width - 1) {
-						localX = width - 1;
-					}
-				}
-				tileY = inY;
-			}
-
-			unsigned tileData;
-			if (!GBAObjAttributesAIs256Color(a)) {
-				unsigned xBase = (localX & ~0x7) * 4 + ((localX >> 1) & 2);
-				unsigned yBase = (tileY & ~0x7) * stride + (tileY & 0x7) * 4 + maskHi;
-				tileData = VRAM16(batch, BASE_TILE + ((yBase + ((xBase + charBase) & maskLo)) & 0x7FFE));
-				tileData = (tileData >> ((localX & 3) << 2)) & 0xF;
-			} else {
-				unsigned xBase = (localX & ~0x7) * 8 + (localX & 6);
-				unsigned yBase = (tileY & ~0x7) * stride + (tileY & 0x7) * 8 + maskHi;
-				tileData = VRAM16(batch, BASE_TILE + ((yBase + ((xBase + charBase) & maskLo)) & 0x7FFE));
-				tileData = (tileData >> ((localX & 1) << 3)) & 0xFF;
-			}
-
-			uint32_t current = spriteLayer;
-			uint32_t reordered = (current & ~(FLAG_ORDER_MASK | FLAG_REBLEND | FLAG_TARGET_1)) | (flags & (FLAG_ORDER_MASK | FLAG_REBLEND | FLAG_TARGET_1));
-			if (flags & FLAG_OBJWIN) {
-				if (tileData) {
-					row |= FLAG_OBJWIN;
-				} else if (current != FLAG_UNWRITTEN && (current & FLAG_ORDER_MASK) > flags) {
-					spriteLayer = reordered;
-				}
-			} else if ((current & FLAG_ORDER_MASK) > flags) {
-				if (tileData) {
-					unsigned color = _color(palette[paletteBase + tileData]);
-					if ((objwinSlowPath && (row & FLAG_OBJWIN)) ? objwinVariant : variant) {
-						color = _variant(color, effect, bldy);
-					}
-					spriteLayer = color | flags;
-				} else if (current != FLAG_UNWRITTEN) {
-					spriteLayer = reordered;
-				}
-			}
-		}
-	}
-
-	unsigned priority;
-	for (priority = 0; priority < 4; ++priority) {
-		uint32_t sprite = spriteLayer & ~FLAG_OBJWIN;
-		if ((sprite & FLAG_UNWRITTEN) != FLAG_UNWRITTEN && (sprite & FLAG_PRIORITY) >> OFFSET_PRIORITY == priority) {
-			sprite |= FLAG_TARGET_2 * !!(head & HEAD_TARGET_2_OBJ);
-			if (objwinEnable) {
-				bool objwinDisable = !GBAWindowControlIsObjEnable(objwin);
-				bool objwinOnly = !objwinDisable && !GBAWindowControlIsObjEnable(control);
-				if (objwinDisable && !GBAWindowControlIsObjEnable(control)) {
-					// Not drawn in this window
-				} else if (objwinDisable ? !(row & FLAG_OBJWIN) : (!objwinOnly || (row & FLAG_OBJWIN))) {
-					row = _batchBlendObjwin(blda, bldb, sprite, row);
-				}
-			} else if (GBAWindowControlIsObjEnable(control)) {
-				row = _batchBlendNoObjwin(blda, bldb, sprite, row);
-			}
-		}
-
-		int index;
-		for (index = 0; index < 4; ++index) {
-			const uint32_t* bg = &line[L_BG + index * BG_WORDS];
-			uint32_t bgControl = bg[BG_CONTROL];
-			if (!(bgControl & CONTROL_ENABLED) || CONTROL_PRIORITY(bgControl) != priority) {
-				continue;
-			}
-			bool windowed = control & (1 << index);
-			bool objwinBg = objwin & (1 << index);
-			if (!windowed && !(objwinEnable && objwinBg)) {
-				continue;
-			}
-			int bgMode;
-			if (index < 2) {
-				if (mode >= 2) {
-					continue;
-				}
-				bgMode = 0;
-			} else if (index == 2) {
-				if (mode > 5) {
-					continue;
-				}
-				bgMode = mode == 1 ? 2 : mode;
-			} else {
-				if (mode != 0 && mode != 2) {
-					continue;
-				}
-				bgMode = mode;
-			}
-
-			bool target1 = bgControl & CONTROL_TARGET_1;
-			uint32_t flags = (priority << OFFSET_PRIORITY) | (index << OFFSET_INDEX) | FLAG_IS_BACKGROUND;
-			if (bgControl & CONTROL_TARGET_2) {
-				flags |= FLAG_TARGET_2;
-			}
-			uint32_t objwinFlags = flags;
-			if (effect == BLEND_ALPHA) {
-				if (blda == 0x10 && bldb == 0) {
-					flags &= ~FLAG_TARGET_2;
-					objwinFlags &= ~FLAG_TARGET_2;
-				} else if (target1) {
-					if (winBlend) {
-						flags |= FLAG_TARGET_1;
-					}
-					if (objwinBlend) {
-						objwinFlags |= FLAG_TARGET_1;
-					}
-				}
-			}
-			bool variant = target1 && winBlend && brightness;
-			bool objwinVariant = objwinEnable && target1 && objwinBlend && brightness;
-			bool objwinForceEnable = objwinBg && windowed;
-			bool objwinOnly = !objwinBg;
-
-			if (bgMode == 3 || bgMode == 5) {
-				// Direct color: no transparency, always composited
-				int32_t sx = bg[BG_SX];
-				int32_t sy = bg[BG_SY];
-				int dx = (int16_t) bg[BG_D];
-				int dy = (int16_t) (bg[BG_D] >> 16);
-				int sampleX = x;
-				if (bgControl & CONTROL_MOSAIC) {
-					int mosaicV = GBAMosaicControlGetBgV(mosaic) + 1;
-					int mosaicH = GBAMosaicControlGetBgH(mosaic) + 1;
-					sx -= (y % mosaicV) * (int16_t) bg[BG_DM];
-					sy -= (y % mosaicV) * (int16_t) (bg[BG_DM] >> 16);
-					sampleX = x - (x % mosaicH);
-				}
-				int32_t localX = sx + sampleX * dx;
-				int32_t localY = sy + sampleX * dy;
-				int width = bgMode == 3 ? GBA_VIDEO_HORIZONTAL_PIXELS : 160;
-				int height = bgMode == 3 ? GBA_VIDEO_VERTICAL_PIXELS : 128;
-				if (localX < 0 || localY < 0 || (localX >> 8) >= width || (localY >> 8) >= height) {
-					continue;
-				}
-				unsigned color;
-				if (bgMode == 3) {
-					color = _color(VRAM16(batch, ((localX >> 8) + (localY >> 8) * GBA_VIDEO_HORIZONTAL_PIXELS) << 1));
-				} else {
-					uint32_t offset = GBARegisterDISPCNTIsFrameSelect(dispcnt) ? 0xA000 : 0;
-					color = _color(VRAM16(batch, offset + (localX >> 8) * 2 + (localY >> 8) * 320));
-				}
-				if (!objwinEnable || (!(row & FLAG_OBJWIN)) != objwinOnly) {
-					uint32_t mergedFlags = (row & FLAG_OBJWIN) ? objwinFlags : flags;
-					if (variant) {
-						color = _variant(color, effect, bldy);
-					}
-					row = _batchBlendObjwin(blda, bldb, color | mergedFlags, row);
-				}
-				continue;
-			}
-
-			unsigned pixelData;
-			unsigned paletteData = 0;
-			if (bgMode == 0) {
-				int sampleX = x;
-				int inY = y;
-				if (bgControl & CONTROL_MOSAIC) {
-					if (GBAMosaicControlGetBgH(mosaic)) {
-						sampleX = x - (x % (GBAMosaicControlGetBgH(mosaic) + 1));
-					}
-					inY -= inY % (GBAMosaicControlGetBgV(mosaic) + 1);
-				}
-				int inX = (sampleX + (bg[BG_OFFSET] & 0xFFFF)) & 0x1FF;
-				inY += bg[BG_OFFSET] >> 16;
-				int size = CONTROL_SIZE(bgControl);
-				unsigned yBase = inY & 0xF8;
-				if (size == 2) {
-					yBase += inY & 0x100;
-				} else if (size == 3) {
-					yBase += (inY & 0x100) << 1;
-				}
-				yBase = (CONTROL_SCREEN_BASE(bgControl) >> 1) + (yBase << 2);
-				unsigned xBase = inX & 0xF8;
-				if (size & 1) {
-					xBase += (inX & 0x100) << 5;
-				}
-				uint16_t mapData = batch->vram[yBase + (xBase >> 3)];
-				int localY = inY & 0x7;
-				if (GBA_TEXT_MAP_VFLIP(mapData)) {
-					localY = 7 - localY;
-				}
-				int column = inX & 0x7;
-				if (GBA_TEXT_MAP_HFLIP(mapData)) {
-					column = 7 - column;
-				}
-				uint32_t charBase;
-				if (!(bgControl & CONTROL_256)) {
-					charBase = CONTROL_CHAR_BASE(bgControl) + (GBA_TEXT_MAP_TILE(mapData) << 5) + (localY << 2);
-					if (charBase >= 0x10000) {
-						continue;
-					}
-					pixelData = VRAM8(batch, charBase + (column >> 1));
-					pixelData = (column & 1) ? pixelData >> 4 : pixelData & 0xF;
-					paletteData = GBA_TEXT_MAP_PALETTE(mapData) << 4;
-				} else {
-					charBase = CONTROL_CHAR_BASE(bgControl) + (GBA_TEXT_MAP_TILE(mapData) << 6) + (localY << 3);
-					if (charBase >= 0x10000) {
-						continue;
-					}
-					pixelData = VRAM8(batch, charBase + column);
-				}
-			} else {
-				int32_t sx = bg[BG_SX];
-				int32_t sy = bg[BG_SY];
-				int dx = (int16_t) bg[BG_D];
-				int dy = (int16_t) (bg[BG_D] >> 16);
-				int sampleX = x;
-				if (bgControl & CONTROL_MOSAIC) {
-					int mosaicV = GBAMosaicControlGetBgV(mosaic) + 1;
-					int mosaicH = GBAMosaicControlGetBgH(mosaic) + 1;
-					sx -= (y % mosaicV) * (int16_t) bg[BG_DM];
-					sy -= (y % mosaicV) * (int16_t) (bg[BG_DM] >> 16);
-					sampleX = x - (x % mosaicH);
-				}
-				int32_t localX = sx + sampleX * dx;
-				int32_t localY = sy + sampleX * dy;
-				if (bgMode == 4) {
-					if (localX < 0 || localY < 0 || (localX >> 8) >= GBA_VIDEO_HORIZONTAL_PIXELS || (localY >> 8) >= GBA_VIDEO_VERTICAL_PIXELS) {
-						continue;
-					}
-					uint32_t offset = GBARegisterDISPCNTIsFrameSelect(dispcnt) ? 0xA000 : 0;
-					pixelData = VRAM8(batch, offset + (localX >> 8) + (localY >> 8) * GBA_VIDEO_HORIZONTAL_PIXELS);
-					if (!pixelData || !IS_WRITABLE(row)) {
-						continue;
-					}
-					if (!objwinEnable) {
-						unsigned color = _color(palette[pixelData]);
-						if (variant) {
-							color = _variant(color, effect, bldy);
-						}
-						row = _batchBlendNoObjwin(blda, bldb, color | flags, row);
-					} else if (objwinForceEnable || (!(row & FLAG_OBJWIN)) == objwinOnly) {
-						unsigned color = _color(palette[pixelData]);
-						if ((row & FLAG_OBJWIN) ? objwinVariant : variant) {
-							color = _variant(color, effect, bldy);
-						}
-						row = _batchBlendObjwin(blda, bldb, color | ((row & FLAG_OBJWIN) ? objwinFlags : flags), row);
-					}
-					continue;
-				}
-				int32_t sizeAdjusted = 0x8000 << CONTROL_SIZE(bgControl);
-				if (bgControl & CONTROL_OVERFLOW) {
-					localX &= sizeAdjusted - 1;
-					localY &= sizeAdjusted - 1;
-				} else if ((localX | localY) & ~(sizeAdjusted - 1)) {
-					continue;
-				}
-				uint8_t mapData = VRAM8(batch, CONTROL_SCREEN_BASE(bgControl) + (localX >> 11) + (((localY >> 7) & 0x7F0) << CONTROL_SIZE(bgControl)));
-				pixelData = VRAM8(batch, CONTROL_CHAR_BASE(bgControl) + (mapData << 6) + ((localY & 0x700) >> 5) + ((localX & 0x700) >> 8));
-			}
-
-			if (!pixelData || !IS_WRITABLE(row)) {
-				continue;
-			}
-			unsigned entry = paletteData | pixelData;
-			bool reblend = (row & (FLAG_IS_BACKGROUND | FLAG_REBLEND)) == FLAG_REBLEND;
-			if (!objwinEnable) {
-				unsigned color = _color(palette[entry]);
-				if (variant && !reblend) {
-					color = _variant(color, effect, bldy);
-				}
-				if (flags & FLAG_TARGET_2) {
-					row = _batchBlendNoObjwin(blda, bldb, color | flags, row);
-				} else {
-					row = _batchNoBlendNoObjwin(color | flags, row);
-				}
-			} else if (objwinForceEnable || (!(row & FLAG_OBJWIN)) == objwinOnly) {
-				unsigned color = _color(palette[entry]);
-				uint32_t mergedFlags = flags;
-				if (row & FLAG_OBJWIN) {
-					mergedFlags = objwinFlags;
-					if (objwinVariant) {
-						color = _variant(color, effect, bldy);
-					}
-				} else if (variant && !reblend) {
-					color = _variant(color, effect, bldy);
-				}
-				if (flags & FLAG_TARGET_2) {
-					row = _batchBlendObjwin(blda, bldb, color | mergedFlags, row);
-				} else {
-					row = _batchNoBlendObjwin(color | mergedFlags, row);
-				}
-			}
-		}
-	}
-
-	if (((head & HEAD_FORCE_TARGET_1) || anyTarget1) && (head & HEAD_TARGET_2_BD)) {
-		if (row & FLAG_TARGET_1) {
-			unsigned color = _color(palette[0]);
-			if ((head & HEAD_TARGET_1_BD) && brightness && winBlend) {
-				color = _variant(color, effect, bldy);
-			}
-			row = mColorMix5Bit(bldb, color, blda, row);
-		}
-	}
-	if ((head & HEAD_FORCE_TARGET_1) && brightness) {
-		uint32_t mask = FLAG_REBLEND | FLAG_IS_BACKGROUND;
-		uint32_t match = FLAG_REBLEND;
-		bool apply = true;
-		if (objwinEnable && objwinBlend != winBlend) {
-			mask |= FLAG_OBJWIN;
-			if (objwinBlend) {
-				match |= FLAG_OBJWIN;
-			}
-		} else if (!winBlend) {
-			apply = false;
-		}
-		if (apply && (row & mask) == match) {
-			row = _variant(row, effect, bldy);
-		}
-	}
-	return row;
-}
-
-static unsigned _stats[8];
+#define BATCH_SHARED(...) __VA_ARGS__
+#define BATCH_FN static inline
+#define FEATURE_OBJWIN true
+#define FEATURE_MOSAIC true
+#define FEATURE_AFFINE_SPRITES true
+#define FEATURE_AFFINE_BG true
+#define FEATURE_BRIGHTNESS true
+#define FEATURE_BLEND true
+#define FEATURE_WINDOWS true
+#define U(X) ((uint) (X))
+#define I(X) ((int) (X))
+#define iabs(X) abs(X)
+#define FETCH_LINE(Y, T) _fetch4(&_frame->lines[Y][(T) * 4])
+#define FETCH_SPRITE(R, T) _fetch4(&_frame->sprites[R][(T) >> 1][((T) & 1) * 4])
+#define FETCH_LIST(Y, T) _fetchList(Y, T)
+#define FETCH_PAL(R, E) ((uint) _frame->palettes[R][E])
+#define FETCH_VRAM16(H) ((uint) _frame->vram[(H) < 0xC000u ? (H) : 0xBFFFu])
+#include "gba/renderers/video-batch-pixel.h"
+#undef BATCH_SHARED
+#undef BATCH_FN
+#undef FEATURE_OBJWIN
+#undef FEATURE_MOSAIC
+#undef FEATURE_AFFINE_SPRITES
+#undef FEATURE_AFFINE_BG
+#undef FEATURE_BRIGHTNESS
+#undef FEATURE_BLEND
+#undef FEATURE_WINDOWS
+#undef U
+#undef I
+#undef iabs
+#undef FETCH_LINE
+#undef FETCH_SPRITE
+#undef FETCH_LIST
+#undef FETCH_PAL
+#undef FETCH_VRAM16
 
 static void _draw(struct GBAVideoBatchRenderer* batch, int endY) {
 	if (endY > batch->drawnY) {
@@ -788,17 +252,22 @@ static void _draw(struct GBAVideoBatchRenderer* batch, int endY) {
 	}
 	if (batch->gl) {
 		if (endY > batch->drawnY) {
+			double t = _timed ? _now() : 0;
 			GBAVideoBatchGLDraw(batch, batch->drawnY, endY);
+			if (_timed) {
+				_timing[1] += _now() - t;
+			}
 		}
 		batch->drawnY = endY;
 		return;
 	}
+	_frame = batch;
 	int y;
 	for (y = batch->drawnY; y < endY; ++y) {
 		mColor* out = &batch->outputBuffer[batch->outputBufferStride * y];
 		int x;
 		for (x = 0; x < GBA_VIDEO_HORIZONTAL_PIXELS; ++x) {
-			out[x] = _pixel(batch, x, y);
+			out[x] = batchPixel(x, y);
 		}
 	}
 	batch->drawnY = endY;
@@ -808,7 +277,11 @@ static void _uploadVRAM(struct GBAVideoBatchRenderer* batch, uint32_t pages) {
 	batch->vramDirty &= ~pages;
 	if (batch->gl) {
 		_stats[1] += __builtin_popcount(pages);
+		double t = _timed ? _now() : 0;
 		GBAVideoBatchGLUploadVRAM(batch, pages);
+		if (_timed) {
+			_timing[2] += _now() - t;
+		}
 		return;
 	}
 	while (pages) {
@@ -827,16 +300,10 @@ static uint32_t _pages(uint32_t start, uint32_t size) {
 	return (2U << end) - (1U << (start >> 12));
 }
 
-static uint32_t _rowPages(const uint32_t* bg, int y, GBAMosaicControl mosaic, uint32_t base, int rowBytes, int rows) {
-	int32_t sy = bg[BG_SY];
-	int dy = (int16_t) (bg[BG_D] >> 16);
-	int dmy = (int16_t) (bg[BG_DM] >> 16);
-	int32_t first = sy;
-	int32_t last = sy + (GBA_VIDEO_HORIZONTAL_PIXELS - 1) * dy;
-	if (bg[BG_CONTROL] & CONTROL_MOSAIC) {
-		first -= (y % (GBAMosaicControlGetBgV(mosaic) + 1)) * dmy;
-		last -= (y % (GBAMosaicControlGetBgV(mosaic) + 1)) * dmy;
-	}
+// The rows of a bitmap background this line reads
+static uint32_t _rowPages(const uint32_t* params, uint32_t base, int rowBytes, int rows) {
+	int32_t first = params[1];
+	int32_t last = first + (GBA_VIDEO_HORIZONTAL_PIXELS - 1) * ((int32_t) params[2] >> 16);
 	if (first > last) {
 		int32_t swap = first;
 		first = last;
@@ -857,32 +324,18 @@ static uint32_t _rowPages(const uint32_t* bg, int y, GBAMosaicControl mosaic, ui
 }
 
 // The pages a text background line reads: its map row and the span of tiles that row names
-static uint32_t _textPages(const struct GBAVideoBatchRenderer* batch, const uint32_t* bg, int y, GBAMosaicControl mosaic) {
-	uint32_t control = bg[BG_CONTROL];
-	int inY = y;
-	if (control & CONTROL_MOSAIC) {
-		inY -= inY % (GBAMosaicControlGetBgV(mosaic) + 1);
-	}
-	inY += bg[BG_OFFSET] >> 16;
-	int size = CONTROL_SIZE(control);
-	unsigned yBase = inY & 0xF8;
-	if (size == 2) {
-		yBase += inY & 0x100;
-	} else if (size == 3) {
-		yBase += (inY & 0x100) << 1;
-	}
-	yBase = (CONTROL_SCREEN_BASE(control) >> 1) + (yBase << 2);
+static uint32_t _textPages(const struct GBAVideoBatchRenderer* batch, const uint32_t* params) {
 	uint32_t pages = 0;
 	unsigned minTile = 0x3FF;
 	unsigned maxTile = 0;
+	int inX = params[1] & 0x1F8;
 	int tile;
-	int inX = bg[BG_OFFSET] & 0x1F8;
 	for (tile = 0; tile < 31; ++tile, inX += 8) {
 		unsigned xBase = inX & 0xF8;
-		if (size & 1) {
+		if (params[1] & 0x200) {
 			xBase += (inX & 0x100) << 5;
 		}
-		unsigned address = yBase + (xBase >> 3);
+		unsigned address = params[0] + (xBase >> 3);
 		pages |= 1U << (address >> 11);
 		unsigned index = GBA_TEXT_MAP_TILE(batch->d.vram[address]);
 		if (index < minTile) {
@@ -892,9 +345,9 @@ static uint32_t _textPages(const struct GBAVideoBatchRenderer* batch, const uint
 			maxTile = index;
 		}
 	}
-	unsigned shift = control & CONTROL_256 ? 6 : 5;
-	uint32_t start = CONTROL_CHAR_BASE(control) + (minTile << shift);
-	uint32_t end = CONTROL_CHAR_BASE(control) + ((maxTile + 1) << shift);
+	unsigned shift = params[1] & 0x400 ? 6 : 5;
+	uint32_t start = params[2] + (minTile << shift);
+	uint32_t end = params[2] + ((maxTile + 1) << shift);
 	if (end > 0x10000) {
 		end = 0x10000;
 	}
@@ -904,13 +357,12 @@ static uint32_t _textPages(const struct GBAVideoBatchRenderer* batch, const uint
 	return pages;
 }
 
-// The pages a sprite on this line reads
+// The pages a sprite reads
 static uint32_t _spritePages(const struct GBAVideoBatchRenderer* batch, const uint32_t* sprite) {
 	GBAObjAttributesA a = sprite[0];
-	GBAObjAttributesB b = sprite[0] >> 16;
 	GBAObjAttributesC c = sprite[1];
-	int width = GBAVideoObjSizes[GBAObjAttributesAGetShape(a) * 4 + GBAObjAttributesBGetSize(b)][0];
-	int height = GBAVideoObjSizes[GBAObjAttributesAGetShape(a) * 4 + GBAObjAttributesBGetSize(b)][1];
+	int width = sprite[5] & 0xFF;
+	int height = (sprite[5] >> 8) & 0xFF;
 	unsigned rowBytes = (width / 8) * (GBAObjAttributesAIs256Color(a) ? 64 : 32);
 	unsigned rows = height / 8;
 	unsigned bytes;
@@ -920,86 +372,85 @@ static uint32_t _spritePages(const struct GBAVideoBatchRenderer* batch, const ui
 		bytes = (rows - 1) * 0x400 + rowBytes;
 	}
 	uint32_t start = GBAObjAttributesCGetTile(c) * 32;
-	if (start + bytes > 0x8000) {
+	if (!bytes || start + bytes > 0x8000) {
 		return _pages(BASE_TILE, 0x8000);
 	}
 	return _pages(BASE_TILE + start, bytes);
 }
 
-// The 4 KiB pages of VRAM a recorded line can read, roughly when nothing it might read is dirty
-static uint32_t _readPages(const struct GBAVideoBatchRenderer* batch, const uint32_t* line, int y, bool exact) {
-	uint32_t head = line[L_HEAD];
-	if (head & HEAD_BLANK) {
+// The 4 KiB pages of VRAM a recorded line can read, roughly or exactly
+static uint32_t _readPages(const struct GBAVideoBatchRenderer* batch, int y, bool exact) {
+	const struct GBAVideoSoftwareRenderer* sw = &batch->sw;
+	const uint32_t* line = batch->lines[y];
+	if (line[L_HEAD] & HEAD_BLANK) {
 		return 0;
 	}
-	int mode = GBARegisterDISPCNTGetMode(head);
-	GBAMosaicControl mosaic = line[L_BLEND] >> 16;
+	int mode = GBARegisterDISPCNTGetMode(sw->dispcnt);
 	uint32_t pages = 0;
-	if (HEAD_SPRITES(head)) {
+	int nSprites = line[L_OBJ] & 0xFF;
+	if (nSprites) {
 		if (!exact) {
 			pages |= mode >= 3 ? _pages(0x14000, 0x4000) : _pages(BASE_TILE, 0x8000);
 		} else {
-			const uint32_t (*sprites)[BATCH_SPRITE_WORDS] = batch->sprites[line[L_ROWS] >> 16];
+			const uint32_t (*sprites)[BATCH_SPRITE_WORDS] = batch->sprites[line[L_MISC] >> 24];
 			int i;
-			for (i = 0; i < (int) HEAD_SPRITES(head); ++i) {
-				pages |= _spritePages(batch, sprites[batch->spriteLists[y][i]]);
+			for (i = 0; i < nSprites; ++i) {
+				pages |= _spritePages(batch, sprites[batch->spriteLists[y][i] & 0xFF]);
 			}
 		}
 	}
 	int i;
 	for (i = 0; i < 4; ++i) {
-		const uint32_t* bg = &line[L_BG + i * BG_WORDS];
-		uint32_t control = bg[BG_CONTROL];
-		if (!(control & CONTROL_ENABLED)) {
+		const struct GBAVideoSoftwareBackground* bg = &sw->bg[i];
+		const uint32_t* params = &line[L_PARAMS + i * 4];
+		if (bg->enabled != ENABLED_MAX) {
 			continue;
 		}
 		if (mode >= 3) {
 			if (i != 2) {
 				continue;
 			}
-			uint32_t frame = mode != 3 && GBARegisterDISPCNTIsFrameSelect(head) ? 0xA000 : 0;
+			uint32_t frame = mode != 3 && GBARegisterDISPCNTIsFrameSelect(sw->dispcnt) ? 0xA000 : 0;
 			if (!exact) {
 				pages |= _pages(frame, mode == 3 ? 0x12C00 : mode == 4 ? 0x9600 : 0xA000);
 			} else if (mode == 3) {
-				pages |= _rowPages(bg, y, mosaic, 0, 480, GBA_VIDEO_VERTICAL_PIXELS);
+				pages |= _rowPages(params, 0, 480, GBA_VIDEO_VERTICAL_PIXELS);
 			} else if (mode == 4) {
-				pages |= _rowPages(bg, y, mosaic, frame, 240, GBA_VIDEO_VERTICAL_PIXELS);
+				pages |= _rowPages(params, frame, 240, GBA_VIDEO_VERTICAL_PIXELS);
 			} else {
-				pages |= _rowPages(bg, y, mosaic, frame, 320, 128);
+				pages |= _rowPages(params, frame, 320, 128);
 			}
-		} else if ((i < 2 && mode != 2) || mode == 0) {
+		} else if (i < 2 ? mode != 2 : mode == 0) {
 			if (exact) {
-				pages |= _textPages(batch, bg, y, mosaic);
+				pages |= _textPages(batch, params);
 				continue;
 			}
 			static const uint32_t screenSize[4] = { 0x800, 0x1000, 0x1000, 0x2000 };
-			pages |= _pages(CONTROL_SCREEN_BASE(control), screenSize[CONTROL_SIZE(control)]);
-			uint32_t charSize = control & CONTROL_256 ? 0x10000 : 0x8000;
-			if (CONTROL_CHAR_BASE(control) + charSize > 0x10000) {
-				charSize = 0x10000 - CONTROL_CHAR_BASE(control);
+			pages |= _pages(bg->screenBase, screenSize[bg->size]);
+			uint32_t charSize = bg->multipalette ? 0x10000 : 0x8000;
+			if (bg->charBase + charSize > 0x10000) {
+				charSize = 0x10000 - bg->charBase;
 			}
-			pages |= _pages(CONTROL_CHAR_BASE(control), charSize);
+			pages |= _pages(bg->charBase, charSize);
 		} else if (i >= 2) {
-			pages |= _pages(CONTROL_SCREEN_BASE(control), 0x100 << (2 * CONTROL_SIZE(control)));
-			pages |= _pages(CONTROL_CHAR_BASE(control), 0x4000);
+			pages |= _pages(bg->screenBase, 0x100 << (2 * bg->size));
+			pages |= _pages(bg->charBase, 0x4000);
 		}
 	}
 	return pages;
 }
 
-// The sprites the software renderer would draw on this line, and whether any of them blends again afterwards
-static int _spriteList(struct GBAVideoBatchRenderer* batch, int y, bool* forceTarget1) {
+// The sprites the software renderer would draw on this line, with the 32-pixel columns each can reach,
+// and whether any of them blends again afterwards
+static int _spriteList(struct GBAVideoBatchRenderer* batch, int y, bool target2, bool* forceTarget1) {
 	struct GBAVideoSoftwareRenderer* sw = &batch->sw;
-	uint8_t* list = batch->spriteLists[y];
+	uint16_t* list = batch->spriteLists[y];
 	int cycles = GBARegisterDISPCNTIsHblankIntervalFree(sw->dispcnt) ? OBJ_HBLANK_FREE_LENGTH : OBJ_LENGTH;
 	bool objwinEnable = GBARegisterDISPCNTIsObjwinEnable(sw->dispcnt);
-	bool target2 = sw->target2Bd;
-	int i;
-	for (i = 0; i < 4; ++i) {
-		target2 |= sw->bg[i].target2 && sw->bg[i].enabled;
-	}
+	int mosaicH = GBAMosaicControlGetObjH(sw->mosaic) + 1;
 	int n = 0;
 	int lastIndex = 0;
+	int i;
 	for (i = 0; i < sw->oamMax; ++i) {
 		struct GBAVideoRendererSprite* sprite = &sw->sprites[i];
 		cycles -= 2 * (sprite->index - lastIndex);
@@ -1010,14 +461,30 @@ static int _spriteList(struct GBAVideoBatchRenderer* batch, int y, bool* forceTa
 		if (y < sprite->y || y >= sprite->endY) {
 			continue;
 		}
-		list[n] = i;
-		++n;
 		cycles -= sprite->cycles;
+
+		GBAObjAttributesA a = sprite->obj.a;
+		int width = GBAVideoObjSizes[GBAObjAttributesAGetShape(a) * 4 + GBAObjAttributesBGetSize(sprite->obj.b)][0];
+		int32_t x = (uint32_t) GBAObjAttributesBGetX(sprite->obj.b) << 23;
+		x >>= 23;
+		int end = x + (width << (GBAObjAttributesAIsTransformed(a) && GBAObjAttributesAIsDoubleSize(a)));
+		if (GBAObjAttributesAIsMosaic(a)) {
+			end += mosaicH - 1;
+		}
+		if (x < 0) {
+			x = 0;
+		}
+		if (end > GBA_VIDEO_HORIZONTAL_PIXELS) {
+			end = GBA_VIDEO_HORIZONTAL_PIXELS;
+		}
+		if (x < end) {
+			list[n] = i | ((((2U << ((end - 1) >> 5)) - (1U << (x >> 5))) & 0xFF) << 8);
+			++n;
+		}
 
 		if (*forceTarget1 || !target2) {
 			continue;
 		}
-		GBAObjAttributesA a = sprite->obj.a;
 		if (GBARegisterDISPCNTGetMode(sw->dispcnt) >= 3 && GBAObjAttributesCGetTile(sprite->obj.c) < 512) {
 			continue;
 		}
@@ -1040,6 +507,67 @@ static int _spriteList(struct GBAVideoBatchRenderer* batch, int y, bool* forceTa
 	return n;
 }
 
+// The backgrounds a window segment draws, front to back, with how each blends there
+static int _program(const struct GBAVideoSoftwareRenderer* sw, struct WindowControl control, uint32_t* slots) {
+	int mode = GBARegisterDISPCNTGetMode(sw->dispcnt);
+	bool objwinEnable = GBARegisterDISPCNTIsObjwinEnable(sw->dispcnt);
+	bool winBlend = GBAWindowControlIsBlendEnable(control.packed);
+	bool objwinBlend = GBAWindowControlIsBlendEnable(sw->objwin.packed);
+	bool brightness = sw->blendEffect == BLEND_BRIGHTEN || sw->blendEffect == BLEND_DARKEN;
+	int n = 0;
+	unsigned priority;
+	for (priority = 0; priority < 4; ++priority) {
+		int i;
+		for (i = 0; i < 4; ++i) {
+			const struct GBAVideoSoftwareBackground* bg = &sw->bg[i];
+			if (bg->enabled != ENABLED_MAX || bg->priority != priority) {
+				continue;
+			}
+			bool windowed = control.packed & (1 << i);
+			bool objwinBg = sw->objwin.packed & (1 << i);
+			if (!windowed && !(objwinEnable && objwinBg)) {
+				continue;
+			}
+			int bgMode;
+			if (i < 2) {
+				if (mode >= 2) {
+					continue;
+				}
+				bgMode = 0;
+			} else if (i == 2) {
+				if (mode > 5) {
+					continue;
+				}
+				bgMode = mode == 1 ? 2 : mode;
+			} else {
+				if (mode != 0 && mode != 2) {
+					continue;
+				}
+				bgMode = mode;
+			}
+			bool target1 = false;
+			bool target2 = bg->target2;
+			bool objwinTarget1 = false;
+			bool objwinTarget2 = bg->target2;
+			if (sw->blendEffect == BLEND_ALPHA) {
+				if (sw->blda == 0x10 && sw->bldb == 0) {
+					target2 = false;
+					objwinTarget2 = false;
+				} else if (bg->target1) {
+					target1 = winBlend;
+					objwinTarget1 = objwinBlend;
+				}
+			}
+			slots[n] = i | (priority << 2) | (bgMode << 4) | (target1 << 7) | (target2 << 8) | (objwinTarget1 << 9) |
+			           (objwinTarget2 << 10) | ((bg->target1 && winBlend && brightness) << 11) |
+			           ((objwinEnable && bg->target1 && objwinBlend && brightness) << 12) | ((objwinBg && windowed) << 13) |
+			           (!objwinBg << 14);
+			++n;
+		}
+	}
+	return n;
+}
+
 static void _recordLine(struct GBAVideoBatchRenderer* batch, int y) {
 	struct GBAVideoSoftwareRenderer* sw = &batch->sw;
 	uint32_t* line = batch->lines[y];
@@ -1047,6 +575,13 @@ static void _recordLine(struct GBAVideoBatchRenderer* batch, int y) {
 		memcpy(batch->palettes[batch->nPalettes], batch->d.palette, sizeof(batch->palettes[0]));
 		++batch->nPalettes;
 		batch->paletteDirty = false;
+	}
+	bool target2 = sw->target2Bd;
+	bool anyTarget1 = false;
+	int i;
+	for (i = 0; i < 4; ++i) {
+		target2 |= sw->bg[i].target2 && sw->bg[i].enabled;
+		anyTarget1 |= sw->bg[i].target1;
 	}
 	int nSprites = 0;
 	bool forceTarget1 = false;
@@ -1058,52 +593,136 @@ static void _recordLine(struct GBAVideoBatchRenderer* batch, int y) {
 		}
 		if (batch->oamDirty) {
 			uint32_t (*sprites)[BATCH_SPRITE_WORDS] = batch->sprites[batch->nSprites];
-			int i;
 			for (i = 0; i < sw->oamMax; ++i) {
 				struct GBAVideoRendererSprite* sprite = &sw->sprites[i];
 				const struct GBAOAMMatrix* mat = &sw->d.oam->mat[GBAObjAttributesBGetMatIndex(sprite->obj.b)];
+				const int* size = GBAVideoObjSizes[GBAObjAttributesAGetShape(sprite->obj.a) * 4 + GBAObjAttributesBGetSize(sprite->obj.b)];
 				sprites[i][0] = sprite->obj.a | (sprite->obj.b << 16);
 				sprites[i][1] = sprite->obj.c;
 				sprites[i][2] = (uint16_t) sprite->y | ((uint32_t) (uint16_t) sprite->endY << 16);
 				sprites[i][3] = (uint16_t) mat->a | ((uint32_t) (uint16_t) mat->b << 16);
 				sprites[i][4] = (uint16_t) mat->c | ((uint32_t) (uint16_t) mat->d << 16);
-				sprites[i][5] = sprite->index;
+				sprites[i][5] = size[0] | (size[1] << 8);
 			}
 			++batch->nSprites;
 			batch->oamDirty = false;
 		}
-		nSprites = _spriteList(batch, y, &forceTarget1);
+		nSprites = _spriteList(batch, y, target2, &forceTarget1);
 	}
 
+	uint32_t ends = 0xFFFFFFFF;
+	int w;
+	for (w = 0; w < sw->nWindows - 1; ++w) {
+		ends &= ~(0xFF << (8 * w));
+		ends |= sw->windows[w].endX << (8 * w);
+	}
+	line[L_ENDS] = ends;
 	line[L_HEAD] = sw->dispcnt | (sw->blendEffect << 16) | (forceTarget1 ? HEAD_FORCE_TARGET_1 : 0) |
 	               (sw->target1Obj ? HEAD_TARGET_1_OBJ : 0) | (sw->target1Bd ? HEAD_TARGET_1_BD : 0) |
 	               (sw->target2Obj ? HEAD_TARGET_2_OBJ : 0) | (sw->target2Bd ? HEAD_TARGET_2_BD : 0) |
-	               ((uint32_t) nSprites << 24);
-	line[L_BLEND] = sw->blda | (sw->bldb << 5) | (sw->bldy << 10) | ((uint32_t) sw->mosaic << 16);
-	line[L_WINDOWS] = sw->nWindows | (sw->objwin.packed << 8) | ((uint8_t) sw->objwin.priority << 16);
-	int w;
-	for (w = 0; w < sw->nWindows; ++w) {
-		line[L_SEGMENT + w] = sw->windows[w].endX | (sw->windows[w].control.packed << 8) | ((uint8_t) sw->windows[w].control.priority << 16);
+	               (target2 ? HEAD_TARGET_2_ANY : 0) | (anyTarget1 ? HEAD_TARGET_1_ANY : 0);
+	line[L_MISC] = sw->blda | (sw->bldb << 5) | (sw->bldy << 10) | ((batch->nPalettes - 1) << 16) | ((uint32_t) (batch->nSprites ? batch->nSprites - 1 : 0) << 24);
+	static int experiment = -1;
+	if (experiment < 0) {
+		experiment = getenv("ARMGBA_BATCH_EXPERIMENT") ? atoi(getenv("ARMGBA_BATCH_EXPERIMENT")) : 0;
 	}
-	line[L_ROWS] = (batch->nPalettes - 1) | ((uint32_t) (batch->nSprites ? batch->nSprites - 1 : 0) << 16);
-	int i;
+	if (experiment & 1) {
+		nSprites = 0;
+	}
+	line[L_OBJ] = nSprites | ((uint32_t) sw->mosaic << 8) | ((uint32_t) sw->objwin.packed << 24);
+
+	unsigned features = 0;
+	if (GBARegisterDISPCNTIsObjwinEnable(sw->dispcnt)) {
+		features |= BATCH_FEATURE_OBJWIN;
+	}
+	if (sw->mosaic) {
+		features |= BATCH_FEATURE_MOSAIC;
+	}
+	if (GBARegisterDISPCNTGetMode(sw->dispcnt) != 0) {
+		features |= BATCH_FEATURE_AFFINE_BG;
+	}
+	if (sw->blendEffect == BLEND_BRIGHTEN || sw->blendEffect == BLEND_DARKEN) {
+		features |= BATCH_FEATURE_BRIGHTNESS;
+	}
+	if (sw->blendEffect == BLEND_ALPHA || forceTarget1) {
+		features |= BATCH_FEATURE_BLEND;
+	}
+	if (sw->nWindows > 1) {
+		features |= BATCH_FEATURE_WINDOWS;
+	}
+	for (i = 0; i < nSprites; ++i) {
+		GBAObjAttributesA a = sw->sprites[batch->spriteLists[y][i] & 0xFF].obj.a;
+		if (GBAObjAttributesAIsTransformed(a)) {
+			features |= BATCH_FEATURE_AFFINE_SPRITES;
+		}
+		if (GBAObjAttributesAGetMode(a) == OBJ_MODE_SEMITRANSPARENT) {
+			features |= BATCH_FEATURE_BLEND;
+		}
+	}
+	batch->features[y] = features;
+	for (w = 0; w < sw->nWindows; ++w) {
+		uint32_t* program = &line[L_PROGRAM + w * 8];
+		int slots = _program(sw, sw->windows[w].control, &program[1]);
+		if (experiment & 2) {
+			slots = 0;
+		}
+		program[0] = sw->windows[w].control.packed | ((uint8_t) sw->windows[w].control.priority << 8) | ((uint8_t) sw->objwin.priority << 16) | (slots << 24);
+	}
+
+	int mode = GBARegisterDISPCNTGetMode(sw->dispcnt);
 	for (i = 0; i < 4; ++i) {
 		const struct GBAVideoSoftwareBackground* bg = &sw->bg[i];
-		uint32_t* out = &line[L_BG + i * BG_WORDS];
-		out[BG_CONTROL] = (bg->enabled == ENABLED_MAX ? CONTROL_ENABLED : 0) | (bg->enabled ? CONTROL_PRESENT : 0) |
-		                  (bg->priority << 2) | ((bg->charBase >> 14) << 4) | ((bg->screenBase >> 11) << 6) |
-		                  (bg->size << 11) | (bg->multipalette ? CONTROL_256 : 0) | (bg->mosaic ? CONTROL_MOSAIC : 0) |
-		                  (bg->overflow ? CONTROL_OVERFLOW : 0) | (bg->target1 ? CONTROL_TARGET_1 : 0) |
-		                  (bg->target2 ? CONTROL_TARGET_2 : 0);
-		out[BG_OFFSET] = bg->x | ((uint32_t) bg->y << 16);
-		out[BG_SX] = bg->sx;
-		out[BG_SY] = bg->sy;
-		out[BG_D] = (uint16_t) bg->dx | ((uint32_t) (uint16_t) bg->dy << 16);
-		out[BG_DM] = (uint16_t) bg->dmx | ((uint32_t) (uint16_t) bg->dmy << 16);
+		uint32_t* params = &line[L_PARAMS + i * 4];
+		if (bg->enabled != ENABLED_MAX) {
+			continue;
+		}
+		int mosaicH = bg->mosaic ? GBAMosaicControlGetBgH(sw->mosaic) : 0;
+		if (i < 2 ? mode < 2 : mode == 0) {
+			int inY = y;
+			if (bg->mosaic) {
+				inY -= inY % (GBAMosaicControlGetBgV(sw->mosaic) + 1);
+			}
+			inY += bg->y;
+			unsigned yBase = inY & 0xF8;
+			if (bg->size == 2) {
+				yBase += inY & 0x100;
+			} else if (bg->size == 3) {
+				yBase += (inY & 0x100) << 1;
+			}
+			params[0] = (bg->screenBase >> 1) + (yBase << 2);
+			params[1] = bg->x | ((bg->size & 1) << 9) | (bg->multipalette ? 0x400 : 0) | (mosaicH << 12) | ((inY & 7) << 16);
+			params[2] = bg->charBase;
+		} else {
+			int32_t sx = bg->sx;
+			int32_t sy = bg->sy;
+			if (bg->mosaic) {
+				sx -= (y % (GBAMosaicControlGetBgV(sw->mosaic) + 1)) * bg->dmx;
+				sy -= (y % (GBAMosaicControlGetBgV(sw->mosaic) + 1)) * bg->dmy;
+			}
+			params[0] = sx;
+			params[1] = sy;
+			params[2] = (uint16_t) bg->dx | ((uint32_t) (uint16_t) bg->dy << 16);
+			params[3] = (bg->screenBase >> 11) | ((bg->charBase >> 14) << 5) | (bg->size << 7) | (bg->overflow << 9) | (mosaicH << 12) |
+			            (GBARegisterDISPCNTIsFrameSelect(sw->dispcnt) ? 0x10000 : 0);
+		}
 	}
 }
 
+
+static void _drawScanline(struct GBAVideoRenderer* renderer, int y);
+
 static void GBAVideoBatchRendererDrawScanline(struct GBAVideoRenderer* renderer, int y) {
+	if (!_timed) {
+		_drawScanline(renderer, y);
+		return;
+	}
+	double t = _now();
+	double inner = _timing[1] + _timing[2];
+	_drawScanline(renderer, y);
+	_timing[0] += _now() - t - (_timing[1] + _timing[2] - inner);
+}
+
+static void _drawScanline(struct GBAVideoRenderer* renderer, int y) {
 	struct GBAVideoBatchRenderer* batch = (struct GBAVideoBatchRenderer*) renderer;
 	struct GBAVideoSoftwareRenderer* sw = &batch->sw;
 	if (batch->check) {
@@ -1116,14 +735,25 @@ static void GBAVideoBatchRendererDrawScanline(struct GBAVideoRenderer* renderer,
 	GBAVideoSoftwareRendererStepWindow(sw, y);
 	if (GBARegisterDISPCNTIsForcedBlank(sw->dispcnt)) {
 		batch->lines[y][L_HEAD] = HEAD_BLANK;
+		batch->lines[y][L_OBJ] = 0;
+		batch->features[y] = 0;
 		return;
 	}
 	GBAVideoSoftwareRendererPreprocessBuffer(sw);
 	_recordLine(batch, y);
 
+	if (getenv("ARMGBA_BATCH_TRACE") && batch->frame == (unsigned) atoi(getenv("ARMGBA_BATCH_TRACE")) && (y == 0 || y == 100)) {
+		const uint32_t* l = batch->lines[y];
+		fprintf(stderr, "line %d:", y);
+		int k;
+		for (k = 0; k < BATCH_LINE_WORDS; ++k) {
+			fprintf(stderr, " %08X", l[k]);
+		}
+		fprintf(stderr, "\n  dispcnt %04X effect %d bg2 enabled %d prio %d sx %08X sy %08X dx %d dy %d nWindows %d win0 %02X ctl %02X\n", sw->dispcnt, sw->blendEffect, sw->bg[2].enabled, sw->bg[2].priority, sw->bg[2].sx, sw->bg[2].sy, sw->bg[2].dx, sw->bg[2].dy, sw->nWindows, sw->windows[0].endX, sw->windows[0].control.packed);
+	}
 	// Lines waiting to be drawn saw VRAM as it was; this one may need newer pages
-	uint32_t stale = batch->vramDirty & _readPages(batch, batch->lines[y], y, false);
-	if (stale && !(batch->vramDirty & _readPages(batch, batch->lines[y], y, true))) {
+	uint32_t stale = batch->vramDirty & _readPages(batch, y, false);
+	if (stale && !(batch->vramDirty & _readPages(batch, y, true))) {
 		stale = 0;
 	}
 	if (stale) {
@@ -1216,6 +846,11 @@ static void _compare(struct GBAVideoBatchRenderer* batch) {
 static void GBAVideoBatchRendererFinishFrame(struct GBAVideoRenderer* renderer) {
 	struct GBAVideoBatchRenderer* batch = (struct GBAVideoBatchRenderer*) renderer;
 	_draw(batch, batch->nextY);
+	if (_timed && batch->gl && getenv("ARMGBA_BATCH_FINISH")) {
+		double t = _now();
+		GBAVideoBatchGLFinish(batch);
+		_timing[3] += _now() - t;
+	}
 	batch->sw.d.finishFrame(&batch->sw.d);
 	if (batch->check) {
 		batch->check->d.finishFrame(&batch->check->d);
@@ -1224,6 +859,12 @@ static void GBAVideoBatchRendererFinishFrame(struct GBAVideoRenderer* renderer) 
 		}
 	}
 	++batch->frame;
+	if (_timed && !(batch->frame % 1200)) {
+		fprintf(stderr, "batch timing per frame: record %.1f us, draw %.1f us, upload %.1f us, finish %.1f us, %.2f draws, %.2f pages\n", _timing[0] * 1e6 / 1200, _timing[1] * 1e6 / 1200, _timing[2] * 1e6 / 1200, _timing[3] * 1e6 / 1200, (_stats[0] - _stats[6]) / 1200.0, (_stats[1] - _stats[7]) / 1200.0);
+		memset(_timing, 0, sizeof(_timing));
+		_stats[6] = _stats[0];
+		_stats[7] = _stats[1];
+	}
 	_stats[2] += batch->nPalettes;
 	_stats[3] += batch->nSprites;
 	if (_stats[4] < _stats[0] - _stats[5]) {

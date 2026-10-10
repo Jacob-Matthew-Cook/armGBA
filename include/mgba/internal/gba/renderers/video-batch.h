@@ -14,10 +14,22 @@ CXX_GUARD_START
 #include <mgba/internal/gba/renderers/video-software.h>
 
 // Scanlines are recorded as they come and drawn together, one pixel at a time, when VRAM changes or the frame ends
-#define BATCH_LINE_WORDS 44
+#define BATCH_LINE_WORDS 64
 #define BATCH_SPRITE_WORDS 8
 #define BATCH_VRAM_PAGES (GBA_SIZE_VRAM >> 12)
 #define BATCH_MAGIC 0x68637462
+
+// What a scanline needs beyond plain tiles and sprites; the GPU draws with a shader that leaves out the rest
+enum {
+	BATCH_FEATURE_OBJWIN = 1,
+	BATCH_FEATURE_MOSAIC = 2,
+	BATCH_FEATURE_AFFINE_SPRITES = 4,
+	BATCH_FEATURE_AFFINE_BG = 8,
+	BATCH_FEATURE_BRIGHTNESS = 16,
+	BATCH_FEATURE_BLEND = 32,
+	BATCH_FEATURE_WINDOWS = 64,
+	BATCH_FEATURE_ALL = 127
+};
 
 struct GBAVideoBatchGL;
 
@@ -34,7 +46,8 @@ struct GBAVideoBatchRenderer {
 	int outputBufferStride;
 
 	uint32_t lines[GBA_VIDEO_VERTICAL_PIXELS][BATCH_LINE_WORDS];
-	uint8_t spriteLists[GBA_VIDEO_VERTICAL_PIXELS][128];
+	uint16_t spriteLists[GBA_VIDEO_VERTICAL_PIXELS][128];
+	uint8_t features[GBA_VIDEO_VERTICAL_PIXELS];
 	uint16_t palettes[GBA_VIDEO_VERTICAL_PIXELS][512];
 	uint32_t sprites[GBA_VIDEO_VERTICAL_PIXELS][128][BATCH_SPRITE_WORDS];
 	uint16_t vram[GBA_SIZE_VRAM / 2];
@@ -62,6 +75,7 @@ void GBAVideoBatchRendererDeinitGL(struct GBAVideoBatchRenderer* renderer);
 void GBAVideoBatchGLUploadVRAM(struct GBAVideoBatchRenderer* renderer, uint32_t pages);
 void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* renderer, int startY, int endY);
 void GBAVideoBatchGLStartFrame(struct GBAVideoBatchRenderer* renderer);
+void GBAVideoBatchGLFinish(struct GBAVideoBatchRenderer* renderer);
 
 CXX_GUARD_END
 
