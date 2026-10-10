@@ -137,19 +137,40 @@ static void _ldstR(struct Emitter* e, uint32_t op, int rt, int rn, int rm) {
 	_emit(e, op | (rm << 16) | (rn << 5) | rt);
 }
 
+// One MOVZ or MOVN when a halfword is all zeros or all ones, else MOVZ and MOVK
 static void _movImm32(struct Emitter* e, int rd, uint32_t value) {
-	_emit(e, 0x52800000 | ((value & 0xFFFF) << 5) | rd);
-	if (value >> 16) {
-		_emit(e, 0x72A00000 | ((value >> 16) << 5) | rd);
+	if (!(value & 0xFFFF) && value) {
+		_emit(e, 0x52A00000 | ((value >> 16) << 5) | rd);
+	} else if ((value >> 16) == 0xFFFF) {
+		_emit(e, 0x12800000 | ((~value & 0xFFFF) << 5) | rd);
+	} else {
+		_emit(e, 0x52800000 | ((value & 0xFFFF) << 5) | rd);
+		if (value >> 16) {
+			_emit(e, 0x72A00000 | ((value >> 16) << 5) | rd);
+		}
 	}
 }
 
+// MOVN for mostly-ones values, MOVZ otherwise, then MOVK for each halfword left
 static void _movImm64(struct Emitter* e, int rd, uint64_t value) {
-	_emit(e, 0xD2800000 | ((value & 0xFFFF) << 5) | rd);
+	unsigned ones = 0;
 	int hw;
-	for (hw = 1; hw < 4; ++hw) {
-		uint32_t part = (value >> (16 * hw)) & 0xFFFF;
-		if (part) {
+	for (hw = 0; hw < 4; ++hw) {
+		ones += ((value >> (16 * hw)) & 0xFFFF) == 0xFFFF;
+	}
+	uint64_t fill = ones > 1 ? 0xFFFF : 0;
+	int first = 0;
+	for (hw = 0; hw < 4; ++hw) {
+		if (((value >> (16 * hw)) & 0xFFFF) != fill) {
+			first = hw;
+			break;
+		}
+	}
+	uint32_t part = (value >> (16 * first)) & 0xFFFF;
+	_emit(e, (fill ? 0x92800000 | ((~part & 0xFFFF) << 5) : 0xD2800000 | (part << 5)) | (first << 21) | rd);
+	for (hw = first + 1; hw < 4; ++hw) {
+		part = (value >> (16 * hw)) & 0xFFFF;
+		if (part != fill) {
 			_emit(e, 0xF2800000 | (hw << 21) | (part << 5) | rd);
 		}
 	}
