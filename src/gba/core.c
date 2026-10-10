@@ -583,6 +583,18 @@ static unsigned _GBACoreVideoScale(const struct mCore* core) {
 	return 1;
 }
 
+// Draws with the batch renderer from the next reset on
+struct GBAVideoBatchRenderer* GBACoreBatchRenderer(struct mCore* core) {
+	struct GBACore* gbacore = (struct GBACore*) core;
+	if (!gbacore->batch) {
+		gbacore->batch = malloc(sizeof(*gbacore->batch));
+		GBAVideoBatchRendererCreate(gbacore->batch);
+		gbacore->batch->outputBuffer = gbacore->renderer.outputBuffer;
+		gbacore->batch->outputBufferStride = gbacore->renderer.outputBufferStride;
+	}
+	return gbacore->batch;
+}
+
 static size_t _GBACoreScreenRegions(const struct mCore* core, const struct mCoreScreenRegion** regions) {
 	UNUSED(core);
 	*regions = _GBAScreenRegions;

@@ -14,13 +14,18 @@ CXX_GUARD_START
 #include <mgba/internal/gba/renderers/video-software.h>
 
 // Scanlines are recorded as they come and drawn together, one pixel at a time, when VRAM changes or the frame ends
-#define BATCH_LINE_WORDS 36
+#define BATCH_LINE_WORDS 44
 #define BATCH_SPRITE_WORDS 8
 #define BATCH_VRAM_PAGES (GBA_SIZE_VRAM >> 12)
 #define BATCH_MAGIC 0x68637462
 
+struct GBAVideoBatchGL;
+
 struct GBAVideoBatchRenderer {
 	struct GBAVideoRenderer d;
+
+	// Draws with OpenGL ES 3 when set, on the CPU otherwise
+	struct GBAVideoBatchGL* gl;
 
 	// Keeps the windows, affine steps, layer enables and sprite list; draws nothing
 	struct GBAVideoSoftwareRenderer sw;
@@ -50,6 +55,13 @@ struct GBAVideoBatchRenderer {
 };
 
 void GBAVideoBatchRendererCreate(struct GBAVideoBatchRenderer* renderer);
+void GBAVideoBatchRendererReloadVRAM(struct GBAVideoBatchRenderer* renderer);
+
+bool GBAVideoBatchRendererInitGL(struct GBAVideoBatchRenderer* renderer, void* (*getProc)(const char*), uintptr_t (*getFramebuffer)(void));
+void GBAVideoBatchRendererDeinitGL(struct GBAVideoBatchRenderer* renderer);
+void GBAVideoBatchGLUploadVRAM(struct GBAVideoBatchRenderer* renderer, uint32_t pages);
+void GBAVideoBatchGLDraw(struct GBAVideoBatchRenderer* renderer, int startY, int endY);
+void GBAVideoBatchGLStartFrame(struct GBAVideoBatchRenderer* renderer);
 
 CXX_GUARD_END
 

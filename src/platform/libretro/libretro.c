@@ -24,6 +24,7 @@
 #include <mgba/gba/core.h>
 #include <mgba/gba/interface.h>
 #include <mgba/internal/gba/gba.h>
+#include <mgba/internal/gba/renderers/video-batch.h>
 #endif
 #include <mgba-util/memory.h>
 #include <mgba-util/vfs.h>
@@ -85,6 +86,26 @@ static void _setupMaps(struct mCore* core);
 
 static struct mCore* core;
 static mColor* outputBuffer = NULL;
+
+#ifdef M_CORE_GBA
+// Drawing on the GPU: the batch renderer fills the frontend's framebuffer
+static struct retro_hw_render_callback hwRender;
+static struct GBAVideoBatchRenderer* gpuRenderer = NULL;
+static bool gpuReady = false;
+
+static void _gpuContextReset(void) {
+	if (gpuRenderer) {
+		gpuReady = GBAVideoBatchRendererInitGL(gpuRenderer, (void* (*)(const char*)) hwRender.get_proc_address, hwRender.get_current_framebuffer);
+	}
+}
+
+static void _gpuContextDestroy(void) {
+	if (gpuRenderer) {
+		GBAVideoBatchRendererDeinitGL(gpuRenderer);
+	}
+	gpuReady = false;
+}
+#endif
 static struct LibretroAudioConverter audioConverter;
 static int16_t *audioSampleBuffer = NULL;
 static size_t audioSampleBufferSize;
@@ -1245,6 +1266,11 @@ static void _reloadSettings(void) {
 	var.value = 0;
 	environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
 	mCoreConfigSetDefaultIntValue(&core->config, "threadedVideo", !var.value || strcmp(var.value, "enabled") == 0);
+#ifdef M_CORE_GBA
+	if (gpuRenderer) {
+		mCoreConfigSetDefaultIntValue(&core->config, "threadedVideo", 0);
+	}
+#endif
 
 	var.key = "mgba_idle_optimization";
 	var.value = 0;
@@ -1730,6 +1756,12 @@ void retro_run(void) {
 	}
 
 	if (!skipFrame) {
+#ifdef M_CORE_GBA
+		if (gpuReady) {
+			videoCallback(RETRO_HW_FRAME_BUFFER_VALID, width, height, 0);
+		} else
+#endif
+		{
 		// A renderer on another thread finishes the frame here
 		const void* pixels;
 		size_t stride;
@@ -1741,6 +1773,7 @@ void retro_run(void) {
 		} else
 #endif
 			videoCallback(outputBuffer, width, height, VIDEO_WIDTH_MAX * sizeof(mColor));
+		}
 	} else {
 		videoCallback(NULL, width, height, VIDEO_WIDTH_MAX * sizeof(mColor));
 	}
@@ -2058,6 +2091,22 @@ bool retro_load_game(const struct retro_game_info* game) {
 	memset(outputBuffer, 0xFFFF, VIDEO_BUFF_SIZE);
 	core->setVideoBuffer(core, outputBuffer, VIDEO_WIDTH_MAX);
 
+#ifdef M_CORE_GBA
+	struct retro_variable gpuVar = { .key = "mgba_gpu_renderer", .value = 0 };
+	if (core->platform(core) == mPLATFORM_GBA && environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &gpuVar) && gpuVar.value && strcmp(gpuVar.value, "enabled") == 0) {
+		memset(&hwRender, 0, sizeof(hwRender));
+		hwRender.context_type = RETRO_HW_CONTEXT_OPENGLES3;
+		hwRender.version_major = 3;
+		hwRender.version_minor = 0;
+		hwRender.context_reset = _gpuContextReset;
+		hwRender.context_destroy = _gpuContextDestroy;
+		hwRender.bottom_left_origin = true;
+		if (environCallback(RETRO_ENVIRONMENT_SET_HW_RENDER, &hwRender)) {
+			gpuRenderer = GBACoreBatchRenderer(core);
+		}
+	}
+#endif
+
 	#ifdef M_CORE_GBA
 	/* GBA emulation produces a fairly regular number
 	 * of audio samples per frame that is consistent
@@ -2169,6 +2218,13 @@ void retro_unload_game(void) {
 		_setFastForward(false);
 	}
 	mCoreConfigDeinit(&core->config);
+#ifdef M_CORE_GBA
+	if (gpuRenderer) {
+		GBAVideoBatchRendererDeinitGL(gpuRenderer);
+		gpuRenderer = NULL;
+		gpuReady = false;
+	}
+#endif
 	core->deinit(core);
 	mappedMemoryFree(data, dataSize);
 	data = 0;
@@ -2213,6 +2269,11 @@ bool retro_unserialize(const void* data, size_t size) {
 	// Save data goes straight back to the save RAM the frontend writes out: masked, it never reached the .srm under run-ahead
 	bool success = mCoreLoadStateNamed(core, vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
 	vfm->close(vfm);
+#ifdef M_CORE_GBA
+	if (gpuRenderer) {
+		GBAVideoBatchRendererReloadVRAM(gpuRenderer);
+	}
+#endif
 	return success;
 }
 

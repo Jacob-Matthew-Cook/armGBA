@@ -12,6 +12,7 @@ CXX_GUARD_START
 
 struct mCore;
 struct mCore* GBACoreCreate(void);
+struct GBAVideoBatchRenderer* GBACoreBatchRenderer(struct mCore* core);
 #ifndef MINIMAL_CORE
 struct mCore* GBAVideoLogPlayerCreate(void);
 #endif

@@ -15,9 +15,9 @@ enum {
 	L_HEAD = 0,
 	L_BLEND,
 	L_WINDOWS,
+	L_ROWS,
 	L_SEGMENT,
-	L_ROWS = L_SEGMENT + MAX_WINDOW,
-	L_BG,
+	L_BG = 12,
 };
 
 enum {
@@ -27,7 +27,7 @@ enum {
 	BG_SY,
 	BG_D,
 	BG_DM,
-	BG_WORDS
+	BG_WORDS = 8
 };
 
 #define HEAD_EFFECT(H) (((H) >> 16) & 3)
@@ -86,6 +86,11 @@ void GBAVideoBatchRendererCreate(struct GBAVideoBatchRenderer* renderer) {
 	GBAVideoSoftwareRendererCreate(&renderer->sw);
 }
 
+// For VRAM replaced without stores, as by loading a state
+void GBAVideoBatchRendererReloadVRAM(struct GBAVideoBatchRenderer* batch) {
+	batch->vramDirty = (1U << BATCH_VRAM_PAGES) - 1;
+}
+
 static void _shareMemory(struct GBAVideoBatchRenderer* batch, struct GBAVideoSoftwareRenderer* sw) {
 	sw->d.palette = batch->d.palette;
 	sw->d.vram = batch->d.vram;
@@ -100,6 +105,9 @@ static void _startFrame(struct GBAVideoBatchRenderer* batch) {
 	batch->oamDirty = true;
 	batch->drawnY = 0;
 	batch->nextY = 0;
+	if (batch->gl) {
+		GBAVideoBatchGLStartFrame(batch);
+	}
 }
 
 static void GBAVideoBatchRendererInit(struct GBAVideoRenderer* renderer) {
@@ -778,6 +786,13 @@ static void _draw(struct GBAVideoBatchRenderer* batch, int endY) {
 	if (endY > batch->drawnY) {
 		++_stats[0];
 	}
+	if (batch->gl) {
+		if (endY > batch->drawnY) {
+			GBAVideoBatchGLDraw(batch, batch->drawnY, endY);
+		}
+		batch->drawnY = endY;
+		return;
+	}
 	int y;
 	for (y = batch->drawnY; y < endY; ++y) {
 		mColor* out = &batch->outputBuffer[batch->outputBufferStride * y];
@@ -791,6 +806,11 @@ static void _draw(struct GBAVideoBatchRenderer* batch, int endY) {
 
 static void _uploadVRAM(struct GBAVideoBatchRenderer* batch, uint32_t pages) {
 	batch->vramDirty &= ~pages;
+	if (batch->gl) {
+		_stats[1] += __builtin_popcount(pages);
+		GBAVideoBatchGLUploadVRAM(batch, pages);
+		return;
+	}
 	while (pages) {
 		unsigned page = __builtin_ctz(pages);
 		pages &= pages - 1;
