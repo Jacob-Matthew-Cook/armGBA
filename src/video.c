@@ -7,7 +7,7 @@
 
 #include <string.h>
 
-// Scanline timing and the registers that depend on it; drawing lives elsewhere
+// Scanline timing and the registers that depend on it; drawing lives elsewhere.
 
 enum {
 	HBLANK_START = 1007,
@@ -21,7 +21,7 @@ static void lineEvent(struct GBA*, void*, uint32_t);
 
 static const int IRQ_OF_EVENT[3] = { IRQ_VBLANK, IRQ_HBLANK, IRQ_VCOUNTER };
 
-// The V-blank, H-blank and line-match interrupts are asked for a cycle after what causes them
+// The V-blank, H-blank and line-match interrupts are requested one cycle after what causes them.
 static void requestIrq(struct GBA* gba, void* context, uint32_t late) {
 	gbaRaiseIrq(gba, IRQ_OF_EVENT[(intptr_t) context], late);
 }
@@ -31,7 +31,8 @@ static void scheduleIrq(struct GBA* gba, int which, uint32_t late) {
 	timingSchedule(gba, &gba->video.irqEvent[which], 1 - (int32_t) late);
 }
 
-// DISPSTAT's match flag: set while VCOUNT equals the line a game chose, with an interrupt as it sets
+// DISPSTAT's match flag: set while VCOUNT equals the line a game chose, with an interrupt when it
+// sets.
 static void updateMatch(struct GBA* gba, uint32_t late) {
 	uint16_t dispstat = gba->io[IO(REG_DISPSTAT)];
 	bool match = gba->video.vcount == (dispstat >> 8);
@@ -41,16 +42,16 @@ static void updateMatch(struct GBA* gba, uint32_t late) {
 	gba->io[IO(REG_DISPSTAT)] = match ? dispstat | 0x0004 : dispstat & ~0x0004;
 }
 
-// Lines start when something looks at them: the line, VCOUNT and DISPSTAT come up to date then.
-// Only the frame's first line (the keypad IRQ test) and V-blank's first start as events, and
-// H-blank is one on the visible lines, which are drawn then, and on every line while its IRQ is on.
-// What happens a few cycles into some lines is scheduled ahead from the line starts it follows.
+// Lines start when something looks at them: the line, VCOUNT and DISPSTAT are brought up to date
+// then. Only the frame's first line (for the keypad IRQ test) and V-blank's first start as events,
+// and H-blank is one on the visible lines, which are drawn then, and on every line while its IRQ is
+// on. What happens a few cycles into some lines is scheduled ahead from the line starts before it.
 
 static uint32_t nextLineStart(struct GBA* gba) {
 	return gba->video.lineStart + LINE_LENGTH;
 }
 
-// A visible line is drawn as at its H-blank: then, or later but before anything it shows changes
+// A visible line is drawn as at its H-blank: then, or later but before anything it shows changes.
 static void drawLine(struct GBA* gba) {
 	struct Video* video = &gba->video;
 	if (!video->drawn && video->vcount < VISIBLE_LINES) {
@@ -63,8 +64,8 @@ static void drawLine(struct GBA* gba) {
 	}
 }
 
-// When the next line to draw is due: compiled code's video stores check this, so that a line whose
-// H-blank has passed is drawn before what it shows changes
+// Returns when the next line to draw is due. Compiled code's video stores check this, so a line
+// whose H-blank has passed is drawn before what it shows changes.
 static void planDraw(struct GBA* gba) {
 	struct Video* video = &gba->video;
 	int vcount = video->vcount;
@@ -77,8 +78,8 @@ static void planDraw(struct GBA* gba) {
 	}
 }
 
-// The start of a line, worked out when something first needs it: VCOUNT, the flags, V-blank's
-// interrupt and DMA, and the frame's end
+// Starts a line, worked out when something first needs it: VCOUNT, the flags, V-blank's interrupt
+// and DMA, and the frame's end.
 static void startLine(struct GBA* gba, uint32_t late) {
 	struct Video* video = &gba->video;
 	drawLine(gba);
@@ -122,8 +123,8 @@ static void startLine(struct GBA* gba, uint32_t late) {
 	gba->io[IO(REG_DISPSTAT)] = dispstat;
 }
 
-// Brings the line, VCOUNT and DISPSTAT up to now. stableUntil is the time up to which compiled
-// code can read the two registers as they stand.
+// Brings the line, VCOUNT and DISPSTAT up to now. stableUntil is the time until which compiled code
+// can read the two registers as they stand.
 void videoSync(struct GBA* gba) {
 	struct Video* video = &gba->video;
 	uint32_t now = timingCurrentTime(gba);
@@ -140,19 +141,19 @@ void videoSync(struct GBA* gba) {
 	planDraw(gba);
 }
 
-// The line the display is on now
+// Returns the line the display is on now.
 int videoLine(struct GBA* gba) {
 	videoSync(gba);
 	return gba->video.vcount;
 }
 
-// H-blank is an event only for what can't wait: HBlank DMA on the visible lines, and its IRQ where IE
-// lets it through
+// H-blank is an event only for what can't wait: H-blank DMA on the visible lines, and its IRQ where
+// IE lets it through.
 static bool hblankEvent(struct GBA* gba, int line) {
 	return (line < VISIBLE_LINES && dmaTimingArmed(gba, 2)) || ((gba->io[IO(REG_DISPSTAT)] & 0x0010) && (gba->irq.ie & (1 << IRQ_HBLANK)));
 }
 
-// The first H-blank at from or later, before or after the line video last came up to
+// Returns the first H-blank at from or later, before or after the line video last came up to.
 uint32_t videoNextHblank(struct GBA* gba, uint32_t from) {
 	uint32_t hblank = gba->video.lineStart + HBLANK_START;
 	int32_t ahead = from - hblank;
@@ -164,14 +165,14 @@ uint32_t videoNextHblank(struct GBA* gba, uint32_t from) {
 	return hblank;
 }
 
-// The two line starts that are always events: the frame's first and V-blank's
+// The two line starts that are always events: the frame's first and V-blank's.
 static bool lineStartEvent(int line) {
 	return line == 0 || line == VISIBLE_LINES;
 }
 
-// The video event after time from (synced): the next H-blank or line start that does something then.
-// What H-blank does is the same on every visible line and on every V-blank line, so the event is found
-// without going line by line.
+// Returns the video event after time from (synced): the next H-blank or line start that does
+// something then. What H-blank does is the same on every visible line and on every V-blank line, so
+// the event is found without going line by line.
 static void scheduleVideo(struct GBA* gba, uint32_t from) {
 	struct Video* video = &gba->video;
 	int line = video->vcount;
@@ -186,7 +187,7 @@ static void scheduleVideo(struct GBA* gba, uint32_t from) {
 		timingScheduleAbsolute(gba, &video->event, start + HBLANK_START);
 		return;
 	}
-	// The next line, then on to the next line start that is an event or H-blank that is one
+	// The next line, then on to the next line start or H-blank that is an event.
 	int next = line + 1 == TOTAL_LINES ? 0 : line + 1;
 	start += LINE_LENGTH;
 	int target;
@@ -198,7 +199,7 @@ static void scheduleVideo(struct GBA* gba, uint32_t from) {
 		target = next;
 		hblank = true;
 	} else {
-		// Nothing until V-blank's line or the frame's first
+		// Nothing until V-blank's line or the frame's first.
 		target = next < VISIBLE_LINES ? VISIBLE_LINES : 0;
 		hblank = false;
 	}
@@ -214,13 +215,14 @@ static void scheduleVideo(struct GBA* gba, uint32_t from) {
 		timingScheduleAbsolute(gba, &video->event, start + HBLANK_START);
 	} else {
 		video->event.callback = lineEvent;
-		// The line that starts V-blank ends the frame
+		// The line that starts V-blank ends the frame.
 		video->event.endsRun = target == VISIBLE_LINES;
 		timingScheduleAbsolute(gba, &video->event, start);
 	}
 }
 
-// The next time, after now (or from the next line), that a line in lines starts offset cycles in
+// Returns the next time, after now (or from the next line), that a line in lines starts offset
+// cycles in.
 static void scheduleAhead(struct GBA* gba, struct Event* event, int32_t offset, bool (*lines)(struct GBA*, int), bool thisLine) {
 	struct Video* video = &gba->video;
 	uint32_t now = timingCurrentTime(gba);
@@ -237,13 +239,13 @@ static void scheduleAhead(struct GBA* gba, struct Event* event, int32_t offset, 
 	}
 }
 
-// The VCOUNT flag changes a cycle in, only on the line LYC names and the one after
+// The VCOUNT flag changes one cycle into a line, only on the line LYC names and the one after.
 static bool matchLine(struct GBA* gba, int line) {
 	int lyc = gba->io[IO(REG_DISPSTAT)] >> 8;
 	return line == lyc || line == (lyc + 1) % TOTAL_LINES;
 }
 
-// A cycle into a line, the match flag follows the new VCOUNT
+// One cycle into a line, the match flag follows the new VCOUNT.
 static void matchEvent(struct GBA* gba, void* context, uint32_t late) {
 	(void) context;
 	videoSync(gba);
@@ -252,20 +254,20 @@ static void matchEvent(struct GBA* gba, void* context, uint32_t late) {
 }
 
 // The latch and capture events run only where they can change something: a latch while DISPCNT
-// differs from what was latched, a capture while DMA3 waits for one
+// differs from what was latched, a capture while DMA3 waits for one.
 static bool latchLine(struct GBA* gba, int vcount) {
 	(void) gba;
 	return vcount <= VISIBLE_LINES || vcount >= TOTAL_LINES - 3;
 }
 
-// Whether latching DISPCNT again would change nothing
+// Whether latching DISPCNT again would change nothing.
 static bool latchSettled(struct GBA* gba) {
 	const uint16_t* latch = gba->renderer.dispcntLatch;
 	uint16_t dispcnt = gba->renderer.dispcnt;
 	return latch[0] == dispcnt && latch[1] == dispcnt && latch[2] == dispcnt;
 }
 
-// The renderer's DISPCNT latch, 40 cycles into a line, for as long as it has something to take in
+// The renderer's DISPCNT latch, 40 cycles into a line, for as long as it has something to take in.
 static void scheduleLatch(struct GBA* gba, bool thisLine) {
 	if (latchSettled(gba)) {
 		return;
@@ -275,7 +277,7 @@ static void scheduleLatch(struct GBA* gba, bool thisLine) {
 	}
 }
 
-// A latch, on one thread or both
+// Runs a latch, on one thread or both.
 static void latchEvent(struct GBA* gba, void* context, uint32_t late) {
 	(void) context;
 	(void) late;
@@ -287,13 +289,13 @@ static void latchEvent(struct GBA* gba, void* context, uint32_t late) {
 	scheduleLatch(gba, false);
 }
 
-// Video capture DMA runs on lines 2 to 161, three cycles in
+// Video capture DMA runs on lines 2 to 161, three cycles in.
 static bool captureLine(struct GBA* gba, int vcount) {
 	(void) gba;
 	return vcount >= 2 && vcount < VISIBLE_LINES + 2;
 }
 
-// Whether channel 3 is on and waiting for it
+// Whether channel 3 is on and waiting for capture.
 static bool captureArmed(struct GBA* gba) {
 	uint16_t reg = gba->dma[3].reg;
 	return (reg & 0x8000) && ((reg >> 12) & 3) == 3;
@@ -315,34 +317,34 @@ static void captureEvent(struct GBA* gba, void* context, uint32_t late) {
 	scheduleCapture(gba, false);
 }
 
-// Whether a video event can run after the instruction it falls in: not one that starts DMA
+// Whether a video event can run after the instruction it falls in: not one that starts DMA.
 bool videoDeferrable(struct GBA* gba, const struct Event* event) {
 	struct Video* video = &gba->video;
 	if (event == &video->captureEvent) {
 		return false;
 	}
-	// HBlank asks HBlank DMA to start
+	// H-blank asks H-blank DMA to start.
 	return event != &video->event || event->callback != startHblank || video->eventLine >= VISIBLE_LINES || !dmaTimingArmed(gba, 2);
 }
 
-// For save states: which of its two callbacks the video event has
+// For save states: which of its two callbacks the video event has.
 bool videoEventIsHblank(struct GBA* gba) {
 	return gba->video.event.callback == startHblank;
 }
 
-// A loaded state says which of its two callbacks the video event had
+// A loaded state says which of its two callbacks the video event had.
 void videoEventRestore(struct GBA* gba, bool hblank) {
 	gba->video.event.callback = hblank ? startHblank : lineEvent;
 }
 
-// DISPCNT changed, so there is something to latch
+// Called when DISPCNT changes, so there is something to latch.
 void videoDispcntWritten(struct GBA* gba) {
 	scheduleLatch(gba, true);
 }
 
 // In mode 2 with both backgrounds on, the display fetches from VRAM all through a visible line's
-// drawing and the CPU's access waits for H-blank, as mGBA has it: the cycles to add to an access
-// that has waited `wait` already
+// drawing, and the CPU's access waits for H-blank, as in mGBA. Returns the cycles to add to an
+// access that has already waited `wait`.
 int32_t videoVramStall(struct GBA* gba, int32_t wait) {
 	struct Video* video = &gba->video;
 	videoSync(gba);
@@ -353,13 +355,13 @@ int32_t videoVramStall(struct GBA* gba, int32_t wait) {
 	return until > 0 ? until : 0;
 }
 
-// Channel 3 was set up for capture
+// Called when channel 3 is set up for capture.
 void videoCaptureArmed(struct GBA* gba) {
 	videoSync(gba);
 	scheduleCapture(gba, true);
 }
 
-// The video events and their priorities
+// The video events and their priorities.
 void videoInit(struct GBA* gba) {
 	struct Video* video = &gba->video;
 	video->event = (struct Event) { .priority = 8 };
@@ -371,7 +373,7 @@ void videoInit(struct GBA* gba) {
 	video->captureEvent = (struct Event) { .callback = captureEvent, .priority = 8 };
 }
 
-// Partway through line vcount, its H-blank this many cycles away
+// Partway through line vcount, with its H-blank this many cycles away.
 void videoStartAt(struct GBA* gba, int vcount, int32_t untilHblank) {
 	struct Video* video = &gba->video;
 	video->vcount = vcount;
@@ -382,12 +384,13 @@ void videoStartAt(struct GBA* gba, int vcount, int32_t untilHblank) {
 	planDraw(gba);
 	scheduleVideo(gba, timingCurrentTime(gba));
 	scheduleAhead(gba, &video->matchEvent, 1, matchLine, false);
-	// The renderer starts with DISPCNT not yet latched
+	// The renderer starts with DISPCNT not yet latched.
 	timingDeschedule(gba, &video->latchEvent);
 	scheduleLatch(gba, false);
 }
 
-// Video memory cleared, and the display at the point of the frame the hardware, or the BIOS, leaves it
+// Clears video memory and puts the display at the point of the frame the hardware, or the BIOS,
+// leaves it.
 void videoReset(struct GBA* gba) {
 	gba->vramStall = false;
 	struct Video* video = &gba->video;
@@ -407,14 +410,14 @@ void videoReset(struct GBA* gba) {
 	}
 }
 
-// A line start that is an event
+// A line start that is an event.
 static void lineEvent(struct GBA* gba, void* context, uint32_t late) {
 	(void) context;
 	videoSync(gba);
 	scheduleVideo(gba, timingCurrentTime(gba) - late);
 }
 
-// H-blank as an event: the flag, H-blank DMA on the visible lines, and the interrupt
+// H-blank as an event: the flag, H-blank DMA on the visible lines, and the interrupt.
 static void startHblank(struct GBA* gba, void* context, uint32_t late) {
 	(void) context;
 	struct Video* video = &gba->video;
@@ -431,13 +434,13 @@ static void startHblank(struct GBA* gba, void* context, uint32_t late) {
 	scheduleVideo(gba, timingCurrentTime(gba) - late);
 }
 
-// What makes H-blank an event changed: the next video event is planned again
+// Called when what makes H-blank an event changed: the next video event is planned again.
 void videoHblankDmaArmed(struct GBA* gba) {
 	videoSync(gba);
 	scheduleVideo(gba, timingCurrentTime(gba));
 }
 
-// DISPSTAT: the interrupt enables and the match line; the three status bits are read-only
+// DISPSTAT: the interrupt enables and the match line; the three status bits are read-only.
 uint16_t videoWriteDispstat(struct GBA* gba, uint16_t value) {
 	videoSync(gba);
 	gbaIrqSync(gba);
@@ -450,7 +453,7 @@ uint16_t videoWriteDispstat(struct GBA* gba, uint16_t value) {
 		scheduleAhead(gba, &gba->video.matchEvent, 1, matchLine, true);
 	}
 	if ((old ^ value) & 0x0010) {
-		// H-blank events on every line, or only the visible ones
+		// H-blank events on every line, or only on the visible ones.
 		scheduleVideo(gba, timingCurrentTime(gba));
 	}
 	return gba->io[IO(REG_DISPSTAT)];
