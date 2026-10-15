@@ -594,21 +594,24 @@
 		DRAW_BACKGROUND_MODE_0_TILE_PREFIX_##BPP(BLEND, OBJWIN) \
 	}
 
+#if RENDER_SIMD
 static bool useSimd;
 static bool checkFast;
+#endif
 
 // ARMGBA_RENDER=reference draws with mGBA's loops alone; =check draws both ways and compares.
 void renderInit(void) {
+#if RENDER_SIMD
 	const char* mode = getenv("ARMGBA_RENDER");
 	bool reference = mode && !strcmp(mode, "reference");
 	checkFast = mode && !strcmp(mode, "check");
-#if RENDER_SIMD
 	useSimd = !reference && renderHasSimd();
 #endif
 }
 
 static void drawBackgroundMode0Reference(struct GBA* gba, struct RenderBackground* background, int y);
 
+#if RENDER_SIMD
 // For ARMGBA_RENDER=check: saves the row as 32-bit pixels, restores it, and compares it over [from,
 // to).
 static void rowSave(const struct Renderer* renderer, uint32_t* out) {
@@ -631,10 +634,13 @@ static bool rowDiffers(const struct Renderer* renderer, const uint32_t* row, int
 	}
 	return false;
 }
+#endif
+
 static void drawBackgroundMode4Reference(struct GBA* gba, struct RenderBackground* background, int inY);
 
 // Draws a text background's line: the SIMD path where it applies, otherwise the reference loops.
 static void drawBackgroundMode0(struct GBA* gba, struct RenderBackground* background, int y) {
+#if RENDER_SIMD
 	struct Renderer* renderer = &gba->renderer;
 	// Horizontal mosaic needs mGBA's own loop; the 256-color fast path has no object window
 	// support.
@@ -643,7 +649,6 @@ static void drawBackgroundMode0(struct GBA* gba, struct RenderBackground* backgr
 	if (background->mosaic) {
 		fastY -= y % (MOSAIC_BG_V(renderer->mosaic) + 1);
 	}
-#if RENDER_SIMD
 	if (fast && useSimd) {
 		if (!checkFast) {
 			if (renderTextSimd(gba, background, fastY)) {
@@ -671,7 +676,6 @@ static void drawBackgroundMode0(struct GBA* gba, struct RenderBackground* backgr
 		}
 	}
 #endif
-	(void) fast;
 	drawBackgroundMode0Reference(gba, background, y);
 }
 
@@ -872,6 +876,8 @@ static void drawBackgroundMode2(struct GBA* gba, struct RenderBackground* backgr
 	(void) mosaicWait;
 	(void) localX;
 	(void) localY;
+	(void) x;
+	(void) y;
 	drawBackgroundMode2Reference(gba, background, inY);
 }
 
