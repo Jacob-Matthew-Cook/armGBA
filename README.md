@@ -1,10 +1,14 @@
 # armGBA
 
-A Game Boy Advance libretro core built around a recompiler, written for small ARM handhelds. Game Boy
-and Game Boy Color games run in the same core.
+A Game Boy Advance, Game Boy and Game Boy Color libretro core for low-power handhelds.
 
-The aim is timing that a game cannot tell from the hardware, at twice the speed of mGBA on a
-Cortex-A35 or Cortex-A55.
+armGBA builds on years of work by others. Much of its Game Boy Advance side is mGBA's code (Jeffrey
+Pfau and contributors), and mGBA is the reference it's tested against. Its Game Boy and Game Boy
+Color games run on Gambatte-Speedrun's core. See Credits for the full list.
+
+What armGBA adds is a recompiler for the Game Boy Advance's CPU, so games run with headroom on slow
+handheld chips such as the Cortex-A35 and Cortex-A55. It stays accurate wherever a game could notice:
+interrupts, DMA, timers and what's on screen all happen when they would on the hardware.
 
 ## Controls
 
@@ -124,18 +128,19 @@ Where the hardware gives no answer, these rules apply:
 
 ## Performance
 
-Frames per second on one core, unthrottled, against the cores ROCKNIX ships. Game Boy Advance games
-ran 9000 frames with scripted button presses, Game Boy games 3000 frames from power-on.
+How much headroom armGBA leaves on a slow handheld: frames per second on one core, unthrottled, with
+the cores ROCKNIX ships alongside for reference. Full speed is about 60. Game Boy Advance games ran
+9000 frames with scripted button presses, Game Boy games 3000 frames from power-on.
 
 Anbernic RG353M (RK3566, Cortex-A55 1.8 GHz), 14 October 2026:
 
-| Game | armGBA | mGBA | |
-| --- | --- | --- | --- |
-| Payback | 232 | 148 | 1.57x |
-| Mario Kart: Super Circuit | 372 | 248 | 1.50x |
-| Final Fantasy Tactics Advance | 353 | 255 | 1.38x |
-| Advance Wars | 320 | 202 | 1.58x |
-| Golden Sun | 549 | 347 | 1.58x |
+| Game | armGBA | mGBA |
+| --- | --- | --- |
+| Payback | 232 | 148 |
+| Mario Kart: Super Circuit | 372 | 248 |
+| Final Fantasy Tactics Advance | 353 | 255 |
+| Advance Wars | 320 | 202 |
+| Golden Sun | 549 | 347 |
 
 | Game | armGBA | Gambatte | mGBA |
 | --- | --- | --- | --- |
@@ -149,8 +154,8 @@ Anbernic RG353M (RK3566, Cortex-A55 1.8 GHz), 14 October 2026:
 | Wario Land 3 | 1532 | 1449 | 734 |
 
 With Threaded Video, Payback on the RG353M runs at 276, and at 288 with One Frame Late. Every game
-here runs several times faster than full speed. The 2x target over mGBA is met on x86-64, but not yet
-on one RK3566 core, where the small caches decide most of the speed.
+here runs several times faster than full speed, which leaves room for runahead, fast-forward and
+slower chips.
 
 ## How it works
 
