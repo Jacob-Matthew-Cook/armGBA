@@ -4,10 +4,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// The exact CPU: one instruction at a time, its bus accesses in the order the ARM7TDMI makes them.
-// Each access moves the clock on by its own cycles, and events due by then happen before it reads
-// or writes, so I/O sees what the hardware would. IRQs are taken between instructions. Compiled
-// code runs where no event can fall inside it; this runs the instructions around events.
+// The exact CPU: one instruction at a time, with its bus accesses in the order the ARM7TDMI makes
+// them. Each access moves the clock on by its own cycles, and events due by then happen before it
+// reads or writes, so I/O sees what the hardware would. IRQs are taken between instructions.
+// Compiled code runs where no event can fall inside it; this CPU runs the instructions around
+// events.
 
 #include "decode.h"
 #include "gba.h"
@@ -21,12 +22,12 @@ static uint32_t ror32(uint32_t value, unsigned rotate) {
 	return rotate ? (value >> rotate) | (value << (32 - rotate)) : value;
 }
 
-// After a PC write: the new PC's fetch is nonsequential, the next one sequential
+// After a PC write, the new PC's fetch is nonsequential and the next one sequential.
 void stepReload(struct GBA* gba) {
 	struct CPU* cpu = &gba->cpu;
 	bool thumb = cpu->cpsr & PSR_T;
 	int width = thumb ? 2 : 4;
-	// Like mGBA, an ARM-state PC keeps bit 1; fetches ignore it but PC reads see it
+	// As in mGBA, an ARM-state PC keeps bit 1: fetches ignore it, but PC reads see it.
 	uint32_t pc = cpu->r[15] & ~1u;
 	memorySetActiveRegion(gba, pc);
 	cpu->fetchSeq = false;
@@ -50,8 +51,8 @@ static void refetch(struct GBA* gba) {
 	}
 }
 
-// Entering an exception: the mode's banked registers come in, the old CPSR goes to its SPSR, IRQs are
-// masked, ARM state is entered and the PC goes to the vector
+// Enters an exception: the mode's banked registers come in, the old CPSR goes to its SPSR, IRQs are
+// masked, ARM state is entered, and the PC goes to the vector.
 static void exception(struct GBA* gba, unsigned mode, uint32_t vector, uint32_t lr) {
 	struct CPU* cpu = &gba->cpu;
 	uint32_t cpsr = cpu->cpsr;
@@ -63,12 +64,12 @@ static void exception(struct GBA* gba, unsigned mode, uint32_t vector, uint32_t 
 	stepReload(gba);
 }
 
-// At an instruction boundary, r15 pointing past the next instruction
+// At an instruction boundary, r15 points past the next instruction.
 static void takeIrq(struct GBA* gba) {
 	struct CPU* cpu = &gba->cpu;
 	bool thumb = cpu->cpsr & PSR_T;
 	int width = thumb ? 2 : 4;
-	// The fetch already under way is thrown away
+	// The fetch already under way is thrown away.
 	busFetch(gba, cpu->r[15] + width, thumb);
 	exception(gba, MODE_IRQ, 0x18, cpu->r[15] - width + 4);
 }
@@ -115,7 +116,7 @@ static bool passes(uint32_t cpsr, int cond) {
 	}
 }
 
-// Addressing mode 1
+// Addressing mode 1.
 static uint32_t shifter(struct GBA* gba, const struct Operand* op, bool* carry) {
 	struct CPU* cpu = &gba->cpu;
 	bool c = cpu->cpsr & PSR_C;
@@ -125,7 +126,7 @@ static uint32_t shifter(struct GBA* gba, const struct Operand* op, bool* carry) 
 	}
 	uint32_t v = cpu->r[op->rm];
 	if (op->byReg) {
-		// The shift takes a cycle, by which time the PC has moved on
+		// The shift takes a cycle, by which time the PC has moved on.
 		if (op->rm == 15) {
 			v += 4;
 		}
@@ -198,7 +199,7 @@ static uint32_t shifter(struct GBA* gba, const struct Operand* op, bool* carry) 
 	}
 }
 
-// Addressing mode 2: an offset register shifted by a constant
+// Addressing mode 2: an offset register shifted by a constant.
 static uint32_t offsetOf(struct GBA* gba, const struct Operand* op) {
 	if (op->isImm) {
 		return op->imm;
@@ -217,18 +218,18 @@ static uint32_t offsetOf(struct GBA* gba, const struct Operand* op) {
 	}
 }
 
-// TST, TEQ, CMP and CMN set flags and write no register
+// TST, TEQ, CMP and CMN set flags and write no register.
 static bool isTest(int op) {
 	return op >= ALU_TST && op <= ALU_CMN;
 }
 
-// N and Z from a result; C and V are the operation's to set
+// Sets N and Z from a result; C and V are left for the operation to set.
 static void setNz(struct CPU* cpu, uint32_t d) {
 	cpu->cpsr = (cpu->cpsr & ~(PSR_N | PSR_Z)) | (d & PSR_N) | (d ? 0 : PSR_Z);
 }
 
-// A data processing instruction. A shift by a register takes an internal cycle, and then the fetch
-// that follows is nonsequential.
+// Runs a data-processing instruction. A shift by a register takes an internal cycle, and the fetch
+// after it is then nonsequential.
 static void alu(struct GBA* gba, const struct Inst* in) {
 	struct CPU* cpu = &gba->cpu;
 	bool byReg = !in->op2.isImm && in->op2.byReg;
@@ -239,7 +240,7 @@ static void alu(struct GBA* gba, const struct Inst* in) {
 	bool carry;
 	uint32_t m = shifter(gba, &in->op2, &carry);
 	uint32_t n = cpu->r[in->rn];
-	// With a register shift the PC is read a cycle later, so it is 12 ahead instead of 8
+	// With a register shift, the PC is read a cycle later, so it is 12 ahead instead of 8.
 	if (!in->thumb && in->rn == 15 && byReg) {
 		n += 4;
 	}
@@ -330,13 +331,13 @@ static void alu(struct GBA* gba, const struct Inst* in) {
 	if (!test) {
 		stepReload(gba);
 	} else if (!in->thumb) {
-		// The next instruction follows in whatever state the SPSR gave, without a refill
+		// The next instruction runs in whatever state the SPSR gave, without a refill.
 		cpu->r[15] = in->address + 4 + ((cpu->cpsr & PSR_T) ? 2 : 4);
 		refetch(gba);
 	}
 }
 
-// The multiplier stops early once the rest of the operand is all zeros (or all ones, signed)
+// The multiplier stops early once the rest of the operand is all zeros (or all ones, when signed).
 static int multiplyCycles(uint32_t value, bool sign) {
 	if (sign) {
 		value ^= (uint32_t) ((int32_t) value >> 31);
@@ -344,7 +345,7 @@ static int multiplyCycles(uint32_t value, bool sign) {
 	return (31 - __builtin_clz(value | 1)) / 8 + 1;
 }
 
-// MUL and MLA: one internal cycle for each byte of the multiplier the early-out does not skip, and
+// MUL and MLA: one internal cycle for each byte of the multiplier the early-out doesn't skip, and
 // one more to accumulate. The carry flag comes out as the hardware's multiplier leaves it.
 static void mul(struct GBA* gba, const struct Inst* in) {
 	struct CPU* cpu = &gba->cpu;
@@ -352,7 +353,7 @@ static void mul(struct GBA* gba, const struct Inst* in) {
 	if (in->rd == 15 || (in->accumulate && in->rn == 15)) {
 		return;
 	}
-	// Thumb's MUL times by the destination's old value; ARM's by Rs
+	// Thumb's MUL multiplies by the destination's old value; ARM's by Rs.
 	uint32_t multiplier = in->thumb ? cpu->r[in->rd] : cpu->r[in->rs];
 	uint32_t multiplicand = in->thumb ? cpu->r[in->rs] : cpu->r[in->rm];
 	uint32_t accum = in->accumulate ? cpu->r[in->rn] : 0;
@@ -369,7 +370,7 @@ static void mul(struct GBA* gba, const struct Inst* in) {
 	}
 }
 
-// The 64-bit multiplies, which take one cycle more than the 32-bit ones
+// The 64-bit multiplies, which take one cycle more than the 32-bit ones.
 static void mulLong(struct GBA* gba, const struct Inst* in) {
 	struct CPU* cpu = &gba->cpu;
 	cpu->fetchSeq = false;
@@ -399,8 +400,8 @@ static void mulLong(struct GBA* gba, const struct Inst* in) {
 	}
 }
 
-// A single load or store. The base is written back after the access; a load then takes an internal
-// cycle before the register is written, which is when a loaded PC takes effect.
+// Runs a single load or store. The base is written back after the access; a load then takes an
+// internal cycle before the register is written, which is when a loaded PC takes effect.
 static void mem(struct GBA* gba, const struct Inst* in) {
 	struct CPU* cpu = &gba->cpu;
 	uint32_t base = cpu->r[in->rn];
@@ -414,7 +415,7 @@ static void mem(struct GBA* gba, const struct Inst* in) {
 	if (in->load) {
 		uint32_t value = busRead(gba, address, in->size, false);
 		if (in->signExtend) {
-			// A signed halfword load from an odd address reads the byte there, sign-extended
+			// A signed halfword load from an odd address reads the byte there, sign-extended.
 			if (in->size == 1 || (address & 1)) {
 				value = (uint32_t) (int8_t) value;
 			} else {
@@ -433,7 +434,7 @@ static void mem(struct GBA* gba, const struct Inst* in) {
 	}
 	uint32_t value = cpu->r[in->rd];
 	if (in->rd == 15) {
-		// A stored PC is 12 ahead of the instruction
+		// A stored PC is 12 ahead of the instruction.
 		value += 4;
 	}
 	busWrite(gba, address, value, in->size, false);
@@ -442,7 +443,8 @@ static void mem(struct GBA* gba, const struct Inst* in) {
 	}
 }
 
-// SWP: a read and a write of the same address with nothing able to come between, then an internal cycle
+// SWP: a read and a write of the same address with nothing able to come between them, then an
+// internal cycle.
 static void swap(struct GBA* gba, const struct Inst* in) {
 	struct CPU* cpu = &gba->cpu;
 	uint32_t address = cpu->r[in->rn];
@@ -453,12 +455,12 @@ static void swap(struct GBA* gba, const struct Inst* in) {
 	cpu->r[in->rd] = value;
 }
 
-// LDM and STM transfer upward from the lowest address; the base is written back after the first
-// register, so a later STM sees it moved and a loaded base wins
+// LDM and STM transfer upward from the lowest address. The base is written back after the first
+// register, so a later STM sees it moved and a loaded base wins.
 static void block(struct GBA* gba, const struct Inst* in) {
 	struct CPU* cpu = &gba->cpu;
 	uint16_t list = in->list;
-	// An empty list moves the base as sixteen registers would and transfers r15
+	// An empty list moves the base as sixteen registers would, and transfers r15.
 	int count = list ? __builtin_popcount(list) : 16;
 	if (!list) {
 		list = 0x8000;
@@ -517,7 +519,7 @@ static void block(struct GBA* gba, const struct Inst* in) {
 	}
 }
 
-// BX: bit 0 of the target picks ARM or Thumb
+// BX: bit 0 of the target picks ARM or Thumb.
 static void bx(struct GBA* gba, const struct Inst* in) {
 	struct CPU* cpu = &gba->cpu;
 	uint32_t target = cpu->r[in->rm];
@@ -530,7 +532,7 @@ static void bx(struct GBA* gba, const struct Inst* in) {
 	stepReload(gba);
 }
 
-// MSR writes the CPSR or the SPSR, in the fields its mask names
+// MSR writes the CPSR or the SPSR, in the fields its mask names.
 static void msr(struct GBA* gba, const struct Inst* in) {
 	struct CPU* cpu = &gba->cpu;
 	uint32_t value = in->op2.isImm ? in->op2.imm : cpu->r[in->op2.rm];
@@ -538,7 +540,7 @@ static void msr(struct GBA* gba, const struct Inst* in) {
 	if (in->spsr) {
 		return;
 	}
-	// mGBA refetches after writing the CPSR; switched to Thumb, a NOP fills the gap
+	// mGBA refetches after writing the CPSR; after switching to Thumb, a NOP fills the gap.
 	if (cpu->cpsr & PSR_T) {
 		cpu->prefetch[0] = 0x46C0;
 		cpu->prefetch[1] &= 0xFFFF;
@@ -607,8 +609,8 @@ void stepExecute(struct GBA* gba, const struct Inst* in) {
 	}
 }
 
-// For debugging: writes the PC and time of each instruction stepped, from a given PC or time on
-// (TRACE_FROM, TRACE_TIME), for TRACE_COUNT instructions
+// For debugging: writes the PC and time of each instruction stepped, from a given PC or time
+// onwards (TRACE_FROM, TRACE_TIME), for TRACE_COUNT instructions.
 void stepTraceOpen(struct GBA* gba, const char* path) {
 	gba->traceFile = fopen(path, "w");
 	gba->traceFromPc = getenv("TRACE_FROM") ? strtoul(getenv("TRACE_FROM"), NULL, 16) : ~0u;
@@ -636,8 +638,9 @@ void stepTrace(struct GBA* gba) {
 	}
 }
 
-// One instruction: an IRQ is taken first if one is waiting, then the pipeline moves on a place (the
-// fetch for two instructions ahead goes out on the bus now) and the instruction at its head runs
+// Runs one instruction: an IRQ is taken first if one is waiting, then the pipeline moves on a place
+// (the fetch for two instructions ahead goes out on the bus now), and the instruction at its head
+// runs.
 static void step(struct GBA* gba) {
 	struct CPU* cpu = &gba->cpu;
 	if (gba->irq.line && !cpu->irqMasked) {
@@ -648,7 +651,7 @@ static void step(struct GBA* gba) {
 	}
 	bool thumb = cpu->cpsr & PSR_T;
 	uint32_t opcode = cpu->prefetch[0];
-	// The I flag as it is before the instruction decides whether an IRQ is taken after it
+	// The I flag as it is before the instruction decides whether an IRQ is taken after it.
 	cpu->irqMasked = cpu->cpsr & PSR_I;
 	cpu->prefetch[0] = cpu->prefetch[1];
 	struct Inst in;
@@ -666,7 +669,7 @@ static void step(struct GBA* gba) {
 	}
 }
 
-// After a reset or a loaded state: the pipeline filled from memory, at no cost
+// After a reset or a loaded state, fills the pipeline from memory at no cost.
 void stepReset(struct GBA* gba) {
 	struct CPU* cpu = &gba->cpu;
 	refetch(gba);

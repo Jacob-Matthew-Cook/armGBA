@@ -16,15 +16,15 @@ enum {
 	SP_BASE_SUPERVISOR = 0x03007FE0,
 };
 
-// The interrupt controller is a short pipeline: a write to IE, IF or IME, or a request, shows in the
-// registers a cycle later; whether an enabled interrupt is waiting (which wakes a halted CPU) a cycle
-// after that; and the CPU's IRQ line a cycle after that. Each stage is an event, from a small pool
-// since several can be in flight.
+// The interrupt controller is a short pipeline: a write to IE, IF or IME, or a request, shows in
+// the registers one cycle later; whether an enabled interrupt is waiting (which wakes a halted
+// CPU), one cycle after that; and the CPU's IRQ line, one cycle after that. Each stage is an event,
+// taken from a small pool since several can be in flight.
 static void freeChange(void* context) {
 	((struct IrqChange*) context)->busy = false;
 }
 
-// Schedules a stage's change with a free slot of its pool
+// Schedules a stage's change in a free slot of its pool.
 static void scheduleChange(struct GBA* gba, struct IrqChange* slots, bool value, int32_t when) {
 	struct IrqChange* change = &slots[0];
 	while (change->busy && change < &slots[3]) {
@@ -35,21 +35,22 @@ static void scheduleChange(struct GBA* gba, struct IrqChange* slots, bool value,
 	timingSchedule(gba, &change->event, when);
 }
 
-// The second stage: IE & IF as the halt logic sees it
+// The second stage: IE & IF as the halt logic sees it.
 static void availableChanged(struct GBA* gba, void* context, uint32_t late) {
 	(void) late;
 	freeChange(context);
 	gba->irq.available = ((struct IrqChange*) context)->value;
 }
 
-// The third: the line the CPU samples between instructions
+// The third stage: the line the CPU samples between instructions.
 static void lineChanged(struct GBA* gba, void* context, uint32_t late) {
 	(void) late;
 	freeChange(context);
 	gba->irq.line = ((struct IrqChange*) context)->value;
 }
 
-// The first: the registers take their new values, and the later stages are scheduled if they change
+// The first stage: the registers take their new values, and the later stages are scheduled if they
+// change.
 static void applyIrq(struct GBA* gba, void* context, uint32_t late) {
 	struct Irq* irq = &gba->irq;
 	gbaIrqSync(gba);
@@ -68,7 +69,7 @@ static void applyIrq(struct GBA* gba, void* context, uint32_t late) {
 	}
 }
 
-// A pool's four events, all with the same callback
+// Sets up a pool's four events, all with the same callback.
 static void initChanges(struct IrqChange* slots, EventCallback callback, unsigned priority) {
 	for (int i = 0; i < 4; ++i) {
 		slots[i].event.callback = callback;
@@ -77,7 +78,7 @@ static void initChanges(struct IrqChange* slots, EventCallback callback, unsigne
 	}
 }
 
-// Nothing enabled, nothing requested, nothing in flight
+// Nothing enabled, nothing requested, nothing in flight.
 static void irqReset(struct GBA* gba) {
 	struct Irq* irq = &gba->irq;
 	irq->ie = 0;
@@ -95,7 +96,7 @@ static void irqReset(struct GBA* gba) {
 	}
 }
 
-// A machine with no BIOS or cartridge yet
+// Creates a machine with no BIOS or cartridge yet.
 struct GBA* gbaCreate(void) {
 	struct GBA* gba = calloc(1, sizeof(*gba));
 	if (!gba) {
@@ -130,7 +131,7 @@ void gbaDestroy(struct GBA* gba) {
 	free(gba);
 }
 
-// The 16 KiB BIOS image
+// Loads the 16 KiB BIOS image.
 bool gbaLoadBios(struct GBA* gba, const void* data, size_t size) {
 	if (size != SIZE_BIOS) {
 		return false;
@@ -140,7 +141,7 @@ bool gbaLoadBios(struct GBA* gba, const void* data, size_t size) {
 	return true;
 }
 
-// The next power of two at or above value
+// Returns the next power of two at or above value.
 static uint32_t toPow2(uint32_t value) {
 	uint32_t p = 1;
 	while (p < value) {
@@ -149,13 +150,13 @@ static uint32_t toPow2(uint32_t value) {
 	return p;
 }
 
-// Whether a word could be an address in a region's first 128 KiB
+// Whether a word could be an address in a region's first 128 KiB.
 static bool addressIn(uint32_t word, int region) {
 	return (word & ~0x1FFFFu) == (uint32_t) region << 24;
 }
 
-// A multiboot image, as mGBA tells one from a cartridge: an entry at 0xC0 that branches on, or code
-// after it that points into EWRAM rather than the cartridge
+// Whether an image is a multiboot image, as mGBA tells one from a cartridge: an entry at 0xC0 that
+// branches on, or code after it that points into EWRAM rather than the cartridge.
 static bool multibootImage(const uint8_t* data, size_t size) {
 	if (size > SIZE_EWRAM || size < 0xC4 || data[3] != 0xEA || data[0xB2] != 0x96) {
 		return false;
@@ -166,7 +167,7 @@ static bool multibootImage(const uint8_t* data, size_t size) {
 	decodeArm(&in, 0xC0, word);
 	if (in.kind == I_B && !in.link) {
 		int32_t offset = in.target - 0xC8;
-		// 28 is an old toolchain's loop
+		// 28 is an old toolchain's loop.
 		if (offset <= 0 || offset == 28) {
 			return false;
 		}
@@ -195,13 +196,13 @@ static bool multibootImage(const uint8_t* data, size_t size) {
 	return cartridge < 2 && ewram;
 }
 
-// The cartridge image, copied. A multiboot image, which runs from work RAM, is kept apart and the
+// Copies the cartridge image in. A multiboot image, which runs from work RAM, is kept apart and the
 // cartridge left empty.
 bool gbaLoadRom(struct GBA* gba, const void* data, size_t size) {
 	if (!cartLoad(gba, data, size)) {
 		return false;
 	}
-	// Like mGBA, the first 32 MiB of a bigger file, as ROM hacks that run past it need
+	// As in mGBA, takes the first 32 MiB of a bigger file, which ROM hacks that run past it need.
 	if (size > SIZE_ROM) {
 		size = SIZE_ROM;
 	}
@@ -210,7 +211,7 @@ bool gbaLoadRom(struct GBA* gba, const void* data, size_t size) {
 	gba->multiboot = NULL;
 	gba->multibootSize = 0;
 	if (multibootImage(data, size)) {
-		// No cartridge
+		// No cartridge.
 		gba->multiboot = malloc(size);
 		if (!gba->multiboot) {
 			return false;
@@ -219,14 +220,14 @@ bool gbaLoadRom(struct GBA* gba, const void* data, size_t size) {
 		gba->multibootSize = size;
 		size = 0;
 	}
-	// The full 32 MiB is mapped so out-of-range reads can't leave the buffer
+	// The full 32 MiB is mapped, so out-of-range reads can't leave the buffer.
 	gba->rom = calloc(1, SIZE_ROM);
 	if (!gba->rom) {
 		return false;
 	}
 	memcpy(gba->rom, data, size);
-	// A Classic NES Series cartridge repeats its 1 MiB all through the cartridge space; the games read
-	// it there, and drop button presses without it
+	// A Classic NES Series cartridge repeats its 1 MiB all through the cartridge space; the games
+	// read it there, and drop button presses without it.
 	if (size >= 0xB0 && gba->rom[0xAC] == 'F' && !(size & (size - 1))) {
 		for (size_t at = size; at < SIZE_ROM; at += size) {
 			memcpy(&gba->rom[at], gba->rom, size);
@@ -238,14 +239,14 @@ bool gbaLoadRom(struct GBA* gba, const void* data, size_t size) {
 	return true;
 }
 
-// Power-on. With skipBios the machine starts as the BIOS would have left it, at the cartridge's
+// Powers on. With skipBios, the machine starts as the BIOS would have left it, at the cartridge's
 // entry point; otherwise at the BIOS's reset vector.
 void gbaReset(struct GBA* gba, bool skipBios) {
 	struct CPU* cpu = &gba->cpu;
 	gpioSetDevices(gba, overridesApply(gba));
 	cartReset(gba);
 	cpuReset(gba);
-	// The BIOS hangs on a cartridge whose logo is wrong; like mGBA, start it straight away
+	// The BIOS hangs on a cartridge whose logo is wrong, so, as in mGBA, start it straight away.
 	if (!overridesLogoValid(gba)) {
 		skipBios = true;
 	}
@@ -278,8 +279,8 @@ void gbaReset(struct GBA* gba, bool skipBios) {
 	}
 
 	if (skipBios && cpu->r[15] == 4) {
-		// A multiboot image at its header's branch, as mGBA starts one: kiosk images have no entry at
-		// 0xC0 and fall into 0xE0's wait for a GameCube
+		// Starts a multiboot image at its header's branch, as mGBA does: kiosk images have no entry
+		// at 0xC0, and would fall into 0xE0's wait for a GameCube.
 		cpu->r[15] = gba->multiboot ? 0x02000000 : 0x08000000;
 		videoStartAt(gba, 0x7E, 117);
 		gba->io[IO(REG_POSTFLG)] = 1;
@@ -288,7 +289,7 @@ void gbaReset(struct GBA* gba, bool skipBios) {
 	stepReset(gba);
 }
 
-// Runs until the next frame is complete
+// Runs until the next frame is complete.
 void gbaRunFrame(struct GBA* gba) {
 	uint32_t frame = gba->video.frameCounter;
 	while (gba->video.frameCounter == frame) {
@@ -296,28 +297,28 @@ void gbaRunFrame(struct GBA* gba) {
 	}
 }
 
-// The buttons held, a bit each, set as 1; the register has them the other way up
+// Sets the buttons held, one bit each, as 1; the register has them the other way up.
 void gbaSetKeys(struct GBA* gba, uint16_t keys) {
 	gba->keysActive = keys & 0x3FF;
-	// Kept as read, for compiled code's loads
+	// Kept as read, for compiled code's loads.
 	gba->io[IO(REG_KEYINPUT)] = 0x3FF ^ gba->keysActive;
 	gbaTestKeypadIrq(gba, 0);
 }
 
-// A request from a device: its IF bit, by way of the pipeline
+// A request from a device: sets its IF bit, by way of the pipeline.
 void gbaRaiseIrq(struct GBA* gba, int irq, uint32_t late) {
 	gba->irq.iflags |= 1 << irq;
 	scheduleChange(gba, gba->irq.apply, false, 1 - (int32_t) late);
 }
 
-// An HBlank IRQ request that IE leaves out only sets IF, a cycle after H-blank, and the register shows
-// it a cycle later. With nothing else to do, those requests aren't events: IF is worked out when read,
-// written, or changed by the controller.
+// An H-blank IRQ request that IE leaves out only sets IF, one cycle after H-blank, and the register
+// shows it one cycle later. With nothing else to do, those requests aren't events: IF is worked out
+// when read, written, or changed by the controller.
 bool gbaQuietHblank(struct GBA* gba) {
 	return (gba->io[IO(REG_DISPSTAT)] & 0x0010) && !(gba->irq.ie & (1 << IRQ_HBLANK));
 }
 
-// Brings IF up to date with H-blank requests that were left to be worked out
+// Brings IF up to date with the H-blank requests left to be worked out.
 void gbaIrqSync(struct GBA* gba) {
 	struct Irq* irq = &gba->irq;
 	if (!irq->quietPending) {
@@ -334,13 +335,13 @@ void gbaIrqSync(struct GBA* gba) {
 		irq->quietFrom = hblank;
 		return;
 	}
-	// Set until IF is written
+	// Set until IF is written.
 	gba->io[IO(REG_IF)] |= 1 << IRQ_HBLANK;
 	irq->quietPending = false;
 	irq->ifStable = now + INT32_MAX;
 }
 
-// Requests from H-blanks at from or later
+// Requests from H-blanks at from or later.
 static void startQuiet(struct GBA* gba, uint32_t from) {
 	struct Irq* irq = &gba->irq;
 	irq->quietPending = true;
@@ -348,8 +349,9 @@ static void startQuiet(struct GBA* gba, uint32_t from) {
 	irq->ifStable = videoNextHblank(gba, from) + 2;
 }
 
-// After DISPSTAT's HBlank IRQ enable or IE changed. Leaving quiet, a request under way goes on as
-// events: the IF update a cycle after an H-blank just now, or the register's a cycle after that.
+// Called after DISPSTAT's H-blank IRQ enable or IE changed. When leaving quiet mode, a request
+// under way continues as events: the IF update one cycle after an H-blank that just happened, or
+// the register's one cycle after that.
 void gbaIrqQuietChanged(struct GBA* gba, bool wasQuiet) {
 	struct Irq* irq = &gba->irq;
 	bool quiet = gbaQuietHblank(gba);
@@ -357,7 +359,7 @@ void gbaIrqQuietChanged(struct GBA* gba, bool wasQuiet) {
 		return;
 	}
 	if (quiet) {
-		// An H-blank just now went by as an event, before the change
+		// An H-blank that just happened went by as an event, before the change.
 		startQuiet(gba, timingCurrentTime(gba) + 1);
 		return;
 	}
@@ -375,7 +377,8 @@ void gbaIrqQuietChanged(struct GBA* gba, bool wasQuiet) {
 	irq->ifStable = timingCurrentTime(gba) + INT32_MAX;
 }
 
-// The three interrupt registers. Each write goes through the pipeline's first stage a cycle later.
+// The three interrupt registers. Each write goes through the pipeline's first stage one cycle
+// later.
 void gbaWriteIe(struct GBA* gba, uint16_t value) {
 	gbaIrqSync(gba);
 	bool wasQuiet = gbaQuietHblank(gba);
@@ -384,18 +387,18 @@ void gbaWriteIe(struct GBA* gba, uint16_t value) {
 	scheduleChange(gba, gba->irq.apply, false, 1);
 	if ((old ^ gba->irq.ie) & (1 << IRQ_HBLANK)) {
 		gbaIrqQuietChanged(gba, wasQuiet);
-		// H-blank events on every line, or not
+		// H-blank events on every line, or not.
 		videoHblankDmaArmed(gba);
 	}
 }
 
-// Writing a 1 to an IF bit acknowledges that interrupt
+// Writing a 1 to an IF bit acknowledges that interrupt.
 void gbaWriteIf(struct GBA* gba, uint16_t value) {
 	gbaIrqSync(gba);
 	gba->irq.iflags &= ~value;
 	scheduleChange(gba, gba->irq.apply, false, 1);
 	if ((value & (1 << IRQ_HBLANK)) && gbaQuietHblank(gba)) {
-		// An H-blank just now asks after the write
+		// An H-blank that just happened asks after the write.
 		startQuiet(gba, timingCurrentTime(gba));
 	}
 }
@@ -405,8 +408,8 @@ void gbaWriteIme(struct GBA* gba, uint16_t value) {
 	scheduleChange(gba, gba->irq.apply, false, 1);
 }
 
-// The key interrupt: any of the chosen keys, or all of them at once, as KEYCNT says. It is asked
-// for again only when the keys change.
+// The key interrupt: any of the chosen keys, or all of them at once, as KEYCNT says. It is checked
+// again only when the keys change.
 void gbaTestKeypadIrq(struct GBA* gba, uint32_t late) {
 	uint16_t keysLast = gba->keysLast;
 	uint16_t keysActive = gba->keysActive;
@@ -429,25 +432,25 @@ void gbaTestKeypadIrq(struct GBA* gba, uint32_t late) {
 	}
 }
 
-// Halting takes a cycle on top of the write
+// Halting takes a cycle on top of the write.
 void gbaHalt(struct GBA* gba) {
 	gba->cpu.cycles += 1;
 	gba->cpu.nextEvent = gba->cpu.cycles;
 	gba->cpu.halted = 1;
 }
 
-// STOP is not emulated beyond making compiled code look at events
+// STOP isn't emulated, beyond making compiled code look at events.
 void gbaStop(struct GBA* gba) {
 	gba->cpu.nextEvent = gba->cpu.cycles;
 }
 
-// Asks the run loop to return to its caller as soon as it can
+// Asks the run loop to return to its caller as soon as it can.
 void gbaInterrupt(struct GBA* gba) {
 	gba->earlyExit = true;
 	timingInterrupt(gba);
 }
 
-// Once a frame, in case the keys changed
+// Once a frame, in case the keys changed.
 void gbaFrameStarted(struct GBA* gba, uint32_t late) {
 	gbaTestKeypadIrq(gba, late);
 }
