@@ -20,7 +20,6 @@ set(CORE_SOURCES
 	src/gba.c
 	src/gpio.c
 	src/io.c
-	src/jit.c
 	src/memory.c
 	src/overrides.c
 	src/psg.c
@@ -35,12 +34,19 @@ set(CORE_SOURCES
 	src/video.c
 )
 
+option(ARMGBA_JIT "Build the recompiler, where there is a backend for the CPU" ON)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-	list(APPEND CORE_SOURCES src/x64/backend.c src/render-x86.c)
+	list(APPEND CORE_SOURCES src/render-x86.c)
+	set(BACKEND src/x64/backend.c)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-	list(APPEND CORE_SOURCES src/a64/backend.c src/render-neon.c)
+	list(APPEND CORE_SOURCES src/render-neon.c)
+	set(BACKEND src/a64/backend.c)
+endif()
+if(ARMGBA_JIT AND BACKEND)
+	list(APPEND CORE_SOURCES src/jit.c ${BACKEND})
 else()
-	message(FATAL_ERROR "No recompiler backend for ${CMAKE_SYSTEM_PROCESSOR} yet")
+	message(STATUS "No recompiler: every instruction runs on the exact CPU")
+	list(APPEND CORE_SOURCES src/nojit.c)
 endif()
 
 add_library(armgba STATIC ${CORE_SOURCES})

@@ -68,57 +68,6 @@ static uint32_t canonical(int kind, uint32_t address) {
 	}
 }
 
-// The regions codeKindOf returns.
-static inline const uint8_t* codePointer(struct GBA* gba, uint32_t address) {
-	switch (address >> 24) {
-	case REGION_BIOS:
-		return address < SIZE_BIOS ? &gba->bios[address] : NULL;
-	case REGION_EWRAM:
-		return &gba->ewram[address & (SIZE_EWRAM - 1)];
-	case REGION_IWRAM:
-		return &gba->iwram[address & (SIZE_IWRAM - 1)];
-	case REGION_PALETTE:
-		return &gba->palette[address & (SIZE_PALETTE - 1)];
-	case REGION_VRAM:
-		return &gba->vram[canonical(CODE_VRAM, address)];
-	case REGION_OAM:
-		return &gba->oam[address & (SIZE_OAM - 1)];
-	case REGION_ROM0 ... REGION_ROM2_EX: {
-		uint32_t offset = address & (SIZE_ROM - 1);
-		return offset < gba->romSize ? &gba->rom[offset] : cartPrintCode(gba, address);
-	}
-	default:
-		return NULL;
-	}
-}
-
-// Fetching from unmapped memory gives the undefined instruction mGBA uses there.
-enum {
-	DEAD_CODE = 0xE710B710,
-};
-
-// Returns the instruction word at an address as memory holds it now, without timing, or DEAD_CODE
-// where there is no memory to fetch from.
-uint32_t codeFetch32(struct GBA* gba, uint32_t address) {
-	const uint8_t* p = codePointer(gba, address & ~3u);
-	uint32_t value = DEAD_CODE;
-	if (p) {
-		memcpy(&value, p, 4);
-	}
-	return value;
-}
-
-// The same for a Thumb instruction.
-uint16_t codeFetch16(struct GBA* gba, uint32_t address) {
-	const uint8_t* p = codePointer(gba, address & ~1u);
-	if (!p) {
-		return (uint16_t) DEAD_CODE;
-	}
-	uint16_t value;
-	memcpy(&value, p, 2);
-	return value;
-}
-
 // The part of the cartridge a mapper's window covers: the Matrix mapper's sixteen 512-byte pages.
 enum {
 	ROM_WINDOW = 0x2000,
@@ -2331,35 +2280,6 @@ uint32_t jitMultiplyCarry(struct GBA* gba, uint32_t kind) {
 		return cpuMultiplyCarryHigh(multiplicand, multiplier, accumHi, sign);
 	}
 	return cpuMultiplyCarryLow(multiplicand, multiplier, accumLo);
-}
-
-enum {
-	PSR_USER_MASK = 0xF0000000,
-	PSR_PRIV_MASK = 0x000000CF,
-	PSR_STATE_MASK = 0x00000020,
-};
-
-// MSR: writes the fields named in the mask, leaving alone the bits a mode may not change; a change
-// of mode switches the banked registers.
-void jitHelperMsr(struct GBA* gba, uint32_t value, uint32_t packed) {
-	struct CPU* cpu = &gba->cpu;
-	uint32_t mask = packed & 0xFF0000FF;
-	if (packed & 0x100) {
-		mask &= PSR_USER_MASK | PSR_PRIV_MASK | PSR_STATE_MASK;
-		cpu->spsr = (cpu->spsr & ~mask) | (value & mask) | 0x10;
-		return;
-	}
-	uint32_t cpsr = cpu->cpsr;
-	if (mask & PSR_USER_MASK) {
-		cpsr = (cpsr & ~PSR_USER_MASK) | (value & PSR_USER_MASK);
-	}
-	if (mask & PSR_STATE_MASK) {
-		cpsr = (cpsr & ~PSR_STATE_MASK) | (value & PSR_STATE_MASK);
-	}
-	if (cpu->mode != MODE_USER && (mask & PSR_PRIV_MASK)) {
-		cpsr = (cpsr & ~PSR_PRIV_MASK) | (value & PSR_PRIV_MASK);
-	}
-	cpuWriteCpsr(gba, cpsr);
 }
 
 static struct Jit* statsJit;
