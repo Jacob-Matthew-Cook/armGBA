@@ -37,9 +37,8 @@ enum {
 	NATIVE_RATE = 2097152,
 	FRAME_SAMPLES = 35112,
 	OVERRUN = 2064,
-	// A state's size is known once one is made; this much room for it to grow
-	// Room for a state to grow, and for the work RAM a Game Boy Color has over a Game Boy when the game
-	// starts again as one: the size a frontend was told stays enough
+	// Extra room in the state size told to the frontend: for the state to grow, and for the extra work
+	// RAM a Game Boy Color has if the game restarts as one
 	STATE_SLACK = 4096 + 6 * 4096,
 };
 

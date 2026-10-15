@@ -2007,6 +2007,16 @@ static void preprocessBuffer(struct GBA* gba) {
 
 // After the layers: the backdrop where nothing drew, the blends between a top layer and the one under
 // it, and the row turned into the frame's colors
+// Blends the backdrop under the first-target pixels of [from, end), as mGBA's loop does
+static void blendBackdropReference(struct Renderer* renderer, int from, int end, uint32_t backdrop) {
+	for (int x = from; x < end; ++x) {
+		uint32_t color = rowGet(renderer, x);
+		if (color & FLAG_TARGET_1) {
+			rowSet(renderer, x, mix5(renderer->bldb, backdrop, renderer->blda, color));
+		}
+	}
+}
+
 static void postprocessBuffer(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16_t* normalPalette = (const uint16_t*) gba->palette;
@@ -2028,28 +2038,24 @@ static void postprocessBuffer(struct GBA* gba) {
 				x = end;
 				continue;
 			}
-			uint32_t fastRow[SCREEN_WIDTH];
 			if (useSimd) {
 				uint32_t before[SCREEN_WIDTH];
+				uint32_t fastRow[SCREEN_WIDTH];
 				rowSave(renderer, before);
 				renderBlendBackdropSimd(gba, x, end, backdrop);
 				rowSave(renderer, fastRow);
 				rowRestore(renderer, before);
-			}
-			int from = x;
-#endif
-			for (; x < end; ++x) {
-				uint32_t color = rowGet(renderer, x);
-				if (color & FLAG_TARGET_1) {
-					rowSet(renderer, x, mix5(renderer->bldb, backdrop, renderer->blda, color));
+				blendBackdropReference(renderer, x, end, backdrop);
+				if (rowDiffers(renderer, fastRow, x, end)) {
+					fprintf(stderr, "backdrop blend differs [%d,%d)\n", x, end);
+					abort();
 				}
-			}
-#if RENDER_SIMD
-			if (useSimd && rowDiffers(renderer, fastRow, from, end)) {
-				fprintf(stderr, "backdrop blend differs [%d,%d)\n", from, end);
-				abort();
+				x = end;
+				continue;
 			}
 #endif
+			blendBackdropReference(renderer, x, end, backdrop);
+			x = end;
 		}
 	}
 	if (renderer->forceTarget1 && (renderer->blendEffect == BLEND_DARKEN || renderer->blendEffect == BLEND_BRIGHTEN)) {
