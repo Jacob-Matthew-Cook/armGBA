@@ -356,8 +356,8 @@ void renderThreadStop(struct GBA* gba) {
 	pthread_cond_signal(&t->wake);
 	pthread_mutex_unlock(&t->mutex);
 	pthread_join(t->thread, NULL);
-	// Covers the lines the copy has drawn but this renderer hasn't: this renderer takes the copy's
-	// state to carry on alone, with the changes not yet logged.
+	// The copy has drawn lines this renderer hasn't, so this renderer takes over the copy's state to
+	// carry on alone, keeping its own record of changes not yet logged.
 	struct Renderer* renderer = &gba->renderer;
 	uint8_t memoryChanged = renderer->memoryChanged;
 	uint8_t vramChanged[PAGES];
