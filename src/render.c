@@ -6,20 +6,22 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // mGBA's software renderer (video-software.c, software-bg.c, software-mode0.c, software-obj.c,
-// common.c), kept line for line in BGR555 so its frames are the reference the faster paths match
+// common.c), kept line for line in BGR555 so its frames are the reference the faster paths must
+// match.
 
 #include "render-private.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 
-// A line is built in the row, one 32-bit word a pixel: the color in the low bits, and above it the flags
-// that decide what may draw over it (priority, which layer, whether it is a blend target). The words
-// are kept as two planes, colors and top halves, which rowGet and rowSet join and split. Layers are
-// drawn front to back, so a pixel is written only where nothing in front has been.
+// A line is built in the row, one 32-bit word per pixel: the color in the low bits, and above it
+// the flags that decide what may draw over it (priority, which layer, whether it is a blend
+// target). The words are stored as two planes, colors and top halves, which rowGet and rowSet join
+// and split. Layers are drawn front to back, so a pixel is written only where nothing in front has
+// been drawn.
 //
-// One background pixel of a 16-color tile into the row, where the object window applies: the window
-// picks the palette and flags, and may hide the pixel
+// Draws one background pixel of a 16-color tile into the row where the object window applies: the
+// window picks the palette and flags, and may hide the pixel.
 #define COMPOSITE_16_OBJWIN(BLEND, IDX) \
 	if (background->objwinForceEnable || (!(current & FLAG_OBJWIN)) == background->objwinOnly) { \
 		unsigned color; \
@@ -35,7 +37,7 @@
 		composite##BLEND##Objwin(renderer, pixel + IDX, color | mergedFlags, current); \
 	}
 
-// The same with no object window to consult
+// The same, with no object window to consult.
 #define COMPOSITE_16_NO_OBJWIN(BLEND, IDX) \
 	{ \
 		unsigned color; \
@@ -47,7 +49,7 @@
 		composite##BLEND##NoObjwin(renderer, pixel + IDX, color | flags, current); \
 	}
 
-// And the two for 256-color tiles, whose pixel is the palette index itself
+// And the two for 256-color tiles, whose pixel is the palette index itself.
 #define COMPOSITE_256_OBJWIN(BLEND, IDX) \
 	if (background->objwinForceEnable || (!(current & FLAG_OBJWIN)) == background->objwinOnly) { \
 		unsigned color; \
@@ -74,8 +76,8 @@
 		composite##BLEND##NoObjwin(renderer, pixel + IDX, color | flags, current); \
 	}
 
-// The next pixel of the tile row in tileData, lowest bits first: drawn if it is not color 0 and the
-// row's pixel is still free, then on to the next
+// Takes the next pixel of the tile row in tileData, lowest bits first, and draws it if it isn't
+// color 0 and the row's pixel is still free.
 #define BACKGROUND_DRAW_PIXEL_16(BLEND, OBJWIN, IDX) \
 	pixelData = tileData & 0xF; \
 	current = rowGet(renderer, pixel + IDX); \
@@ -92,8 +94,8 @@
 	} \
 	tileData >>= 8;
 
-// Whether pixels have to ask the object window, and the palette pixels inside it use: the brightened
-// or darkened one when the window allows the effect on this background
+// Whether pixels have to consult the object window, and the palette pixels inside it use: the
+// brightened or darkened one when the window allows the effect on this background.
 #define PREPARE_OBJWIN \
 	int objwinSlowPath = DISPCNT_OBJWIN_ENABLE(renderer->dispcnt); \
 	const uint16_t* objwinPalette = normalPalette; \
@@ -105,8 +107,9 @@
 		} \
 	}
 
-// Start of an affine or bitmap background's line: its texture coordinates at the left edge in 8.8
-// fixed point, pulled back to the top-left of the mosaic block where mosaic is on, and its palettes
+// Sets up the start of an affine or bitmap background's line: its texture coordinates at the left
+// edge in 8.8 fixed point, pulled back to the top-left of the mosaic block when mosaic is on, and
+// its palettes.
 #define BACKGROUND_BITMAP_INIT \
 	int32_t x = background->sx + (renderer->start - 1) * background->dx; \
 	int32_t y = background->sy + (renderer->start - 1) * background->dy; \
@@ -139,9 +142,9 @@
 	(void) objwinFlags; \
 	PREPARE_OBJWIN;
 
-// Text backgrounds
+// Text backgrounds.
 
-// The map entry for the tile at localX: the map is one, two or four 32x32 screens
+// Returns the map entry for the tile at localX; the map is one, two or four 32x32 screens.
 #define BACKGROUND_TEXT_SELECT_CHARACTER \
 	xBase = localX & 0xF8; \
 	if (background->size & 1) { \
@@ -150,8 +153,8 @@
 	screenBase = yBase + (xBase >> 3); \
 	mapData = load16(vram, screenBase << 1);
 
-// A text background's line is drawn as a partial tile, whole tiles, and a partial tile. This is the
-// left-hand part of a tile cut by the right edge: 16 colors.
+// A text background's line is drawn as a partial tile, whole tiles, then another partial tile. This
+// draws the left-hand part of a tile cut off by the right edge, for 16 colors.
 #define DRAW_BACKGROUND_MODE_0_TILE_SUFFIX_16(BLEND, OBJWIN) \
 	paletteData = TEXT_MAP_PALETTE(mapData) << 4; \
 	charBase = (background->charBase + (TEXT_MAP_TILE(mapData) << 5)) + (localY << 2); \
@@ -168,7 +171,7 @@
 		} \
 	}
 
-// The right-hand part of a tile cut by the left edge
+// The right-hand part of a tile cut off by the left edge.
 #define DRAW_BACKGROUND_MODE_0_TILE_PREFIX_16(BLEND, OBJWIN) \
 	charBase = (background->charBase + (TEXT_MAP_TILE(mapData) << 5)) + (localY << 2); \
 	tileData = load32(vram, charBase); \
@@ -196,7 +199,7 @@
 		} \
 	}
 
-// The whole line with horizontal mosaic: each block of pixels repeats its first
+// The whole line with horizontal mosaic: each block of pixels repeats its first pixel.
 #define DRAW_BACKGROUND_MODE_0_MOSAIC_16(BLEND, OBJWIN) \
 	x = inX & 7; \
 	if (mosaicWait) { \
@@ -275,7 +278,7 @@
 		x = 0; \
 	}
 
-// The whole tiles in between, eight pixels at a time; a flipped tile is read from its other end
+// The whole tiles in between, eight pixels at a time; a flipped tile is read from its other end.
 #define DRAW_BACKGROUND_MODE_0_TILES_16(BLEND, OBJWIN) \
 	for (; tileX < tileEnd; ++tileX) { \
 		mapData = background->mapCache[(localX >> 3) & 0x3F]; \
@@ -309,7 +312,7 @@
 		pixel += 8; \
 	}
 
-// The same four for 256-color tiles, which are two words a row
+// The same four for 256-color tiles, which take two words per row.
 #define DRAW_BACKGROUND_MODE_0_TILE_SUFFIX_256(BLEND, OBJWIN) \
 	charBase = (background->charBase + (TEXT_MAP_TILE(mapData) << 6)) + (localY << 3); \
 	int end2 = end - 4; \
@@ -538,8 +541,8 @@
 		x = 0; \
 	}
 
-// A text background's line for one color depth, one blend setting and one object window setting:
-// the compiler makes a loop of each combination, so that none of them tests those per pixel
+// Draws a text background's line for one color depth, one blend setting and one object window
+// setting. The compiler makes a loop for each combination, so none of them tests those per pixel.
 #define DRAW_BACKGROUND_MODE_0(BPP, BLEND, OBJWIN) \
 	int pixel = outX; \
 	if (background->mosaic && MOSAIC_BG_H(renderer->mosaic)) { \
@@ -594,7 +597,7 @@
 static bool useSimd;
 static bool checkFast;
 
-// ARMGBA_RENDER=reference draws with mGBA's loops alone; =check draws with both and compares
+// ARMGBA_RENDER=reference draws with mGBA's loops alone; =check draws both ways and compares.
 void renderInit(void) {
 	const char* mode = getenv("ARMGBA_RENDER");
 	bool reference = mode && !strcmp(mode, "reference");
@@ -606,7 +609,8 @@ void renderInit(void) {
 
 static void drawBackgroundMode0Reference(struct GBA* gba, struct RenderBackground* background, int y);
 
-// For ARMGBA_RENDER=check: the row as 32-bit pixels, put back, and compared over [from, to)
+// For ARMGBA_RENDER=check: saves the row as 32-bit pixels, restores it, and compares it over [from,
+// to).
 static void rowSave(const struct Renderer* renderer, uint32_t* out) {
 	for (int x = 0; x < SCREEN_WIDTH; ++x) {
 		out[x] = rowGet(renderer, x);
@@ -629,10 +633,11 @@ static bool rowDiffers(const struct Renderer* renderer, const uint32_t* row, int
 }
 static void drawBackgroundMode4Reference(struct GBA* gba, struct RenderBackground* background, int inY);
 
-// A text background's line: the SIMD path where it applies, else the reference loops
+// Draws a text background's line: the SIMD path where it applies, otherwise the reference loops.
 static void drawBackgroundMode0(struct GBA* gba, struct RenderBackground* background, int y) {
 	struct Renderer* renderer = &gba->renderer;
 	// Horizontal mosaic needs mGBA's own loop; the 256-color fast path has no object window
+	// support.
 	bool fast = !(background->mosaic && MOSAIC_BG_H(renderer->mosaic)) && (!DISPCNT_OBJWIN_ENABLE(renderer->dispcnt) || !background->multipalette);
 	int fastY = y;
 	if (background->mosaic) {
@@ -670,7 +675,7 @@ static void drawBackgroundMode0(struct GBA* gba, struct RenderBackground* backgr
 	drawBackgroundMode0Reference(gba, background, y);
 }
 
-// mGBA's loops for a text background: finds the map row and picks the specialized loop
+// mGBA's loops for a text background: finds the map row and picks the specialized loop.
 static void drawBackgroundMode0Reference(struct GBA* gba, struct RenderBackground* background, int y) {
 	struct Renderer* renderer = &gba->renderer;
 	int inX = (renderer->start + background->x) & 0x1FF;
@@ -759,10 +764,10 @@ static void drawBackgroundMode0Reference(struct GBA* gba, struct RenderBackgroun
 	}
 }
 
-// Affine and bitmap backgrounds
+// Affine and bitmap backgrounds.
 
-// One step along an affine line: on by the matrix's dx and dy, and the pixel skipped where the
-// background does not wrap and the coordinates are outside it
+// One step along an affine line: moves on by the matrix's dx and dy, and skips the pixel where the
+// background doesn't wrap and the coordinates fall outside it.
 #define BACKGROUND_BITMAP_ITERATE(W, H) \
 	x += background->dx; \
 	y += background->dy; \
@@ -783,13 +788,13 @@ static void drawBackgroundMode0Reference(struct GBA* gba, struct RenderBackgroun
 	localX = x; \
 	localY = y;
 
-// Mode 1 and 2's affine tile backgrounds: the map is bytes, the tiles 256 colors
+// Modes 1 and 2's affine tile backgrounds: the map is bytes, and the tiles are 256 colors.
 #define MODE_2_NO_MOSAIC(COORD) \
 	COORD \
 	mapData = screenBase[(localX >> 11) + (((localY >> 7) & 0x7F0) << background->size)]; \
 	pixelData = charBase[(mapData << 6) + ((localY & 0x700) >> 5) + ((localX & 0x700) >> 8)];
 
-// With mosaic the pixel is looked up only at the start of each block
+// With mosaic, the pixel is looked up only at the start of each block.
 #define MODE_2_MOSAIC(COORD) \
 	if (!mosaicWait) { \
 		MODE_2_NO_MOSAIC(COORD) \
@@ -809,7 +814,7 @@ static void drawBackgroundMode0Reference(struct GBA* gba, struct RenderBackgroun
 		} \
 	}
 
-// The line for one blend setting and one object window setting
+// The line for one blend setting and one object window setting.
 #define DRAW_BACKGROUND_MODE_2(BLEND, OBJWIN) \
 	if (background->overflow) { \
 		if (mosaicH > 1) { \
@@ -835,7 +840,8 @@ static void drawBackgroundMode0Reference(struct GBA* gba, struct RenderBackgroun
 
 static void drawBackgroundMode2Reference(struct GBA*, struct RenderBackground*, int inY);
 
-// An affine tile background's line: the SIMD path where it applies, else the reference loop
+// Draws an affine tile background's line: the SIMD path where it applies, otherwise the reference
+// loop.
 static void drawBackgroundMode2(struct GBA* gba, struct RenderBackground* background, int inY) {
 	struct Renderer* renderer = &gba->renderer;
 	BACKGROUND_BITMAP_INIT;
@@ -869,7 +875,7 @@ static void drawBackgroundMode2(struct GBA* gba, struct RenderBackground* backgr
 	drawBackgroundMode2Reference(gba, background, inY);
 }
 
-// mGBA's loop for an affine tile background
+// mGBA's loop for an affine tile background.
 static void drawBackgroundMode2Reference(struct GBA* gba, struct RenderBackground* background, int inY) {
 	struct Renderer* renderer = &gba->renderer;
 	int sizeAdjusted = 0x8000 << background->size;
@@ -901,7 +907,7 @@ static void drawBackgroundMode2Reference(struct GBA* gba, struct RenderBackgroun
 	}
 }
 
-// Mode 3: a 240x160 bitmap of 15-bit colors
+// Mode 3: a 240x160 bitmap of 15-bit colors.
 static void drawBackgroundMode3(struct GBA* gba, struct RenderBackground* background, int inY) {
 	struct Renderer* renderer = &gba->renderer;
 	BACKGROUND_BITMAP_INIT;
@@ -940,7 +946,7 @@ static void drawBackgroundMode3(struct GBA* gba, struct RenderBackground* backgr
 	}
 }
 
-// Mode 4: a 240x160 bitmap of palette indices, in one of two pages
+// Mode 4: a 240x160 bitmap of palette indices, in one of two pages.
 static void drawBackgroundMode4(struct GBA* gba, struct RenderBackground* background, int inY) {
 	struct Renderer* renderer = &gba->renderer;
 	BACKGROUND_BITMAP_INIT;
@@ -948,7 +954,8 @@ static void drawBackgroundMode4(struct GBA* gba, struct RenderBackground* backgr
 	if (useSimd && !objwinSlowPath && (!mosaicH || RENDER_SIMD_MOSAIC)) {
 		uint8_t picked[SCREEN_WIDTH + 8];
 		if (mosaicH) {
-			// The colors drawBackgroundMode4Reference's mosaic picks, before compositing them all at once
+			// The colors drawBackgroundMode4Reference's mosaic picks, before compositing them all
+			// at once.
 			uint32_t offset = DISPCNT_FRAME_SELECT(renderer->dispcnt) ? 0xA000 : 0;
 			uint8_t color = 0;
 			if (mosaicWait && localX >= 0 && localY >= 0 && (localX >> 8) < SCREEN_WIDTH && (localY >> 8) < SCREEN_HEIGHT) {
@@ -1001,7 +1008,7 @@ static void drawBackgroundMode4(struct GBA* gba, struct RenderBackground* backgr
 	drawBackgroundMode4Reference(gba, background, inY);
 }
 
-// mGBA's loop for mode 4
+// mGBA's loop for mode 4.
 static void drawBackgroundMode4Reference(struct GBA* gba, struct RenderBackground* background, int inY) {
 	struct Renderer* renderer = &gba->renderer;
 	BACKGROUND_BITMAP_INIT;
@@ -1043,7 +1050,7 @@ static void drawBackgroundMode4Reference(struct GBA* gba, struct RenderBackgroun
 	}
 }
 
-// Mode 5: a 160x128 bitmap of 15-bit colors, in one of two pages
+// Mode 5: a 160x128 bitmap of 15-bit colors, in one of two pages.
 static void drawBackgroundMode5(struct GBA* gba, struct RenderBackground* background, int inY) {
 	struct Renderer* renderer = &gba->renderer;
 	BACKGROUND_BITMAP_INIT;
@@ -1086,13 +1093,13 @@ static void drawBackgroundMode5(struct GBA* gba, struct RenderBackground* backgr
 	}
 }
 
-// Sprites
+// Sprites.
 
-// Sprites are drawn into their own layer first, then merged a priority at a time. These loops walk a
-// sprite's pixels on the line; DEPTH is its colors and TYPE says whether it is an ordinary sprite or
-// one that defines the object window.
+// Sprites are drawn into their own layer first, then merged one priority at a time. These loops
+// walk a sprite's pixels on the line; DEPTH is its color depth and TYPE says whether it's an
+// ordinary sprite or one that defines the object window.
 //
-// An unscaled sprite, left to right or flipped
+// An unscaled sprite, left to right or flipped.
 #define SPRITE_NORMAL_LOOP(DEPTH, TYPE) \
 	SPRITE_YBASE_##DEPTH(inY); \
 	unsigned tileData; \
@@ -1101,7 +1108,7 @@ static void drawBackgroundMode5(struct GBA* gba, struct RenderBackground* backgr
 		SPRITE_DRAW_PIXEL_##DEPTH##_##TYPE(inX); \
 	}
 
-// A rotated or scaled sprite: each screen pixel is mapped back through the sprite's matrix
+// A rotated or scaled sprite: each screen pixel is mapped back through the sprite's matrix.
 #define SPRITE_TRANSFORMED_LOOP(DEPTH, TYPE) \
 	unsigned tileData; \
 	unsigned widthMask = ~(width - 1); \
@@ -1119,14 +1126,14 @@ static void drawBackgroundMode5(struct GBA* gba, struct RenderBackground* backgr
 		SPRITE_DRAW_PIXEL_##DEPTH##_##TYPE(localX); \
 	}
 
-// Where in VRAM a 16-color sprite's pixel is: tiles are 32 bytes, four bits a pixel
+// Where in VRAM a 16-color sprite's pixel is: tiles are 32 bytes, four bits per pixel.
 #define SPRITE_XBASE_16(localX) unsigned xBase = (localX & ~0x7) * 4 + ((localX >> 1) & 2);
 #define SPRITE_YBASE_16(localY) unsigned yBase = (localY & ~0x7) * stride + (localY & 0x7) * 4 + maskHi;
 
 #define SPRITE_OTHER_FLAGS (FLAG_ORDER_MASK | FLAG_REBLEND | FLAG_TARGET_1)
 
-// One pixel of a 16-color sprite, written where it comes before what is there. A transparent pixel
-// still passes some of its flags to the pixel under it.
+// Writes one pixel of a 16-color sprite where it comes before what's already there. A transparent
+// pixel still passes some of its flags to the pixel under it.
 #define SPRITE_DRAW_PIXEL_16_NORMAL(localX) \
 	tileData = load16(vramBase, (yBase + ((xBase + charBase) & maskLo)) & 0x7FFE); \
 	tileData = (tileData >> ((localX & 3) << 2)) & 0xF; \
@@ -1139,7 +1146,7 @@ static void drawBackgroundMode5(struct GBA* gba, struct RenderBackground* backgr
 		} \
 	}
 
-// The same where the object window decides whether sprites show
+// The same, where the object window decides whether sprites show.
 #define SPRITE_DRAW_PIXEL_16_NORMAL_OBJWIN(localX) \
 	tileData = load16(vramBase, (yBase + ((xBase + charBase) & maskLo)) & 0x7FFE); \
 	tileData = (tileData >> ((localX & 3) << 2)) & 0xF; \
@@ -1153,7 +1160,7 @@ static void drawBackgroundMode5(struct GBA* gba, struct RenderBackground* backgr
 		} \
 	}
 
-// A window sprite draws nothing: its pixels mark where the object window is
+// A window sprite draws nothing: its pixels mark where the object window is.
 #define SPRITE_DRAW_PIXEL_16_OBJWIN(localX) \
 	tileData = load16(vramBase, (yBase + ((xBase + charBase) & maskLo)) & 0x7FFE); \
 	tileData = (tileData >> ((localX & 3) << 2)) & 0xF; \
@@ -1166,7 +1173,7 @@ static void drawBackgroundMode5(struct GBA* gba, struct RenderBackground* backgr
 		} \
 	}
 
-// And for 256-color sprites: 64 bytes a tile, a byte a pixel
+// And the same for 256-color sprites: 64 bytes per tile, one byte per pixel.
 #define SPRITE_XBASE_256(localX) unsigned xBase = (localX & ~0x7) * 8 + (localX & 6);
 #define SPRITE_YBASE_256(localY) unsigned yBase = (localY & ~0x7) * stride + (localY & 0x7) * 8 + maskHi;
 
@@ -1208,7 +1215,7 @@ static void drawBackgroundMode5(struct GBA* gba, struct RenderBackground* backgr
 	}
 
 #if RENDER_SIMD
-// A run of pixels by the SIMD path where there is one, else by the loop given
+// Draws a run of pixels with the SIMD path where there is one, otherwise with the given loop.
 #define SPRITE_RUN(RUN, REFERENCE) \
 	if (!checkFast) { \
 		renderSpriteRunSimd(gba, &RUN); \
@@ -1234,7 +1241,7 @@ struct Matrix {
 	int16_t d;
 };
 
-// The columns sprites wrote on this line, so that only those are cleared for the next
+// The columns sprites wrote on this line, so only those are cleared for the next.
 static void noteSpriteSpan(struct Renderer* renderer, int from, int to) {
 	if (from < renderer->spriteFrom) {
 		renderer->spriteFrom = from;
@@ -1246,48 +1253,49 @@ static void noteSpriteSpan(struct Renderer* renderer, int from, int to) {
 
 static void coverMosaic(struct Renderer* renderer, int from, int to, unsigned priority);
 
-// One sprite's pixels on line y into the sprite layer, as far as the line's budget of sprite cycles
-// allows. Returns whether it is on the line.
+// Draws one sprite's pixels on line y into the sprite layer, as far as the line's budget of sprite
+// cycles allows. Returns whether the sprite is on the line.
 static int preprocessSprite(struct GBA* gba, const struct RenderSprite* sprite, int y) {
 	struct Renderer* renderer = &gba->renderer;
 	uint16_t a = sprite->a;
 	uint16_t b = sprite->b;
 	uint16_t c = sprite->c;
-	// A sprite's shape and size fields pick one of twelve sizes, from 8x8 to 64x64
+	// A sprite's shape and size fields pick one of twelve sizes, from 8x8 to 64x64.
 	int width = objSizes[OBJ_A_SHAPE(a) * 4 + OBJ_B_SIZE(b)][0];
 	int height = objSizes[OBJ_A_SHAPE(a) * 4 + OBJ_B_SIZE(b)][1];
 	int start = renderer->start;
 	int end = renderer->end;
 	// The flags its pixels carry: priority, whether it is a first blend target (a semi-transparent
-	// sprite always is), and whether it is an object window sprite
+	// sprite always is), and whether it is an object window sprite.
 	uint32_t flags = OBJ_C_PRIORITY(c) << OFFSET_PRIORITY;
 	flags |= FLAG_TARGET_1 * ((WIN_BLEND_ENABLE(renderer->currentWindow.packed) && renderer->target1Obj && renderer->blendEffect == BLEND_ALPHA) || OBJ_A_MODE(a) == OBJ_MODE_SEMITRANSPARENT);
 	flags |= FLAG_OBJWIN * (OBJ_A_MODE(a) == OBJ_MODE_OBJWIN);
-	// Inside one of the rectangular windows, which come first, the object window does not apply
+	// Inside one of the rectangular windows, which take precedence, the object window doesn't
+	// apply.
 	if ((flags & FLAG_OBJWIN) && renderer->currentWindow.priority < renderer->objwin.priority) {
 		return 0;
 	}
-	// X is nine bits, signed
+	// X is nine bits, signed.
 	int32_t x = (uint32_t) OBJ_B_X(b) << 23;
 	x >>= 23;
 	const uint8_t* vramBase = &gba->vram[BASE_TILE];
-	// Where its tiles are. With the two-dimensional mapping tiles are 32 across, and a 256-color
-	// sprite's number has its low bit ignored.
+	// Where its tiles are. With two-dimensional mapping, tiles are 32 across, and a 256-color
+	// sprite's tile number has its low bit ignored.
 	unsigned align = OBJ_A_256(a) && !DISPCNT_OBJ_1D(renderer->dispcnt);
 	unsigned charBase = (OBJ_C_TILE(c) & ~align) * 0x20;
 	unsigned maskLo = DISPCNT_OBJ_1D(renderer->dispcnt) ? 0x7FFE : 0x3FE;
 	unsigned maskHi = DISPCNT_OBJ_1D(renderer->dispcnt) ? 0 : charBase & 0x7C00;
-	// The bitmap modes use the first half of the sprite tiles for the bitmap
+	// The bitmap modes use the first half of the sprite tiles for the bitmap.
 	if (DISPCNT_MODE(renderer->dispcnt) >= 3 && OBJ_C_TILE(c) < 512) {
 		return 0;
 	}
 
-	// Which palette: the brightened or darkened copy if sprites are a target of that effect here
+	// Which palette: the brightened or darkened copy if sprites are a target of that effect here.
 	int objwinSlowPath = DISPCNT_OBJWIN_ENABLE(renderer->dispcnt) && WIN_BLEND_ENABLE(renderer->objwin.packed) != WIN_BLEND_ENABLE(renderer->currentWindow.packed);
 	int variant = renderer->target1Obj &&
 	              WIN_BLEND_ENABLE(renderer->currentWindow.packed) &&
 	              (renderer->blendEffect == BLEND_BRIGHTEN || renderer->blendEffect == BLEND_DARKEN);
-	// A sprite that may alpha-blend does so only if there is a second target for it to blend with
+	// A sprite that may alpha-blend only does so if there is a second target to blend with.
 	if (OBJ_A_MODE(a) == OBJ_MODE_SEMITRANSPARENT || (renderer->target1Obj && renderer->blendEffect == BLEND_ALPHA) || objwinSlowPath) {
 		int target2 = renderer->target2Bd;
 		target2 |= renderer->bg[0].target2 && renderer->bg[0].enabled;
@@ -1313,13 +1321,13 @@ static int preprocessSprite(struct GBA* gba, const struct RenderSprite* sprite, 
 		}
 	}
 
-	// The row of the sprite on this line, and the bytes from one tile row to the next
+	// The sprite's row on this line, and the bytes from one tile row to the next.
 	int inY = y - (int) OBJ_A_Y(a);
 	int stride = DISPCNT_OBJ_1D(renderer->dispcnt) ? (width >> !OBJ_A_256(a)) : 0x80;
 
 	uint32_t current;
-	// A rotated or scaled sprite: its matrix is in OAM, shared among sprites, and it may be drawn in a
-	// box twice its size
+	// A rotated or scaled sprite: its matrix is in OAM, shared among sprites, and it may be drawn
+	// in a box twice its size.
 	if (OBJ_A_TRANSFORMED(a)) {
 		int totalWidth = width << OBJ_A_DOUBLE_SIZE(a);
 		int totalHeight = height << OBJ_A_DOUBLE_SIZE(a);
@@ -1333,24 +1341,25 @@ static int preprocessSprite(struct GBA* gba, const struct RenderSprite* sprite, 
 		if (inY < 0) {
 			inY += 256;
 		}
-		// The columns of it inside the span being drawn
+		// The sprite's columns inside the span being drawn.
 		int outX = x >= start ? x : start;
 		int condition = x + totalWidth;
 		int inX = outX - x;
 		if (end < condition) {
 			condition = end;
 		}
-		// Horizontal mosaic is applied to the whole line of sprites once they are all drawn
+		// Horizontal mosaic is applied to the whole line of sprites once they are all drawn.
 		if (OBJ_A_MOSAIC(a) && MOSAIC_OBJ_H(renderer->mosaic) && !(flags & FLAG_OBJWIN)) {
 			coverMosaic(renderer, outX, condition, OBJ_C_PRIORITY(c));
 		}
 		noteSpriteSpan(renderer, outX, condition);
 
-		// The texture coordinate of the first column, in 8.8 fixed point, measured from the sprite's center
+		// The texture coordinate of the first column, in 8.8 fixed point, measured from the
+		// sprite's center.
 		int xAccum = mat.a * (inX - 1 - (totalWidth >> 1)) + mat.b * (inY - (totalHeight >> 1)) + (width << 7);
 		int yAccum = mat.c * (inX - 1 - (totalWidth >> 1)) + mat.d * (inY - (totalHeight >> 1)) + (height << 7);
 
-		// Clip off early pixels
+		// Clips off pixels before the span.
 		if (mat.a) {
 			if ((xAccum >> 8) < 0) {
 				int32_t diffX = -xAccum - 1;
@@ -1428,7 +1437,7 @@ static int preprocessSprite(struct GBA* gba, const struct RenderSprite* sprite, 
 	} else {
 		int outX = x >= start ? x : start;
 		int condition = x + width;
-		// Horizontal mosaic is applied to the whole line of sprites once they are all drawn
+		// Horizontal mosaic is applied to the whole line of sprites once they are all drawn.
 		if (OBJ_A_MOSAIC(a) && MOSAIC_OBJ_H(renderer->mosaic) && !(flags & FLAG_OBJWIN)) {
 			coverMosaic(renderer, outX, condition < end ? condition : end, OBJ_C_PRIORITY(c));
 		}
@@ -1487,7 +1496,7 @@ static int preprocessSprite(struct GBA* gba, const struct RenderSprite* sprite, 
 	return 1;
 }
 
-// The sprite layer's pixels of one priority into the row, under the window's rules
+// Merges the sprite layer's pixels of one priority into the row, under the window's rules.
 static void postprocessSprite(struct GBA* gba, unsigned priority) {
 	struct Renderer* renderer = &gba->renderer;
 	int x;
@@ -1570,10 +1579,10 @@ static void postprocessSprite(struct GBA* gba, unsigned priority) {
 	}
 }
 
-// The sprites OAM describes, as common.c's GBAVideoRendererCleanOAM lists them
+// The sprites OAM describes, as common.c's GBAVideoRendererCleanOAM lists them.
 static uint64_t pageRange(uint32_t from, uint32_t size);
 
-// Where a sprite's tiles lie with either mapping: rows of 32 tiles, or one after another
+// Where a sprite's tiles lie with either mapping: rows of 32 tiles, or one after another.
 static uint64_t spritePages(uint16_t a, uint16_t b, uint16_t c) {
 	int width = objSizes[OBJ_A_SHAPE(a) * 4 + OBJ_B_SIZE(b)][0];
 	int height = objSizes[OBJ_A_SHAPE(a) * 4 + OBJ_B_SIZE(b)][1];
@@ -1585,14 +1594,14 @@ static uint64_t spritePages(uint16_t a, uint16_t b, uint16_t c) {
 		to = oneD;
 	}
 	if (to > 0x8000) {
-		// It wraps round the sprite tiles
+		// It wraps around the sprite tiles.
 		from = 0;
 		to = 0x8000;
 	}
 	return pageRange(BASE_TILE + from, to - from);
 }
 
-// The sprites that are switched on, in OAM order, with the lines each covers
+// Lists the sprites that are switched on, in OAM order, with the lines each covers.
 static int cleanOam(struct GBA* gba, struct RenderSprite* sprites) {
 	int oamMax = 0;
 	for (int i = 0; i < 128; ++i) {
@@ -1645,9 +1654,9 @@ static int cleanOam(struct GBA* gba, struct RenderSprite* sprites) {
 	return oamMax;
 }
 
-// All the sprites on line y into the sprite layer. Returns the priorities that have pixels, a bit each.
-// The columns a mosaic sprite covers, its transparent pixels too, with the best priority covering each
-// plus one
+// Draws all the sprites on line y into the sprite layer. Returns the priorities that have pixels,
+// one bit each. Also records the columns a mosaic sprite covers, its transparent pixels included,
+// with the best priority covering each plus one.
 static void coverMosaic(struct Renderer* renderer, int from, int to, unsigned priority) {
 	for (int x = from; x < to; ++x) {
 		uint8_t* cover = &renderer->spriteMosaicCover[x];
@@ -1660,11 +1669,11 @@ static void coverMosaic(struct Renderer* renderer, int from, int to, unsigned pr
 	}
 }
 
-// Sprites' horizontal mosaic, applied to the finished line of sprite pixels as the hardware does: in a
-// column a mosaic sprite covers, the pixel is the one latched at the start of its block, blocks
-// counted from the left of the screen. The latch carries on into a neighbouring mosaic sprite unless
-// that one's priority is higher, and starts afresh where mosaic sprites start after other pixels. A
-// transparent pixel is latched too, with its sprite's priority.
+// Applies sprites' horizontal mosaic to the finished line of sprite pixels, as the hardware does.
+// In a column a mosaic sprite covers, the pixel is the one latched at the start of its block, with
+// blocks counted from the left of the screen. The latch carries on into a neighbouring mosaic
+// sprite unless that one's priority is higher, and starts afresh where mosaic sprites begin after
+// other pixels. A transparent pixel is latched too, with its sprite's priority.
 static void spriteMosaicLine(struct Renderer* renderer) {
 	renderer->spriteMosaic = false;
 	int size = MOSAIC_OBJ_H(renderer->mosaic) + 1;
@@ -1710,8 +1719,8 @@ static int preprocessSpriteLayer(struct GBA* gba, int y) {
 		int mosaicV = MOSAIC_OBJ_V(renderer->mosaic) + 1;
 		int mosaicY = y - (y % mosaicV);
 		int lastIndex = 0;
-		// Only the sprites on this line: the cycles the others took come from the gaps between OAM
-		// indices, and the limit can only be reached sooner, never skipped
+		// Only the sprites on this line. The cycles the others took come from the gaps between OAM
+		// indices, so the limit can only be reached sooner, never skipped.
 		for (int j = 0; j < renderer->lineSpriteCount[y]; ++j) {
 			struct RenderSprite* sprite = &renderer->sprites[renderer->lineSprites[y][j]];
 			int localY = y;
@@ -1749,20 +1758,20 @@ static int preprocessSpriteLayer(struct GBA* gba, int y) {
 	return spriteLayers;
 }
 
-// Windows
+// Windows.
 
 // The line is cut into spans in which the same layers show. This cuts the spans at one of the two
-// rectangular windows' edges and gives the part inside it that window's settings.
+// rectangular windows' edges, and gives the part inside it that window's settings.
 static void breakWindowInner(struct Renderer* renderer, const struct RenderWindowN* win) {
 	int activeWindow;
 	int startX = 0;
 	if (win->hEnd > 0) {
 		for (activeWindow = 0; activeWindow < renderer->nWindows; ++activeWindow) {
 			if (win->hStart < renderer->windows[activeWindow].endX) {
-				// Insert a window before the end of the active window
+				// Inserts a window before the end of the active window.
 				struct RenderWindow oldWindow = renderer->windows[activeWindow];
 				if (win->hStart > startX) {
-					// And after the start of the active window
+					// And after the start of the active window.
 					int nextWindow = renderer->nWindows;
 					++renderer->nWindows;
 					for (; nextWindow > activeWindow; --nextWindow) {
@@ -1774,7 +1783,7 @@ static void breakWindowInner(struct Renderer* renderer, const struct RenderWindo
 				renderer->windows[activeWindow].control = win->control;
 				renderer->windows[activeWindow].endX = win->hEnd;
 				if (win->hEnd >= oldWindow.endX) {
-					// Trim off extra windows we've overwritten
+					// Trims off extra windows that were overwritten.
 					for (++activeWindow; renderer->nWindows > activeWindow + 1 && win->hEnd >= renderer->windows[activeWindow].endX; ++activeWindow) {
 						renderer->windows[activeWindow] = renderer->windows[activeWindow + 1];
 						--renderer->nWindows;
@@ -1795,7 +1804,7 @@ static void breakWindowInner(struct Renderer* renderer, const struct RenderWindo
 	}
 }
 
-// A window that wraps round the right edge is two
+// A window that wraps around the right edge becomes two.
 static void breakWindow(struct Renderer* renderer, const struct RenderWindowN* win) {
 	if (win->hEnd > SCREEN_WIDTH || win->hEnd < win->hStart) {
 		struct RenderWindowN splits[2] = { *win, *win };
@@ -1808,8 +1817,8 @@ static void breakWindow(struct Renderer* renderer, const struct RenderWindowN* w
 	}
 }
 
-// The flags a background's pixels carry: its priority and index, whether it is a blend target, and
-// which palette they use. Worked out when a register changes instead of for every pixel.
+// Works out the flags a background's pixels carry: its priority and index, whether it is a blend
+// target, and which palette it uses. Done when a register changes instead of for every pixel.
 static void updateFlags(struct Renderer* renderer, struct RenderBackground* background) {
 	uint32_t flags = (background->priority << OFFSET_PRIORITY) | (background->index << OFFSET_INDEX) | FLAG_IS_BACKGROUND;
 	if (background->target2) {
@@ -1834,7 +1843,8 @@ static void updateFlags(struct Renderer* renderer, struct RenderBackground* back
 	background->variant = background->target1 && WIN_BLEND_ENABLE(renderer->currentWindow.packed) && (renderer->blendEffect == BLEND_BRIGHTEN || renderer->blendEffect == BLEND_DARKEN);
 }
 
-// Before a span is drawn: what the current window and the object window allow each background
+// Before a span is drawn, works out what the current window and the object window allow each
+// background.
 static void prepareWindow(struct Renderer* renderer) {
 	if (DISPCNT_OBJWIN_ENABLE(renderer->dispcnt)) {
 		for (int i = 0; i < 4; ++i) {
@@ -1851,12 +1861,12 @@ static void prepareWindow(struct Renderer* renderer) {
 		if (renderer->bg[1].enabled == ENABLED_MAX) {
 			updateFlags(renderer, &renderer->bg[1]);
 		}
-		// Fall through
+		// Fall through.
 	case 2:
 		if (renderer->bg[3].enabled == ENABLED_MAX) {
 			updateFlags(renderer, &renderer->bg[3]);
 		}
-		// Fall through
+		// Fall through.
 	case 3:
 	case 4:
 	case 5:
@@ -1878,7 +1888,8 @@ static void prepareWindow(struct Renderer* renderer) {
 	}
 }
 
-// A window switches on at the line its top is on and off at its bottom, whatever happens in between
+// A window switches on at the line its top is on and off at its bottom, whatever happens in
+// between.
 static void stepWindow(struct Renderer* renderer, int y) {
 	for (int i = 0; i < 2; ++i) {
 		struct RenderWindowN* win = &renderer->winN[i];
@@ -1891,14 +1902,14 @@ static void stepWindow(struct Renderer* renderer, int y) {
 	}
 }
 
-// Which backgrounds this line shows
+// Which backgrounds this line shows.
 static void updateDispcnt(struct Renderer* renderer) {
 	for (int i = 0; i < 4; ++i) {
 		renderer->bg[i].enabled = DISPCNT_BG_ENABLE(renderer->lineDispcnt, i) ? ENABLED_MAX : 0;
 	}
 }
 
-// The 16-color banks the palette has changed in since variantPalette was made, one bit each
+// The 16-color banks the palette has changed in since variantPalette was made, one bit each.
 static uint32_t changedBanks(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
 	uint32_t banks = 0;
@@ -1910,7 +1921,7 @@ static uint32_t changedBanks(struct GBA* gba) {
 	return banks;
 }
 
-// The brightened or darkened copy of the palette, kept up to date in the banks that changed
+// Updates the brightened or darkened copy of the palette in the banks that changed.
 static void updatePalettes(struct GBA* gba, uint32_t banks) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16_t* normalPalette = (const uint16_t*) gba->palette;
@@ -1931,7 +1942,7 @@ static void updatePalettes(struct GBA* gba, uint32_t banks) {
 	}
 }
 
-// Its own functions so the compiler knows nothing else is written and uses wide stores
+// These are separate functions so the compiler knows nothing else is written, and uses wide stores.
 #if defined(__aarch64__)
 static void fill16(uint16_t* restrict p, uint16_t value, int n) {
 	for (int i = 0; i < n; ++i) {
@@ -1946,10 +1957,11 @@ static void fill32(uint32_t* restrict p, uint32_t value, int n) {
 	}
 }
 
-// Before a line: the row and the sprite layer emptied, the palette copy and the spans brought up to date
+// Before a line: empties the row and the sprite layer, and brings the palette copy and the spans up
+// to date.
 static void preprocessBuffer(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
-	// Sprites wrote only the span noted on the last line drawn
+	// Sprites wrote only the span noted on the last line drawn.
 	int spriteTo = renderer->spriteTo < SCREEN_WIDTH ? renderer->spriteTo : SCREEN_WIDTH;
 	if (renderer->spriteFrom < spriteTo) {
 		fill32(&renderer->spriteLayer[renderer->spriteFrom], FLAG_UNWRITTEN, spriteTo - renderer->spriteFrom);
@@ -1973,7 +1985,7 @@ static void preprocessBuffer(struct GBA* gba) {
 
 	updateDispcnt(renderer);
 
-	// mGBA keeps the brightened or darkened palette current as the palette changes
+	// mGBA keeps the brightened or darkened palette current as the palette changes.
 	if (renderer->blendDirty || renderer->paletteDirty) {
 		uint32_t banks = renderer->blendDirty ? 0xFFFFFFFF : changedBanks(gba);
 		updatePalettes(gba, banks);
@@ -2005,9 +2017,7 @@ static void preprocessBuffer(struct GBA* gba) {
 	}
 }
 
-// After the layers: the backdrop where nothing drew, the blends between a top layer and the one under
-// it, and the row turned into the frame's colors
-// Blends the backdrop under the first-target pixels of [from, end), as mGBA's loop does
+// Blends the backdrop under the first-target pixels of [from, end), as mGBA's loop does.
 static void blendBackdropReference(struct Renderer* renderer, int from, int end, uint32_t backdrop) {
 	for (int x = from; x < end; ++x) {
 		uint32_t color = rowGet(renderer, x);
@@ -2017,6 +2027,8 @@ static void blendBackdropReference(struct Renderer* renderer, int from, int end,
 	}
 }
 
+// After the layers are drawn: fills the backdrop where nothing drew, blends a top layer with the one
+// under it, and turns the row into the frame's colors.
 static void postprocessBuffer(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16_t* normalPalette = (const uint16_t*) gba->palette;
@@ -2094,7 +2106,8 @@ static void postprocessBuffer(struct GBA* gba) {
 	}
 }
 
-// A background draws at its own priority, if it is on and the window, or the object window, shows it
+// A background draws at its own priority, if it is on and the window, or the object window, shows
+// it.
 #define TEST_LAYER_ENABLED(X) \
 	(renderer->bg[X].enabled == ENABLED_MAX && \
 	 (WIN_BG_ENABLE(renderer->currentWindow.packed, X) || \
@@ -2104,13 +2117,13 @@ static void postprocessBuffer(struct GBA* gba) {
 #define DIRTY_SCANLINE(R, Y) (R)->scanlineDirty[(Y) >> 5] |= (1U << ((Y) & 0x1F))
 #define CLEAN_SCANLINE(R, Y) (R)->scanlineDirty[(Y) >> 5] &= ~(1U << ((Y) & 0x1F))
 
-// RGB565 from BGR555, green's top bit repeated below it
+// RGB565 from BGR555, with green's top bit repeated below it.
 static uint16_t toRgb565(uint32_t color) {
 	uint32_t g = (color >> 5) & 0x1F;
 	return ((color & 0x1F) << 11) | (g << 6) | ((g >> 4) << 5) | ((color >> 10) & 0x1F);
 }
 
-// The lines a sprite covers, as cleanOam places it
+// Returns the lines a sprite covers, as cleanOam places it.
 static void dirtySpriteLines(struct Renderer* renderer, uint16_t a, uint16_t b) {
 	if (!OBJ_A_TRANSFORMED(a) && OBJ_A_DISABLE(a)) {
 		return;
@@ -2129,7 +2142,7 @@ static void dirtySpriteLines(struct Renderer* renderer, uint16_t a, uint16_t b) 
 	}
 }
 
-// [from, from + size) in 2 KiB pages
+// [from, from + size) in 2 KiB pages.
 static uint64_t pageRange(uint32_t from, uint32_t size) {
 	uint32_t first = from >> 11;
 	uint32_t last = (from + size - 1) >> 11;
@@ -2142,9 +2155,9 @@ static uint64_t pageRange(uint32_t from, uint32_t size) {
 	return (~0ull >> (63 - last)) & (~0ull << first);
 }
 
-// The VRAM pages a line drawn now reads, or more where that is simpler: the map row and the
+// Marks the VRAM pages a line drawn now reads, or more where that is simpler: the map row and the
 // characters it names for a text background, whole maps and character blocks for the others, and
-// each sprite's tiles
+// each sprite's tiles.
 static uint64_t linePages(struct GBA* gba, int y) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint8_t* vram = gba->vram;
@@ -2163,7 +2176,7 @@ static uint64_t linePages(struct GBA* gba, int y) {
 				inY -= y % (MOSAIC_BG_V(renderer->mosaic) + 1);
 			}
 			inY += bg->y;
-			// The same row of tiles as last time, with the same layout
+			// The same row of tiles as last time, with the same layout.
 			int32_t key = ((inY & 0x1F8) << 4) | ((bg->x >> 3) & 0x3F);
 			if (key == bg->rowKey) {
 				pages |= bg->rowPages;
@@ -2206,7 +2219,7 @@ static uint64_t linePages(struct GBA* gba, int y) {
 	return pages;
 }
 
-// After line y was drawn
+// Called after line y was drawn.
 static void notePages(struct GBA* gba, int y, uint64_t pages) {
 	struct Renderer* renderer = &gba->renderer;
 	uint64_t moved = renderer->linePages[y] ^ pages;
@@ -2218,7 +2231,7 @@ static void notePages(struct GBA* gba, int y, uint64_t pages) {
 	}
 }
 
-// The pages VRAM stores changed since last asked
+// The pages VRAM stores changed since last asked.
 static uint64_t takeVramChanges(struct Renderer* renderer) {
 	uint64_t words[6];
 	memcpy(words, renderer->vramChanged, sizeof(words));
@@ -2228,13 +2241,13 @@ static uint64_t takeVramChanges(struct Renderer* renderer) {
 	memset(renderer->vramChanged, 0, sizeof(renderer->vramChanged));
 	uint64_t changed = 0;
 	for (int w = 0; w < 6; ++w) {
-		// Eight bytes of 0 or 1 to eight bits
+		// Turns eight bytes of 0 or 1 into eight bits.
 		changed |= ((words[w] * 0x0102040810204080ull) >> 56) << (w * 8);
 	}
 	return changed;
 }
 
-// Lines that read a changed page, and row caches whose map may have changed
+// Marks dirty the lines that read a changed page, and the row caches whose map may have changed.
 static void dirtyVramLines(struct Renderer* renderer, uint64_t changed) {
 	for (uint64_t bits = changed; bits; bits &= bits - 1) {
 		int page = __builtin_ctzll(bits);
@@ -2249,8 +2262,8 @@ static void dirtyVramLines(struct Renderer* renderer, uint64_t changed) {
 	}
 }
 
-// After OAM alone changed: the lines of the sprites that changed, where they were and where they are,
-// and of those using a changed matrix
+// After only OAM changed, marks dirty the lines of the sprites that changed, both where they were
+// and where they are now, and of those using a changed matrix.
 static void dirtyChangedSprites(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
 	uint32_t matrices = 0;
@@ -2276,19 +2289,19 @@ static void dirtyChangedSprites(struct GBA* gba) {
 	}
 }
 
-// Draws line y, unless nothing it shows has changed since it was last drawn
+// Draws line y, unless nothing it shows has changed since it was last drawn.
 void renderScanline(struct GBA* gba, int y) {
 	struct Renderer* renderer = &gba->renderer;
 	renderer->nextY = y == SCREEN_HEIGHT - 1 ? 0 : y + 1;
 	uint16_t latched = renderer->dispcntLatch[0];
 	renderer->lineDispcnt = (renderer->dispcnt & ~0x1F80) | (renderer->dispcnt & latched & 0x1F00) | ((renderer->dispcnt | latched) & 0x0080);
-	// What changed since the last line: any of it makes the lines that read it dirty
+	// What changed since the last line: any of it makes the lines that read it dirty.
 	uint64_t vramChanged = takeVramChanges(renderer);
 	if (vramChanged) {
 		dirtyVramLines(renderer, vramChanged);
 	}
-	// OAM as the line before left it is this line's; as it is now, the next line's. The frame's first
-	// line takes it as it is: nothing was drawn above it to delay it by.
+	// OAM as the previous line left it is this line's; as it is now, it is the next line's. The
+	// frame's first line takes OAM as it is, since nothing was drawn above it to delay it.
 	for (int pass = 0; pass < 2; ++pass) {
 		if (pass) {
 			if (!(renderer->memoryChanged & RENDER_OAM)) {
@@ -2312,12 +2325,13 @@ void renderScanline(struct GBA* gba, int y) {
 		renderer->paletteDirty = true;
 	}
 	renderer->memoryChanged = 0;
-	// mGBA drops the map rows whenever VRAM changes; rebuilding them every line comes to the same
+	// mGBA drops the map rows whenever VRAM changes; rebuilding them every line gives the same
+	// result.
 	for (int i = 0; i < 4; ++i) {
 		renderer->bg[i].yCache = -1;
 	}
 
-	// The line is also dirty if its registers, affine coordinates or windows differ from last time
+	// The line is also dirty if its registers, affine coordinates or windows differ from last time.
 	bool dirty = renderer->scanlineDirty[y >> 5] & (1U << (y & 0x1F));
 	if (memcmp(renderer->nextIo, renderer->cache[y].io, sizeof(renderer->nextIo))) {
 		memcpy(renderer->cache[y].io, renderer->nextIo, sizeof(renderer->nextIo));
@@ -2361,7 +2375,8 @@ void renderScanline(struct GBA* gba, int y) {
 		return;
 	}
 
-	// Sprites first, into their own layer, then each priority from the front: sprites, then backgrounds
+	// Sprites first, into their own layer, then each priority from the front: sprites, then
+	// backgrounds.
 	preprocessBuffer(gba);
 	renderer->spriteCyclesRemaining = DISPCNT_HBLANK_FREE(renderer->dispcnt) ? OBJ_HBLANK_FREE_LENGTH : OBJ_LENGTH;
 	int spriteLayers = preprocessSpriteLayer(gba, y);
@@ -2420,7 +2435,7 @@ void renderScanline(struct GBA* gba, int y) {
 	notePages(gba, y, linePages(gba, y));
 
 	if (renderer->stereoChanges) {
-		// Each pair goes out at line cycle 52 + 4x, with green swap as it is then
+		// Each pixel pair goes out at line cycle 52 + 4x, with green swap as it is at that moment.
 		bool stereo = renderer->lineStereo;
 		int change = 0;
 		for (int x = 0; x < SCREEN_WIDTH; x += 2) {
@@ -2463,8 +2478,8 @@ void renderScanline(struct GBA* gba, int y) {
 	}
 }
 
-// The end of the frame: a window whose top or bottom lies below the screen is switched as if the
-// lines down there had been stepped through
+// At the end of the frame, a window whose top or bottom lies below the screen is switched as if the
+// lines down there had been stepped through.
 void renderFinishFrame(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
 	renderer->nextY = 0;
@@ -2479,9 +2494,9 @@ void renderFinishFrame(struct GBA* gba) {
 	}
 }
 
-// Registers
+// Registers.
 
-// The register writes that set up the renderer's own copies of the state, masked as they read back
+// The register writes that set up the renderer's own copies of the state, masked as they read back.
 static void writeBgcnt(struct Renderer* renderer, struct RenderBackground* bg, uint16_t value) {
 	bg->priority = value & 3;
 	bg->charBase = ((value >> 2) & 3) << 14;
@@ -2495,20 +2510,21 @@ static void writeBgcnt(struct Renderer* renderer, struct RenderBackground* bg, u
 	updateFlags(renderer, bg);
 }
 
-// An affine reference point is 28 bits, signed, written in halves; the write is noted for the line start
+// An affine reference point is 28 bits, signed, written in halves; the write is noted for the line
+// start.
 static void writeRefLo(int32_t* ref, bool* written, uint16_t value) {
 	*ref = (*ref & 0xFFFF0000) | value;
 	*written = true;
 }
 
-// The high half, sign-extended from 28 bits
+// The high half, sign-extended from 28 bits.
 static void writeRefHi(int32_t* ref, bool* written, uint16_t value) {
 	*ref = (*ref & 0x0000FFFF) | ((uint32_t) value << 16);
 	*ref = (int32_t) ((uint32_t) *ref << 4) >> 4;
 	*written = true;
 }
 
-// Which layers blend and how. A change of effect means the palette copy has to be made again.
+// Which layers blend, and how. A change of effect means the palette copy has to be made again.
 static void writeBldcnt(struct Renderer* renderer, uint16_t value) {
 	int oldEffect = renderer->blendEffect;
 	for (int i = 0; i < 4; ++i) {
@@ -2525,7 +2541,7 @@ static void writeBldcnt(struct Renderer* renderer, uint16_t value) {
 	}
 }
 
-// A window's left and right edges, with the hardware's handling of edges past the screen
+// A window's left and right edges, with the hardware's handling of edges past the screen.
 static void writeWindowH(struct RenderWindowN* win, uint16_t value) {
 	win->hEnd = value;
 	win->hStart = value >> 8;
@@ -2540,12 +2556,12 @@ static void writeWindowH(struct RenderWindowN* win, uint16_t value) {
 	}
 }
 
-// A write to a video register: returns the value as it reads back
-// The cases are the registers by their offset in the I/O space.
+// Handles a write to a video register, and returns the value as it reads back. The cases are the
+// registers by their offset in the I/O space.
 uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) {
 	struct Renderer* renderer = &gba->renderer;
 	switch (address) {
-	// DISPCNT: the mode, which layers are on, and the window switches
+	// DISPCNT: the mode, which layers are on, and the window switches.
 	case 0x000:
 		value &= 0xFFF7;
 		renderer->dispcnt = value;
@@ -2555,7 +2571,7 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 			videoDispcntWritten(gba);
 		}
 		break;
-	// The undocumented green swap register
+	// The undocumented green swap register.
 	case 0x002:
 		if ((value & 1) != renderer->stereo && renderer->stereoChanges < 8) {
 			renderer->stereoCycle[renderer->stereoChanges] = renderer->copy ? renderer->copyCycle : (int32_t) (timingCurrentTime(gba) - gba->video.lineStart);
@@ -2575,7 +2591,7 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 	case 0x00E:
 		writeBgcnt(renderer, &renderer->bg[(address - 0x008) >> 1], value);
 		break;
-	// The text backgrounds' horizontal scroll, nine bits each
+	// The text backgrounds' horizontal scroll, nine bits each.
 	case 0x010:
 	case 0x014:
 	case 0x018:
@@ -2583,7 +2599,7 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 		value &= 0x01FF;
 		renderer->bg[(address - 0x010) >> 2].x = value;
 		break;
-	// And vertical
+	// And vertical.
 	case 0x012:
 	case 0x016:
 	case 0x01A:
@@ -2591,7 +2607,7 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 		value &= 0x01FF;
 		renderer->bg[(address - 0x012) >> 2].y = value;
 		break;
-	// The two affine backgrounds' matrices: PA, PB, PC and PD, 8.8 fixed point
+	// The two affine backgrounds' matrices: PA, PB, PC and PD, in 8.8 fixed point.
 	case 0x020:
 	case 0x030:
 		renderer->bg[2 + ((address - 0x020) >> 4)].dx = value;
@@ -2608,7 +2624,7 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 	case 0x036:
 		renderer->bg[2 + ((address - 0x026) >> 4)].dmy = value;
 		break;
-	// And their reference points, X then Y, each written in two halves
+	// And their reference points, X then Y, each written in two halves.
 	case 0x028:
 	case 0x038: {
 		int i = (address - 0x028) >> 4;
@@ -2649,7 +2665,7 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 		}
 		break;
 	}
-	// BLDCNT, BLDALPHA and BLDY: what blends with what, and the coefficients, each at most 16/16
+	// BLDCNT, BLDALPHA and BLDY: what blends with what, and the coefficients, each at most 16/16.
 	case 0x050:
 		writeBldcnt(renderer, value);
 		value &= 0x3FFF;
@@ -2675,7 +2691,7 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 			renderer->blendDirty = true;
 		}
 		break;
-	// The two windows' horizontal and vertical edges
+	// The two windows' horizontal and vertical edges.
 	case 0x040:
 		writeWindowH(&renderer->winN[0], value);
 		break;
@@ -2690,7 +2706,8 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 		renderer->winN[1].vEnd = value;
 		renderer->winN[1].vStart = value >> 8;
 		break;
-	// WININ and WINOUT: which layers show inside each window, outside both, and in the object window
+	// WININ and WINOUT: which layers show inside each window, outside both, and in the object
+	// window.
 	case 0x048:
 		value &= 0x3F3F;
 		renderer->winN[0].control.packed = value;
@@ -2701,7 +2718,7 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 		renderer->winout.packed = value;
 		renderer->objwin.packed = value >> 8;
 		break;
-	// MOSAIC: block sizes for backgrounds and for sprites
+	// MOSAIC: block sizes for backgrounds and for sprites.
 	case 0x04C:
 		renderer->mosaic = value;
 		break;
@@ -2716,13 +2733,14 @@ uint16_t renderWriteRegister(struct GBA* gba, uint32_t address, uint16_t value) 
 	return value;
 }
 
-// The start of line y, where the hardware latches what it uses for the line
+// The start of line y, where the hardware latches what it uses for the line.
 void renderStartLine(struct GBA* gba, int y) {
 	struct Renderer* renderer = &gba->renderer;
 	int last = y ? y - 1 : TOTAL_LINES_ - 1;
 	int mode = DISPCNT_MODE(renderer->dispcnt);
 	uint16_t enabled = renderer->dispcntLatch[0] & renderer->dispcnt;
-	// The last line ends: an affine BG moves on by PB and PD as they are now, if it was showing
+	// When the last line ends, an affine background moves on by PB and PD as they are now, if it
+	// was showing.
 	if (last < SCREEN_HEIGHT && mode >= 1 && mode <= 5) {
 		for (int i = 2; i < 4; ++i) {
 			if ((i == 2 || mode == 2) && DISPCNT_BG_ENABLE(enabled, i)) {
@@ -2750,7 +2768,7 @@ void renderStartLine(struct GBA* gba, int y) {
 }
 
 // A layer switched on in DISPCNT shows only a few lines later: the values at the last three latches
-// are kept, and a line shows a layer that is on now and was on at the oldest of them
+// are kept, and a line shows a layer that is on now and was on at the oldest of them.
 void renderLatchDispcnt(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
 	renderer->dispcntLatch[0] = renderer->dispcntLatch[1];
@@ -2758,7 +2776,7 @@ void renderLatchDispcnt(struct GBA* gba) {
 	renderer->dispcntLatch[2] = renderer->dispcnt;
 }
 
-// A white screen, every line to be drawn, and the registers at their reset values
+// Sets a white screen, every line to be drawn, and the registers at their reset values.
 void renderReset(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
 	memset(renderer->dispcntLatch, 0, sizeof(renderer->dispcntLatch));
@@ -2788,7 +2806,7 @@ void renderReset(struct GBA* gba) {
 	renderer->winout = (struct RenderWindowControl) { .priority = 3 };
 	renderer->oamDirty = true;
 	renderer->oamMax = 0;
-	// The first line clears the whole sprite layer
+	// The first line clears the whole sprite layer.
 	renderer->spriteFrom = 0;
 	renderer->spriteTo = SCREEN_WIDTH;
 	renderer->mosaic = 0;
