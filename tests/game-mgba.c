@@ -27,30 +27,30 @@ static bool stopped;
 static bool skip;
 static const char* biosPath;
 static uint16_t keys;
-// As large as the libretro core's, which RetroArch save files match
+// As large as the libretro core's, which RetroArch save files match.
 static uint8_t save[0x20000];
 static uint8_t* saveFile;
 static size_t saveFileSize;
 static int forcedSaveType = -1;
 
-// Both emulators read the same fixed clock
+// Both emulators read the same fixed clock.
 static time_t fixedTime(struct mRTCSource* source) {
 	return 1700000000;
 }
 
 static struct mRTCSource fixedClock = { .unixTime = fixedTime };
 
-// mGBA's log messages cost time to format and print; nothing reads them
+// mGBA's log messages cost time to format and print, and nothing reads them.
 static void quietLog(struct mLogger* logger, int category, enum mLogLevel level, const char* format, va_list args) {
 }
 
 static struct mLogger quietLogger = { .log = quietLog };
 
-// libmgba is built with COLOR_16_BIT, so this is BGR555
+// libmgba is built with COLOR_16_BIT, so this is BGR555.
 static uint16_t video[160][240];
 
 static void reset(void) {
-	// The renderer only fills lines as it draws them; start from white as armGBA does
+	// The renderer only fills lines as it draws them, so start from white, as armGBA does.
 	for (int y = 0; y < 160; ++y) {
 		for (int x = 0; x < 240; ++x) {
 			video[y][x] = 0x7FFF;
@@ -67,8 +67,8 @@ static void reset(void) {
 	if (state && !core->loadState(core, state)) {
 		fprintf(stderr, "MGBA_STATE isn't an mGBA GBA state\n");
 	}
-	// MGBA_IDLE keeps mGBA's removal of the idle loops it knows, as its frontends run it, which isn't
-	// cycle-exact
+	// MGBA_IDLE keeps mGBA's removal of the idle loops it knows, as its frontends run it; that
+	// isn't cycle-exact.
 	if (!getenv("MGBA_IDLE")) {
 		gba->idleOptimization = IDLE_LOOP_IGNORE;
 	}
@@ -87,7 +87,8 @@ static bool load(const char* bios, const uint8_t* rom, size_t romSize, bool skip
 	struct mCoreOptions opts = { .useBios = true, .skipBios = skipBios };
 	mCoreConfigLoadDefaults(&core->config, &opts);
 	mCoreLoadConfig(core);
-	// The software renderer masks display registers, so it has to be attached as in the libretro core
+	// The software renderer masks display registers, so it has to be attached as in the libretro
+	// core.
 	if (!getenv("NO_RENDERER")) {
 		core->setVideoBuffer(core, (void*) video, 240);
 	}

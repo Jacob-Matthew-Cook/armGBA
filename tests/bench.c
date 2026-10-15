@@ -18,7 +18,7 @@
 #include <time.h>
 #include <ucontext.h>
 
-// A sampling profiler: where the program counter is, every 100 microseconds
+// A sampling profiler: records where the program counter is every 100 microseconds.
 enum {
 	MAX_SAMPLES = 1 << 20,
 };
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
 		stopProfiling();
 	}
 	if (getenv("BENCH_HASH")) {
-		// A hash of the state at the end, to tell runs that went different ways apart
+		// Hashes the state at the end, to tell apart runs that went different ways.
 		static struct Snapshot s;
 		emu->snapshot(&s);
 		uint32_t h = 2166136261u;

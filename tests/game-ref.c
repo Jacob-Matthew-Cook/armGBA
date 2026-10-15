@@ -5,7 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "ref.h"
 
-// The reference emulator for the test tools: game-armgba.c built around the exact CPU alone
+// The reference emulator for the test tools: game-armgba.c built around the exact CPU alone.
 
 #define GAME refGame
 #define GAME_NAME "REF"

@@ -17,7 +17,7 @@
 #include <fcntl.h>
 #include <string.h>
 
-// cpufuzz's mGBA side: the same, on an mGBA core built from a tree with mgba-oracle.patch
+// cpufuzz's mGBA side: the same, on an mGBA core built from a tree with mgba-oracle.patch.
 
 static struct mCore* core;
 static struct GBA* gba;
@@ -38,7 +38,7 @@ static bool init(const char* bios, uint8_t* rom, size_t romSize) {
 	}
 	core->reset(core);
 	gba = core->board;
-	// Run the real BIOS for SWIs, not mGBA's high-level versions
+	// Runs the real BIOS for SWIs, not mGBA's high-level versions.
 	GBALoadBIOS(gba, vf);
 	gba->idleOptimization = IDLE_LOOP_IGNORE;
 	return gba->memory.fullBios;

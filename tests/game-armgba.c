@@ -13,12 +13,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-// armGBA behind the test tools' common face (game.h): load, run frames, take snapshots
+// armGBA behind the test tools' common interface (game.h): load, run frames, take snapshots.
 
-// game-ref.c builds this file again around the reference interpreter
+// game-ref.c builds this file again around the reference interpreter.
 #ifndef GAME
 #define GAME armgbaGame
-// The name results are printed under; scripts look for it
+// The name results are printed under; scripts look for it.
 #define GAME_NAME "armGBA"
 #define RUN_LOOP jitRunLoop
 #define AFTER_RESET(gba)
@@ -41,9 +41,9 @@ static void hashBytes(const void* data, size_t size) {
 	}
 }
 
-// The samples the mixer put out since the last call, hashed in when BENCH_HASH asks for it. Intervals
-// finish when something asks, so every interval done by now is taken: builds that ask at other times
-// split the same stream the same way.
+// The samples the mixer put out since the last call, hashed in when BENCH_HASH asks for it.
+// Intervals finish when something asks, so every interval done by now is taken: builds that ask at
+// other times split the same stream the same way.
 static void takeAudio(void) {
 	audioCatchUp(gba, timingCurrentTime(gba), false);
 	if (hashAudio) {
@@ -68,7 +68,7 @@ static void reset(void) {
 	}
 	gbaReset(gba, skip);
 	AFTER_RESET(gba);
-	// MGBA_STATE=<file> goes on from an mGBA save state of the game
+	// MGBA_STATE=<file> continues from an mGBA save state of the game.
 	size_t stateSize;
 	const uint8_t* state = mgbaStateFile(&stateSize);
 	if (state && !mgbaStateLoad(gba, state, stateSize)) {
@@ -76,7 +76,7 @@ static void reset(void) {
 	}
 	audioHash = 2166136261u;
 	hashAudio = getenv("BENCH_HASH");
-	// Only the first run is traced, not one gamecmp makes again to find a difference
+	// Only the first run is traced, not one gamecmp makes again to find a difference.
 	static bool traced;
 	if (getenv(TRACE_ENV) && !traced) {
 		traced = true;
@@ -99,7 +99,7 @@ static bool load(const char* bios, const uint8_t* rom, size_t romSize, bool skip
 	gbaLoadBios(gba, data, sizeof(data));
 	gbaLoadRom(gba, rom, romSize);
 	reset();
-	// ARMGBA_THREADED: the renderer on a second thread; 2 for frames a frame late
+	// ARMGBA_THREADED: the renderer on a second thread; 2 shows frames one frame late.
 	if (getenv("ARMGBA_THREADED")) {
 		renderThreadStart(gba, atoi(getenv("ARMGBA_THREADED")) == 2);
 	}
@@ -115,7 +115,7 @@ static void runFrame(void) {
 	uint32_t before = audioHash;
 	takeAudio();
 	if (hashAudio) {
-		// Every frame's picture too
+		// Every frame's picture too.
 		uint64_t h = 0;
 		const uint64_t* words = (const uint64_t*) gba->renderer.frame;
 		for (size_t i = 0; i < sizeof(gba->renderer.frame) / 8; ++i) {
@@ -127,7 +127,7 @@ static void runFrame(void) {
 			frames = fopen(getenv("BENCH_FRAMES"), "w");
 		}
 		if (frames) {
-			// Each frame's sound and picture apart, to find where two builds part
+			// Each frame's sound and picture separately, to find where two builds part.
 			fprintf(frames, "%u %08X %016llX\n", gba->video.frameCounter, before == audioHash ? 0 : audioHash, (unsigned long long) h);
 		}
 	}

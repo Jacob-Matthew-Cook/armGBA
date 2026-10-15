@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// cpufuzz's armGBA side: a bare machine that runs a program from a state to a cycle deadline
+// cpufuzz's armGBA side: a bare machine that runs a program from a state to a cycle deadline.
 
 static struct GBA* gba;
 static uint8_t* romData;
@@ -52,7 +52,7 @@ static uint8_t* memory(uint32_t address) {
 
 static void codeChanged(void) {
 	jitFlush(gba);
-	// FUZZ_FRESH: every run compiles as if the code had never been rewritten
+	// FUZZ_FRESH: every run compiles as if the code had never been rewritten.
 	if (getenv("FUZZ_FRESH")) {
 		jitForgetRewrites(gba);
 	}
