@@ -10,14 +10,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// The state of mGBA's software renderer, drawing BGR555 the way its 16-bit color builds do
+// The state of mGBA's software renderer, drawing BGR555 the way its 16-bit color builds do.
 
 enum {
 	SCREEN_WIDTH = 240,
 	SCREEN_HEIGHT = 160,
 };
 
-// What stores changed since the last line was drawn, as mGBA's writeVRAM/writeOAM/writePalette hear it
+// What stores changed since the last line was drawn, as mGBA's writeVRAM, writeOAM and writePalette
+// see them.
 enum {
 	RENDER_VRAM = 1,
 	RENDER_OAM = 2,
@@ -38,7 +39,7 @@ struct RenderBackground {
 	int target2;
 	uint16_t x;
 	uint16_t y;
-	// The reference point as written; the BG takes it on at the start of the next line
+	// The reference point as written; the background takes it on at the start of the next line.
 	int32_t refx;
 	int32_t refy;
 	bool refxWritten;
@@ -51,7 +52,7 @@ struct RenderBackground {
 	int32_t sy;
 	int yCache;
 	uint16_t mapCache[64];
-	// The pages a row of tiles reads, and where that row was; cleared when its map changes
+	// The pages a row of tiles reads, and where that row was; cleared when its map changes.
 	uint64_t rowPages;
 	uint64_t mapPages;
 	int32_t rowKey;
@@ -89,32 +90,32 @@ struct RenderSprite {
 	int16_t endY;
 	int16_t cycles;
 	int8_t index;
-	// The VRAM pages its tiles lie in
+	// The VRAM pages its tiles lie in.
 	uint64_t pages;
 };
 
 struct Renderer {
 	uint16_t dispcnt;
-	// DISPCNT as latched 40 cycles into each of the last three lines: a layer shows only once enabled
-	// in both the oldest and the current, and forced blank in either blanks
+	// DISPCNT as latched 40 cycles into each of the last three lines. A layer shows only once it is
+	// enabled in both the oldest and the current one, and forced blank in either blanks the line.
 	uint16_t dispcntLatch[3];
-	// The DISPCNT this line draws with
+	// The DISPCNT this line draws with.
 	uint16_t lineDispcnt;
 #if defined(__aarch64__)
-	// The line being built: each pixel's color, and its flags (render.c's 32-bit pixel's top half)
-	// apart, for NEON's 16-bit lanes
+	// The line being built: each pixel's color, and separately its flags (the top half of
+	// render.c's 32-bit pixel), for NEON's 16-bit lanes.
 	uint16_t rowColor[SCREEN_WIDTH];
 	uint16_t rowFlags[SCREEN_WIDTH];
 #else
-	// The line being built, a 32-bit pixel each (render.c), for AVX2's 32-bit lanes
+	// The line being built, one 32-bit pixel each (see render.c), for AVX2's 32-bit lanes.
 	uint32_t row[SCREEN_WIDTH];
 #endif
 	uint32_t spriteLayer[SCREEN_WIDTH];
 	int32_t spriteCyclesRemaining;
-	// The columns sprites may have written on this line
+	// The columns sprites may have written on this line.
 	int spriteFrom;
 	int spriteTo;
-	// A sprite with horizontal mosaic is on this line, and the columns such sprites cover
+	// Whether a sprite with horizontal mosaic is on this line, and the columns such sprites cover.
 	bool spriteMosaic;
 	uint8_t spriteMosaicCover[SCREEN_WIDTH];
 
@@ -126,14 +127,15 @@ struct Renderer {
 	bool paletteDirty;
 	int blendEffect;
 	uint16_t variantPalette[512];
-	// The palette variantPalette was made from, to find the 16-color banks a change touched
+	// The palette variantPalette was made from, used to find the 16-color banks a change touched.
 	uint16_t paletteSeen[512];
-	// The same, 32 bits wide for SIMD gathers
+	// The same, 32 bits wide for SIMD gathers.
 	uint32_t normal32[512];
 	uint32_t variant32[512];
-	// Low and high bytes of each 16-color bank, for byte shuffles: [normal/variant][bank][low/high][16]
+	// The low and high bytes of each 16-color bank, for byte shuffles:
+	// [normal/variant][bank][low/high][16].
 	uint8_t bankBytes[2][32][2][16];
-	// The banks of these three made before the palette last changed, one bit each
+	// The banks of these three that were made before the palette last changed, one bit each.
 	uint32_t palette32Stale;
 
 	uint16_t blda;
@@ -142,7 +144,7 @@ struct Renderer {
 
 	uint16_t mosaic;
 	bool stereo;
-	// Green swap as the line started, and its changes since with the line cycle of each
+	// Green swap as the line started, and its changes since, each with its line cycle.
 	bool lineStereo;
 	int stereoChanges;
 	uint16_t stereoCycle[8];
@@ -161,7 +163,7 @@ struct Renderer {
 	bool oamDirty;
 	int oamMax;
 	struct RenderSprite sprites[128];
-	// The sprites on each line, in OAM order
+	// The sprites on each line, in OAM order.
 	uint8_t lineSpriteCount[SCREEN_HEIGHT];
 	uint8_t lineSprites[SCREEN_HEIGHT][128];
 
@@ -169,17 +171,17 @@ struct Renderer {
 	int start;
 	int end;
 
-	// mGBA redraws a line only if something it saw changed; the frames depend on that
+	// mGBA redraws a line only if something it saw changed; the frames depend on that.
 	uint8_t memoryChanged;
 	uint32_t scanlineDirty[5];
-	// OAM as the dirty lines last took it in
-	// The OAM lines are drawn from. Sprites are fetched a line ahead of the one they show on, so a
-	// change reaches the picture a line late: it waits in oamNext while the line under way is drawn.
+	// oamSeen is the OAM the dirty lines last took in, which lines are drawn from. Sprites are
+	// fetched a line ahead of the one they show on, so a change reaches the picture a line late: it
+	// waits in oamNext while the line under way is drawn.
 	uint8_t oamSeen[0x400];
 	uint8_t oamNext[0x400];
 	bool oamPending;
-	// The 2 KiB VRAM pages stores have changed (one byte each), those each line read when last drawn,
-	// and the lines that read each page
+	// The 2 KiB VRAM pages stores have changed (one byte each), the pages each line read when last
+	// drawn, and the lines that read each page.
 	uint8_t vramChanged[48];
 	uint64_t linePages[SCREEN_HEIGHT];
 	uint32_t pageLines[48][5];
@@ -192,10 +194,10 @@ struct Renderer {
 	} cache[SCREEN_HEIGHT];
 
 	uint16_t frame[SCREEN_HEIGHT][SCREEN_WIDTH];
-	// Set by a frontend that takes frame in RGB565 instead of BGR555
+	// Set by a frontend that takes the frame in RGB565 instead of BGR555.
 	bool rgb565;
-	// The render thread's copy, fed from a log: it has no say in the video timing, and a register
-	// write comes with how far into the line it was made
+	// The render thread's copy, fed from a log. It has no say in the video timing, and each
+	// register write comes with how far into the line it was made.
 	bool copy;
 	int32_t copyCycle;
 };
@@ -203,22 +205,24 @@ struct Renderer {
 struct GBA;
 
 void renderReset(struct GBA*);
-// Picks the SIMD paths if the CPU has them; ARMGBA_RENDER=reference keeps to the scalar ones
+// Chooses the SIMD paths if the CPU has them; ARMGBA_RENDER=reference keeps to the scalar ones.
 void renderInit(void);
 uint16_t renderWriteRegister(struct GBA*, uint32_t address, uint16_t value);
 void renderScanline(struct GBA*, int y);
-// At the start of each line: the affine BGs finish the last line and take on new reference points
+// At the start of each line, the affine backgrounds finish the last line and take on new reference
+// points.
 void renderStartLine(struct GBA*, int y);
 void renderLatchDispcnt(struct GBA*);
 void renderFinishFrame(struct GBA*);
 
-// render-thread.c: drawing on a second thread. Started, each call above is logged for it after it is
-// made here, but for renderScanline, which only it makes; the frame is complete after renderFinishFrame.
-// late: renderFinishFrame leaves the frame before the one it ends, so that drawing overlaps emulation
+// render-thread.c: drawing on a second thread. Once started, each call above is logged for it after
+// it is made here, except renderScanline, which only the thread makes; the frame is complete after
+// renderFinishFrame. With late, renderFinishFrame hands back the frame before the one it ends, so
+// drawing overlaps emulation.
 bool renderThreadStart(struct GBA*, bool late);
 void renderThreadStop(struct GBA*);
 void renderThreadClone(struct GBA*);
-// The copy's renderer, with all that is logged drawn
+// Returns the copy's renderer, with everything logged so far drawn.
 const struct Renderer* renderThreadRenderer(struct GBA*);
 void renderThreadRegister(struct GBA*, uint32_t address, uint16_t value);
 void renderThreadScanline(struct GBA*, int y);

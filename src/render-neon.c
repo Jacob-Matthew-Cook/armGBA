@@ -5,25 +5,25 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // NEON versions of the renderer's hot paths, line for line with render-x86.c: eight pixels as two
-// four-lane vectors, the same compositing order, flags and 5-bit blending.
+// four-lane vectors, with the same compositing order, flags and 5-bit blending.
 
 #include "render-private.h"
 
 #include <arm_neon.h>
 #include <string.h>
 
-// NEON is part of AArch64
+// NEON is part of AArch64.
 bool renderHasSimd(void) {
 	return true;
 }
 
-// Eight 32-bit lanes; masks are all ones or all zeros per lane
+// Eight 32-bit lanes; masks are all ones or all zeros per lane.
 typedef struct {
 	uint32x4_t v[2];
 } v8;
 
-// The operations on eight lanes that the shared SIMD code is written in, here as pairs of NEON's
-// four-lane ones
+// The eight-lane operations the shared SIMD code is written in, here as pairs of NEON's four-lane
+// ones.
 static inline v8 set8(uint32_t x) {
 	return (v8) { { vdupq_n_u32(x), vdupq_n_u32(x) } };
 }
@@ -64,12 +64,12 @@ static inline v8 gts8(v8 a, v8 b) {
 		            vcgtq_s32(vreinterpretq_s32_u32(a.v[1]), vreinterpretq_s32_u32(b.v[1])) } };
 }
 
-// Whether no lane is set
+// Whether no lane is set.
 static inline bool none8(v8 a) {
 	return !vmaxvq_u32(vorrq_u32(a.v[0], a.v[1]));
 }
 
-// Every bit of every lane inverted
+// Every bit of every lane inverted.
 static inline v8 not8(v8 a) {
 	return (v8) { { vmvnq_u32(a.v[0]), vmvnq_u32(a.v[1]) } };
 }
@@ -79,12 +79,12 @@ static inline v8 not8(v8 a) {
 #define SAR8(a, n) ((v8) { { vreinterpretq_u32_s32(vshrq_n_s32(vreinterpretq_s32_u32((a).v[0]), n)), \
 	                         vreinterpretq_u32_s32(vshrq_n_s32(vreinterpretq_s32_u32((a).v[1]), n)) } })
 
-// a >> b per lane, logical
+// a >> b per lane, logical.
 static inline v8 srlv8(v8 a, v8 b) {
 	return (v8) { { vshlq_u32(a.v[0], vnegq_s32(vreinterpretq_s32_u32(b.v[0]))), vshlq_u32(a.v[1], vnegq_s32(vreinterpretq_s32_u32(b.v[1]))) } };
 }
 
-// The lanes of a mask as bits
+// The lanes of a mask as bits.
 static inline int movemask8(v8 m) {
 	static const uint32_t weights[8] = { 1, 2, 4, 8, 16, 32, 64, 128 };
 	return vaddvq_u32(vandq_u32(m.v[0], vld1q_u32(weights))) + vaddvq_u32(vandq_u32(m.v[1], vld1q_u32(weights + 4)));
@@ -92,17 +92,17 @@ static inline int movemask8(v8 m) {
 
 static const uint32_t laneNumbers[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
 
-// The lanes' own numbers, 0 to 7
+// The lanes' own numbers, 0 to 7.
 static inline v8 laneIndex8(void) {
 	return load8(laneNumbers);
 }
 
-// Eight 32-bit lanes as bytes
+// Eight 32-bit lanes narrowed to bytes.
 static inline uint8x8_t narrow8(v8 lanes) {
 	return vmovn_u16(vcombine_u16(vmovn_u32(lanes.v[0]), vmovn_u32(lanes.v[1])));
 }
 
-// 32-bit copies of the palettes for lookups, and each bank split into bytes for table lookups
+// 32-bit copies of the palettes for lookups, and each bank split into bytes for table lookups.
 static void updatePalette32(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16_t* normal = (const uint16_t*) gba->palette;
@@ -120,7 +120,7 @@ static void updatePalette32(struct GBA* gba) {
 	renderer->palette32Stale = 0;
 }
 
-// Eight table entries, by index
+// Looks up eight table entries by index.
 static inline v8 lookup8(const uint32_t* table, v8 index) {
 	uint32_t idx[8];
 	uint32_t out[8];
@@ -131,26 +131,26 @@ static inline v8 lookup8(const uint32_t* table, v8 index) {
 	return load8(out);
 }
 
-// Eight pixels as their low halves (the color) and high halves (the flags, bits 24-31 of a pixel in
-// bits 8-15), one register each
+// Eight pixels as their low halves (the color) and high halves (the flags, a pixel's bits 24-31 in
+// bits 8-15), one register each.
 typedef struct {
 	uint16x8_t lo;
 	uint16x8_t hi;
 } h8;
 
-// Eight lanes loaded with their halves apart, for palette words
+// Loads eight lanes with their halves apart, for palette words.
 static inline h8 loadH8(const uint32_t* p) {
 	uint16x8x2_t halves = vld2q_u16((const uint16_t*) p);
 	return (h8) { halves.val[0], halves.val[1] };
 }
 
-// Zips rather than st2: GCC moves st2's register pair through the stack
+// Zips rather than st2: GCC moves st2's register pair through the stack.
 static inline void storeH8(uint32_t* p, h8 a) {
 	vst1q_u16((uint16_t*) p, vzip1q_u16(a.lo, a.hi));
 	vst1q_u16((uint16_t*) (p + 4), vzip2q_u16(a.lo, a.hi));
 }
 
-// Eight pixels of the row from x: its two planes are already the halves apart
+// Loads eight pixels of the row from x; its two planes are already the halves apart.
 static inline h8 loadRowH8(const struct Renderer* renderer, int x) {
 	return (h8) { vld1q_u16(&renderer->rowColor[x]), vld1q_u16(&renderer->rowFlags[x]) };
 }
@@ -160,7 +160,7 @@ static inline void storeRowH8(struct Renderer* renderer, int x, h8 a) {
 	vst1q_u16(&renderer->rowFlags[x], a.hi);
 }
 
-// The same for lanes [from, to) alone, at an end of the line; the others read as 0
+// The same for lanes [from, to) only, at an end of the line; the others read as 0.
 static inline h8 loadRowPartH8(const struct Renderer* renderer, int x, int from, int to) {
 	uint16_t color[8] = { 0 };
 	uint16_t flags[8] = { 0 };
@@ -182,12 +182,13 @@ static inline void storeRowPartH8(struct Renderer* renderer, int x, int from, in
 	}
 }
 
-// All lanes zero: narrowing to 64 bits is quicker than a horizontal maximum on small cores
+// Whether all lanes are zero; narrowing to 64 bits is quicker than a horizontal maximum on small
+// cores.
 static inline bool noneH(uint16x8_t a) {
 	return !vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(a, 4)), 0);
 }
 
-// mix5 on eight colors: each channel is min((a * weightA + b * weightB) / 16, 31)
+// mix5 on eight colors: each channel is min((a * weightA + b * weightB) / 16, 31).
 static inline uint16x8_t mix5x8h(uint16_t weightA, uint16x8_t colorA, uint16_t weightB, uint16x8_t colorB) {
 	const uint16x8_t five = vdupq_n_u16(0x1F);
 	uint16x8_t r = vmlaq_n_u16(vmulq_n_u16(vandq_u16(colorA, five), weightA), vandq_u16(colorB, five), weightB);
@@ -199,7 +200,7 @@ static inline uint16x8_t mix5x8h(uint16_t weightA, uint16x8_t colorA, uint16_t w
 	return vorrq_u16(vorrq_u16(r, vshlq_n_u16(g, 5)), vshlq_n_u16(b, 10));
 }
 
-// compositeEight on halves: color >= current compares the flags, then the colors
+// compositeEight on halves: color >= current compares the flags, then the colors.
 static inline h8 compositeEightH(struct Renderer* renderer, h8 current, h8 color, uint16x8_t drawn, bool blend) {
 	uint16x8_t notBelow = vorrq_u16(vcgtq_u16(color.hi, current.hi), vandq_u16(vceqq_u16(color.hi, current.hi), vcgeq_u16(color.lo, current.lo)));
 	// current & (0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN)
@@ -209,7 +210,7 @@ static inline h8 compositeEightH(struct Renderer* renderer, h8 current, h8 color
 		result.lo = vbslq_u16(notBelow, current.lo, color.lo);
 		result.hi = vbslq_u16(notBelow, keptHi, color.hi);
 	} else {
-		// A mix leaves just the color
+		// A mix leaves just the color.
 		uint16x8_t mixes = vandq_u16(vtstq_u16(current.hi, vdupq_n_u16(FLAG_TARGET_1 >> 16)), vtstq_u16(color.hi, vdupq_n_u16(FLAG_TARGET_2 >> 16)));
 		uint16x8_t aboveLo = current.lo;
 		uint16x8_t aboveHi = keptHi;
@@ -224,7 +225,7 @@ static inline h8 compositeEightH(struct Renderer* renderer, h8 current, h8 color
 }
 
 // compositeEightH under the object window: a color drawn above keeps the pixel's object window bit,
-// as render.c's composite*Objwin do
+// as render.c's composite*Objwin do.
 static inline h8 compositeEightObjwinH(struct Renderer* renderer, h8 current, h8 color, uint16x8_t drawn, bool blend) {
 	uint16x8_t notBelow = vorrq_u16(vcgtq_u16(color.hi, current.hi), vandq_u16(vceqq_u16(color.hi, current.hi), vcgeq_u16(color.lo, current.lo)));
 	uint16x8_t keptHi = vandq_u16(current.hi, vdupq_n_u16(0x05FF));
@@ -247,15 +248,15 @@ static inline h8 compositeEightObjwinH(struct Renderer* renderer, h8 current, h8
 	return (h8) { vbslq_u16(drawn, result.lo, current.lo), vbslq_u16(drawn, result.hi, current.hi) };
 }
 
-// Eight pixels' colors from one 16-color bank as 16-bit lanes
+// Eight pixels' colors from one 16-color bank, as 16-bit lanes.
 static inline uint16x8_t bankColorsH(const uint8_t (*bank)[16], uint8x8_t indices) {
 	uint8x8_t lo = vqtbl1_u8(vld1q_u8(bank[0]), indices);
 	uint8x8_t hi = vqtbl1_u8(vld1q_u8(bank[1]), indices);
 	return vreinterpretq_u16_u8(vcombine_u8(vzip1_u8(lo, hi), vzip2_u8(lo, hi)));
 }
 
-// Composites palette indices onto the row: renderer.c's BACKGROUND_DRAW_PIXEL with COMPOSITE_*_NO_OBJWIN.
-// index[i] holds the palette index of pixel start + i; 0 draws nothing.
+// Composites palette indices onto the row: render.c's BACKGROUND_DRAW_PIXEL with
+// COMPOSITE_*_NO_OBJWIN. index[i] holds the palette index of pixel start + i; 0 draws nothing.
 static void compositeIndices(struct GBA* gba, const uint8_t* index, uint32_t flags, bool variant) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16_t* normal = (const uint16_t*) gba->palette;
@@ -301,14 +302,14 @@ static void compositeIndices(struct GBA* gba, const uint8_t* index, uint32_t fla
 	}
 }
 
-// The map entry of tile column tx of a line: of a 256-pixel map, or of two side by side
+// Returns the map entry of tile column tx of a line, in a 256-pixel map or in two side by side.
 static inline uint16_t textMapEntry(const uint8_t* map, int tx, unsigned wideMap) {
 	tx &= 63;
 	return load16(map, ((tx & 31) + ((tx & 32) << 5) * wideMap) << 1);
 }
 
-// What renderText16 draws a tile with. Inlined twice, so the plain case carries no variant palette or
-// object window tests.
+// What renderText16 draws a tile with. It is inlined twice, so the plain case carries no variant
+// palette or object window tests.
 struct Text16 {
 	struct Renderer* renderer;
 	uint16x8_t flagsHi;
@@ -319,13 +320,14 @@ struct Text16 {
 	bool objwinSlowPath;
 	bool objwinVariant;
 	bool forceEnable;
-	// The palette bank last drawn with, as bytes for table lookups
+	// The palette bank last drawn with, as bytes for table lookups.
 	int lastBank;
 	uint8x16_t bankLo;
 	uint8x16_t bankHi;
 };
 
-// A tile's row of nibbles onto the eight pixels of the row from x; one at an end of the run (edge) draws [from, to)
+// Draws a tile's row of nibbles onto the eight pixels of the row from x; at an end of the run
+// (edge), only [from, to).
 static inline __attribute__((always_inline)) void text16Tile(struct Text16* s, int x, uint16_t mapData, uint32_t data,
                                                              int from, int to, bool edge) {
 	struct Renderer* renderer = s->renderer;
@@ -364,7 +366,7 @@ static inline __attribute__((always_inline)) void text16Tile(struct Text16* s, i
 	} else {
 		uint16x8_t normal = color;
 		if (s->variant) {
-			// Pixels to blend again take the normal palette
+			// Pixels to blend again take the normal palette.
 			normal = bankColorsH(renderer->bankBytes[0][bank], nibbles);
 			uint16x8_t reblendBits = vandq_u16(current.hi, vdupq_n_u16((FLAG_IS_BACKGROUND | FLAG_REBLEND) >> 16));
 			color = vbslq_u16(vceqq_u16(reblendBits, vdupq_n_u16(FLAG_REBLEND >> 16)), normal, color);
@@ -389,9 +391,9 @@ static inline __attribute__((always_inline)) void text16Tile(struct Text16* s, i
 	}
 }
 
-// A line's tiles in order, the loads for each started early, as an in-order core needs: the map entry
-// two tiles ahead, the pixel row one. Past the run they read map entries of the same line and rows
-// inside VRAM.
+// A line's tiles in order, with each tile's loads started early, as an in-order core needs: the map
+// entry two tiles ahead, the pixel row one. Past the run, they read map entries of the same line
+// and rows inside VRAM.
 struct TextTiles {
 	const uint8_t* vram;
 	const uint8_t* map;
@@ -405,13 +407,13 @@ struct TextTiles {
 	uint32_t data0;
 };
 
-// Where in VRAM the tile row a map entry names is, with vertical flip taken into account
+// Returns where in VRAM the tile row a map entry names is, taking vertical flip into account.
 static inline uint32_t textRowBase(const struct TextTiles* t, uint16_t mapData) {
 	return (TEXT_MAP_VFLIP(mapData) ? t->flippedOffset : t->rowOffset) + (TEXT_MAP_TILE(mapData) << 5);
 }
 
-// The text background loop looks one tile ahead, so that the next tile's data is being loaded while
-// this one is drawn
+// The text background loop looks one tile ahead, so the next tile's data loads while this one is
+// drawn.
 static inline void textNextTile(struct TextTiles* t, uint16_t* mapData, uint32_t* charBase, uint32_t* data) {
 	*mapData = t->map0;
 	*charBase = t->base0;
@@ -423,7 +425,7 @@ static inline void textNextTile(struct TextTiles* t, uint16_t* mapData, uint32_t
 	++t->tx;
 }
 
-// 16-color text on 16-bit lanes, for renderTextSimd
+// 16-color text on 16-bit lanes, for renderTextSimd.
 static inline __attribute__((always_inline)) void renderText16(struct GBA* gba, struct RenderBackground* background, unsigned yBase,
                                                                int inX, int lead, int count, int localY0, bool special) {
 	struct Renderer* renderer = &gba->renderer;
@@ -434,7 +436,8 @@ static inline __attribute__((always_inline)) void renderText16(struct GBA* gba, 
 		.objwinOnly = vdupq_n_u16(background->objwinOnly ? 0xFFFF : 0),
 		.blend = background->flags & FLAG_TARGET_2,
 		.variant = special && background->variant,
-		// With the object window on, pixels under it take objwinFlags and the object window palette
+		// With the object window on, pixels under it take objwinFlags and the object window
+		// palette.
 		.objwinSlowPath = special && DISPCNT_OBJWIN_ENABLE(renderer->dispcnt),
 		.forceEnable = background->objwinForceEnable,
 		.lastBank = -1,
@@ -459,7 +462,7 @@ static inline __attribute__((always_inline)) void renderText16(struct GBA* gba, 
 	uint16_t mapData;
 	uint32_t charBase;
 	uint32_t data;
-	// mGBA skips whole tiles past 64 KiB, but draws the partial ones at the ends of the run
+	// mGBA skips whole tiles past 64 KiB, but draws the partial ones at the ends of the run.
 	if (lead) {
 		textNextTile(&tiles, &mapData, &charBase, &data);
 		if (data) {
@@ -481,7 +484,8 @@ static inline __attribute__((always_inline)) void renderText16(struct GBA* gba, 
 	}
 }
 
-// A text background without mosaic or the object window, as render.c's drawBackgroundMode0 draws it
+// Draws a text background without mosaic or the object window, as render.c's drawBackgroundMode0
+// does.
 bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, int y) {
 	struct Renderer* renderer = &gba->renderer;
 	int length = renderer->end - renderer->start;
@@ -502,10 +506,10 @@ bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, int y)
 	yBase = (background->screenBase >> 1) + (yBase << 2);
 	const uint8_t* vram = gba->vram;
 
-	// Indices from the start of the first tile; lead pixels of it lie before the window
+	// Indices from the start of the first tile; its lead pixels lie before the window.
 	int lead = inX & 7;
 	int count = lead + length;
-	// When the window ends inside the first, partial tile, mGBA lines its pixels up differently
+	// When the window ends inside the first, partial tile, mGBA lines its pixels up differently.
 	if (lead && count < 8) {
 		return false;
 	}
@@ -519,8 +523,8 @@ bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, int y)
 		}
 		return true;
 	}
-	// 256 colors: the tiles' palette indices first, with their loads ahead of use as above; tiles past
-	// 64 KiB draw nothing, and their row loads are moved inside VRAM
+	// 256 colors: the tiles' palette indices first, with their loads ahead of use as above. Tiles
+	// past 64 KiB draw nothing, and their row loads are moved inside VRAM.
 	uint8_t index[SCREEN_WIDTH + 16] __attribute__((aligned(16)));
 	const uint8_t* map = &vram[yBase << 1];
 	int tx0 = (inX - lead) >> 3;
@@ -549,8 +553,8 @@ bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, int y)
 	return true;
 }
 
-// render.c's postprocessSprite without the object window: sprites of one priority onto the row
-// Sprites wrote only columns [from, to) on this line
+// Merges the sprites of one priority onto the row: render.c's postprocessSprite without the object
+// window. Sprites wrote only columns [from, to) on this line.
 void renderSpritesSimd(struct GBA* gba, unsigned priority, int from, int to) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16x8_t unwritten = vdupq_n_u16(FLAG_UNWRITTEN >> 16);
@@ -584,7 +588,7 @@ void renderSpritesSimd(struct GBA* gba, unsigned priority, int from, int to) {
 		}
 		h8 current = lanes < 8 ? loadRowPartH8(renderer, x, 0, lanes) : loadRowH8(renderer, x);
 		h8 color = { sprite.lo, vorrq_u16(sprite.hi, flags) };
-		// compositeBlendNoObjwin: blends whenever target 1 meets target 2
+		// compositeBlendNoObjwin: blends whenever target 1 meets target 2.
 		h8 result = compositeEightH(renderer, current, color, drawn, true);
 		if (lanes < 8) {
 			storeRowPartH8(renderer, x, 0, lanes, result);
@@ -594,7 +598,7 @@ void renderSpritesSimd(struct GBA* gba, unsigned priority, int from, int to) {
 	}
 }
 
-// The first part of render.c's postprocessBuffer: target 1 pixels blended with the backdrop
+// The first part of render.c's postprocessBuffer: blends target 1 pixels with the backdrop.
 void renderBlendBackdropSimd(struct GBA* gba, int x, int end, uint32_t backdrop) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16x8_t target1 = vdupq_n_u16(FLAG_TARGET_1 >> 16);
@@ -606,7 +610,7 @@ void renderBlendBackdropSimd(struct GBA* gba, int x, int end, uint32_t backdrop)
 		if (noneH(hit)) {
 			continue;
 		}
-		// A mix leaves just the color
+		// A mix leaves just the color.
 		h8 result = { vbslq_u16(hit, mix5x8h(renderer->bldb, backdropLo, renderer->blda, color.lo), color.lo), vbicq_u16(color.hi, hit) };
 		if (lanes < 8) {
 			storeRowPartH8(renderer, x, 0, lanes, result);
@@ -616,9 +620,8 @@ void renderBlendBackdropSimd(struct GBA* gba, int x, int end, uint32_t backdrop)
 	}
 }
 
-// render.c's SPRITE_NORMAL_LOOP and SPRITE_TRANSFORMED_LOOP with SPRITE_DRAW_PIXEL_*_NORMAL, eight pixels at a time
-// Eight sprite pixels onto the sprite layer on 16-bit lanes (sprite flags are all in the high halves):
-// the first count of them, where they come before what is there
+// Merges eight sprite pixels onto the sprite layer on 16-bit lanes (sprite flags are all in the
+// high halves): the first count of them, where they come before what's there.
 static inline void mergeSpritePixels(uint32_t* layer, int count, uint16x8_t transparent, uint16x8_t color, uint32_t flags) {
 	const uint16_t laneNumbers16[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
 	const uint16x8_t flagsHi = vdupq_n_u16(flags >> 16);
@@ -651,8 +654,8 @@ static inline void mergeSpritePixels(uint32_t* layer, int count, uint16x8_t tran
 	}
 }
 
-// How many pixels of a run with c == 0 lie in the sprite before the first that doesn't: pixel k reads
-// column (xAccum + (k + 1) * a) >> 8, which only moves one way
+// Returns how many pixels of a run with c == 0 lie in the sprite before the first that doesn't.
+// Pixel k reads column (xAccum + (k + 1) * a) >> 8, which only moves one way.
 static int spriteRowLength(int xAccum, int a, int width, int left) {
 	int first = xAccum + a;
 	int limit = width << 8;
@@ -670,8 +673,10 @@ static int spriteRowLength(int xAccum, int a, int width, int left) {
 	return n < left ? n : left;
 }
 
-// A run of an unscaled sprite's pixels, eight at a time: tile data widened to a pixel a lane, looked
-// up in the palette, and merged into the sprite layer under the same rules as the scalar loop
+// Draws a run of a sprite's pixels eight at a time (render.c's SPRITE_NORMAL_LOOP and
+// SPRITE_TRANSFORMED_LOOP with SPRITE_DRAW_PIXEL_*_NORMAL): tile data widened to a pixel per lane,
+// looked up in the palette, and merged into the sprite layer under the same rules as the scalar
+// loop.
 void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 	struct Renderer* renderer = &gba->renderer;
 	if (renderer->palette32Stale) {
@@ -693,8 +698,8 @@ void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 	int inX = run->inX;
 	int xAccum = run->xAccum;
 	int yAccum = run->yAccum;
-	// An affine sprite whose rows don't turn (c == 0) reads a single row of itself, so its texels and
-	// their colors go in tables once
+	// An affine sprite whose rows don't turn (c == 0) reads a single row of itself, so its texels
+	// and their colors go into tables once.
 	int rowY = yAccum >> 8;
 	bool rowTable = run->transformed && !run->c && run->width <= 64 && !(rowY & ~(run->height - 1));
 	if (rowTable) {
@@ -727,7 +732,8 @@ void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 		uint16x8_t color;
 		bool stop = false;
 		if (!run->transformed && !run->wide && left >= 8 && (run->xOffset == 1 ? !(inX & 7) : run->xOffset == -1 && (inX & 7) == 7)) {
-			// One whole row of a 16-color tile: its two halfwords, as SPRITE_DRAW_PIXEL_16_NORMAL reads them
+			// One whole row of a 16-color tile: its two halfwords, as SPRITE_DRAW_PIXEL_16_NORMAL
+			// reads them.
 			unsigned xBase = (inX & ~7) * 4;
 			unsigned yBase = (run->inY & ~7) * run->stride + (run->inY & 7) * 4 + run->maskHi;
 			uint32_t data = load16(vramBase, (yBase + ((xBase + run->charBase) & run->maskLo)) & 0x7FFE);
@@ -751,7 +757,7 @@ void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 				v8 ys = add8(set8(yAccum), mul8(step, set8(run->c)));
 				localX = SAR8(xs, 8);
 				localY = SAR8(ys, 8);
-				// The loop stops at the first pixel outside the sprite
+				// The loop stops at the first pixel outside the sprite.
 				v8 outside = or8(and8(localX, set8(~(run->width - 1))), and8(localY, set8(~(run->height - 1))));
 				outside = and8(not8(eq8(outside, zero)), gts8(set8(left), lanesUp));
 				int bits = movemask8(outside);
@@ -796,9 +802,9 @@ void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 	}
 }
 
-// render.c's drawBackgroundMode4 without the object window. x and y are the coordinates of the pixel
-// before the window's first, as BACKGROUND_BITMAP_INIT leaves them; with mosaic, picked holds the
-// color index each pixel took instead, 0 for none.
+// render.c's drawBackgroundMode4 without the object window. x and y are the coordinates of the
+// pixel before the window's first, as BACKGROUND_BITMAP_INIT leaves them; with mosaic, picked holds
+// the color index each pixel took instead, or 0 for none.
 void renderMode4Simd(struct GBA* gba, struct RenderBackground* background, int32_t x, int32_t y, const uint8_t* picked) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16_t* palette = background->variant ? renderer->variantPalette : (const uint16_t*) gba->palette;
@@ -813,12 +819,13 @@ void renderMode4Simd(struct GBA* gba, struct RenderBackground* background, int32
 	const uint16x8_t writable = vdupq_n_u16(0xFE000000 >> 16);
 	const uint16_t laneNumbers16[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
 	const uint16x8_t lanes16 = vld1q_u16(laneNumbers16);
-	// Without rotation a row reads one line; shrunk at most by half, eight pixels lie within 16 bytes of it
+	// Without rotation, a row reads one line; shrunk at most by half, eight pixels lie within 16
+	// bytes of it.
 	bool flat = background->dy == 0 && background->dx > 0 && background->dx <= 0x200;
 	int length = renderer->end - renderer->start;
 	for (int i = 0; i < length; i += 8) {
 		int to = length - i < 8 ? length - i : 8;
-		// The loop adds dx and dy before each pixel
+		// The loop adds dx and dy before each pixel.
 		v8 xs = add8(set8(x + i * background->dx), mul8(step, dx));
 		v8 column = SAR8(xs, 8);
 		uint8_t indices[8] = { 0 };
@@ -833,7 +840,7 @@ void renderMode4Simd(struct GBA* gba, struct RenderBackground* background, int32
 		} else {
 			v8 ys = add8(set8(y + i * background->dy), mul8(step, dy));
 			v8 line = SAR8(ys, 8);
-			// x and y in range: (unsigned) column < 240 and line < 160
+			// x and y in range: (unsigned) column < 240 and line < 160.
 			v8 inside = and8(gts8(width, column), gts8(height, line));
 			inside = and8(inside, gts8(or8(column, line), set8(-1)));
 			inside = and8(inside, gts8(set8(to), laneIndex8()));
@@ -873,10 +880,10 @@ void renderMode4Simd(struct GBA* gba, struct RenderBackground* background, int32
 	}
 }
 
-// The pixels [*from, *to) of n whose coordinate a + i * d lies in [0, size)
+// Returns the pixels [*from, *to) of n whose coordinate a + i * d lies in [0, size).
 static void insideRun(int32_t a, int32_t d, int32_t size, int n, int* from, int* to) {
 	if (d < 0) {
-		// The same run measured from the far edge
+		// The same run, measured from the far edge.
 		a = size - 1 - a;
 		d = -d;
 	}
@@ -894,8 +901,8 @@ static void insideRun(int32_t a, int32_t d, int32_t size, int n, int* from, int*
 	*to = last > *to ? *to : last;
 }
 
-// Palette indices of an affine background's pixels [from, to), whose coordinates are inside the map
-// or, with wrap, wrapped into it: x and y are those of pixel -1
+// The palette indices of an affine background's pixels [from, to) whose coordinates are inside the
+// map or, with wrap, wrapped into it; x and y are those of pixel -1.
 static inline __attribute__((always_inline)) void affineIndices(uint8_t* index, int from, int to, const uint8_t* screenBase, const uint8_t* charBase,
                                                                 int32_t x, int32_t y, int32_t dx, int32_t dy, int size, bool wrap) {
 	uint32_t mask = (0x8000 << size) - 1;
@@ -910,9 +917,9 @@ static inline __attribute__((always_inline)) void affineIndices(uint8_t* index, 
 	}
 }
 
-// render.c's drawBackgroundMode2 without mosaic or the object window: the palette indices first, then
-// composited as 256-color text is. x and y are the coordinates of the pixel before the window's first,
-// as BACKGROUND_BITMAP_INIT leaves them.
+// render.c's drawBackgroundMode2 without mosaic or the object window: the palette indices first,
+// then composited as 256-color text is. x and y are the coordinates of the pixel before the
+// window's first, as BACKGROUND_BITMAP_INIT leaves them.
 void renderAffineSimd(struct GBA* gba, struct RenderBackground* background, int32_t x, int32_t y) {
 	struct Renderer* renderer = &gba->renderer;
 	int length = renderer->end - renderer->start;
@@ -925,7 +932,7 @@ void renderAffineSimd(struct GBA* gba, struct RenderBackground* background, int3
 	int32_t dx = background->dx;
 	int32_t dy = background->dy;
 	bool wrap = background->overflow;
-	// Outside the map draws nothing unless it wraps
+	// Outside the map draws nothing unless it wraps.
 	int from = 0;
 	int to = length;
 	if (!wrap) {
