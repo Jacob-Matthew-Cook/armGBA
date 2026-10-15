@@ -180,10 +180,10 @@ static inline unsigned darken(unsigned color, int y) {
 	return c;
 }
 
-// A row pixel as one 32-bit word, with the color below the flags. On AArch64 the row is two planes,
+// A row pixel as one 32-bit word, with the color below the flags. With NEON the row is two planes,
 // which these join and split.
 static inline uint32_t rowGet(const struct Renderer* renderer, int x) {
-#if defined(__aarch64__)
+#if defined(__ARM_NEON)
 	return (uint32_t) renderer->rowFlags[x] << 16 | renderer->rowColor[x];
 #else
 	return renderer->row[x];
@@ -191,7 +191,7 @@ static inline uint32_t rowGet(const struct Renderer* renderer, int x) {
 }
 
 static inline void rowSet(struct Renderer* renderer, int x, uint32_t value) {
-#if defined(__aarch64__)
+#if defined(__ARM_NEON)
 	renderer->rowColor[x] = value;
 	renderer->rowFlags[x] = value >> 16;
 #else
@@ -201,7 +201,7 @@ static inline void rowSet(struct Renderer* renderer, int x, uint32_t value) {
 
 // Returns the color of a row pixel, as the frame takes it.
 static inline uint16_t rowColorAt(const struct Renderer* renderer, int x) {
-#if defined(__aarch64__)
+#if defined(__ARM_NEON)
 	return renderer->rowColor[x];
 #else
 	return renderer->row[x];
@@ -254,8 +254,8 @@ static inline void compositeNoBlendNoObjwin(struct Renderer* renderer, int x, ui
 	rowSet(renderer, x, color);
 }
 
-// SIMD versions of the hot paths: AVX2 (chosen at run time) on x86-64, NEON on AArch64.
-#if defined(__x86_64__) || defined(__aarch64__)
+// SIMD versions of the hot paths: AVX2 (chosen at run time) on x86-64, NEON on AArch64 and ARMv7.
+#if defined(__x86_64__) || defined(__ARM_NEON)
 #define RENDER_SIMD 1
 #else
 #define RENDER_SIMD 0

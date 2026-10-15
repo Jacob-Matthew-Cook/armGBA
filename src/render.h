@@ -101,7 +101,7 @@ struct Renderer {
 	uint16_t dispcntLatch[3];
 	// The DISPCNT this line draws with.
 	uint16_t lineDispcnt;
-#if defined(__aarch64__)
+#if defined(__ARM_NEON)
 	// The line being built: each pixel's color, and separately its flags (the top half of
 	// render.c's 32-bit pixel), for NEON's 16-bit lanes.
 	uint16_t rowColor[SCREEN_WIDTH];
