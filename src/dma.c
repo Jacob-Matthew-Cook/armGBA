@@ -8,7 +8,8 @@
 #include <string.h>
 
 // A request starts a channel two cycles later. Started channels wait for the bus and run, highest
-// priority first, before the CPU's next access; a cycle goes on starting up and one on handing back.
+// priority first, before the CPU's next access; one cycle goes on starting up and one on handing
+// back.
 
 enum {
 	DMA_INCREMENT,
@@ -29,7 +30,7 @@ static const uint32_t DMA_SRC_MASK[] = { 0x07FFFFFE, 0x0FFFFFFE, 0x0FFFFFFE, 0x0
 static const uint32_t DMA_DST_MASK[] = { 0x07FFFFFE, 0x07FFFFFE, 0x07FFFFFE, 0x0FFFFFFE };
 
 // The fields of a channel's control word: how the destination and source addresses move, whether it
-// repeats, 16 or 32 bits a unit, what starts it, and whether it is on
+// repeats, 16 or 32 bits per unit, what starts it, and whether it is on.
 static int destControl(uint16_t reg) {
 	return (reg >> 5) & 3;
 }
@@ -54,7 +55,8 @@ static bool enabled(uint16_t reg) {
 	return reg & 0x8000;
 }
 
-// Units to move: a count of 0 means the most the channel can, 0x4000 or for channel 3 0x10000
+// Returns the units to move: a count of 0 means the most the channel can, 0x4000, or 0x10000 for
+// channel 3.
 static int32_t countOf(struct GBA* gba, int i) {
 	int32_t count = gba->io[IO(REG_DMA0CNT_LO + i * 12)];
 	if (i == 3) {
@@ -64,8 +66,8 @@ static int32_t countOf(struct GBA* gba, int i) {
 	return count ? count : 0x4000;
 }
 
-// A channel's start event: from now it takes the bus at the CPU's next access. A higher-priority
-// channel starting inside a lower one makes that one stop and come back.
+// A channel's start event: from now on, it takes the bus at the CPU's next access. A
+// higher-priority channel starting during a lower one makes that one stop and resume later.
 static void started(struct GBA* gba, void* context, uint32_t late) {
 	(void) late;
 	int i = (int) (intptr_t) context;
@@ -78,7 +80,7 @@ static void started(struct GBA* gba, void* context, uint32_t late) {
 	gba->dmaRunnable |= 1 << i;
 }
 
-// DMA starts two cycles after what asks for it
+// DMA starts two cycles after what asks for it.
 static void request(struct GBA* gba, int i, uint32_t late) {
 	struct Dma* dma = &gba->dma[i];
 	timingDeschedule(gba, &dma->start);
@@ -91,7 +93,7 @@ void dmaInit(struct GBA* gba) {
 	}
 }
 
-// Channels off, nothing running; the events themselves are kept
+// Channels off, nothing running; the events themselves are kept.
 void dmaReset(struct GBA* gba) {
 	for (int i = 0; i < 4; ++i) {
 		struct Event start = gba->dma[i].start;
@@ -107,7 +109,7 @@ void dmaReset(struct GBA* gba) {
 	gba->dmaIdleCredit = 0;
 }
 
-// The address registers, less the top bits a channel cannot address. They are copied to the working
+// The address registers, minus the top bits a channel can't address. They are copied to the working
 // addresses when the channel is switched on.
 uint32_t dmaWriteSource(struct GBA* gba, int dma, uint32_t address) {
 	gba->dma[dma].source = address & DMA_SRC_MASK[dma];
@@ -119,7 +121,7 @@ uint32_t dmaWriteDest(struct GBA* gba, int dma, uint32_t address) {
 	return gba->dma[dma].dest;
 }
 
-// Whether any channel is waiting for this kind of start
+// Whether any channel is waiting for this kind of start.
 bool dmaTimingArmed(struct GBA* gba, int timing) {
 	for (int i = 0; i < 4; ++i) {
 		uint16_t reg = gba->dma[i].reg;
@@ -130,12 +132,13 @@ bool dmaTimingArmed(struct GBA* gba, int timing) {
 	return false;
 }
 
-// Whether an event is a channel starting, which compiled code cannot have fall inside an instruction
+// Whether an event is a channel starting, which compiled code can't have fall inside an
+// instruction.
 bool dmaStartEvent(const struct Event* event) {
 	return event->callback == started;
 }
 
-// Whether channel i is set up to refill a sound FIFO
+// Whether channel i is set up to refill a sound FIFO.
 bool dmaFifoArmed(struct GBA* gba, int i) {
 	return enabled(gba->dma[i].reg) && gba->dma[i].fifo;
 }
@@ -145,7 +148,7 @@ bool dmaFifoArmed(struct GBA* gba, int i) {
 uint16_t dmaWriteControl(struct GBA* gba, int i, uint16_t control) {
 	struct Dma* dma = &gba->dma[i];
 	if (i == 1 || i == 2) {
-		// Quiet timer overflows counted on this channel's requests
+		// Quiet timer overflows counted on this channel's requests.
 		timerReplan(gba, timingCurrentTime(gba));
 	}
 	bool wasEnabled = enabled(dma->reg);
@@ -153,7 +156,7 @@ uint16_t dmaWriteControl(struct GBA* gba, int i, uint16_t control) {
 	control &= i < 3 ? 0xF7E0 : 0xFFE0;
 	dma->reg = control;
 	if (wasHblank != (enabled(control) && timingOf(control) == DMA_TIMING_HBLANK)) {
-		// H-blank events on the visible lines come and go with it
+		// H-blank events on the visible lines come and go with it.
 		videoHblankDmaArmed(gba);
 	}
 	if (!enabled(control)) {
@@ -165,7 +168,7 @@ uint16_t dmaWriteControl(struct GBA* gba, int i, uint16_t control) {
 		return control;
 	}
 	if (wasEnabled) {
-		// Changed while running, the rest of the transfer follows the new settings
+		// If changed while running, the rest of the transfer follows the new settings.
 		if (i == gba->activeDma && gba->performingDma) {
 			gba->dmaReenter = true;
 		}
@@ -178,7 +181,7 @@ uint16_t dmaWriteControl(struct GBA* gba, int i, uint16_t control) {
 	dma->nextDest = dma->dest;
 	dma->fifo = timingOf(control) == DMA_TIMING_CUSTOM && (i == 1 || i == 2);
 	if (dma->fifo) {
-		// The FIFO a channel writes to sends it its requests
+		// The FIFO a channel writes to sends it its requests.
 		if (dma->dest == (0x04000000 | REG_FIFO_A_LO)) {
 			gba->audio.chA.dmaSource = i;
 		} else if (dma->dest == (0x04000000 | REG_FIFO_B_LO)) {
@@ -201,7 +204,7 @@ uint16_t dmaWriteControl(struct GBA* gba, int i, uint16_t control) {
 	return control;
 }
 
-// Starts every channel waiting for this timing, the FIFO ones apart
+// Starts every channel waiting for this timing, except the FIFO ones.
 static void requestTiming(struct GBA* gba, int timing, uint32_t late) {
 	for (int i = 0; i < 4; ++i) {
 		uint16_t reg = gba->dma[i].reg;
@@ -211,7 +214,8 @@ static void requestTiming(struct GBA* gba, int timing, uint32_t late) {
 	}
 }
 
-// The video timings: every visible line's H-blank, V-blank, and for channel 3 each line from 2 to 161
+// The video timings: every visible line's H-blank, V-blank, and for channel 3 each line from 2 to
+// 161.
 void dmaRequestHblank(struct GBA* gba, uint32_t late) {
 	requestTiming(gba, DMA_TIMING_HBLANK, late);
 }
@@ -227,7 +231,7 @@ void dmaRequestDisplayStart(struct GBA* gba, uint32_t late) {
 	}
 }
 
-// A sound FIFO has room for four more words
+// A sound FIFO has room for four more words.
 void dmaRequestFifo(struct GBA* gba, int i, uint32_t late) {
 	struct Dma* dma = &gba->dma[i];
 	if (enabled(dma->reg) && dma->fifo) {
@@ -235,7 +239,7 @@ void dmaRequestFifo(struct GBA* gba, int i, uint32_t late) {
 	}
 }
 
-// A channel's transfer is done: its interrupt, then off, or set up again if it repeats
+// A channel's transfer is done: its interrupt, then off, or set up again if it repeats.
 static void finish(struct GBA* gba, int i) {
 	struct Dma* dma = &gba->dma[i];
 	gba->dmaRunnable &= ~(1 << i);
@@ -243,7 +247,7 @@ static void finish(struct GBA* gba, int i) {
 		gbaRaiseIrq(gba, IRQ_DMA0 + i, 0);
 	}
 	int timing = timingOf(dma->reg);
-	// The display start channel stops after the last visible line
+	// The display start channel stops after the last visible line.
 	bool lastCapture = i == 3 && timing == DMA_TIMING_CUSTOM && videoLine(gba) == 161;
 	if (!repeats(dma->reg) || timing == DMA_TIMING_NOW || lastCapture) {
 		dma->reg &= ~0x8000;
@@ -260,13 +264,13 @@ static void finish(struct GBA* gba, int i) {
 	}
 }
 
-// Memory a transfer can be done on directly: no I/O, no cartridge
+// Whether a transfer can be done on this memory directly: no I/O, no cartridge.
 static bool plainSource(unsigned region) {
 	return region >= REGION_EWRAM && region <= REGION_OAM && region != REGION_IO;
 }
 
-// Units memoryDmaCopy can move: between RAM, palette, VRAM and OAM, or read forwards from cartridge
-// ROM once the burst has started and the cartridge's counter is at the source
+// Returns the units memoryDmaCopy can move: between RAM, palette, VRAM and OAM, or read forwards
+// from cartridge ROM once the burst has started and the cartridge's counter is at the source.
 static bool plain(struct GBA* gba, uint32_t source, uint32_t dest, int32_t sourceStep, bool cartridge, bool eeprom) {
 	unsigned region = source >> 24;
 	if (!plainSource(dest >> 24)) {
@@ -288,7 +292,7 @@ static void runChannel(struct GBA* gba) {
 	int32_t sourceStep = DMA_OFFSET[sourceControl(dma->reg)] * size;
 	int32_t destStep = dma->fifo ? 0 : DMA_OFFSET[destControl(dma->reg)] * size;
 	bool eeprom = gba->savedata.type == SAVEDATA_EEPROM || gba->savedata.type == SAVEDATA_EEPROM512;
-	// The first cartridge access starts a burst
+	// The first cartridge access starts a burst.
 	bool cartridge = false;
 	gba->performingDma = 1 | (i << 1);
 	while (dma->nextCount) {
@@ -332,7 +336,7 @@ static void runChannel(struct GBA* gba) {
 		} else if ((dest >> 24) == REGION_ROM2_EX && (eeprom || gba->savedata.type == SAVEDATA_AUTODETECT)) {
 			busTick(gba, busCycles(gba, dest, 2, destSeq));
 			if (gba->savedata.type == SAVEDATA_AUTODETECT) {
-				// The rest of this transfer goes to the EEPROM too
+				// The rest of this transfer goes to the EEPROM too.
 				savedataInitEeprom(gba);
 				eeprom = true;
 			}
@@ -347,7 +351,7 @@ static void runChannel(struct GBA* gba) {
 	finish(gba, i);
 }
 
-// The lowest-numbered channel has priority
+// The lowest-numbered channel has priority.
 static int lowest(uint8_t bits) {
 	return __builtin_ctz(bits);
 }
@@ -366,7 +370,7 @@ int32_t dmaRun(struct GBA* gba) {
 	}
 	gba->performingDma = 0;
 	gba->activeDma = -1;
-	// A DMA that halted the CPU hands the bus back once the CPU wakes
+	// A DMA that halted the CPU hands the bus back once the CPU wakes.
 	while (!wasHalted && cpu->halted) {
 		if (cpu->cycles < cpu->nextEvent) {
 			cpu->cycles = cpu->nextEvent;

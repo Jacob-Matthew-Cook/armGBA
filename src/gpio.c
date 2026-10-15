@@ -10,9 +10,9 @@
 #include <time.h>
 
 // Cartridge GPIO pins at 0x080000C4 and the devices behind them, as mGBA has them: the real-time
-// clock, Boktai's light sensor, WarioWare: Twisted!'s gyro and the rumble motor. The pin registers read
-// back through the ROM, so their state is written into the ROM buffer. The tilt sensor of Yoshi
-// Topsy-Turvy and Korokoro Puzzle sits in the save memory's addresses instead.
+// clock, Boktai's light sensor, WarioWare: Twisted!'s gyro and the rumble motor. The pin registers
+// read back through the ROM, so their state is written into the ROM buffer. The tilt sensor of
+// Yoshi Topsy-Turvy and Korokoro Puzzle sits in the save memory's addresses instead.
 
 enum {
 	GPIO_REG_DATA = 0xC4,
@@ -30,19 +30,19 @@ enum {
 
 static const int RTC_BYTES[8] = { 0, 0, 7, 0, 1, 0, 3, 0 };
 
-// A command byte's register number
+// Returns a command byte's register number.
 static int rtcCommand(uint32_t command) {
 	return (command >> 4) & 7;
 }
 
-// The port's registers are readable in the ROM's address space when a game switches that on
+// The port's registers are readable in the ROM's address space when a game switches that on.
 static void storePin(struct GBA* gba, uint32_t offset, uint16_t value) {
 	if (gba->rom) {
 		memcpy(&gba->rom[offset], &value, 2);
 	}
 }
 
-// The pins as they read: the ones the game drives, and the device's on the others
+// The pins as they read: the ones the game drives, and the device's on the others.
 static void outputPins(struct GBA* gba, unsigned pins) {
 	struct Gpio* hw = &gba->gpio;
 	hw->pinState &= hw->direction;
@@ -52,7 +52,7 @@ static void outputPins(struct GBA* gba, unsigned pins) {
 	}
 }
 
-// The clock counts in binary-coded decimal
+// The clock counts in binary-coded decimal.
 static unsigned bcd(unsigned value) {
 	int counter = value % 10;
 	value /= 10;
@@ -60,7 +60,7 @@ static unsigned bcd(unsigned value) {
 	return counter;
 }
 
-// Latches the host's time into the clock's registers, less the offset a game has set
+// Latches the host's time into the clock's registers, minus the offset a game has set.
 static void rtcUpdateClock(struct GBA* gba) {
 	struct Gpio* hw = &gba->gpio;
 	time_t t = hw->clock ? (time_t) hw->clock(hw->clockContext) : time(NULL);
@@ -77,7 +77,7 @@ static void rtcUpdateClock(struct GBA* gba) {
 	hw->rtc.time[6] = bcd(date.tm_sec);
 }
 
-// The first byte after chip select: which register, and whether it is read or written
+// The first byte after chip select: which register, and whether it is read or written.
 static void rtcBeginCommand(struct GBA* gba) {
 	struct Gpio* hw = &gba->gpio;
 	uint32_t command = hw->rtc.bits;
@@ -99,7 +99,7 @@ static void rtcBeginCommand(struct GBA* gba) {
 	hw->rtc.bitsRead = 0;
 }
 
-// A byte of a write has arrived
+// Handles a byte of a write once it has arrived.
 static void rtcProcessByte(struct GBA* gba) {
 	struct Gpio* hw = &gba->gpio;
 	if (rtcCommand(hw->rtc.command) == RTC_CONTROL) {
@@ -113,7 +113,7 @@ static void rtcProcessByte(struct GBA* gba) {
 	}
 }
 
-// The bit the clock puts on its data pin during a read
+// Returns the bit the clock puts on its data pin during a read.
 static unsigned rtcOutput(struct GBA* gba) {
 	struct Gpio* hw = &gba->gpio;
 	uint8_t outputByte = 0xFF;
@@ -129,7 +129,7 @@ static unsigned rtcOutput(struct GBA* gba) {
 	return (outputByte >> hw->rtc.bitsRead) & 1;
 }
 
-// Pins: 0 SCK, 1 SIO, 2 CS
+// Pins: 0 SCK, 1 SIO, 2 CS.
 static void rtcReadPins(struct GBA* gba) {
 	struct Gpio* hw = &gba->gpio;
 	outputPins(gba, hw->pinState & 2);
@@ -187,13 +187,13 @@ static void rtcReadPins(struct GBA* gba) {
 	hw->rtc.sckEdge = !!(hw->pinState & 1);
 }
 
-// The gyro's reading, 16 bits shifted out on pin 2: a rising pin 0 samples it, each falling pin 1 moves
-// it a bit
+// The gyro's reading, 16 bits shifted out on pin 2: a rising pin 0 samples it, and each falling pin
+// 1 moves it on a bit.
 static void gyroReadPins(struct GBA* gba) {
 	struct Gpio* hw = &gba->gpio;
 	bool output = hw->gyroEdge && !(hw->pinState & 2);
 	if (hw->pinState & 1) {
-		// About 12 bits around 0x700, a bit cropped so that it can't go negative
+		// About 12 bits around 0x700, cropped a little so it can't go negative.
 		hw->gyroSample = (hw->gyroZ >> 21) + 0x700;
 		output = true;
 	}
@@ -205,7 +205,7 @@ static void gyroReadPins(struct GBA* gba) {
 	hw->gyroEdge = !!(hw->pinState & 2);
 }
 
-// Pin 3 runs the motor
+// Pin 3 runs the motor.
 static void rumbleReadPins(struct GBA* gba) {
 	gba->gpio.rumble = !!(gba->gpio.pinState & 8);
 }
@@ -231,7 +231,7 @@ static void lightReadPins(struct GBA* gba) {
 	outputPins(gba, (sendBit << 3) | (hw->pinState & 0x7));
 }
 
-// Called after the game changes the pins: the devices attached look at them
+// Called after the game changes the pins, so the attached devices can react.
 static void readPins(struct GBA* gba) {
 	int devices = gba->gpio.devices;
 	if (devices & HW_RTC) {
@@ -248,8 +248,8 @@ static void readPins(struct GBA* gba) {
 	}
 }
 
-// The tilt sensor reads when the game writes 0x55 to 0x8000 and then 0xAA to 0x8100; its two
-// 12-bit axes, about 0x3A0 when level, read from 0x8200 to 0x8500
+// The tilt sensor takes a reading when the game writes 0x55 to 0x8000 and then 0xAA to 0x8100. Its
+// two 12-bit axes, about 0x3A0 when level, are read from 0x8200 to 0x8500.
 void gpioTiltWrite(struct GBA* gba, uint32_t offset, uint8_t value) {
 	struct Gpio* hw = &gba->gpio;
 	switch (offset) {
@@ -283,7 +283,7 @@ uint8_t gpioTiltRead(struct GBA* gba, uint32_t offset) {
 	return 0xFF;
 }
 
-// Which devices the cartridge has, from the override list
+// Which devices the cartridge has, from the override list.
 void gpioSetDevices(struct GBA* gba, int devices) {
 	struct Gpio* hw = &gba->gpio;
 	hw->devices = devices;
@@ -308,7 +308,7 @@ void gpioSetDevices(struct GBA* gba, int devices) {
 	hw->rumble = false;
 }
 
-// All pins inputs, the clock idle
+// All pins are inputs, and the clock is idle.
 void gpioReset(struct GBA* gba) {
 	struct Gpio* hw = &gba->gpio;
 	hw->readWrite = 0;
@@ -317,7 +317,7 @@ void gpioReset(struct GBA* gba) {
 	hw->direction = 0;
 }
 
-// Pokémon ROM hacks get the VBA-compatible pin behavior, as in mGBA
+// Pokémon ROM hacks get the VBA-compatible pin behavior, as in mGBA.
 void gpioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	struct Gpio* hw = &gba->gpio;
 	bool vbaCompat = hw->devices & 0x10000;
