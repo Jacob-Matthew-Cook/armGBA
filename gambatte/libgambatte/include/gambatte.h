@@ -180,13 +180,13 @@ public:
 
 	/**
 	  * @param palNum 0 <= palNum < 3. One of BG_PALETTE, SP1_PALETTE and SP2_PALETTE.
-	  * @param colorNum 0 <= colorNum < 4, or 4 with BG_PALETTE for a Game Boy's screen while it is off
+	  * @param colorNum 0 <= colorNum < 4, or (armGBA:) 4 with BG_PALETTE for a Game Boy's screen while it is off
 	  */
 	void setDmgPaletteColor(int palNum, int colorNum, unsigned long rgb32);
 
 	/**
-	  * Whether the screen, while the game has it off, shows the game's background color instead of what
-	  * the console's screen shows
+	  * armGBA: whether the screen, while the game has it off, shows the game's background color instead
+	  * of what the console's screen shows
 	  */
 	void setScreenOffBackground(bool enabled);
 
