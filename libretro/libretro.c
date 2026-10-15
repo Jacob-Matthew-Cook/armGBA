@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// The libretro core: Game Boy Advance games on armGBA, and Game Boy and Game Boy Color games on gb/ where
-// it builds (ARMGBA_GB)
+// The libretro core: Game Boy Advance games on armGBA, and Game Boy and Game Boy Color games on the
+// Gambatte core in gambatte/ where it builds (ARMGBA_GB)
 
 #include "libretro.h"
 

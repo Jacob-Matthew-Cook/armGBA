@@ -49,9 +49,9 @@ mGBA's SDL frontend scales a stick; the right stick, pushed up or down, changes 
 
 **Game Boy and Game Boy Color.** Gambatte-Speedrun's core (`gambatte/`), plus mappers for unlicensed
 cartridges (Sachen, TAMA5, MBC6, MBC7, Vast Fame, and the BBD, Hitek, Sintax, Li Cheng, NT and Makon
-families), a choice of console model and screen, and a tilt sensor mapping. The screens and the Game
-Boy Color's (and Game Boy Advance's) color correction are SameBoy's, and so are the free boot ROMs
-built in.
+families), a choice of console model and screen, and a tilt sensor mapping. The screens other than
+Grayscale (gambatte-libretro's) and the Game Boy Color's (and Game Boy Advance's) color correction are
+SameBoy's, and so are the free boot ROMs built in.
 
 ## Accuracy
 
@@ -70,8 +70,9 @@ Where the hardware gives no answer, these rules apply:
 ## Options
 
 A game sees only its own console's options, in this order. Holding **L2** or **R2** fast-forwards, and **X** and **Y** are turbo **A** and **B**. In Game Boy Advance games **L3** and **R3** are turbo **L** and **R**.
-A Game Boy game running as on a Game Boy Advance is shown in the middle of that console's screen,
-and **L** or **R** stretches it across, as the console's shoulder buttons do.
+A Game Boy game running as on a Game Boy Advance is shown at its own size (with the black around it
+if Game Boy Advance Border is Shown), and **L** or **R** stretches it across, as the console's
+shoulder buttons do.
 
 | Console | Option | Values (default first) |
 | --- | --- | --- |
@@ -134,7 +135,7 @@ yet on one RK3566 core, where the small caches decide most of the speed.
 - **`tests/cpufuzz`:** random ARM and Thumb programs against mGBA.
 - **Hardware test ROMs:** all 28 pass (jsmolka's gba-tests, FuzzARM, NanoBoyAdvance's).
 - **mGBA test suite:** every scored category passes in full except Misc edge, at 6 of 12.
-- **Game Boy:** 214 of 236 test ROM screens match a SameBoy-based build; the rest are SameSuite's
+- **Game Boy:** 213 of 236 test ROM screens match a SameBoy-based build; the rest are SameSuite's
   APU tests, which time the sound channels to a fraction of a CPU cycle. Every game of the Game Boy
   and Game Boy Color sets was started and compared with SameBoy: 2776 of 2796 and 2983 of 3055 match.
   The rest are not games (BIOS files, cheat cartridges), betas, and unlicensed carts that differ on
@@ -151,8 +152,9 @@ This makes `armgba_libretro.so`; `libretro/armgba_libretro.info` goes in RetroAr
 The system directory needs `gba_bios.bin`. Game Boy boot ROMs there are optional: `gb_bios.bin` or
 `dmg_boot.bin`, `gbc_bios.bin` or `cgb_boot.bin`, `mgb_boot.bin`, and for the Game Boy Advance model
 `cgb_agb_boot.bin`, `cgb_agb0_boot.bin`, the Game Boy Color's (made into it) or `agb_boot.bin`, in
-that order. With Boot ROM On, Nintendo's is used under whichever of these names it has, and SameBoy's
-only where Nintendo's isn't there.
+that order. With Boot ROM On, Nintendo's is used under whichever of these names it has, a SameBoy
+boot ROM under one of them only where Nintendo's isn't there, and with neither the game starts
+without one.
 
 The test tools also need an mGBA source tree with `tests/mgba-oracle.patch` applied, and its
 `libmgba.a` built with `-DCOLOR_16_BIT`:
@@ -184,13 +186,14 @@ Environment variables for working on the core, read at start:
 Code taken from other projects, each under its own license (see License):
 
 - **mGBA** (Jeffrey Pfau and contributors, MPL-2.0): the software renderer, bus and I/O behaviour,
-  save chips, the GPIO clock, the Matrix and Vast Fame cartridge mappers, the save override list,
+  save chips, the GPIO clock, the light sensor, gyro, tilt sensor and rumble, the Matrix and Vast
+  Fame cartridge mappers, the save override list,
   the GBA sound channels, the cheat code decoders and engine, and the unlicensed Game Boy mapper
   tables. It is also the yardstick
   the GBA side is compared with, through `tests/mgba-oracle.patch`.
 - **Gambatte** (sinamas) as extended by **Gambatte-Speedrun** (pokemon-speedrunning/gambatte-core,
   GPL-2.0): the whole Game Boy core in `gambatte/`, with **snes_spc** (Shay Green, LGPL) inside it.
-- **SameBoy** (Lior Halphon, MIT): the Game Boy screen palettes, the Game Boy Color and Game Boy
+- **SameBoy** (Lior Halphon, MIT): the Game Boy screen palettes other than Grayscale, the Game Boy Color and Game Boy
   Advance color correction curves, and the free boot ROMs in `libretro/sameboy-boot.h`. A SameBoy-based build is also the reference the Game Boy side is
   tested against.
 - **libretro** (MIT): `libretro/libretro.h`.
@@ -200,7 +203,8 @@ Read for how the hardware behaves, without code taken:
 - **NanoBoyAdvance** (fleroviux): its hardware test ROMs, which the sprite mosaic rule was worked
   out from, and its renderer, read for when a layer switched on mid-line shows.
 - **hhugboy** (taizou): how unlicensed Game Boy cartridges are detected and banked.
-- **gambatte-libretro**: its `.rtc` layout, which armGBA's clock files share.
+- **gambatte-libretro**: its `.rtc` layout, which armGBA's clock files share, its turbo buttons and
+  their period, and its Grayscale palette.
 - **pret/pokecrystal** and **pret/pokegold**: how Pokémon Gold, Silver and Crystal check the clock.
 - **gpSP**: fast-forward on a held button.
 
@@ -226,4 +230,4 @@ Gambatte. Each part keeps its own notice:
 | `gambatte/` | GPL, version 2 (`gambatte/COPYING`) |
 | `gambatte/libgambatte/src/mem/snes_spc/` | GNU LGPL |
 | `libretro/libretro.h` | MIT |
-| The Game Boy palettes and color curves in `libretro/gb-gambatte.cpp`, the boot ROMs in `libretro/sameboy-boot.h` | MIT, from SameBoy (Lior Halphon) |
+| The Game Boy palettes (other than Grayscale) and color curves in `libretro/gb-gambatte.cpp`, the boot ROMs in `libretro/sameboy-boot.h` | MIT, from SameBoy (Lior Halphon) |

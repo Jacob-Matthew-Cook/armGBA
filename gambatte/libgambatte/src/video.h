@@ -231,6 +231,7 @@ private:
 
 	PPU ppu_;
 	unsigned short dmgColorsBgr15_[3 * 4];
+	// armGBA: a Game Boy's screen while the game has it off, and whether it shows the background color instead
 	unsigned long offColor_;
 	bool offBackground_;
 	unsigned long  cgbColorsRgb32_[32768];
