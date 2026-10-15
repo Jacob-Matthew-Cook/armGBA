@@ -4,7 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// The libretro core's Game Boy and Game Boy Color side, on Gambatte-Speedrun's core (gambatte/, GPL-2.0)
+// The libretro core's Game Boy and Game Boy Color side, running on Gambatte-Speedrun's core
+// (gambatte/, GPL-2.0).
 
 extern "C" {
 #include "gb.h"
@@ -23,7 +24,7 @@ extern "C" {
 #include <vector>
 
 namespace gambatte {
-// armGBA: MBC7's tilt sensor, as an offset from lying flat (mbc7.cpp)
+// MBC7's tilt sensor, as an offset from lying flat, and its flick (defined in mbc7.cpp).
 extern int mbc7TiltX;
 extern int mbc7TiltY;
 extern bool mbc7Flick;
@@ -33,12 +34,12 @@ unsigned long crc32(unsigned long crc, void const* buf, std::size_t size);
 namespace {
 
 enum {
-	// Gambatte's sound comes at 2^21 Hz, 35112 samples to a frame, and it may run on by 2064
+	// Gambatte produces sound at 2^21 Hz, 35112 samples per frame, and may overrun by up to 2064.
 	NATIVE_RATE = 2097152,
 	FRAME_SAMPLES = 35112,
 	OVERRUN = 2064,
-	// Extra room in the state size told to the frontend: for the state to grow, and for the extra work
-	// RAM a Game Boy Color has if the game restarts as one
+	// Extra room in the state size reported to the frontend: for the state to grow, and for the
+	// extra work RAM a Game Boy Color has if the game restarts as one.
 	STATE_SLACK = 4096 + 6 * 4096,
 };
 
@@ -47,35 +48,36 @@ unsigned loadFlags;
 unsigned pressed;
 gambatte::uint_least32_t pixels[LIBRETRO_GB_WIDTH * LIBRETRO_GB_HEIGHT];
 gambatte::uint_least32_t native[FRAME_SAMPLES + OVERRUN];
-// A frame's sound for the frontend: at most two frames' worth of native samples, a pair for each
+// A frame's sound for the frontend: at most two frames' worth of native samples, two channels each.
 int16_t samples[(FRAME_SAMPLES + OVERRUN) * 2 / 16 * 2 + 8];
 size_t sampleCount;
-// Native samples to one of the frontend's, and the sum of those taken so far towards the next
+// How many native samples make one frontend sample, and the running sums towards the next one.
 unsigned ratio;
 long sumLeft;
 long sumRight;
 unsigned summed;
 size_t stateSize;
 unsigned cgbColors[32768];
-// The game and where its boot ROMs are, kept to start it again as another model
+// The game and the boot ROM folder, kept so the game can be restarted as another model.
 std::vector<unsigned char> game;
 std::string systemPath;
 bool hasSystemPath;
 LibretroGbModel chosen;
-// The model the Game Boy Model option asks for, which a state from another model may have changed
-// the machine away from
+// The model the Game Boy Model option asks for. Loading a state from another model may have
+// switched the machine away from it.
 LibretroGbModel wanted;
-// Where games start from, and where this one did
+// The boot ROM choice from the option, and the one this game actually started with.
 LibretroGbBoot bootWanted = LIBRETRO_GB_BOOT_NINTENDO;
 LibretroGbBoot bootUsed;
-// The cheat codes in force, as Gambatte takes them: loading the game again clears them
+// The cheat codes in force, in Gambatte's format. Loading the game again clears them, so they're
+// reapplied.
 std::string gameGenie;
 std::string gameShark;
 
-// An MBC3 clock, kept by the frontend as the .rtc file: in its first 8 bytes the Unix time the clock
-// would have started from, as gambatte-libretro keeps it, so that either core reads the other's file;
-// then the registers as they were and when, which say more (rtc.h's order). A HuC3 chip's file has the
-// chip's whole state where the registers go.
+// An MBC3 clock, kept by the frontend as the .rtc file. The first 8 bytes are the Unix time the
+// clock would have started from, as gambatte-libretro stores it, so either core reads the other's
+// file. Then come the registers and when they were saved, which carry more detail (in rtc.h's
+// order). A HuC3 chip's file stores the chip's whole state in place of the registers.
 enum {
 	RTC_BASE = 0,
 	RTC_MAGIC = 8,
@@ -84,17 +86,20 @@ enum {
 	RTC_SIZE = RTC_REGS + 14,
 	HUC3_STATE = 0x104,
 	HUC3_SIZE = RTC_REGS + HUC3_STATE,
-	// In the HuC3 state: the cycles into the minute, then I/O with the minutes and days as 4-bit fields
+	// In the HuC3 state: the cycles into the current minute, then I/O with the minutes and days as
+	// 4-bit fields.
 	HUC3_MINUTES = 4 + 0x10,
 	HUC3_DAYS = 4 + 0x13,
-	// A host clock before 2024 is one that was never set, and says nothing about the time between
+	// A host clock before 2024 was never set, so it says nothing about the time the game was off.
 	SANE_TIME = 1704067200,
 };
-// The registers in the order gambatte keeps them (mem/rtc.h), and the length of a second in rtc_c's cycles
+// The registers in the order Gambatte keeps them (mem/rtc.h), and the length of a second in rtc_c's
+// cycles.
 enum { RTC_DH, RTC_DL, RTC_H, RTC_M, RTC_S, RTC_C, RTC_LATCHED };
 unsigned long const RTC_SECOND = 0x400000;
 unsigned char rtcFile[HUC3_SIZE];
-// The frontend fills rtcFile after the game is loaded, so it is read before the first frame
+// The frontend fills rtcFile after the game is loaded, so the file is read just before the first
+// frame.
 bool rtcPending;
 
 void put64(unsigned char* to, unsigned long long value) {
@@ -111,8 +116,9 @@ unsigned long long get64(const unsigned char* from) {
 	return value;
 }
 
-// Runs a clock on by some seconds as the chip counts: a field past its range counts up to its last
-// value and wraps to 0 without a carry; past 511 days the day counter wraps and sets its carry bit
+// Advances a clock by some seconds the way the chip counts: a field past its range counts up to its
+// last value and wraps to 0 without a carry; past 511 days, the day counter wraps and sets its
+// carry bit.
 void runClock(unsigned long r[11], unsigned long long seconds) {
 	if (r[RTC_DH] & 0x40) {
 		return;
@@ -143,12 +149,12 @@ void runClock(unsigned long r[11], unsigned long long seconds) {
 	r[RTC_DH] = (r[RTC_DH] & 0xFE) | (days >> 8 & 1);
 }
 
-// How much of rtcFile the cartridge's clock uses, if it has one
+// How much of rtcFile the cartridge's clock uses, or 0 if it has none.
 size_t rtcSize() {
 	return !gb ? 0 : gb->hasMbc3Rtc() ? RTC_SIZE : gb->hasHuC3() ? HUC3_SIZE : 0;
 }
 
-// A 12-bit count kept as three 4-bit fields, lowest first
+// Reads a 12-bit count stored as three 4-bit fields, lowest first.
 unsigned long getNibbles(const unsigned char* at) {
 	return (at[0] & 0xF) | (at[1] & 0xF) << 4 | (at[2] & 0xF) << 8;
 }
@@ -159,7 +165,8 @@ void putNibbles(unsigned char* at, unsigned long value) {
 	}
 }
 
-// Runs a HuC3 clock on by some seconds as the chip counts: minutes to 1440, then days to 4096
+// Advances a HuC3 clock by some seconds the way the chip counts: minutes up to 1440, then days up
+// to 4096.
 void runHuC3(unsigned char* state, unsigned long long seconds) {
 	unsigned long long const minute = RTC_SECOND * 60;
 	unsigned long long cycles = (unsigned long long) state[0] << 24 | state[1] << 16 | state[2] << 8 | state[3];
@@ -174,7 +181,8 @@ void runHuC3(unsigned char* state, unsigned long long seconds) {
 	}
 }
 
-// The clock from the .rtc file, run on by the time the game was off where the host's clock can tell
+// Loads the clock from the .rtc file and advances it by the time the game was off, when the host
+// clock can tell.
 void readRtcFile() {
 	rtcPending = false;
 	unsigned long long const now = std::time(0);
@@ -210,7 +218,8 @@ void readRtcFile() {
 			runClock(r, now - saved);
 		}
 	} else {
-		// gambatte-libretro's: the clock shows the time since its start, unless that is in the future
+		// gambatte-libretro's format: the clock shows the time since its start, unless that start
+		// is in the future.
 		unsigned long long const base = get64(rtcFile + RTC_BASE);
 		if (!base || base < SANE_TIME / 2 || now < SANE_TIME || base > now) {
 			return;
@@ -223,7 +232,7 @@ void readRtcFile() {
 	gb->setRtcRegs(r);
 }
 
-// The clock as it is now, into the .rtc file
+// Writes the clock's current state into the .rtc file.
 void writeRtcFile() {
 	if (gb->hasHuC3()) {
 		unsigned long long const now = std::time(0);
@@ -251,12 +260,13 @@ void writeRtcFile() {
 	}
 }
 
-// Gambatte asks for the buttons through a callback
+// Gambatte asks for the buttons through a callback.
 unsigned input(void*) {
 	return pressed;
 }
 
-// A boot ROM file's first 2304 bytes, the size of the largest; an empty one when there is none
+// Reads the first 2304 bytes of a boot ROM file (the size of the largest boot ROM), or nothing if
+// there is no file.
 std::vector<unsigned char> readBoot(std::string const& path) {
 	std::vector<unsigned char> bytes(2305);
 	FILE* const f = std::fopen(path.c_str(), "rb");
@@ -268,8 +278,8 @@ std::vector<unsigned char> readBoot(std::string const& path) {
 	return bytes;
 }
 
-// Whether a boot ROM is Nintendo's: each holds the logo it checks cartridges against, which SameBoy's,
-// drawn from the cartridge, don't
+// Whether a boot ROM is Nintendo's: each of Nintendo's holds the logo it checks cartridges against,
+// while SameBoy's draw it from the cartridge.
 bool nintendoBoot(std::vector<unsigned char> const& bytes) {
 	static const unsigned char logo[48] = {
 		0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
@@ -279,17 +289,18 @@ bool nintendoBoot(std::vector<unsigned char> const& bytes) {
 	return std::search(bytes.begin(), bytes.end(), logo, logo + sizeof(logo)) != bytes.end();
 }
 
-// The boot ROM in the system directory for the model, or none: Nintendo's under any of the names
-// ROCKNIX's BIOS check, Gambatte, gbdev's archive, SameBoy and Gearboy know it by, or else one of
-// SameBoy's there. Gambatte turns Nintendo's Game Boy Color one into the Game Boy Advance's; SameBoy's
-// it can't.
+// Finds the boot ROM in the system directory for the model, or none. Nintendo's is looked for under
+// every name ROCKNIX's BIOS check, Gambatte, gbdev's archive, SameBoy and Gearboy use for it;
+// failing that, a SameBoy boot ROM under one of those names. Gambatte can convert Nintendo's Game
+// Boy Color boot ROM into the Game Boy Advance's, but not SameBoy's.
 std::string bootRom(const char* systemDirectory, LibretroGbModel model) {
 	static const char* const names[4][5] = {
 		{ "gb_bios.bin", "dmg_boot.bin" },
 		{ "gbc_bios.bin", "cgb_boot.bin" },
-		// The later Game Boy Advances', the first ones', the Game Boy Color's, then SameBoy's name
+		// The later Game Boy Advances', the first ones', the Game Boy Color's, then SameBoy's name.
 		{ "cgb_agb_boot.bin", "cgb_agb0_boot.bin", "gbc_bios.bin", "cgb_boot.bin", "agb_boot.bin" },
-		// The Game Boy's would leave its own value in A: without the Pocket's, none
+		// The Game Boy's boot ROM would leave the wrong value in A for a Pocket, so without the
+		// Pocket's there is none.
 		{ "mgb_boot.bin" },
 	};
 	std::string other;
@@ -311,8 +322,8 @@ std::string bootRom(const char* systemDirectory, LibretroGbModel model) {
 	return other;
 }
 
-// SameBoy's boot ROM for the model. Its Pocket one is its Game Boy one leaving 0xFF in A: the high byte
-// of its "ld hl, $01B0" before "push hl; pop af".
+// Returns SameBoy's boot ROM for the model. The Pocket's is the Game Boy's with 0xFF left in A:
+// that byte is the high byte of its "ld hl, $01B0" before "push hl; pop af".
 std::vector<unsigned char> sameboyBoot(LibretroGbModel model) {
 	switch (model) {
 	case LIBRETRO_GB_CGB:
@@ -329,23 +340,25 @@ std::vector<unsigned char> sameboyBoot(LibretroGbModel model) {
 	}
 }
 
-// What the Game Boy Advance takes before it hands over to the Game Boy Color inside it
+// How long the Game Boy Advance takes before handing over to the Game Boy Color hardware inside it.
 size_t stall() {
 	return (loadFlags & gambatte::GB::GBA_FLAG) && !(loadFlags & gambatte::GB::NO_BIOS) ? 485808 : 0;
 }
 
-// The four shades of each original Game Boy screen, lightest first: 0 plain grays, 1 the Pocket's, 2 the
-// first model's green, 3 the Light's with its backlight on
+// The original Game Boy screen chosen: 0 plain grays, 1 the Pocket's, 2 the first model's green, 3
+// the Light's with its backlight on.
 int screen;
 bool correction;
-// Whether a screen the game has turned off shows its background color, not white or the screen's own shade
+// Whether a screen the game has turned off shows its background color, instead of white or the
+// screen's own off shade.
 bool offBackground;
-// What the color table was last built for: 0 uncorrected, 1 a Game Boy Color's screen, 2 a Game Boy Advance's
+// What the color table was last built for: 0 uncorrected, 1 a Game Boy Color's screen, 2 a Game Boy
+// Advance's.
 int built = -1;
 
-// The Game Boy Color's colors as its screen shows them, as SameBoy has it (Lior Halphon, MIT license;
-// its "modern balanced" correction): each channel's response curve, then green takes in some of blue.
-// The Game Boy Advance's screen has curves of its own and mixes less.
+// Builds the Game Boy Color's colors as its screen shows them, as SameBoy does (Lior Halphon, MIT
+// license; its "modern balanced" correction): each channel's response curve, then green takes in
+// some blue. The Game Boy Advance's screen has its own curves and mixes less.
 void correctedColors(bool advance) {
 	static const unsigned char cgbCurve[32] = { 0, 6, 12, 20, 28, 36, 45, 56, 66, 76, 88, 100, 113, 125, 137, 149,
 	                                            161, 172, 182, 192, 202, 210, 218, 225, 232, 238, 243, 247, 250, 252, 254, 255 };
@@ -366,29 +379,31 @@ void correctedColors(bool advance) {
 	}
 }
 
-// Installs the colors: the screen chosen for an original Game Boy's four shades, and the table that
-// turns the Game Boy Color's 15-bit colors into the frontend's, corrected or not
+// Installs the colors: the chosen screen's four shades for original Game Boy games, and the table
+// that turns Game Boy Color 15-bit colors into the frontend's, corrected or not.
 void setColors() {
-	// The plain grays as Gambatte's libretro core shows Game Boy games; the Pocket's and the Light's as
-	// SameBoy has them, and the first model's is SameBoy's too
+	// The plain grays are those gambatte-libretro shows Game Boy games in; the Pocket's, the first
+	// model's and the Light's are SameBoy's.
 	static const unsigned long shades[4][4] = {
 		{ 0xFFFFFF, 0xA5A5A5, 0x525252, 0x000000 },
 		{ 0xC2CE93, 0x818D66, 0x3A4C3A, 0x07100E },
 		{ 0xC6DE8C, 0x84A563, 0x396139, 0x081810 },
 		{ 0x7FE2C3, 0x56B495, 0x357862, 0x0A1C15 },
 	};
-	// Each screen while the game has it off: a little lighter than its lightest shade, not white
+	// Each screen's color while the game has it off: slightly lighter than its lightest shade, not
+	// white.
 	static const unsigned long off[4] = { 0xFFFFFF, 0xCFDAAC, 0xD2E6A6, 0x91EAD0 };
 	gb->setDmgPaletteColor(0, 4, off[screen]);
 	gb->setScreenOffBackground(offBackground);
-	// A Game Boy game a Game Boy Color started through its boot ROM keeps the colors the boot ROM gave
-	// it, which a state holds
+	// A Game Boy game started through a Game Boy Color's boot ROM keeps the colors the boot ROM
+	// gave it (a state stores them too), so they aren't replaced here.
 	if (!gb->isCgb() || (loadFlags & gambatte::GB::NO_BIOS)) {
 		for (int i = 0; i < 12; ++i) {
 			gb->setDmgPaletteColor(i / 4, i % 4, shades[screen][i % 4]);
 		}
 	}
-	// A Game Boy's screen is not a Game Boy Color's: its shades are shown as they are
+	// Game Boy screen shades are shown as they are; color correction is only for a Game Boy Color's
+	// screen.
 	int const wanted = correction && gb->isCgb() ? (loadFlags & gambatte::GB::GBA_FLAG ? 2 : 1) : 0;
 	if (wanted != built) {
 		built = wanted;
@@ -408,24 +423,24 @@ void setColors() {
 
 void restartAs(LibretroGbModel model);
 
-// The game as the model chosen, or as the one its header asks for: in the machine there is, when one
-// is there already
+// Starts the game as the chosen model, or as its header asks for, reusing the existing machine if
+// there is one.
 bool start(LibretroGbModel model, char* error, size_t errorSize) {
 	chosen = model;
 	const unsigned char* const bytes = &game[0];
 	size_t const size = game.size();
 	const char* const systemDirectory = hasSystemPath ? systemPath.c_str() : 0;
-	// Sachen's multicarts show the boot ROM a logo of their own through a lock that isn't emulated,
-	// and keep their header where their scrambled address lines put it
+	// Sachen's multicarts show the boot ROM their own logo through a lock that isn't emulated, and
+	// keep their header where their scrambled address lines put it.
 	bool const sachen = size >= 0x200 && ((bytes[0x104] == 0xCE && bytes[0x144] == 0xED && bytes[0x114] == 0x66)
 	                                      || (bytes[0x184] == 0xCE && bytes[0x1C4] == 0xED && bytes[0x194] == 0x66));
 	if (model == LIBRETRO_GB_AUTO && sachen) {
 		model = (bytes[0x151] & 0xBF) == 0x80 ? LIBRETRO_GB_CGB : LIBRETRO_GB_DMG;
 	}
 	if (model == LIBRETRO_GB_AUTO) {
-		// The header's CGB flag: 0x80 for color games that also run on a Game Boy, 0xC0 for color only.
-		// Anything else is the end of an older game's title, and so is 0x80 where a title runs right up
-		// to it in an unlicensed game's header that names no cartridge type there is
+		// The header's CGB flag: 0x80 for color games that also run on a Game Boy, 0xC0 for color
+		// only. Any other value is the end of an older game's title. So is 0x80 when a title runs
+		// right up to it in an unlicensed game whose header names no known cartridge type.
 		const unsigned char* const header = bytes;
 		unsigned const flag = size > 0x14B ? header[0x143] : 0;
 		unsigned const type = size > 0x14B ? header[0x147] : 0;
@@ -433,7 +448,8 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 		bool const title = !knownType && header[0x14B] != 0x33 && header[0x142] > 0x20 && header[0x142] < 0x7F;
 		model = flag == 0xC0 || (flag == 0x80 && !title) ? LIBRETRO_GB_CGB : LIBRETRO_GB_DMG;
 	}
-	// Through a boot ROM when there is one; without, as the boot ROM would have left the machine
+	// Starts through a boot ROM when there is one; otherwise in the state the boot ROM would have
+	// left the machine.
 	std::string const boot = !sachen && bootWanted == LIBRETRO_GB_BOOT_NINTENDO ? bootRom(systemDirectory, model) : std::string();
 	std::vector<unsigned char> const builtIn = !sachen && bootWanted == LIBRETRO_GB_BOOT_SAMEBOY ? sameboyBoot(model)
 	                                                                                             : std::vector<unsigned char>();
@@ -507,7 +523,7 @@ bool libretroGbLoad(const void* rom, size_t size, const char* systemDirectory, e
 	return true;
 }
 
-// Frees the machine
+// Frees the machine.
 void libretroGbUnload(void) {
 	delete gb;
 	gb = 0;
@@ -528,9 +544,9 @@ void libretroGbReset(enum LibretroGbModel model) {
 
 namespace {
 
-// Another model, or the boot ROM switched on or off: the game is loaded again in the same machine, with
-// its cartridge RAM as it was and where it was, since the frontend can be holding on to where that is,
-// and its clock as it was
+// Restarts the game in the same machine as another model, or with the boot ROM switched on or off.
+// Its cartridge RAM stays as it was and where it was, since the frontend may hold a pointer to it,
+// and so does its clock.
 void restartAs(LibretroGbModel model) {
 	size_t size;
 	const unsigned char* const ram = static_cast<const unsigned char*>(libretroGbSaveRam(&size));
@@ -562,7 +578,7 @@ void restartAs(LibretroGbModel model) {
 
 extern "C" {
 
-// The screen-off option changed, or was read before a game is loaded
+// Called when the Screen Off Behavior option changes, or is read before a game is loaded.
 void libretroGbSetScreenOffBackground(bool on) {
 	offBackground = on;
 	if (gb) {
@@ -570,13 +586,13 @@ void libretroGbSetScreenOffBackground(bool on) {
 	}
 }
 
-// The color correction option changed
+// Called when the Color Correction option changes.
 void libretroGbSetColorCorrection(bool on) {
 	correction = on;
 	setColors();
 }
 
-// The screen option changed, or was read before a game is loaded
+// Called when the Game Boy Screen option changes, or is read before a game is loaded.
 void libretroGbSetBootRom(enum LibretroGbBoot boot) {
 	bootWanted = boot;
 }
@@ -592,10 +608,11 @@ bool libretroGbOnAdvance(void) {
 	return loadFlags & gambatte::GB::GBA_FLAG;
 }
 
-// Runs one frame. Gambatte runs by audio samples, so it is asked for a frame's worth until it has
-// drawn one, and its 2 MHz stereo samples are averaged down to the frontend's rate. Turning the screen
-// off can hold a frame back by up to three frames' worth; a game that turns it off and on faster than a
-// frame never finishes one, and after four frames' worth the frontend gets the last picture again.
+// Runs one frame. Gambatte runs by audio samples, so it is asked for a frame's worth at a time
+// until it has drawn a frame, and its 2 MHz stereo samples are averaged down to the frontend's
+// rate. Turning the screen off can delay a frame by up to three frames' worth. A game that turns
+// the screen off and on faster than a frame never finishes one; after four frames' worth, the
+// frontend gets the last picture again.
 const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** out, size_t* frames) {
 	pressed = keys & 0xFF;
 	sampleCount = 0;
@@ -606,7 +623,7 @@ const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** out, size_t* f
 	for (int runs = 0; !drawn && runs < 4; ++runs) {
 		std::size_t count = FRAME_SAMPLES;
 		drawn = gb->runFor(pixels, LIBRETRO_GB_WIDTH, native, count) >= 0;
-		// Each of the frontend's samples is the mean of the native ones it covers
+		// Each frontend sample is the mean of the native samples it covers.
 		for (std::size_t i = 0; i < count;) {
 			std::size_t const run = ratio - summed < count - i ? ratio - summed : count - i;
 			int left = 0;
@@ -637,7 +654,7 @@ const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** out, size_t* f
 	return reinterpret_cast<const uint32_t*>(pixels);
 }
 
-// The cartridge's battery RAM, for the frontend to load and save as the save file
+// The cartridge's battery RAM, which the frontend loads and saves as the save file.
 void* libretroGbSaveRam(size_t* size) {
 	unsigned char* data = 0;
 	int length = 0;
@@ -649,25 +666,26 @@ void* libretroGbSaveRam(size_t* size) {
 	return data;
 }
 
-// The cartridge's clock, MBC3 or HuC3, for the frontend to keep as the .rtc file
+// The cartridge's clock, MBC3 or HuC3, which the frontend keeps as the .rtc file.
 void* libretroGbRtc(size_t* size) {
 	*size = rtcSize();
 	return *size ? rtcFile : 0;
 }
 
-// The tilt sensor's reading from a stick position
+// Converts a stick position into the tilt sensor's reading.
 void libretroGbSetTilt(int x, int y) {
-	// The sensor reads lower to the right and towards the player; 0x70 is the cartridge on its side
+	// The sensor reads lower to the right and towards the player; 0x70 is the cartridge tipped onto
+	// its side.
 	gambatte::mbc7TiltX = -x * 0x70 / 32768;
 	gambatte::mbc7TiltY = -y * 0x70 / 32768;
 }
 
-// A flick of the console, for the one reading it lasts
+// Flicks the console, for the one sensor reading the flick lasts.
 void libretroGbFlick(void) {
 	gambatte::mbc7Flick = true;
 }
 
-// Work RAM, for achievements and cheats
+// Work RAM, for achievements and cheats.
 void* libretroGbSystemRam(size_t* size) {
 	unsigned char* data = 0;
 	int length = 0;
@@ -692,7 +710,7 @@ size_t libretroGbMemoryMap(struct retro_memory_descriptor* out) {
 		return 0;
 	}
 	size_t count = 0;
-	// OAM, then the I/O registers and high RAM, are in one block
+	// OAM, then the I/O registers and high RAM, are one block.
 	struct retro_memory_descriptor const areas[] = {
 		{ RETRO_MEMDESC_SYSTEM_RAM, wram, 0, 0xC000, 0, 0, 0x1000, 0 },
 		{ RETRO_MEMDESC_SYSTEM_RAM, wram, 0x1000, 0xD000, 0, 0, 0x1000, 0 },
@@ -710,7 +728,7 @@ size_t libretroGbMemoryMap(struct retro_memory_descriptor* out) {
 		struct retro_memory_descriptor const area = { 0, cartRam, 0, 0xA000, ~(std::size_t) 0x1FFF, 0, (std::size_t) cartRamLength, 0 };
 		out[count++] = area;
 	}
-	// A Game Boy Color's work RAM banks 2 to 7, where achievements look for them
+	// A Game Boy Color's work RAM banks 2 to 7, at the addresses achievements expect.
 	if (gb->isCgb()) {
 		struct retro_memory_descriptor const area = { RETRO_MEMDESC_SYSTEM_RAM, wram, 0x2000, 0x10000, 0xFFFFA000, 0, 0x6000, 0 };
 		out[count++] = area;
@@ -756,12 +774,12 @@ bool libretroGbSetCheats(const char* const* codes, size_t count) {
 	return understood;
 }
 
-// Save states: the size the frontend is told, which leaves room for a state to grow
+// Save states: the size reported to the frontend leaves room for a state to grow.
 size_t libretroGbStateSize(void) {
 	return gb ? stateSize : 0;
 }
 
-// The state's length, then the state
+// Saves the state's length, then the state.
 bool libretroGbSaveState(void* data, size_t size) {
 	if (!gb || size < stateSize) {
 		return false;
@@ -775,7 +793,7 @@ bool libretroGbSaveState(void* data, size_t size) {
 	return true;
 }
 
-// Loads a state saved by libretroGbSaveState
+// Loads a state saved by libretroGbSaveState.
 bool libretroGbLoadState(const void* data, size_t size) {
 	gambatte::uint_least32_t length;
 	if (!gb || size < sizeof(length)) {
@@ -786,10 +804,11 @@ bool libretroGbLoadState(const void* data, size_t size) {
 	if (length > size - sizeof(length)) {
 		return false;
 	}
-	// A state from another model makes the machine that model until the next restart. Its third byte
-	// says whether it ran as a Game Boy Color and, in a state that records it (0x80), whether as a Game
-	// Boy Advance. An older state's Color is a Game Boy Advance when the option asks for one. A second
-	// instance a frontend runs ahead with is handed each state the first one makes, so it follows.
+	// A state from another model switches the machine to that model until the next restart. The
+	// state's third byte says whether it ran as a Game Boy Color and, in states that record it
+	// (0x80), whether as a Game Boy Advance. An older Color state counts as Game Boy Advance when
+	// the option asks for one. A second instance that a frontend runs ahead with is handed each
+	// state the first one makes, so it follows along.
 	bool const header = length >= 3 && static_cast<unsigned char>(state[0]) == 0xFF;
 	unsigned const flags = header ? static_cast<unsigned char>(state[2]) : 0;
 	bool const color = flags & gambatte::GB::CGB_MODE;
@@ -806,8 +825,8 @@ bool libretroGbLoadState(const void* data, size_t size) {
 	} else if (!gb->loadState(state, length)) {
 		return false;
 	}
-	// A state holds the shades it was saved with; the screen is the one chosen now. It holds the clock
-	// too, so a state loaded before the first frame wins over the .rtc file
+	// A state holds the shades it was saved with, but the screen should be the one chosen now. It
+	// also holds the clock, so a state loaded before the first frame wins over the .rtc file.
 	setColors();
 	rtcPending = false;
 	return true;
