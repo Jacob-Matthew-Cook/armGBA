@@ -1,0 +1,216 @@
+/* Copyright (c) 2026 Jacob Cook
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+// Save states: the machine as it stands between two instructions, for the same game in the same build.
+// The state is struct GBA as it lies in memory. What in it belongs to the host rather than the machine
+// (the game, the BIOS, the recompiler's bookkeeping, pointers) stays as it is on loading, and the
+// event queue is kept as the order of the events in it.
+
+#include "gba.h"
+#include "jit-internal.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+enum {
+	STATE_MAGIC = 0x3553424A,
+	// The events of the machine, as events() lists them
+	EVENTS = 12 + 4 + 12 + 7 + 3,
+};
+
+struct StateHeader {
+	uint32_t magic;
+	uint32_t size;
+	// Where the saved struct GBA was, for the pointers into it
+	uint64_t base;
+	// The queue, soonest first, as indices into events(); queued of them
+	uint8_t queue[EVENTS];
+	uint8_t queued;
+	// Whether the video event is an H-blank's or a line's
+	bool hblank;
+};
+
+// Every event inside the machine, in a fixed order, so that a state can name them by number
+static void events(struct GBA* gba, struct Event* all[EVENTS]) {
+	int n = 0;
+	for (int i = 0; i < 4; ++i) {
+		all[n++] = &gba->timers[i].event;
+		all[n++] = &gba->timers[i].reloadWrite;
+		all[n++] = &gba->timers[i].controlWrite;
+		all[n++] = &gba->dma[i].start;
+		all[n++] = &gba->irq.apply[i].event;
+		all[n++] = &gba->irq.availableChange[i].event;
+		all[n++] = &gba->irq.lineChange[i].event;
+	}
+	all[n++] = &gba->video.event;
+	all[n++] = &gba->video.matchEvent;
+	for (int i = 0; i < 3; ++i) {
+		all[n++] = &gba->video.irqEvent[i];
+	}
+	all[n++] = &gba->video.latchEvent;
+	all[n++] = &gba->video.captureEvent;
+	all[n++] = &gba->audio.psg.frameEvent;
+	all[n++] = &gba->savedata.dust;
+	all[n++] = &gba->sio.completeEvent;
+}
+
+// A state is a header and the whole struct GBA
+size_t gbaStateSize(void) {
+	return sizeof(struct StateHeader) + sizeof(struct GBA);
+}
+
+// With a render thread, the lines drawn so far are in its copy of the renderer
+static void takeRenderer(struct GBA* gba, struct Renderer* out) {
+	if (!gba->renderThread) {
+		return;
+	}
+	const struct Renderer* drawn = renderThreadRenderer(gba);
+	uint8_t memoryChanged = out->memoryChanged;
+	uint8_t vramChanged[sizeof(out->vramChanged)];
+	memcpy(vramChanged, out->vramChanged, sizeof(vramChanged));
+	memcpy(out, drawn, sizeof(*out));
+	out->memoryChanged = memoryChanged;
+	memcpy(out->vramChanged, vramChanged, sizeof(vramChanged));
+	out->copy = false;
+}
+
+// Copies the machine as it is. The header records where the struct was, so that pointers into it
+// can be moved when it is loaded, and which events were queued, by number.
+void gbaSaveState(struct GBA* gba, void* state) {
+	struct StateHeader header = { .magic = STATE_MAGIC, .size = sizeof(struct GBA), .base = (uintptr_t) gba };
+	struct Event* all[EVENTS];
+	events(gba, all);
+	// Events from outside the machine, a frontend's, aren't part of it
+	for (struct Event* event = gba->timing.root; event; event = event->next) {
+		for (int i = 0; i < EVENTS; ++i) {
+			if (all[i] == event) {
+				header.queue[header.queued++] = i;
+				break;
+			}
+		}
+	}
+	header.hblank = videoEventIsHblank(gba);
+	struct GBA* saved = (struct GBA*) ((uint8_t*) state + sizeof(header));
+	memcpy(state, &header, sizeof(header));
+	memcpy(saved, gba, sizeof(*gba));
+	takeRenderer(gba, &saved->renderer);
+}
+
+// A pointer into the saved struct GBA, for this one
+static uint8_t* moved(struct GBA* gba, const struct StateHeader* header, const uint8_t* pointer) {
+	return pointer ? (uint8_t*) gba + ((uintptr_t) pointer - header->base) : NULL;
+}
+
+// Whether compiled code covers a word that the state holds differently, or was compiled for other
+// wait states
+static bool codeChanged(const struct GBA* gba, const struct GBA* saved) {
+	if (gba->videoCode || gba->prefetchEnabled != saved->prefetchEnabled || memcmp(gba->waitN16, saved->waitN16, sizeof(gba->waitN16)) ||
+	    memcmp(gba->waitS16, saved->waitS16, sizeof(gba->waitS16)) || memcmp(gba->waitN32, saved->waitN32, sizeof(gba->waitN32)) ||
+	    memcmp(gba->waitS32, saved->waitS32, sizeof(gba->waitS32))) {
+		return true;
+	}
+	for (uint32_t word = 0; word < SIZE_IWRAM / 4; ++word) {
+		if (gba->iwramCode[word] && memcmp(&gba->iwram[word * 4], &saved->iwram[word * 4], 4)) {
+			return true;
+		}
+	}
+	for (uint32_t word = 0; word < SIZE_EWRAM / 4; ++word) {
+		if (gba->ewramCode[word] && memcmp(&gba->ewram[word * 4], &saved->ewram[word * 4], 4)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// The reverse. Refused if the header is not this version's. What belongs to the host, such as the
+// ROM, the compiled code and the frontend's callbacks, is kept from the running machine.
+bool gbaLoadState(struct GBA* gba, const void* state, size_t size) {
+	struct StateHeader header;
+	if (size < gbaStateSize()) {
+		return false;
+	}
+	memcpy(&header, state, sizeof(header));
+	if (header.magic != STATE_MAGIC || header.size != sizeof(struct GBA) || header.queued > EVENTS) {
+		return false;
+	}
+	const struct GBA* saved = (const struct GBA*) ((const uint8_t*) state + sizeof(header));
+	// A multi-game cartridge's size is that of the game showing
+	if ((saved->romSize != gba->romSize && !gba->cart.multi) || saved->multibootSize != gba->multibootSize) {
+		return false;
+	}
+	bool flush = codeChanged(gba, saved);
+	struct GBA* host = malloc(sizeof(*host));
+	if (!host) {
+		return false;
+	}
+	memcpy(host, gba, sizeof(*host));
+	struct Event* all[EVENTS];
+	struct Event* was[EVENTS];
+	events(gba, all);
+	events(host, was);
+	memcpy(gba, saved, sizeof(*gba));
+
+	// The host's side of it
+	gba->rom = host->rom;
+	gba->multiboot = host->multiboot;
+	gba->cart.file = host->cart.file;
+	gba->cart.fileSize = host->cart.fileSize;
+	gba->exitLink = host->exitLink;
+	gba->siteReturn = host->siteReturn;
+	gba->siteValid = false;
+	gba->lookup = host->lookup;
+	gba->hostStack = host->hostStack;
+	gba->jitRunning = false;
+	gba->jitDeferred = false;
+	gba->jitLeave = false;
+	gba->idleMark = 0;
+	memcpy(gba->jitStopPenalty, host->jitStopPenalty, sizeof(gba->jitStopPenalty));
+	gba->traceFile = host->traceFile;
+	gba->traceFromPc = host->traceFromPc;
+	gba->traceFromTime = host->traceFromTime;
+	gba->traceLeft = host->traceLeft;
+	gba->tracing = host->tracing;
+	gba->jit = host->jit;
+	gba->renderThread = host->renderThread;
+	gba->earlyExit = false;
+	gba->returnRequested = false;
+	gba->biosLoaded = host->biosLoaded;
+	memcpy(gba->bios, host->bios, sizeof(gba->bios));
+	gba->gpio.clock = host->gpio.clock;
+	gba->gpio.clockContext = host->gpio.clockContext;
+	gba->savedata.backed = host->savedata.backed;
+	gba->savedata.data = moved(gba, &header, saved->savedata.data);
+	gba->savedata.currentBank = moved(gba, &header, saved->savedata.currentBank);
+	gba->renderer.rgb565 = host->renderer.rgb565;
+	gba->renderer.copy = false;
+	memcpy(gba->iwramCode, host->iwramCode, sizeof(gba->iwramCode));
+	memcpy(gba->ewramCode, host->ewramCode, sizeof(gba->ewramCode));
+	gba->videoCode = host->videoCode;
+
+	// The events: what they call is the host's, when they come and in what order the state's
+	for (int i = 0; i < EVENTS; ++i) {
+		all[i]->callback = was[i]->callback;
+		all[i]->context = was[i]->context;
+		all[i]->next = NULL;
+	}
+	videoEventRestore(gba, header.hblank);
+	gba->timing.root = NULL;
+	gba->timing.reroot = NULL;
+	struct Event** link = &gba->timing.root;
+	for (int i = 0; i < header.queued; ++i) {
+		*link = all[header.queue[i]];
+		link = &(*link)->next;
+	}
+	timingResetNextEvent(gba);
+	free(host);
+
+	jitStateLoaded(gba, flush);
+	cartRestore(gba);
+	if (gba->renderThread) {
+		renderThreadClone(gba);
+	}
+	return true;
+}

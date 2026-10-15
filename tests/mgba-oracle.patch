@@ -1,0 +1,22 @@
+--- a/src/gba/savedata.c
++++ b/src/gba/savedata.c
+@@ -403,8 +403,7 @@
+ 			savedata->dirty |= mSAVEDATA_DIRT_NEW;
+ 			savedata->currentBank[address] = value;
+ 			savedata->command = FLASH_COMMAND_NONE;
+-			mTimingDeschedule(&savedata->p->timing, &savedata->dust);
+-			mTimingSchedule(&savedata->p->timing, &savedata->dust, FLASH_PROGRAM_CYCLES);
++			// armGBA oracle: flash program completes instantly, as in armGBA and NanoBoyAdvance
+ 			break;
+ 		case FLASH_COMMAND_SWITCH_BANK:
+ 			if (address == 0 && value < 2) {
+@@ -793,8 +792,6 @@
+ 	if (savedata->type == GBA_SAVEDATA_FLASH1M) {
+ 		mLOG(GBA_SAVE, DEBUG, "Performing unknown sector-size erase at 0x%04x", sectorStart);
+ 	}
+-	savedata->settling = sectorStart >> 12;
+-	mTimingDeschedule(&savedata->p->timing, &savedata->dust);
+-	mTimingSchedule(&savedata->p->timing, &savedata->dust, FLASH_ERASE_CYCLES);
++	// armGBA oracle: flash erase completes instantly, as in armGBA and NanoBoyAdvance
+ 	memset(&savedata->currentBank[sectorStart & ~(size - 1)], 0xFF, size);
+ }
