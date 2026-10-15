@@ -15,17 +15,17 @@
 
 namespace gambatte {
 
-// The frontend's reading of the tilt sensor, as an offset from lying flat
+// The frontend's reading of the tilt sensor, as an offset from lying flat.
 int mbc7TiltX = 0;
 int mbc7TiltY = 0;
 // A flick of the console upwards, for the next reading the game takes: on the forward axis and
-// towards the player is what Kirby Tilt 'n' Tumble takes for one, and one reading of it leaves
-// Kirby where he was
+// towards the player, which Kirby Tilt 'n' Tumble takes as a flick; a single reading of it leaves
+// Kirby where he was.
 bool mbc7Flick = false;
 
-// MBC7: a two-axis tilt sensor and a 93LC56 serial EEPROM of 128 words. The
-// EEPROM is the cartridge RAM bank's first 256 bytes and its lines' state follows them, so save
-// states and the save file carry both.
+// MBC7: a two-axis tilt sensor and a 93LC56 serial EEPROM of 128 words. The EEPROM is the first 256
+// bytes of the cartridge RAM bank, with the state of its lines after them, so save states and the
+// save file carry both.
 namespace {
 
 enum { words = 0, shift = 0x100, count = 0x102, mode = 0x103, address = 0x104, out = 0x105, lines = 0x107, writable = 0x108 };
@@ -43,7 +43,8 @@ Mbc7::Mbc7(MemPtrs &memptrs)
 , x_(0x8000)
 , y_(0x8000)
 {
-	// Before the first state is loaded the bank holds nothing: no lines' state to keep
+	// Before the first state is loaded, the bank holds nothing, so there are no line states to
+	// keep.
 	std::memset(memptrs_.rambankdata() + shift, 0, 16);
 	setBanks();
 }
@@ -97,7 +98,7 @@ void Mbc7::write(unsigned const p, unsigned const data, unsigned long) {
 	}
 }
 
-// The chip's lines: select, clock, data in; data out is kept in the low bit
+// The chip's lines: select, clock and data in; data out is kept in the low bit.
 void Mbc7::eeprom(unsigned const data) {
 	unsigned char *const s = memptrs_.rambankdata();
 	unsigned const before = s[lines];
@@ -111,7 +112,7 @@ void Mbc7::eeprom(unsigned const data) {
 		unsigned value = s[shift] | s[shift + 1] << 8;
 		switch (s[mode]) {
 		case idle:
-			// A start bit, then two of command and eight of address
+			// A start bit, then two bits of command and eight of address.
 			if (in) {
 				s[mode] = command;
 				s[count] = 0;
@@ -160,7 +161,7 @@ void Mbc7::eeprom(unsigned const data) {
 			bit = word >> 15 & 1;
 			word <<= 1;
 			if (++s[count] == 16) {
-				// One word after another for as long as the chip stays selected
+				// One word after another, for as long as the chip stays selected.
 				s[count] = 0;
 				s[address] = (s[address] + 1) & 0x7F;
 				word = s[words + s[address] * 2] | s[words + s[address] * 2 + 1] << 8;
@@ -223,8 +224,8 @@ void Mbc7::setBanks() const {
 	memptrs_.setRombank(rombank_ & (rombanks(memptrs_) - 1));
 }
 
-// MBC6 (Net de Get): the switchable area as two halves of 8 KiB, put side by side in a spare bank
-// past the ROM's own. Its flash memory isn't there; a half switched to it reads as erased.
+// MBC6 (Net de Get): the switchable area works as two 8 KiB halves, put side by side in a spare
+// bank past the ROM's own. Its flash memory isn't emulated; a half switched to it reads as erased.
 Mbc6::Mbc6(MemPtrs &memptrs, unsigned const banks)
 : memptrs_(memptrs)
 , banks_(banks)
@@ -290,7 +291,7 @@ void Mbc6::setBanks() const {
 			std::memcpy(spare + i * 0x2000, memptrs_.romdata() + (half_[i] & (banks_ * 2 - 1)) * 0x2000ul, 0x2000);
 	}
 	memptrs_.setRombank(banks_);
-	// The RAM switches in halves of 4 KiB as well; the first half's number picks the 8 KiB here
+	// The RAM switches in 4 KiB halves as well; the first half's number picks the 8 KiB here.
 	memptrs_.setRambank(enableRam_ ? MemPtrs::read_en | MemPtrs::write_en : MemPtrs::disabled,
 	                    (rambank_ >> 1) & (rambanks(memptrs_) - 1));
 }

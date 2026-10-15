@@ -17,10 +17,11 @@ namespace gambatte {
 
 // Vast Fame's protected cartridge, after taizou's findings in hhugboy (MbcUnlVf001): MBC5 with a
 // lock set up by writes to 6000-7FFF. Each such write turns a running value and XORs the byte into
-// it; what the running value is then is kept by address. With those the game arms two things:
-// a read of one ROM address that makes the next one to four ROM reads answer with bytes the game
-// gave, and bank 0 from an address up read from another bank. The second is put together in a
-// spare bank past the ROM's own; the first has ROM reads take the long way while it is armed.
+// it, and the resulting value is stored by address. With those values the game arms two things. One
+// is a read of a particular ROM address that makes the next one to four ROM reads return bytes the
+// game supplied. The other is bank 0, from some address up, read from another bank. The second is
+// assembled in a spare bank past the ROM's own; for the first, ROM reads take the slow path while
+// it is armed.
 Vf001::Vf001(MemPtrs &memptrs, unsigned const banks, bool const maybeGgb81)
 : memptrs_(memptrs)
 , banks_(banks)
@@ -47,27 +48,27 @@ bool Vf001::disabledRam() const {
 	return !enableRam_;
 }
 
-// How many reads the armed sequence answers
+// How many reads the armed sequence answers.
 unsigned Vf001::length() const {
 	return (reg700x_[0] & 7) >= 4 ? (reg700x_[0] & 7) - 3 : 0;
 }
 
 namespace {
 
-// GGB81's orders of data bits, as in unl.cpp
+// GGB81's orders of data bits, as in unl.cpp.
 unsigned char const ggb81Data[8][8] = {
 	{ 0, 1, 2, 3, 4, 5, 6, 7 }, { 0, 2, 1, 3, 4, 6, 5, 7 }, { 0, 6, 5, 3, 4, 2, 1, 7 }, { 0, 5, 1, 3, 4, 2, 6, 7 },
 	{ 0, 5, 2, 3, 4, 1, 6, 7 }, { 0, 2, 6, 3, 4, 5, 1, 7 }, { 0, 1, 6, 3, 4, 2, 5, 7 }, { 0, 2, 5, 3, 4, 6, 1, 7 },
 };
 
-// Where the difference between the two kinds' starting values is after so many turns
+// Where the difference between the two kinds' starting values is after so many turns.
 unsigned turned(unsigned const turns) {
 	return (0x10 >> (turns & 7) | 0x10 << (8 - (turns & 7))) & 0xFF;
 }
 
 }
 
-// The registers as the other kind of cartridge would have them
+// The registers as the other kind of cartridge would have them.
 void Vf001::otherKind() {
 	start_ ^= 0x10;
 	running_ ^= turned(turns_);
@@ -79,7 +80,7 @@ void Vf001::otherKind() {
 
 unsigned Vf001::romRead(unsigned const p) {
 	if (!decided_ && !left_) {
-		// Whichever kind's trigger address the game reads first is the kind this is
+		// Whichever kind's trigger address the game reads first is the kind this cartridge is.
 		unsigned const otherBank = reg700x_[3] ^ turned(turnOf_[3]);
 		unsigned const other = (reg700x_[2] ^ turned(turnOf_[2])) << 8 | (reg700x_[1] ^ turned(turnOf_[1]));
 		unsigned const mine = reg700x_[2] << 8 | reg700x_[1];
@@ -92,7 +93,7 @@ unsigned Vf001::romRead(unsigned const p) {
 	}
 	unsigned const bank = reg700x_[3];
 	unsigned const address = reg700x_[2] << 8 | reg700x_[1];
-	// As hhugboy has it, its bounds included
+	// As hhugboy has it, bounds included.
 	bool const inBank = (bank == 0 && p < 0x3FFF) || (bank == rombank_ && p >= 4000);
 	if (inBank && p == address && !left_)
 		left_ = length();
@@ -119,9 +120,9 @@ void Vf001::romWrite(unsigned const p, unsigned const data, unsigned long const 
 			turns_ = (turns_ + 1) & 7;
 			unsigned const index = reg == 0x6000 ? 11 : reg & 0xF;
 			turnOf_[index] = turns_;
-			// The running value starts at 00 on Vast Fame's own cartridges and at 10 on the mainland
-			// releases of the same games. Nothing in the ROM says which; a command that only makes
-			// sense the other way does.
+			// The running value starts at 00 on Vast Fame's own cartridges and at 10 on the
+			// mainland releases of the same games. Nothing in the ROM says which; a command that
+			// only makes sense the other way does.
 			if (reg == 0x6000)
 				reg6000_ = running_;
 			else
@@ -213,7 +214,7 @@ void Vf001::setBanks() const {
 		memptrs_.setRombank(banks_ + 1);
 	} else
 		memptrs_.setRombank(bank);
-	// Bank 0 with its upper part from another bank, when 7008's value ends in F
+	// Bank 0 with its upper part from another bank, when 7008's value ends in F.
 	unsigned const from = reg700x_[10] << 8 | reg700x_[9];
 	if ((reg700x_[8] & 0xF) == 0xF && from < rombank_size()) {
 		unsigned char *const spare = memptrs_.romdata() + banks_ * rombank_size();
