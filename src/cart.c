@@ -21,12 +21,12 @@ enum {
 };
 
 // Matrix: the first 8 KiB of the cartridge's address space is sixteen 512-byte pages, each showing
-// any 512 bytes of the 64 MiB chip. The rest of the space shows the chip's first 32 MiB as it is.
+// any 512 bytes of the 64 MiB chip. The rest of the space shows the chip's first 32 MiB as is.
 static void matrixRemap(struct GBA* gba) {
 	struct Cart* cart = &gba->cart;
 	uint32_t vaddr = cart->matrixVaddr;
 	uint32_t size = cart->matrixSize;
-	// Whole pages inside the window, from inside the chip
+	// Whole pages inside the window, from inside the chip.
 	if ((vaddr & ~(MATRIX_WINDOW - MATRIX_PAGE)) || (size & ~(MATRIX_WINDOW - MATRIX_PAGE)) || !size || vaddr + size > MATRIX_WINDOW ||
 	    cart->matrixPaddr > cart->fileSize || size > cart->fileSize - cart->matrixPaddr) {
 		return;
@@ -35,12 +35,12 @@ static void matrixRemap(struct GBA* gba) {
 		cart->matrixMap[vaddr / MATRIX_PAGE + i] = cart->matrixPaddr + i * MATRIX_PAGE;
 	}
 	memcpy(&gba->rom[vaddr], &cart->file[cart->matrixPaddr], size);
-	// Code compiled from what the pages showed before is no longer what is there
+	// Code compiled from what the pages showed before is no longer what's there.
 	jitInvalidate(gba, 0x08000000 + vaddr, size);
 }
 
-// The mapper's four registers at 0x08800100: command, the chip address, the window address, and
-// the size in pages. Command 0x01 or 0x11 maps what the other three describe.
+// Handles the mapper's four registers at 0x08800100: command, chip address, window address, and
+// size in pages. Command 0x01 or 0x11 maps what the other three describe.
 void cartMatrixWrite(struct GBA* gba, uint32_t reg, uint32_t value) {
 	struct Cart* cart = &gba->cart;
 	switch (reg) {
@@ -64,7 +64,7 @@ void cartMatrixWrite(struct GBA* gba, uint32_t reg, uint32_t value) {
 	}
 }
 
-// A 16-bit write sets a register's low half
+// A 16-bit write sets a register's low half.
 void cartMatrixWrite16(struct GBA* gba, uint32_t reg, uint16_t value) {
 	struct Cart* cart = &gba->cart;
 	static const size_t fields[4] = { offsetof(struct Cart, matrixCmd), offsetof(struct Cart, matrixPaddr), offsetof(struct Cart, matrixVaddr),
@@ -78,7 +78,7 @@ void cartMatrixWrite16(struct GBA* gba, uint32_t reg, uint16_t value) {
 }
 
 // Vast Fame: reads past the end of the ROM return a value worked out from the address, which the
-// games check; and writes to SRAM go to a scrambled address with scrambled bits, in a mode the game
+// games check, and writes to SRAM go to a scrambled address with scrambled bits, in a mode the game
 // picks by writing a sequence to the top of SRAM.
 
 enum {
@@ -125,7 +125,7 @@ static const uint8_t VALUE_REORDERING[3][3][8] = {
 
 static const uint8_t MODE_CHANGE_START[5] = { 0x99, 0x02, 0x05, 0x02, 0x03 };
 static const uint8_t MODE_CHANGE_END[5] = { 0x99, 0x03, 0x62, 0x02, 0x56 };
-// Part of the start-up routine these games copy to RAM, at 0x15C in all but one of them
+// Part of the start-up routine these games copy to RAM, at 0x15C in all but one of them.
 static const uint8_t INIT_SEQUENCE[16] = { 0xB4, 0x00, 0x9F, 0xE5, 0x99, 0x10, 0xA0, 0xE3, 0x00, 0x10, 0xC0, 0xE5, 0xAC, 0x00, 0x9F, 0xE5 };
 
 static uint32_t crc32(const uint8_t* data, size_t size) {
@@ -140,20 +140,22 @@ static uint32_t crc32(const uint8_t* data, size_t size) {
 }
 
 static int vfameDetect(const uint8_t* rom, size_t size) {
-	// Dumps of these games from reprints with the protection taken out are 32 MiB, which no real one is
+	// Dumps of these games from reprints with the protection removed are 32 MiB, which no real one
+	// is.
 	if (size == SIZE_ROM || size < 0x200) {
 		return 0;
 	}
 	int type = 0;
-	// The Lord of the Rings game is on another engine and has no such routine: by its title
+	// The Lord of the Rings game uses another engine and has no such routine, so it's found by its
+	// title.
 	if (!memcmp(INIT_SEQUENCE, &rom[0x15C], sizeof(INIT_SEQUENCE)) || !memcmp("\0LORD\0WORD\0\0AKIJ", &rom[0xA0], 16)) {
 		type = VFAME_STANDARD;
 	}
-	// Two cartridges whose chips scramble differently
+	// Two cartridges whose chips scramble differently.
 	if (!memcmp("George Sango", &rom[0xA0], 12)) {
 		type = VFAME_GEORGE;
 	} else if (type && crc32(rom, size) == 0x793A328F) {
-		// Digimon Sapphire in Chinese, whose header is the English one's
+		// Digimon Sapphire in Chinese, whose header is the English one's.
 		type = VFAME_ALTERNATE;
 	}
 	return type;
@@ -166,8 +168,8 @@ static uint32_t patternShift2(uint32_t address) {
 	return value;
 }
 
-// The 16-bit value at an address past the ROM: one of a set of transformations of the address, by
-// which 64 KiB of the 2 MiB pattern it falls in
+// Returns the 16-bit value at an address past the ROM: one of a set of transformations of the
+// address, chosen by which 64 KiB of the 2 MiB pattern it falls in.
 static uint32_t pattern(uint32_t address) {
 	address &= 0x1FFFFF;
 	uint32_t low = address & 0xFFFF;
@@ -252,7 +254,7 @@ static uint32_t pattern(uint32_t address) {
 	return value & 0xFFFF;
 }
 
-// What a read of size bytes past the end of a Vast Fame ROM returns
+// Returns what a read of size bytes past the end of a Vast Fame ROM gives.
 uint32_t cartVfameRead(uint32_t address, int size) {
 	switch (size) {
 	case 1:
@@ -264,7 +266,8 @@ uint32_t cartVfameRead(uint32_t address, int size) {
 	}
 }
 
-// Bit i of the result, counting from the top of length bits, is the bit of value that order[i] names
+// Bit i of the result, counting from the top of length bits, is the bit of value that order[i]
+// names.
 static uint32_t reorder(uint32_t value, const uint8_t* order, int length) {
 	uint32_t result = value;
 	for (int i = 0; i < length; ++i) {
@@ -275,10 +278,10 @@ static uint32_t reorder(uint32_t value, const uint8_t* order, int length) {
 	return result;
 }
 
-// A write to SRAM on a Vast Fame cartridge
+// Handles a write to SRAM on a Vast Fame cartridge.
 void cartVfameSramWrite(struct GBA* gba, uint32_t address, uint8_t value) {
 	struct Cart* cart = &gba->cart;
-	// Writes to FFF8-FFFC spell out the sequences that open and close mode changes
+	// Writes to FFF8-FFFC spell out the sequences that open and close mode changes.
 	if (address >= 0xFFF8 && address <= 0xFFFC) {
 		cart->vfameSequence[address - 0xFFF8] = value;
 		if (address == 0xFFFC) {
@@ -297,7 +300,7 @@ void cartVfameSramWrite(struct GBA* gba, uint32_t address, uint8_t value) {
 			cart->vfameRomMode = value;
 		}
 	}
-	// Until a mode is set SRAM cannot be written
+	// SRAM can't be written until a mode is set.
 	if (cart->vfameSramMode < 0) {
 		return;
 	}
@@ -316,10 +319,10 @@ void cartVfameSramWrite(struct GBA* gba, uint32_t address, uint8_t value) {
 	gba->savedata.dirty = true;
 }
 
-// AGBPrint: games built for Nintendo's development cartridges write text to a buffer near the top of
-// the cartridge space and call a routine there to send it. Prototypes that still do would run off
-// into nothing on a plain cartridge. The text goes nowhere here; the registers and the routine are
-// there, so the game goes on.
+// AGBPrint: games built for Nintendo's development cartridges write text to a buffer near the top
+// of the cartridge space and call a routine there to send it. Prototypes that still do would run
+// off into nothing on a plain cartridge. The text goes nowhere here, but the registers and the
+// routine are there, so the game carries on.
 enum {
 	PRINT_TOP = 0x00FE0000,
 	PRINT_STRUCT = 0x00FE20F8,
@@ -328,8 +331,8 @@ enum {
 	PRINT_UNLOCKED = 0x20,
 };
 
-// Reads of the lock and of the four words, where the cartridge has no ROM there. Everything written
-// counts as sent already: get reads as put.
+// Reads of the lock and the four words, where the cartridge has no ROM there. Everything written
+// counts as already sent: get reads as put.
 bool cartPrintRead(struct GBA* gba, uint32_t address, uint16_t* value) {
 	struct Cart* cart = &gba->cart;
 	uint32_t at = address & 0x00FFFFFE;
@@ -345,7 +348,7 @@ bool cartPrintRead(struct GBA* gba, uint32_t address, uint16_t* value) {
 	return false;
 }
 
-// Writes to the lock, and with it open to the four words and the text buffer
+// Writes to the lock, and, with it open, to the four words and the text buffer.
 bool cartPrintWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	struct Cart* cart = &gba->cart;
 	uint32_t at = address & 0x00FFFFFE;
@@ -363,7 +366,7 @@ bool cartPrintWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	return at >= 0x00FD0000 && at < PRINT_TOP;
 }
 
-// The routine a game calls to send the buffer, where the cartridge has no ROM: it returns
+// The routine a game calls to send the buffer, where the cartridge has no ROM; it just returns.
 const uint8_t* cartPrintCode(struct GBA* gba, uint32_t address) {
 	// bx lr, twice
 	static const uint8_t code[4] = { 0x70, 0x47, 0x70, 0x47 };
@@ -377,8 +380,8 @@ enum {
 	MULTI_BLOCK = 0x80000,
 };
 
-// A multi-game cartridge shows up to 32 MiB of its chip from a 512 KiB block on: bank * 64 + offset
-// blocks in, size blocks long
+// A multi-game cartridge shows up to 32 MiB of its chip from a 512 KiB block onwards: bank * 64 +
+// offset blocks in, size blocks long.
 static void multiMap(struct GBA* gba) {
 	struct Cart* cart = &gba->cart;
 	size_t at = (size_t) (cart->multiBank * 0x40 + (cart->multiOffset & 0x3F)) * MULTI_BLOCK;
@@ -401,9 +404,9 @@ static void multiMap(struct GBA* gba) {
 	jitRomChanged(gba);
 }
 
-// Its registers are in the save memory's space, at 2 to 6: the bank in the high four bits of 2; at
-// 3 the offset, with bit 7 locking them all until power-off; at 4 the size, as 64 less so many blocks.
-// True for a write they took.
+// Its registers are in the save memory's space, at 2 to 6: the bank in the high four bits of 2; the
+// offset at 3, with bit 7 locking them all until power-off; and the size at 4, as 64 minus the
+// number of blocks. Returns true for a write they took.
 bool cartMultiWrite(struct GBA* gba, uint32_t address, uint8_t value) {
 	struct Cart* cart = &gba->cart;
 	if (!cart->multi || cart->multiLocked || address < 2 || address > 6) {
@@ -425,7 +428,7 @@ bool cartMultiWrite(struct GBA* gba, uint32_t address, uint8_t value) {
 	return true;
 }
 
-// Looks at a newly loaded cartridge image, all of it, for the hardware it needs. The Matrix mapper is
+// Scans a newly loaded cartridge image, all of it, for the hardware it needs. The Matrix mapper is
 // on images over 32 MiB whose game code starts with M; it needs the whole image kept.
 bool cartLoad(struct GBA* gba, const uint8_t* data, size_t size) {
 	struct Cart* cart = &gba->cart;
@@ -440,8 +443,8 @@ bool cartLoad(struct GBA* gba, const uint8_t* data, size_t size) {
 		cart->fileSize = size;
 		cart->matrix = true;
 	} else if (size > SIZE_ROM + 0xC0 && data[SIZE_ROM + 3] == 0xEA && data[SIZE_ROM + 0xB2] == 0x96) {
-		// Another game's header 32 MiB in, by its entry branch and fixed byte: several games behind a
-		// bank register
+		// Another game's header 32 MiB in, found by its entry branch and fixed byte: several games
+		// behind a bank register.
 		cart->file = malloc(size);
 		if (!cart->file) {
 			return false;
@@ -460,7 +463,8 @@ void cartFree(struct GBA* gba) {
 	gba->cart.fileSize = 0;
 }
 
-// Power-on: the mapper shows the chip's first 4 KiB, then the 4 KiB from 0x200; Vast Fame has no mode
+// At power-on, the mapper shows the chip's first 4 KiB, then the 4 KiB from 0x200; Vast Fame has no
+// mode.
 void cartReset(struct GBA* gba) {
 	struct Cart* cart = &gba->cart;
 	cart->vfameSramMode = -1;
@@ -470,7 +474,7 @@ void cartReset(struct GBA* gba) {
 	cart->printProtect = 0;
 	memset(cart->printCtx, 0, sizeof(cart->printCtx));
 	if (cart->multi) {
-		// The first game, which is the menu
+		// The first game, which is the menu.
 		cart->multiLocked = false;
 		cart->multiBank = 0;
 		cart->multiOffset = 0;
@@ -491,7 +495,7 @@ void cartReset(struct GBA* gba) {
 	matrixRemap(gba);
 }
 
-// After a state is loaded: the window shows what the state's map says
+// After a state is loaded, the window shows what the state's map says.
 void cartRestore(struct GBA* gba) {
 	struct Cart* cart = &gba->cart;
 	if (cart->multi && cart->multiAt <= cart->fileSize && cart->multiLength <= cart->fileSize - cart->multiAt && cart->multiLength <= SIZE_ROM) {

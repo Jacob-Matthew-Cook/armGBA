@@ -8,21 +8,21 @@
 #include <string.h>
 
 // ARM and Thumb instructions decoded into struct Inst (decode.h), which the exact CPU and the
-// recompiler both work from
+// recompiler both work from.
 
 static uint32_t ror32(uint32_t value, unsigned rotate) {
 	rotate &= 31;
 	return rotate ? (value >> rotate) | (value << (32 - rotate)) : value;
 }
 
-// An operand that is a constant
+// Makes an operand that is a constant.
 static void immOperand(struct Operand* op, uint32_t value) {
 	op->isImm = true;
 	op->immRotated = false;
 	op->imm = value;
 }
 
-// An operand that is a register shifted by a constant
+// Makes an operand that is a register shifted by a constant.
 static void regOperand(struct Operand* op, int rm, int type, int amount) {
 	op->isImm = false;
 	op->rm = rm;
@@ -31,8 +31,8 @@ static void regOperand(struct Operand* op, int rm, int type, int amount) {
 	op->byReg = false;
 }
 
-// ARM's second operand: an 8-bit constant rotated right by an even amount, or a register shifted by
-// a constant or by another register's low byte
+// Decodes ARM's second operand: an 8-bit constant rotated right by an even amount, or a register
+// shifted by a constant or by another register's low byte.
 static void decodeShifter(struct Operand* op, uint32_t opcode) {
 	if (opcode & 0x02000000) {
 		int rotate = (opcode >> 7) & 0x1E;
@@ -47,8 +47,8 @@ static void decodeShifter(struct Operand* op, uint32_t opcode) {
 	}
 }
 
-// The Wii U Virtual Console's calls to its emulator, undefined on a GBA, which its dumps keep and mGBA
-// lets go by: an instruction that never runs
+// The Wii U Virtual Console's calls to its emulator, which are undefined on a GBA. Its dumps keep
+// them, and mGBA lets them go by: an instruction that never runs.
 static void vcCall(struct Inst* in) {
 	in->kind = I_ALU;
 	in->op = ALU_MOV;
@@ -61,7 +61,8 @@ static void vcCall(struct Inst* in) {
 }
 
 // Decodes the ARM instruction opcode at address into in. Bits 27-25 pick the class; everything the
-// CPUs and the recompiler need afterwards is in the fields, so none of them looks at the opcode again.
+// CPUs and the recompiler need afterwards is in the fields, so none of them looks at the opcode
+// again.
 void decodeArm(struct Inst* in, uint32_t address, uint32_t opcode) {
 	memset(in, 0, sizeof(*in));
 	in->address = address;
@@ -75,7 +76,7 @@ void decodeArm(struct Inst* in, uint32_t address, uint32_t opcode) {
 
 	switch ((opcode >> 25) & 7) {
 	// Data processing with a register operand, and the instructions that share its encoding space:
-	// multiplies, SWP and the halfword and signed loads (bits 7 and 4 set), MRS, MSR and BX
+	// multiplies, SWP, the halfword and signed loads (bits 7 and 4 set), MRS, MSR and BX.
 	case 0:
 		if ((opcode & 0x90) == 0x90) {
 			if (!(opcode & 0x60)) {
@@ -97,18 +98,18 @@ void decodeArm(struct Inst* in, uint32_t address, uint32_t opcode) {
 				}
 				return;
 			}
-			// Halfword and signed transfers
+			// Halfword and signed transfers.
 			in->kind = I_MEM;
 			in->load = opcode & 0x00100000;
 			in->pre = opcode & 0x01000000;
 			in->up = opcode & 0x00800000;
 			in->writeback = !in->pre || (opcode & 0x00200000);
 			switch ((opcode >> 5) & 3) {
-			// Data processing with a constant, and MSR with one
+			// Data processing with a constant, and MSR with one.
 			case 1:
 				in->size = 2;
 				break;
-			// LDR, STR, LDRB and STRB, with a constant or a shifted register as the offset
+			// LDR, STR, LDRB and STRB, with a constant or a shifted register as the offset.
 			case 2:
 				in->size = 1;
 				in->signExtend = true;
@@ -148,7 +149,7 @@ void decodeArm(struct Inst* in, uint32_t address, uint32_t opcode) {
 			}
 			return;
 		}
-		// Fall through
+		// Fall through.
 	case 1:
 		if ((opcode & 0x01900000) == 0x01000000) {
 			if (opcode & 0x00200000) {
@@ -181,7 +182,7 @@ void decodeArm(struct Inst* in, uint32_t address, uint32_t opcode) {
 			immOperand(&in->op2, opcode & 0xFFF);
 		}
 		return;
-	// LDM and STM
+	// LDM and STM.
 	case 4:
 		in->kind = I_BLOCK;
 		in->load = opcode & 0x00100000;
@@ -191,7 +192,7 @@ void decodeArm(struct Inst* in, uint32_t address, uint32_t opcode) {
 		in->writeback = opcode & 0x00200000;
 		in->list = opcode & 0xFFFF;
 		return;
-	// B and BL: a signed 24-bit word offset from the PC, which is 8 ahead
+	// B and BL: a signed 24-bit word offset from the PC, which is 8 ahead.
 	case 5: {
 		in->kind = I_B;
 		in->link = opcode & 0x01000000;
@@ -199,7 +200,7 @@ void decodeArm(struct Inst* in, uint32_t address, uint32_t opcode) {
 		in->target = address + 8 + offset;
 		return;
 	}
-	// The coprocessor instructions. A GBA has no coprocessor: they are undefined.
+	// The coprocessor instructions. A GBA has no coprocessor, so they are undefined.
 	case 6:
 		in->kind = I_STUB;
 		return;
@@ -207,7 +208,7 @@ void decodeArm(struct Inst* in, uint32_t address, uint32_t opcode) {
 		if (opcode & 0x01000000) {
 			in->kind = I_SWI;
 		} else if (!(opcode & 0x00000F10)) {
-			// CDP p0, a Wii U Virtual Console call
+			// CDP p0, a Wii U Virtual Console call.
 			vcCall(in);
 		}
 		return;
@@ -222,8 +223,8 @@ static void thumbAlu(struct Inst* in, int op, int rd, int rn, bool setFlags) {
 	in->setFlags = setFlags;
 }
 
-// Decodes the Thumb instruction opcode at address. Its top five bits pick the format; each becomes the
-// ARM instruction it stands for, so the rest of the emulator handles one instruction set.
+// Decodes the Thumb instruction opcode at address. Its top five bits pick the format; each becomes
+// the ARM instruction it stands for, so the rest of the emulator handles one instruction set.
 void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 	memset(in, 0, sizeof(*in));
 	in->address = address;
@@ -238,14 +239,14 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 	int r8 = (opcode >> 8) & 7;
 
 	switch (opcode >> 11) {
-	// LSL, LSR and ASR by a constant
+	// LSL, LSR and ASR by a constant.
 	case 0x00:
 	case 0x01:
 	case 0x02:
 		thumbAlu(in, ALU_MOV, rd, 0, true);
 		regOperand(&in->op2, rs3, opcode >> 11, (opcode >> 6) & 0x1F);
 		return;
-	// ADD and SUB of a register or a 3-bit constant
+	// ADD and SUB of a register or a 3-bit constant.
 	case 0x03:
 		thumbAlu(in, (opcode & 0x0200) ? ALU_SUB : ALU_ADD, rd, rs3, true);
 		if (opcode & 0x0400) {
@@ -254,7 +255,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 			regOperand(&in->op2, r6, SHIFT_LSL, 0);
 		}
 		return;
-	// MOV, CMP, ADD and SUB with an 8-bit constant
+	// MOV, CMP, ADD and SUB with an 8-bit constant.
 	case 0x04:
 		thumbAlu(in, ALU_MOV, r8, 0, true);
 		immOperand(&in->op2, opcode & 0xFF);
@@ -271,7 +272,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 		thumbAlu(in, ALU_SUB, r8, r8, true);
 		immOperand(&in->op2, opcode & 0xFF);
 		return;
-	// The register-to-register operations, and the ones that reach r8-r15: ADD, CMP, MOV and BX
+	// The register-to-register operations, and the ones that reach r8-r15: ADD, CMP, MOV and BX.
 	case 0x08:
 		if (!(opcode & 0x0400)) {
 			static const int8_t ops[16] = {
@@ -326,7 +327,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 			}
 		}
 		return;
-	// LDR from the literal pool: the PC, word-aligned, plus a constant
+	// LDR from the literal pool: the word-aligned PC plus a constant.
 	case 0x09:
 		in->kind = I_MEM;
 		in->load = true;
@@ -337,7 +338,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 		in->up = true;
 		immOperand(&in->op2, (opcode & 0xFF) << 2);
 		return;
-	// Loads and stores with a register offset, the signed loads among them
+	// Loads and stores with a register offset, including the signed loads.
 	case 0x0A:
 	case 0x0B: {
 		static const struct {
@@ -360,7 +361,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 		regOperand(&in->op2, r6, SHIFT_LSL, 0);
 		return;
 	}
-	// Loads and stores of words and bytes with a 5-bit offset, then of halfwords
+	// Loads and stores of words and bytes with a 5-bit offset, then of halfwords.
 	case 0x0C:
 	case 0x0D:
 	case 0x0E:
@@ -379,7 +380,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 		immOperand(&in->op2, ((opcode >> 6) & 0x1F) * in->size);
 		return;
 	}
-	// Loads and stores relative to the stack pointer
+	// Loads and stores relative to the stack pointer.
 	case 0x12:
 	case 0x13:
 		in->kind = I_MEM;
@@ -391,9 +392,9 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 		in->up = true;
 		immOperand(&in->op2, (opcode & 0xFF) << 2);
 		return;
-	// ADD of a constant to the PC or the stack pointer, into a low register
+	// ADD of a constant to the PC or the stack pointer, into a low register.
 	case 0x14:
-		// The base is the word-aligned PC, which is a constant
+		// The base is the word-aligned PC, which is a constant.
 		thumbAlu(in, ALU_MOV, r8, 0, false);
 		immOperand(&in->op2, ((address + 4) & ~3u) + ((opcode & 0xFF) << 2));
 		return;
@@ -401,7 +402,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 		thumbAlu(in, ALU_ADD, r8, 13, false);
 		immOperand(&in->op2, (opcode & 0xFF) << 2);
 		return;
-	// The stack pointer moved by a constant, PUSH and POP
+	// The stack pointer moved by a constant, PUSH and POP.
 	case 0x16:
 	case 0x17:
 		switch ((opcode >> 8) & 0xF) {
@@ -429,7 +430,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 			return;
 		}
 		return;
-	// STMIA and LDMIA
+	// STMIA and LDMIA.
 	case 0x18:
 	case 0x19:
 		in->kind = I_BLOCK;
@@ -439,7 +440,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 		in->writeback = true;
 		in->list = opcode & 0xFF;
 		return;
-	// Conditional branches, and SWI where the condition field is all ones
+	// Conditional branches, and SWI where the condition field is all ones.
 	case 0x1A:
 	case 0x1B: {
 		int cond = (opcode >> 8) & 0xF;
@@ -455,7 +456,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 		in->target = address + 4 + ((int32_t) (int8_t) opcode << 1);
 		return;
 	}
-	// The unconditional branch
+	// The unconditional branch.
 	case 0x1C:
 		in->kind = I_B;
 		in->target = address + 4 + (((int32_t) ((uint32_t) opcode << 21)) >> 20);
@@ -465,8 +466,8 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 			vcCall(in);
 		}
 		return;
-	// BL is two instructions: the first puts the target's upper bits in LR, the second adds the rest
-	// and swaps LR with the return address
+	// BL is two instructions: the first puts the target's upper bits in LR, the second adds the
+	// rest and swaps LR with the return address.
 	case 0x1E:
 		in->kind = I_BL1;
 		in->target = address + 4 + (((int32_t) ((uint32_t) opcode << 21)) >> 9);
@@ -479,7 +480,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 }
 
 // Whether nothing can be compiled after this instruction in the same block: it leaves, or changes
-// the CPU's state in a way the instructions after it were not compiled for
+// the CPU's state in a way the instructions after it weren't compiled for.
 bool instEndsBlock(const struct Inst* in) {
 	switch (in->kind) {
 	case I_B:
@@ -491,7 +492,7 @@ bool instEndsBlock(const struct Inst* in) {
 	case I_MSR:
 		return true;
 	case I_ALU:
-		// An ARM compare with r15 as its destination copies the SPSR to the CPSR
+		// An ARM compare with r15 as its destination copies the SPSR to the CPSR.
 		return in->rd == 15 && (!in->thumb || (in->op != ALU_TST && in->op != ALU_TEQ && in->op != ALU_CMP && in->op != ALU_CMN));
 	case I_MEM:
 		return in->load && (in->rd == 15 || (in->writeback && in->rn == 15));
