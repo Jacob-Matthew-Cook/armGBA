@@ -16,7 +16,8 @@ enum {
 	MAX_BLOCK_INSTS = 64,
 	LOOKUP_BITS = 16,
 	LOOKUP_SIZE = 1 << LOOKUP_BITS,
-	CODE_SIZE = 64 << 20,
+	// Within reach of every branch: AArch64's and A32's reach 128 and 32 MiB.
+	CODE_SIZE = (UINTPTR_MAX > 0xFFFFFFFFu ? 64 : 16) << 20,
 	BLOCK_HASH_SIZE = 1 << 16,
 	SITE_CACHE_SIZE = 1024,
 	TINY_ROUTINES = 1024,
