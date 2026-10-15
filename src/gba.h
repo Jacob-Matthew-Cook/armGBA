@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 // The machine: memory, CPU, bus, timers, DMA, video, audio and cartridge state, and the functions
-// the parts call one another through
+// the parts use to call each other.
 
 enum {
 	SIZE_BIOS = 0x4000,
@@ -144,7 +144,7 @@ enum {
 	REG_POSTFLG = 0x300,
 	REG_EXWAITCNT_LO = 0x800,
 	REG_EXWAITCNT_HI = 0x802,
-	// EXWAITCNT sits outside the I/O block; mGBA keeps it in two slots past the end
+	// EXWAITCNT sits outside the I/O block; mGBA keeps it in two slots past the end.
 	REG_INTERNAL_EXWAITCNT_LO = 0x400,
 	REG_INTERNAL_EXWAITCNT_HI = 0x402,
 	REG_INTERNAL_MAX = 0x404,
@@ -152,8 +152,8 @@ enum {
 
 #define IO(reg) ((reg) >> 1)
 
-// The register file uses mGBA's conventions so states compare directly: between instructions r[15]
-// holds the next instruction's address plus one instruction width.
+// The register file follows mGBA's conventions so states compare directly: between instructions,
+// r[15] holds the next instruction's address plus one instruction width.
 struct CPU {
 	uint32_t r[16];
 	uint32_t cpsr;
@@ -165,17 +165,17 @@ struct CPU {
 	uint32_t prefetch[2];
 	uint32_t mode;
 	int32_t halted;
-	// The last ARM data-processing shifter carry, in bit 8 (the other bits are whatever was handy to
-	// store); mGBA's MULS and MLAS set C from it
+	// The carry out of the last ARM data-processing shifter, in bit 8 (the other bits are whatever
+	// was convenient to store). mGBA's MULS and MLAS set C from it.
 	uint32_t shifterCarry;
-	// The I flag as the IRQ check sees it: as it was when the previous instruction started, or as
-	// a pipeline refill left it
+	// The I flag as the IRQ check sees it: its value when the previous instruction started, or as a
+	// pipeline refill left it.
 	bool irqMasked;
 	bool unused;
-	// The next code fetch follows on from the last one
+	// Whether the next code fetch is sequential to the last one.
 	bool fetchSeq;
-	// The cartridge prefetcher is running. It is kept here, right after fetchSeq at an even offset,
-	// so that compiled code sets the two with one store.
+	// Whether the cartridge prefetcher is running. It sits right after fetchSeq at an even offset,
+	// so compiled code can set both with one store.
 	bool prefetching;
 };
 
@@ -188,7 +188,7 @@ struct Event {
 	void* context;
 	uint32_t when;
 	unsigned priority;
-	// It ends a run of the run loop, which returns at the instruction boundary after it
+	// When set, the run loop returns at the instruction boundary after this event.
 	bool endsRun;
 	struct Event* next;
 };
@@ -206,13 +206,15 @@ struct Timer {
 	bool doIrq;
 	bool enable;
 	int prescaleBits;
-	// Counting on the clock, from `counter` at time `started`; a cascaded or stopped timer holds `counter`
+	// While running, the timer counts on the clock from `counter`, starting at time `started`. A
+	// cascaded or stopped timer just holds `counter`.
 	bool running;
 	uint32_t counter;
 	uint32_t started;
-	// Overflows that only feed the sound FIFOs, run when something needs them; the event is the one after
+	// Overflows that only feed the sound FIFOs are batched and run when something needs them; the
+	// event is for the overflow after them.
 	int quiet;
-	// Writes reach the timer a cycle later
+	// Writes reach the timer one cycle later.
 	uint16_t pendingReload;
 	uint16_t pendingControl;
 	struct Event event;
@@ -228,62 +230,64 @@ struct Dma {
 	uint32_t nextSource;
 	uint32_t nextDest;
 	int32_t nextCount;
-	// The last value the channel read; a source below EWRAM gives this again
+	// The last value the channel read; a source below EWRAM reads this value again.
 	uint32_t latch;
-	// A sound FIFO's channel: four words to a fixed address
+	// Whether this is a sound FIFO's channel, which moves four words to a fixed address.
 	bool fifo;
-	// A request starts the channel two cycles later
+	// A request starts the channel two cycles later.
 	struct Event start;
 };
 
-// A change the interrupt controller makes a few cycles after its cause
+// A change the interrupt controller makes a few cycles after its cause.
 struct IrqChange {
 	struct Event event;
 	bool value;
 	bool busy;
 };
 
-// Writes to IE, IF and IME and requests from the hardware reach the registers a cycle later.
-// HALT sees IE & IF change a cycle after that, and the CPU's IRQ line follows two cycles after that.
+// Writes to IE, IF and IME, and requests from the hardware, reach the registers one cycle later.
+// HALT sees IE & IF change one cycle after that, and the CPU's IRQ line follows two cycles after
+// that.
 struct Irq {
 	uint16_t ie;
 	uint16_t iflags;
 	bool ime;
 	bool available;
 	bool line;
-	// The line as the controller last drove it, before the CPU sees it
+	// The IRQ line as the controller last drove it, before the CPU sees it.
 	bool lineDriven;
 	struct IrqChange apply[4];
 	struct IrqChange availableChange[4];
 	struct IrqChange lineChange[4];
-	// HBlank IRQ requests from quietFrom on not yet in IF, while IE leaves them out (gbaIrqSync)
+	// H-blank IRQ requests since quietFrom that aren't in IF yet, because IE leaves them out (see
+	// gbaIrqSync).
 	bool quietPending;
 	uint32_t quietFrom;
-	// Until when IF in io holds without gbaIrqSync
+	// The time until which IF in io stays valid without calling gbaIrqSync.
 	uint32_t ifStable;
 };
 
 struct Video {
 	int vcount;
 	uint32_t frameCounter;
-	// When the current line started, as far as videoSync has brought it
+	// When the current line started, as far as videoSync has caught up.
 	uint32_t lineStart;
-	// Until when VCOUNT and DISPSTAT in io hold without videoSync
+	// The time until which VCOUNT and DISPSTAT in io stay valid without calling videoSync.
 	uint32_t stableUntil;
-	// The current line is drawn; the H-blank of the next line to draw, which a store to video memory
-	// from then on waits for
+	// Whether the current line has been drawn, and the H-blank of the next line to draw; from then
+	// on, a store to video memory waits for it.
 	bool drawn;
 	uint32_t drawDue;
-	// The next H-blank or line start that does something, and its line
+	// The next H-blank or line start that does something, and its line.
 	struct Event event;
 	int eventLine;
-	// The VCOUNT match flag a cycle into the line
+	// The event that sets the VCOUNT match flag one cycle into the line.
 	struct Event matchEvent;
-	// V-blank, H-blank and VCOUNT match IRQ requests, a cycle after their flags
+	// V-blank, H-blank and VCOUNT match IRQ requests, one cycle after their flags.
 	struct Event irqEvent[3];
-	// DISPCNT latched 40 cycles into the line
+	// The event that latches DISPCNT 40 cycles into the line.
 	struct Event latchEvent;
-	// The display capture DMA's request, 3 cycles into the line
+	// The display capture DMA's request, 3 cycles into the line.
 	struct Event captureEvent;
 };
 
@@ -367,7 +371,7 @@ struct Psg {
 	int32_t lastSample;
 	int sampleIndex;
 	struct Event frameEvent;
-	// psgSample's output as of the last sample, good until a channel next steps
+	// psgSample's output as of the last sample, valid until a channel next steps.
 	bool cached;
 	int16_t cachedLeft;
 	int16_t cachedRight;
@@ -409,9 +413,10 @@ struct Audio {
 	int32_t lastSample;
 	int sampleIndex;
 	struct StereoSample currentSamples[AUDIO_MAX_SAMPLES];
-	// When the sample interval being filled ends; intervals are finished when something needs them
+	// When the sample interval being filled ends. Intervals are finished only when something needs
+	// them.
 	int32_t nextSample;
-	// Output for the frontend
+	// Output for the frontend.
 	struct StereoSample out[4096];
 	size_t outCount;
 };
@@ -436,14 +441,14 @@ struct Savedata {
 	uint32_t readBitsRemaining;
 	uint32_t readAddress;
 	uint32_t writeAddress;
-	// The Flash sector an erase last worked on; it reads busy while dust is scheduled
+	// The Flash sector an erase last worked on; it reads busy while the dust event is scheduled.
 	int settling;
 	struct Event dust;
 	bool dirty;
-	// A frontend keeps its save file in storage, as mGBA's libretro core keeps one as large as storage, so
-	// finding the save type keeps what is there
+	// Whether a frontend keeps its save file in storage. mGBA's libretro core keeps one as large as
+	// storage, so detecting the save type keeps what is already there.
 	bool backed;
-	// Save memory lives here; a frontend loads and stores it
+	// Save memory; the frontend loads and stores it here.
 	uint8_t storage[SIZE_FLASH1M];
 };
 
@@ -466,18 +471,19 @@ struct Gpio {
 		int64_t lastLatch;
 		int64_t offset;
 	} rtc;
-	// Seconds since the epoch; the system clock when unset
+	// Returns seconds since the epoch; the system clock when not set.
 	int64_t (*clock)(void* context);
 	void* clockContext;
-	// The frontend's controls for the sensors, set before each frame, as mGBA's sources give them: the
-	// turn for the gyro, the tilt each way for the tilt sensor, and the light sensor's reading (lower
-	// is brighter)
+	// The frontend's sensor controls, set before each frame in mGBA's units: the turn for the gyro,
+	// the tilt on each axis for the tilt sensor, and the light sensor's reading (lower is
+	// brighter).
 	int32_t gyroZ;
 	int32_t tiltInputX;
 	int32_t tiltInputY;
 	uint8_t luminance;
-	// The gyro's reading shifting out, the light sensor's count against its reading, the tilt sensor's
-	// last reading and where it is in its handshake, and whether the rumble motor is on
+	// Sensor state: the gyro's reading being shifted out, the light sensor's counter against its
+	// reading, the tilt sensor's last reading and handshake step, and whether the rumble motor is
+	// on.
 	uint16_t gyroSample;
 	bool gyroEdge;
 	uint8_t lightCounter;
@@ -496,14 +502,14 @@ struct Sio {
 	struct Event completeEvent;
 };
 
-// The cartridge prefetcher: while the cartridge bus is free it reads on ahead of the CPU's code
+// The cartridge prefetcher. While the cartridge bus is free, it reads ahead of the CPU's code
 // fetches, one read every `duty` cycles, into a buffer of 8 halfwords (4 words in ARM state). At
 // time t it is min(t - base, full) cycles ahead of the fetch at `head`, so a fetch there costs
 // max(1, base + duty - t) and moves base on by duty.
 struct Prefetcher {
 	int width;
 	int32_t duty;
-	// The furthest ahead it gets: the buffer full, or the last read once it is turned off
+	// The furthest ahead it can get: the buffer full, or the last read once it is turned off.
 	int32_t full;
 	uint32_t head;
 	uint32_t base;
@@ -511,16 +517,18 @@ struct Prefetcher {
 
 struct Jit;
 
-// What brings struct GBA's memories to a page boundary; the assertion after the struct says when to change it
+// Padding that puts struct GBA's memories on a page boundary; the assertion after the struct says
+// when to change it.
 enum { PAD_TO_PAGE = 2335 };
 
-// Hardware some cartridges have beyond a ROM and a save chip (cart.c)
+// Hardware some cartridges have beyond a ROM and a save chip (cart.c).
 enum {
 	MATRIX_PAGES = 16,
 };
 
 struct Cart {
-	// The whole image of a cartridge with the Matrix mapper, which is larger than the address space
+	// The whole image of a cartridge with the Matrix mapper, which is larger than the address
+	// space.
 	uint8_t* file;
 	size_t fileSize;
 	bool matrix;
@@ -528,18 +536,21 @@ struct Cart {
 	uint32_t matrixPaddr;
 	uint32_t matrixVaddr;
 	uint32_t matrixSize;
-	// Where in the image each page of the window comes from
+	// Where in the image each page of the window comes from.
 	uint32_t matrixMap[MATRIX_PAGES];
-	// Vast Fame's protection: 0 for none, or which of its three scramblings; the modes are -1 until set
+	// Vast Fame's protection: 0 for none, or which of its three scramblings. The modes are -1 until
+	// set.
 	int vfame;
 	int vfameSramMode;
 	int vfameRomMode;
 	uint8_t vfameSequence[5];
 	bool vfameChanging;
-	// AGBPrint, a development cartridge's debug output: its lock, and its request, bank, get and put
+	// AGBPrint, a development cartridge's debug output: its lock, and its request, bank, get and
+	// put registers.
 	uint16_t printProtect;
 	uint16_t printCtx[4];
-	// A multi-game cartridge: its bank, offset and size registers, and what of the image shows now
+	// A multi-game cartridge: its bank, offset and size registers, and which part of the image
+	// shows now.
 	bool multi;
 	bool multiLocked;
 	uint8_t multiBank;
@@ -552,9 +563,9 @@ struct Cart {
 struct GBA {
 	struct CPU cpu;
 
-	// Read by generated code
+	// Read by generated code.
 	int32_t activeRegion;
-	// The region whose wait states instruction fetches take. mGBA leaves them as they were on a jump to
+	// The region whose wait states instruction fetches use. mGBA leaves them unchanged on a jump to
 	// an address it can't fetch from, so code there runs at the previous region's speed.
 	int32_t fetchRegion;
 	uint32_t lastPrefetchedPc;
@@ -562,7 +573,7 @@ struct GBA {
 	uint32_t romSize;
 	uint32_t romMask;
 	uint8_t* rom;
-	// A multiboot image loaded instead of a cartridge, which reset puts in EWRAM
+	// A multiboot image loaded instead of a cartridge; reset copies it into EWRAM.
 	uint8_t* multiboot;
 	uint32_t multibootSize;
 	uint8_t waitN16[256];
@@ -573,7 +584,7 @@ struct GBA {
 	uint8_t writePcCost16[256];
 	uint8_t writePcCost32[256];
 
-	// Recompiler bookkeeping read and written by generated code
+	// Recompiler bookkeeping, read and written by generated code.
 	uint32_t exitPc;
 	uint32_t exitOps[2];
 	uint32_t exitReason;
@@ -585,66 +596,72 @@ struct GBA {
 	void* lookup;
 	void* hostStack;
 	bool jitRunning;
-	// Operands compiled code hands to a helper
+	// Operands compiled code passes to a helper.
 	uint32_t jitScratch[4];
-	// A careful copy runs the events inside an instruction once it is done
+	// Set when a careful copy should run the events inside an instruction once the instruction is
+	// done.
 	bool jitDeferred;
-	// Compiled code has to leave at its next instruction boundary
+	// Set when compiled code has to leave at its next instruction boundary.
 	bool jitLeave;
-	// The prefetch buffer's base in compiled code, counted like r14d from the next event
+	// The prefetch buffer's base in compiled code, counted like r14d relative to the next event.
 	int32_t jitBase;
-	// A waiting loop's last time round: the block key its way back left, then when it started (like
-	// r14d), eventRuns, nextEvent, the prefetch buffer's base less r14d and video.stableUntil
+	// A waiting loop's last time round: the block key its way back left, when it started (like
+	// r14d), eventRuns, nextEvent, the prefetch buffer's base minus r14d, and video.stableUntil.
 	uint32_t idleMark;
 	int32_t idleCycles;
 	uint32_t idleRuns;
 	int32_t idleNext;
 	int32_t idleLead;
 	uint32_t idleStable;
-	// Whether stopping the prefetch buffer costs a cycle: [32-bit][duty cycle][how far ahead it is]
+	// Whether stopping the prefetch buffer costs a cycle, indexed by [32-bit][duty cycle][how far
+	// ahead it is].
 	uint8_t jitStopPenalty[2][32][128];
-	// Counts processEvents calls, so code called from compiled code can tell that events ran
+	// Counts processEvents calls, so code called from compiled code can tell that events ran.
 	uint32_t eventRuns;
-	// eventRuns when the run loop last looked at an idle loop's head: the head's compiled code leaves
-	// for the run loop to look again once events have run since
+	// eventRuns when the run loop last examined an idle loop's head. The head's compiled code
+	// leaves for the run loop to look again once events have run since.
 	uint32_t idleHeadRuns;
-	// stepTraceOpen's log of instructions and the times they start
+	// stepTraceOpen's log of instructions and their start times.
 	void* traceFile;
 	uint32_t traceFromPc;
 	int32_t traceFromTime;
 	long traceLeft;
 	bool tracing;
-	// The exact CPU is going round a loop to see whether it is idle: its reads and writes go to jit.c
+	// Set while the exact CPU goes round a loop to see whether it is idle; its reads and writes go
+	// to jit.c.
 	bool idleProbing;
 
 	struct Timing timing;
 	struct Jit* jit;
-	// The renderer's second thread, when it has one
+	// The renderer's second thread, if it has one.
 	struct RenderThread* renderThread;
 	struct Irq irq;
 	struct Timer timers[4];
 	struct Dma dma[4];
-	// Channels started and waiting for the bus, as bits; they run before the CPU's next access
+	// Channels started and waiting for the bus, one bit each; they run before the CPU's next
+	// access.
 	uint8_t dmaRunnable;
 	int activeDma;
-	// A channel starting while another runs: the running one stops after its unit to let it in
+	// Set when a channel starts while another runs: the running one stops after its current unit to
+	// let it in.
 	bool dmaReenter;
-	// 1 | channel << 1 while a channel is transferring
+	// 1 | channel << 1 while a channel is transferring.
 	int performingDma;
-	// The last value any channel moved, which reads of nothing return during and straight after DMA
+	// The last value any channel moved, which reads of nothing return during and just after DMA.
 	uint32_t dmaLatch;
 	bool lastAccessDma;
-	// The CPU's internal cycles while DMA runs are free, up to how long the DMA took
+	// The CPU's internal cycles while DMA runs are free, up to how long the DMA took.
 	int32_t dmaIdleCredit;
-	// The cartridge's address counter: sequential accesses read on from it, whatever the address
+	// The cartridge's address counter: sequential accesses read on from it, whatever the address.
 	uint32_t romLatch;
-	// Where the GBA expects the next sequential cartridge access, from the last address it asked for
+	// Where the GBA expects the next sequential cartridge access, from the last address it asked
+	// for.
 	uint32_t romNext;
 	struct Prefetcher prefetcher;
-	// Turning the prefetcher off makes the next code fetch from the cartridge nonsequential
+	// Turning the prefetcher off makes the next code fetch from the cartridge nonsequential.
 	bool prefetchDisabled;
 	bool earlyExit;
-	// Set by a frontend's event callback to get control back once events are processed
+	// Set by a frontend's event callback to get control back once events are processed.
 	bool returnRequested;
 	bool biosLoaded;
 	struct Gpio gpio;
@@ -656,10 +673,11 @@ struct GBA {
 	uint16_t keysLast;
 
 	uint16_t io[REG_INTERNAL_MAX / 2];
-	// Compiled code came from palette, VRAM or OAM since the last flush, so stores there go to the JIT
+	// Set when compiled code came from palette, VRAM or OAM since the last flush, so stores there
+	// go to the JIT.
 	bool videoCode;
-	// The memories compiled code reaches into start a multiple of 4096 bytes in, which is one
-	// instruction to add on AArch64 where any other offset is two
+	// Padding so the memories compiled code reaches into start a multiple of 4096 bytes in: on
+	// AArch64 that takes one add instruction, any other offset two.
 	uint8_t toPage[PAD_TO_PAGE];
 	uint8_t iwramCode[SIZE_IWRAM / 4];
 	uint8_t ewramCode[SIZE_EWRAM / 4];
@@ -669,10 +687,10 @@ struct GBA {
 	uint8_t ewram[SIZE_EWRAM];
 	uint8_t palette[SIZE_PALETTE];
 	uint8_t oam[SIZE_OAM];
-	// Mode 2 with both of its backgrounds on: the display has VRAM to itself while it draws a line
+	// Mode 2 with both of its backgrounds on: the display has VRAM to itself while it draws a line.
 	bool vramStall;
 	struct Cart cart;
-	// Last, so that growing it leaves where the memories lie alone
+	// Last, so that growing it doesn't move the memories.
 	struct Renderer renderer;
 };
 
@@ -712,7 +730,7 @@ void gbaInterrupt(struct GBA*);
 void gbaFrameStarted(struct GBA*, uint32_t late);
 void gbaFrameEnded(struct GBA*);
 
-// state.c: save states, for the same game in the same build, taken between calls to gbaRunFrame
+// state.c: save states, for the same game in the same build, taken between calls to gbaRunFrame.
 size_t gbaStateSize(void);
 void gbaSaveState(struct GBA*, void* state);
 bool gbaLoadState(struct GBA*, const void* state, size_t size);
@@ -729,7 +747,7 @@ uint32_t memoryLoad16(struct GBA*, uint32_t address, int* cycles);
 uint32_t memoryLoad8(struct GBA*, uint32_t address, int* cycles);
 void memoryStore32(struct GBA*, uint32_t address, uint32_t value, int* cycles);
 void memoryStore16(struct GBA*, uint32_t address, uint16_t value, int* cycles);
-// Moves count DMA units between plain regions without leaving them; returns the last latch
+// Moves count DMA units between plain regions without leaving them; returns the last latch.
 int memoryDmaCopy(struct GBA*, struct Dma*, int count, bool wide, int32_t sourceStep, int32_t destStep);
 void memoryStore8(struct GBA*, uint32_t address, uint8_t value, int* cycles);
 uint32_t memoryLoadMultiple(struct GBA*, uint32_t address, int mask, int direction, int* cycles);
@@ -753,21 +771,21 @@ static inline int32_t timingCurrentTime(struct GBA* gba) {
 int32_t timingUntil(struct GBA*, struct Event*);
 void timingInterrupt(struct GBA*);
 void timingResetNextEvent(struct GBA*);
-// Whether the events due by time can run late, at the next instruction boundary: none starts DMA or
-// ends a run
+// Whether the events due by time can run late, at the next instruction boundary: none of them
+// starts DMA or ends a run.
 bool timingDeferrable(struct GBA*, int32_t time);
 void processEvents(struct GBA*);
 
-// step.c: the exact CPU, for the instructions around events
+// step.c: the exact CPU, used for the instructions around events.
 void stepReset(struct GBA*);
 void stepInstruction(struct GBA*);
-// After a PC write: refills the prefetch from the new PC
+// After a PC write, refills the prefetch from the new PC.
 void stepReload(struct GBA*);
-// Logs each instruction the exact CPU runs, and each compiled block entered, with the time it starts:
-// from TRACE_FROM=<hex pc> or TRACE_TIME=<cycle>, for TRACE_COUNT=<n> lines
+// Logs each instruction the exact CPU runs, and each compiled block entered, with its start time.
+// Starts at TRACE_FROM=<hex pc> or TRACE_TIME=<cycle>, for TRACE_COUNT=<n> lines.
 void stepTraceOpen(struct GBA*, const char* path);
 void stepTrace(struct GBA*);
-// Runs a decoded instruction whose fetch has been made, its condition already passed
+// Runs a decoded instruction whose fetch is done and whose condition has passed.
 struct Inst;
 void stepExecute(struct GBA*, const struct Inst*);
 
@@ -782,7 +800,7 @@ void ioWrite32(struct GBA*, uint32_t address, uint32_t value);
 void videoInit(struct GBA*);
 void videoReset(struct GBA*);
 void videoStartAt(struct GBA*, int vcount, int32_t untilHblank);
-// Brings the line, VCOUNT and DISPSTAT up to now
+// Brings the line, VCOUNT and DISPSTAT up to date.
 void videoSync(struct GBA*);
 int videoLine(struct GBA*);
 void videoHblankDmaArmed(struct GBA*);
@@ -792,7 +810,8 @@ void videoDispcntWritten(struct GBA*);
 int32_t videoVramStall(struct GBA*, int32_t wait);
 bool videoEventIsHblank(struct GBA*);
 void videoEventRestore(struct GBA*, bool hblank);
-// Whether a video event can run at the end of the instruction it falls in: it starts no DMA
+// Whether a video event can run at the end of the instruction it falls in, because it starts no
+// DMA.
 bool videoDeferrable(struct GBA*, const struct Event*);
 void videoCaptureArmed(struct GBA*);
 
@@ -801,11 +820,13 @@ void timerInit(struct GBA*);
 uint16_t timerReadCounter(struct GBA*, int timer);
 void timerWriteReload(struct GBA*, int timer, uint16_t reload);
 void timerWriteControl(struct GBA*, int timer, uint16_t control);
-// Runs the quiet overflows due by time, before or at it
+// Runs the quiet overflows due by time, including at it.
 void timerCatchUp(struct GBA*, uint32_t time, bool inclusive);
-// After a change to what overflows do: quiet overflows due by now run, and the rest become events again
+// After a change to what overflows do, runs the quiet overflows due by now and turns the rest back
+// into events.
 void timerReplan(struct GBA*, uint32_t time);
-// Whether a timer event can run at the end of the instruction it falls in: it starts no DMA
+// Whether a timer event can run at the end of the instruction it falls in, because it starts no
+// DMA.
 bool timerDeferrable(struct GBA*, const struct Event*);
 
 // dma.c
@@ -819,13 +840,13 @@ void dmaRequestVblank(struct GBA*, uint32_t late);
 void dmaRequestDisplayStart(struct GBA*, uint32_t late);
 void dmaRequestFifo(struct GBA*, int dma, uint32_t late);
 int32_t dmaRun(struct GBA*);
-// Whether a FIFO's request starts the channel
+// Whether a FIFO's request starts the channel.
 bool dmaFifoArmed(struct GBA*, int dma);
 bool dmaStartEvent(const struct Event*);
-// Whether a request for the timing would start a channel
+// Whether a request with this timing would start a channel.
 bool dmaTimingArmed(struct GBA*, int timing);
 
-// bus.c: timed accesses, each moving the clock on by its cycles
+// bus.c: timed accesses, each moving the clock on by its own cycles.
 int32_t busCycles(struct GBA*, uint32_t address, int size, bool seq);
 void busTick(struct GBA*, int32_t cycles);
 uint32_t busRead(struct GBA*, uint32_t address, int size, bool seq);
@@ -840,9 +861,9 @@ void busDmaWrite(struct GBA*, uint32_t address, uint32_t value, int size, bool s
 void audioInit(struct GBA*);
 void audioReset(struct GBA*);
 void audioSample(struct GBA*, int32_t timestamp);
-// An overflow of the timer a FIFO plays at, at time
+// Handles an overflow of the timer a FIFO plays at, at time.
 void audioSampleFifo(struct GBA*, int fifo, uint32_t time);
-// Finishes the sample intervals that end before time, or at it too
+// Finishes the sample intervals that end before time, or at it too.
 void audioCatchUp(struct GBA*, int32_t time, bool inclusive);
 void audioSync(struct GBA*);
 void audioWriteSoundcntHi(struct GBA*, uint16_t value);
@@ -906,7 +927,7 @@ enum {
 void gpioSetDevices(struct GBA*, int devices);
 void gpioReset(struct GBA*);
 void gpioWrite(struct GBA*, uint32_t address, uint16_t value);
-// The tilt sensor, in the save memory's addresses: offset is the address's low 24 bits
+// The tilt sensor, mapped into the save memory's addresses; offset is the address's low 24 bits.
 uint8_t gpioTiltRead(struct GBA*, uint32_t offset);
 void gpioTiltWrite(struct GBA*, uint32_t offset, uint8_t value);
 
