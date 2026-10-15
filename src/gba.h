@@ -518,8 +518,12 @@ struct Prefetcher {
 struct Jit;
 
 // Padding that puts struct GBA's memories on a page boundary; the assertion after the struct says
-// when to change it.
+// when to change it. Pointers make the struct smaller on 32-bit CPUs.
+#if UINTPTR_MAX > 0xFFFFFFFFu
 enum { PAD_TO_PAGE = 2335 };
+#else
+enum { PAD_TO_PAGE = 3091 };
+#endif
 
 // Hardware some cartridges have beyond a ROM and a save chip (cart.c).
 enum {
