@@ -6,13 +6,13 @@
 #ifndef ARMGBA_TESTS_REF_H
 #define ARMGBA_TESTS_REF_H
 
-// The reference run loop: the exact CPU alone, for the test tools
+// The reference run loop: the exact CPU alone, for the test tools.
 
 struct GBA;
 
-// After a reset: fills the prefetch from where the PC points
+// After a reset, fills the prefetch from where the PC points.
 void refReset(struct GBA*);
-// Runs instructions one at a time until an event is due, then processes events
+// Runs instructions one at a time until an event is due, then processes events.
 void refRunLoop(struct GBA*);
 
 #endif

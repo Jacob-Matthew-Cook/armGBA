@@ -12,9 +12,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-// mGBA's GBASerializedState (mgba/internal/gba/serialize.h, 0x61000 bytes), the part armGBA can take: the
-// CPU, memory, I/O registers, timers, DMA and the video line. Enough to go on from the same spot in a
-// game, not an exact copy: the sound FIFOs, prescaler phases and the place in the line start afresh.
+// mGBA's GBASerializedState (mgba/internal/gba/serialize.h, 0x61000 bytes), the part armGBA can
+// take: the CPU, memory, I/O registers, timers, DMA and the video line. That's enough to continue
+// from the same spot in a game, but isn't an exact copy: the sound FIFOs, prescaler phases and the
+// place in the line start afresh.
 enum {
 	ST_GPRS = 0x20,
 	ST_CPSR = 0x60,
@@ -68,13 +69,13 @@ bool mgbaStateLoad(struct GBA* gba, const uint8_t* state, size_t size) {
 	gba->renderer.memoryChanged = RENDER_VRAM | RENDER_OAM | RENDER_PALETTE;
 	memset(gba->renderer.vramChanged, 1, sizeof(gba->renderer.vramChanged));
 
-	// Wait states first, then sound on before its registers, which it gates
+	// Wait states first, then sound on before its registers, which it gates.
 	ioWrite(gba, REG_WAITCNT, io(state, REG_WAITCNT));
 	write(gba, state, 0x000, 0x054);
 	ioWrite(gba, REG_SOUNDCNT_X, io(state, REG_SOUNDCNT_X));
 	write(gba, state, REG_SOUND1CNT_LO, 0x082);
 	ioWrite(gba, REG_SOUNDBIAS, io(state, REG_SOUNDBIAS));
-	// Timers count on from where they were: games keep clocks in them
+	// Timers count on from where they were: games keep clocks in them.
 	static const int prescaleBits[4] = { 0, 6, 8, 10 };
 	for (int i = 0; i < 4; ++i) {
 		struct Timer* timer = &gba->timers[i];
@@ -95,7 +96,7 @@ bool mgbaStateLoad(struct GBA* gba, const uint8_t* state, size_t size) {
 			timingSchedule(gba, &timer->event, (0x10000 - timer->counter) << timer->prescaleBits);
 		}
 	}
-	// A channel already running goes on where it got to; one that would start now doesn't
+	// A channel already running continues where it got to; one that would start now doesn't.
 	for (int i = 0; i < 4; ++i) {
 		uint32_t reg = REG_DMA0SAD_LO + 12 * i;
 		write(gba, state, reg, reg + 8);
@@ -118,7 +119,8 @@ bool mgbaStateLoad(struct GBA* gba, const uint8_t* state, size_t size) {
 	ioWrite(gba, REG_IME, io(state, REG_IME));
 	gba->io[IO(REG_POSTFLG)] = io(state, REG_POSTFLG);
 
-	// The line: mGBA's next video event is the H-blank in mode 0, the next line's start in H-blank
+	// The line: mGBA's next video event is the H-blank in mode 0, or the next line's start in
+	// H-blank.
 	uint32_t next = get32(state, ST_VIDEO_NEXT);
 	bool hblank = get32(state, ST_VIDEO_FLAGS) & 3;
 	int32_t untilHblank = hblank ? (int32_t) next - 1232 + 1007 : (int32_t) next;

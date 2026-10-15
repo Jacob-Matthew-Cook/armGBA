@@ -10,13 +10,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Starting armGBA from an mGBA save state, so both can run on from the same point
+// Starting armGBA from an mGBA save state, so both can run on from the same point.
 
 struct GBA;
 
-// Goes on from an mGBA save state of the game loaded, as near as armGBA can take it
+// Continues from an mGBA save state of the loaded game, as closely as armGBA can.
 bool mgbaStateLoad(struct GBA*, const uint8_t* state, size_t size);
-// The state MGBA_STATE names, read once; NULL without one
+// Returns the state MGBA_STATE names, read once, or NULL without one.
 const uint8_t* mgbaStateFile(size_t* size);
 
 #endif

@@ -36,7 +36,7 @@ static bool chance(int percent) {
 	return pick(100) < (uint32_t) percent;
 }
 
-// Register roles keep memory accesses inside the data window
+// Register roles keep memory accesses inside the data window.
 struct Layout {
 	bool thumb;
 	bool smc;
@@ -159,13 +159,13 @@ static uint32_t genArm(struct Layout* layout, int index) {
 		return cond | 0x010F0000 | (pick(2) << 22) | ((uint32_t) armDest[pick(10)] << 12);
 	}
 	if (kind < 96) {
-		// Flags only
+		// Flags only.
 		if (chance(50)) {
 			return cond | 0x0328F000 | (pick(16) << 8) | pick(256);
 		}
 		return cond | 0x0128F000 | (uint32_t) armDest[pick(10)];
 	}
-	// Forward branch inside the program
+	// A forward branch inside the program.
 	int remaining = layout->count - index;
 	int skip = pick(remaining > 4 ? 4 : remaining);
 	return cond | 0x0A000000 | (pick(2) << 24) | ((uint32_t) (skip - 1) & 0xFFFFFF);
@@ -188,7 +188,7 @@ static uint16_t genThumb(struct Layout* layout, int index, bool* pair) {
 		return 0x4000 | (pick(16) << 6) | (ts << 3) | td;
 	}
 	if (kind < 48) {
-		// High registers, not writing SP or PC
+		// High registers, without writing SP or PC.
 		static const int hiDest[] = { 0, 1, 2, 3, 4, 14 };
 		int op = pick(3);
 		int hd = op == 1 ? (int) pick(16) : hiDest[pick(6)];
@@ -247,8 +247,9 @@ static uint16_t genThumb(struct Layout* layout, int index, bool* pair) {
 	return 0xF000;
 }
 
-// A segment of one instruction set. Templates add indirect jumps, BIOS calls, mode switches and
-// self-modifying stores. Branches never land inside a template or on the second half of a BL.
+// Generates a segment of one instruction set. Templates add indirect jumps, BIOS calls, mode
+// switches and self-modifying stores. Branches never land inside a template or on the second half
+// of a BL.
 struct Segment {
 	bool thumb;
 	uint32_t base;
@@ -263,7 +264,7 @@ struct Segment {
 };
 
 static uint32_t armAddPc(int rd, uint32_t from, uint32_t to) {
-	// rd = PC + offset, the offset a multiple of 4 up to 1020
+	// rd = PC + offset, the offset a multiple of 4 up to 1020.
 	return 0xE28F0F00 | (rd << 12) | ((to - (from + 8)) >> 2);
 }
 
@@ -309,7 +310,7 @@ static int branchTarget(const struct Segment* seg, int i) {
 }
 
 static void fixBranches(struct Segment* seg) {
-	// Indirect jumps whose target turned out bad become no-ops
+	// Indirect jumps whose target turned out bad become no-ops.
 	for (int i = 0; i < seg->count; ++i) {
 		int t = seg->jumpLength[i] ? seg->jumpTarget[i] : -1;
 		if (t < 0 || t >= seg->count || !(seg->inner[t] || isSecondHalf(seg, t))) {
@@ -336,7 +337,7 @@ static void fixBranches(struct Segment* seg) {
 		}
 		if (seg->thumb) {
 			if ((seg->ops[i] & 0xF800) == 0xF800) {
-				// The second half of a BL: make the pair a no-op pair
+				// The second half of a BL: make the pair a no-op pair.
 				seg->ops[i - 1] = 0x46C0;
 				seg->ops[i] = 0x46C0;
 			} else {
@@ -399,7 +400,8 @@ static void armSegment(struct Segment* seg, bool smc, int reserved) {
 			seg->ops[i] = 0xE321F0C0 | modes[pick(7)];
 			markTemplate(seg, i, 1);
 		} else if (smc && r < 15 && i + 4 < n && !seg->plain[i + 1] && !seg->plain[i + 2]) {
-			// Copy the pool word over a later plain instruction, sometimes one already prefetched
+			// Copies the pool word over a later plain instruction, sometimes one already
+			// prefetched.
 			int target = i + 3 + pick(n - i - 3 > 5 ? 5 : n - i - 3);
 			seg->plain[target] = true;
 			int ry = (rx + 1 + pick(7)) & 7;
@@ -496,7 +498,7 @@ static void emitSegment(struct Layout* layout, struct Segment* seg) {
 	}
 }
 
-// One segment, or two joined by an ARM-Thumb switch at the end of the first
+// One segment, or two joined by an ARM-Thumb switch at the end of the first.
 static void generate(struct Layout* layout) {
 	memset(layout->code, 0, sizeof(layout->code));
 	layout->size = 0;
@@ -522,7 +524,7 @@ static void generate(struct Layout* layout) {
 			first.ops[n - 2] = thumbAddPc(0, at, second.base);
 			first.ops[n - 1] = 0x4700;
 		} else {
-			// Thumb's small offset register and pointers come from ARM's
+			// Thumb's small offset register and pointers come from ARM's.
 			first.ops[n - 6] = 0xE3A05000 | (pick(16) * 4);
 			first.ops[n - 5] = 0xE1A06008;
 			first.ops[n - 4] = 0xE1A07009;
@@ -665,9 +667,9 @@ static void makeCase(struct Case* tc) {
 		}
 		init->bankSpsr[b] = (rnd() & 0xF00000C0) | modes[pick(7)];
 	}
-	// Pointers into the middle of the data window, in every bank
+	// Pointers into the middle of the data window, in every bank.
 	uint32_t window = layout->dataBase + 0x800;
-	// Both instruction sets' roles, since a program may switch
+	// Both instruction sets' roles, since a program may switch.
 	if (layout->thumb) {
 		init->r[6] = window + pick(64) * 4;
 		init->r[7] = window + pick(64) * 4;
@@ -681,7 +683,7 @@ static void makeCase(struct Case* tc) {
 	}
 	init->r[12] = pick(16) * 4;
 	init->bank[1][6] = pick(16) * 4;
-	// Stacks live in the second 4 KiB, far enough apart that pushes don't collide
+	// Stacks live in the second 4 KiB, far enough apart that pushes don't collide.
 	for (int b = 0; b < 6; ++b) {
 		init->bank[b][0] = layout->dataBase + 0x1000 + 0x280 * (b + 1);
 	}
@@ -694,7 +696,7 @@ static void makeCase(struct Case* tc) {
 	}
 	int bankIndex = mode == 0x11 ? 1 : mode == 0x12 ? 2 : mode == 0x13 ? 3 : mode == 0x17 ? 4 : mode == 0x1B ? 5 : 0;
 	init->bankSpsr[bankIndex] = init->spsr;
-	// Every mode gets its own stack
+	// Every mode gets its own stack.
 	init->r[13] = init->bank[bankIndex][0];
 	if (mode == 0x11) {
 		for (int i = 0; i < 5; ++i) {
@@ -715,7 +717,7 @@ static bool runTest(int test) {
 	if (compare(&tc, &res, false)) {
 		return true;
 	}
-	// Find the earliest deadline that shows a difference
+	// Finds the earliest deadline that shows a difference.
 	int32_t first = deadline;
 	for (int32_t d = 1; d < deadline; ++d) {
 		execute(&tc, d, &res);
@@ -786,7 +788,7 @@ int main(int argc, char** argv) {
 	const char* only = getenv("FUZZ_ONLY");
 	for (int test = 0; test < tests; ++test) {
 		if (only && atoi(only) != test) {
-			// Keep the generator in step
+			// Keeps the generator in step.
 			static struct Case skipped;
 			makeCase(&skipped);
 			pick(skipped.layout.count * 12);

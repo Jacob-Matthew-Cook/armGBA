@@ -19,7 +19,8 @@ struct FuzzState {
 	uint32_t shifterCarry;
 };
 
-// One emulator behind a common face: memory pointers, and a run from a state to a cycle deadline
+// One emulator behind a common interface: memory pointers, and a run from a state to a cycle
+// deadline.
 struct Emu {
 	bool (*init)(const char* bios, uint8_t* rom, size_t romSize);
 	uint8_t* (*memory)(uint32_t address);

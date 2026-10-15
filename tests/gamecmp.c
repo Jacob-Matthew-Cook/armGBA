@@ -18,7 +18,7 @@
 
 static struct Snapshot a;
 static struct Snapshot b;
-// A is the side taken as right
+// A is the side taken as correct.
 static const struct GameEmu* A = &mgbaGame;
 static const struct GameEmu* B = &armgbaGame;
 
@@ -113,7 +113,7 @@ static struct {
 } steps[256];
 static int stepCount;
 
-// Deterministic play: Start and A now and then, the D-pad wandering, held for a few frames
+// Deterministic play: Start and A now and then, the D-pad wandering, each held for a few frames.
 static uint16_t keysFor(int frame) {
 	if (stepCount) {
 		uint16_t keys = 0;
@@ -152,9 +152,10 @@ static void resetBoth(void) {
 	B->reset();
 }
 
-// A frame ends for each where its run loop next comes round after the line counter passes the last
-// line, which a game reading the counter just then brings on a few cycles sooner for one than the
-// other. The one behind is run up to the other, so that they are compared at the same moment.
+// A frame ends for each emulator where its run loop next comes round after the line counter passes
+// the last line. A game reading the counter just then makes that happen a few cycles sooner for one
+// than the other, so the one behind is run up to the other, and they are compared at the same
+// moment.
 static void frameBoth(void) {
 	A->runFrame();
 	B->runFrame();
@@ -168,7 +169,7 @@ static void frameBoth(void) {
 	}
 	if (A->now() == B->now()) {
 		// A run loop that ends with the frame can leave events due at that very cycle for its next
-		// turn; both have them before they are compared
+		// turn; both run them before they are compared.
 		A->runCycles(0);
 		B->runCycles(0);
 	}
@@ -184,7 +185,7 @@ static void framesBoth(int frames) {
 	B->setKeys(keysFor(frames));
 }
 
-// Steps both through the next 300000 cycles and reports the first step where they differ
+// Steps both through the next 300000 cycles and reports the first step where they differ.
 static int scan(int32_t step) {
 	printf("scan from %s %u, %s %u\n", A->name, A->now(), B->name, B->now());
 	int32_t t = 0;
@@ -235,7 +236,8 @@ int main(int argc, char** argv) {
 	int frames = atoi(argv[3]);
 	bool skipBios = argc > 4 && atoi(argv[4]);
 	inputSeed = argc > 5 ? atoi(argv[5]) : 0;
-	// PAIR=mgba-ref checks the reference interpreter against mGBA, PAIR=ref-armgba the JIT against it
+	// PAIR=mgba-ref checks the reference interpreter against mGBA; PAIR=ref-armgba checks the JIT
+	// against it.
 	const char* pair = getenv("PAIR");
 	if (pair && !strcmp(pair, "mgba-ref")) {
 		B = &refGame;
@@ -273,15 +275,16 @@ int main(int argc, char** argv) {
 		free(script);
 	}
 
-	// FROM=<frame> with STEP=<cycles> scans that frame on the first run, for differences a rerun doesn't repeat
+	// FROM=<frame> with STEP=<cycles> scans that frame on the first run, for differences a rerun
+	// doesn't repeat.
 	int from = getenv("FROM") ? atoi(getenv("FROM")) : -1;
 	int bad = -1;
-	// LOOSE=1 runs both for the frames without comparing on the way, then lists what differs: for games
-	// that part from mGBA early over a cycle or two and are still expected to end up alike
+	// LOOSE=1 runs both for the frames without comparing along the way, then lists what differs:
+	// for games that part from mGBA early by a cycle or two and are still expected to end up alike.
 	if (getenv("LOOSE")) {
 		if (getenv("PROBE")) {
-			// PROBE=<frame>:<from>:<to>: both run afresh to each cycle count into that frame, and where
-			// each stops
+			// PROBE=<frame>:<from>:<to>: both run afresh to each cycle count into that frame,
+			// showing where each stops.
 			int frame = 0;
 			int from = 0;
 			int to = 0;
@@ -301,7 +304,8 @@ int main(int argc, char** argv) {
 			return 0;
 		}
 		if (getenv("SAMPLE")) {
-			// SAMPLE=<frame>: from there, where each one's PC is every 500 cycles for SPAN frames (4)
+			// SAMPLE=<frame>: from there, records where each one's PC is every 500 cycles, for SPAN
+			// frames (4).
 			framesBoth(atoi(getenv("SAMPLE")));
 			int span = getenv("SPAN") ? atoi(getenv("SPAN")) : 4;
 			for (int side = 0; side < 2; ++side) {
@@ -329,7 +333,8 @@ int main(int argc, char** argv) {
 			return 0;
 		}
 		if (getenv("WATCH")) {
-			// WATCH=<register, hex>: its value on both at the end of every frame it changes on
+			// WATCH=<register, hex>: shows its value on both at the end of every frame it changes
+			// on.
 			unsigned reg = strtoul(getenv("WATCH"), NULL, 16) / 2;
 			unsigned was[2] = { ~0u, ~0u };
 			for (int f = 0; f < frames; ++f) {
@@ -378,14 +383,14 @@ int main(int argc, char** argv) {
 		}
 		printf("  pc %s %08X %s %08X\n", A->name, a.r[15], B->name, b.r[15]);
 		if (getenv("IO")) {
-			// IO=1: the second emulator's video registers
+			// IO=1: the second emulator's video registers.
 			for (int i = 0; i < 0x60 / 2; ++i) {
 				printf("%s%04X", i % 8 ? " " : "\n  ", b.io[i]);
 			}
 			printf("\n");
 		}
 		if (getenv("DUMP")) {
-			// DUMP=<file>: the second emulator's IWRAM, EWRAM, OAM and VRAM
+			// DUMP=<file>: the second emulator's IWRAM, EWRAM, OAM and VRAM.
 			FILE* out = fopen(getenv("DUMP"), "wb");
 			fwrite(b.iwram, 1, sizeof(b.iwram), out);
 			fwrite(b.ewram, 1, sizeof(b.ewram), out);
@@ -413,13 +418,13 @@ int main(int argc, char** argv) {
 		printf("%d frames match\n", frames);
 		return 0;
 	}
-	// Differences can heal, so scan forward through the frame for the first one
+	// Differences can heal, so scan forward through the frame for the first one.
 	if (getenv("SCAN")) {
 		resetBoth();
 		framesBoth(bad);
 		return scan(atoi(getenv("SCAN")));
 	}
-	// Both agree after `bad` frames; find the first cycle of frame `bad` where they don't
+	// Both agree after `bad` frames; find the first cycle of frame `bad` where they don't.
 	resetBoth();
 	framesBoth(bad);
 	uint32_t start = A->now();
@@ -446,7 +451,7 @@ int main(int argc, char** argv) {
 	differ(true);
 	bool thumb = a.cpsr & 0x20;
 	printf("  %s next pc %08X (%s), cpsr %08X\n", A->name, a.r[15] - (thumb ? 2 : 4), thumb ? "Thumb" : "ARM", a.cpsr);
-	// The step before, where they still agreed
+	// The step before, where they still agreed.
 	resetBoth();
 	framesBoth(bad);
 	A->runCycles(lo);
