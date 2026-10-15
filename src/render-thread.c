@@ -76,7 +76,7 @@ static bool spin(struct RenderThread* t, bool worker, uint64_t target) {
 		}
 #if defined(__x86_64__)
 		__builtin_ia32_pause();
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__arm__)
 		__asm__ volatile("yield");
 #endif
 	}

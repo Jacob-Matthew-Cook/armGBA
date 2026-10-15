@@ -12,10 +12,52 @@
 #include <arm_neon.h>
 #include <string.h>
 
-// NEON is part of AArch64.
+// NEON is part of AArch64, and of the ARMv7 CPUs this is built for (-mfpu=neon).
 bool renderHasSimd(void) {
 	return true;
 }
+
+#ifndef __aarch64__
+// AArch64's intrinsics that 32-bit NEON lacks, from the ones it has. A table lookup gives 0 for an
+// index past the table, as AArch64's does.
+static inline uint8x8_t vqtbl1_u8(uint8x16_t table, uint8x8_t index) {
+	uint8x8x2_t t = { { vget_low_u8(table), vget_high_u8(table) } };
+	return vtbl2_u8(t, index);
+}
+
+// The second half's lookup leaves bytes whose index isn't in it as the first half's gave them.
+static inline uint8x8_t vqtbl4_u8(uint8x16x4_t table, uint8x8_t index) {
+	uint8x8x4_t first = { { vget_low_u8(table.val[0]), vget_high_u8(table.val[0]), vget_low_u8(table.val[1]), vget_high_u8(table.val[1]) } };
+	uint8x8x4_t second = { { vget_low_u8(table.val[2]), vget_high_u8(table.val[2]), vget_low_u8(table.val[3]), vget_high_u8(table.val[3]) } };
+	return vtbx4_u8(vtbl4_u8(first, index), second, vsub_u8(index, vdup_n_u8(32)));
+}
+
+static inline uint8x8_t vzip1_u8(uint8x8_t a, uint8x8_t b) {
+	return vzip_u8(a, b).val[0];
+}
+
+static inline uint8x8_t vzip2_u8(uint8x8_t a, uint8x8_t b) {
+	return vzip_u8(a, b).val[1];
+}
+
+static inline uint16x8_t vzip1q_u16(uint16x8_t a, uint16x8_t b) {
+	return vzipq_u16(a, b).val[0];
+}
+
+static inline uint16x8_t vzip2q_u16(uint16x8_t a, uint16x8_t b) {
+	return vzipq_u16(a, b).val[1];
+}
+
+static inline uint32_t vaddvq_u32(uint32x4_t a) {
+	uint32x2_t pair = vadd_u32(vget_low_u32(a), vget_high_u32(a));
+	return vget_lane_u32(vpadd_u32(pair, pair), 0);
+}
+
+static inline uint32_t vmaxvq_u32(uint32x4_t a) {
+	uint32x2_t pair = vmax_u32(vget_low_u32(a), vget_high_u32(a));
+	return vget_lane_u32(vpmax_u32(pair, pair), 0);
+}
+#endif
 
 // Eight 32-bit lanes; masks are all ones or all zeros per lane.
 typedef struct {

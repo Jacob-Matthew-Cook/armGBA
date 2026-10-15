@@ -1949,7 +1949,7 @@ static void updatePalettes(struct GBA* gba, uint32_t banks) {
 }
 
 // These are separate functions so the compiler knows nothing else is written, and uses wide stores.
-#if defined(__aarch64__)
+#if defined(__ARM_NEON)
 static void fill16(uint16_t* restrict p, uint16_t value, int n) {
 	for (int i = 0; i < n; ++i) {
 		p[i] = value;
@@ -2012,7 +2012,7 @@ static void preprocessBuffer(struct GBA* gba) {
 		}
 		int end = renderer->windows[w].endX;
 		if (end > x) {
-#if defined(__aarch64__)
+#if defined(__ARM_NEON)
 			fill16(&renderer->rowColor[x], backdrop, end - x);
 			fill16(&renderer->rowFlags[x], backdrop >> 16, end - x);
 #else
