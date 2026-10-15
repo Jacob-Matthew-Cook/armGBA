@@ -30,6 +30,8 @@ static void onSample(int sig, siginfo_t* info, void* context) {
 	if (sampleCount < MAX_SAMPLES) {
 #if defined(__x86_64__)
 		samples[sampleCount++] = uc->uc_mcontext.gregs[REG_RIP];
+#elif defined(__arm__)
+		samples[sampleCount++] = uc->uc_mcontext.arm_pc;
 #else
 		samples[sampleCount++] = uc->uc_mcontext.pc;
 #endif
