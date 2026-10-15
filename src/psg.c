@@ -8,8 +8,8 @@
 
 #include <string.h>
 
-// The four Game Boy channels in their GBA form, stepped the same way as mGBA's GB audio so that
-// the status bits games read back match
+// The four Game Boy sound channels in their GBA form, stepped the same way as mGBA's GB audio so
+// the status bits games read back match.
 
 enum {
 	TIMING_FACTOR = 4,
@@ -23,7 +23,7 @@ static const int squareDuty[4][8] = {
 	{ 0, 1, 1, 1, 1, 1, 1, 0 },
 };
 
-// Steps from each position until squareDuty flips
+// Steps from each position until squareDuty flips.
 static const uint8_t dutySteps[4][8] = {
 	{ 7, 6, 5, 4, 3, 2, 1, 1 },
 	{ 1, 6, 5, 4, 3, 2, 1, 2 },
@@ -31,17 +31,17 @@ static const uint8_t dutySteps[4][8] = {
 	{ 1, 6, 5, 4, 3, 2, 1, 2 },
 };
 
-// SOUNDCNT_X's low byte: the master switch, and a bit for each channel that is playing
+// SOUNDCNT_X's low byte: the master switch, and a bit for each channel that is playing.
 static uint8_t* nr52(struct GBA* gba) {
 	return (uint8_t*) &gba->io[IO(REG_SOUNDCNT_X)];
 }
 
-// A square channel's output: its duty pattern's current step times its volume
+// Returns a square channel's output: its duty pattern's current step times its volume.
 static void updateSquareSample(struct PsgSquare* ch) {
 	ch->sample = squareDuty[ch->envelope.duty][ch->index] * ch->envelope.currentVolume;
 }
 
-// One step of a volume envelope, up or down. At either end it stops; dead says which end.
+// Steps a volume envelope once, up or down. At either end it stops; dead says which end.
 static void updateEnvelope(struct PsgEnvelope* envelope) {
 	if (envelope->direction) {
 		++envelope->currentVolume;
@@ -59,7 +59,7 @@ static void updateEnvelope(struct PsgEnvelope* envelope) {
 	}
 }
 
-// Whether an envelope has nothing left to do, worked out again after its settings change
+// Works out again, after its settings change, whether an envelope has nothing left to do.
 static void updateEnvelopeDead(struct PsgEnvelope* envelope) {
 	if (!envelope->stepTime) {
 		envelope->dead = envelope->currentVolume ? 1 : 2;
@@ -73,8 +73,8 @@ static void updateEnvelopeDead(struct PsgEnvelope* envelope) {
 	}
 }
 
-// A trigger starts the envelope from its initial volume. Returns whether the channel's DAC is on:
-// a channel with volume 0 going down makes no sound and stops playing.
+// A trigger starts the envelope from its initial volume. Returns whether the channel's DAC is on: a
+// channel with volume 0 going down makes no sound and stops playing.
 static bool resetEnvelope(struct PsgEnvelope* envelope) {
 	envelope->currentVolume = envelope->initialVolume;
 	envelope->nextStep = envelope->stepTime;
@@ -82,7 +82,7 @@ static bool resetEnvelope(struct PsgEnvelope* envelope) {
 	return envelope->initialVolume || envelope->direction;
 }
 
-// The envelope register: step time, direction, initial volume
+// The envelope register: step time, direction, initial volume.
 static bool writeEnvelope(struct PsgEnvelope* envelope, uint8_t value) {
 	envelope->stepTime = value & 7;
 	envelope->direction = (value >> 3) & 1;
@@ -94,14 +94,14 @@ static bool writeEnvelope(struct PsgEnvelope* envelope, uint8_t value) {
 	return envelope->initialVolume || envelope->direction;
 }
 
-// The duty and length register
+// The duty and length register.
 static void writeDuty(struct PsgEnvelope* envelope, uint8_t value) {
 	envelope->length = value & 0x3F;
 	envelope->duty = value >> 6;
 }
 
 // Channel 1's frequency sweep register. Turning a downward sweep upward after it has stepped
-// switches the channel off, as on the hardware; returns whether it still plays.
+// switches the channel off, as on the hardware; returns whether the channel still plays.
 static bool writeSweep(struct PsgSquare* ch, uint8_t value) {
 	ch->sweep.shift = value & 7;
 	bool oldDirection = ch->sweep.direction;
@@ -118,15 +118,15 @@ static bool writeSweep(struct PsgSquare* ch, uint8_t value) {
 	return on;
 }
 
-// A trigger restarts the sweep's timer
+// A trigger restarts the sweep's timer.
 static void resetSweep(struct PsgSquare* ch) {
 	ch->sweep.step = ch->sweep.time;
 	ch->sweep.enable = (ch->sweep.step != 8) || ch->sweep.shift;
 	ch->sweep.occurred = false;
 }
 
-// One step of the sweep: the frequency moves by itself shifted right. Going past the top switches
-// the channel off, which is the return value.
+// Steps the sweep once: the frequency moves by itself shifted right. Going past the top switches
+// the channel off; returns whether it did.
 static bool updateSweep(struct PsgSquare* ch, bool initial) {
 	if (initial || ch->sweep.time != 8) {
 		int frequency = ch->sweep.realFrequency;
@@ -156,10 +156,10 @@ static bool updateSweep(struct PsgSquare* ch, bool initial) {
 	return true;
 }
 
-// The frame sequencer's tick, 512 times a second: lengths, the sweep and envelopes step from it
+// The frame sequencer's tick, 512 times a second; lengths, the sweep and envelopes step from it.
 static void frameEvent(struct GBA* gba, void* context, uint32_t late) {
 	(void) context;
-	// Before a sample interval ending now
+	// Called before a sample interval that ends now.
 	int32_t now = timingCurrentTime(gba) - late;
 	audioCatchUp(gba, now, false);
 	timerCatchUp(gba, now, false);
@@ -174,7 +174,7 @@ void psgInit(struct GBA* gba) {
 	gba->audio.psg.frameEvent.priority = 0x10;
 }
 
-// As after power-on: channels silent, their envelopes finished
+// Resets as after power-on: channels silent, their envelopes finished.
 void psgReset(struct GBA* gba) {
 	struct Psg* psg = &gba->audio.psg;
 	struct Event frameEvent = psg->frameEvent;
@@ -186,7 +186,7 @@ void psgReset(struct GBA* gba) {
 	psg->ch4.envelope.dead = 2;
 }
 
-// Brings a square channel up to timestamp: its duty pattern moves on a step each period
+// Brings a square channel up to timestamp: its duty pattern moves on one step each period.
 static void runSquare(struct PsgSquare* ch, int32_t timestamp) {
 	int period = 4 * (2048 - ch->control.frequency) * TIMING_FACTOR;
 	int32_t diff = timestamp - ch->lastUpdate;
@@ -198,19 +198,19 @@ static void runSquare(struct PsgSquare* ch, int32_t timestamp) {
 	}
 }
 
-// When a square channel's sample next changes as psgRun steps it: where its duty pattern next flips, if
-// it's heard; a stopped channel still steps once it's a long way behind
+// Returns when a square channel's sample next changes as psgRun steps it: where its duty pattern
+// next flips, if it's heard. A stopped channel still steps once it's a long way behind.
 static uint32_t squareChange(const struct PsgSquare* ch, bool playing) {
 	if (!playing || ch->envelope.dead == 2) {
 		return (uint32_t) ch->lastUpdate + 0x40000001;
 	}
 	uint32_t period = 4 * (2048 - ch->control.frequency) * TIMING_FACTOR;
 	if (!ch->envelope.currentVolume && !ch->sample) {
-		// Silent until something changes the envelope, which runs the channel first
+		// Silent until something changes the envelope, which runs the channel first.
 		return (uint32_t) ch->lastUpdate + 0x40000001;
 	}
 	if (ch->sample != squareDuty[ch->envelope.duty][ch->index] * ch->envelope.currentVolume) {
-		// A write changed the duty or volume: the next step takes it up
+		// A write changed the duty or volume; the next step picks it up.
 		return (uint32_t) ch->lastUpdate + period;
 	}
 	return (uint32_t) ch->lastUpdate + dutySteps[ch->envelope.duty][ch->index] * period;
@@ -222,7 +222,8 @@ struct NoiseSteps {
 	uint8_t positive;
 };
 
-// The 7-bit noise LFSR's state after eight steps from each state, with the bits it put out (oldest lowest)
+// The 7-bit noise LFSR's state after eight steps from each state, with the bits it put out (oldest
+// lowest).
 static const struct NoiseSteps* noise7Steps(void) {
 	static struct NoiseSteps table[128];
 	static bool ready;
@@ -248,8 +249,8 @@ static const struct NoiseSteps* noise7Steps(void) {
 	return table;
 }
 
-// Brings the channels named in channels (a bit each) up to timestamp, so that their samples are
-// what a mix at that time hears. Channels nothing can hear are left behind until they matter.
+// Brings the channels named in channels (one bit each) up to timestamp, so their samples are what a
+// mix at that time hears. Channels nothing can hear are left behind until they matter.
 void psgRun(struct GBA* gba, int32_t timestamp, int channels) {
 	struct Psg* psg = &gba->audio.psg;
 	psg->cached = false;
@@ -294,7 +295,7 @@ void psgRun(struct GBA* gba, int32_t timestamp, int channels) {
 			} else {
 				start = 3;
 			}
-			// Rotate the 4-bit samples through the active bank
+			// Rotates the 4-bit samples through the active bank.
 			for (int iter = 0; iter < (diff & mask); ++iter) {
 				uint32_t bitsCarry = ch3->wavedata32[end] & 0x000000F0;
 				uint32_t bits;
@@ -314,8 +315,8 @@ void psgRun(struct GBA* gba, int32_t timestamp, int channels) {
 			ch3->readable = true;
 		}
 	}
-	// Silent noise steps only when a write to it is about to change something, all at once; until
-	// then nothing can hear the LFSR, and a trigger starts it again from zero
+	// Silent noise only steps when a write to it is about to change something, all at once. Until
+	// then nothing can hear the LFSR, and a trigger restarts it from zero.
 	struct PsgNoise* noise = &psg->ch4;
 	bool silent = noise->envelope.dead == 2 && !noise->envelope.currentVolume && !noise->sample;
 	if (psg->playingCh4 && (channels & 0x8) && (channels == 0x8 || !silent)) {
@@ -342,7 +343,8 @@ void psgRun(struct GBA* gba, int32_t timestamp, int channels) {
 			int coeff;
 			if (ch4->power) {
 				coeff = 0x4040;
-				// Eight steps at a time: the low 7 bits are a 7-bit LFSR, the rest the last outputs
+				// Eight steps at a time: the low 7 bits are a 7-bit LFSR, the rest the last
+				// outputs.
 				for (; last + cycles * 8 <= diff; last += cycles * 8) {
 					const struct NoiseSteps* steps = &noise7Steps()[ch4->lfsr & 0x7F];
 					ch4->lfsr = (steps->outputs << 7) | steps->state;
@@ -380,7 +382,7 @@ void psgRun(struct GBA* gba, int32_t timestamp, int channels) {
 			ch4->lastEvent += last;
 		}
 	}
-	// The first time a sample's run would change what psgSample gives
+	// Returns the first time a sample's run would change what psgSample gives.
 	int32_t soonest = INT32_MAX;
 	uint32_t when = squareChange(&psg->ch1, psg->playingCh1);
 	if ((int32_t) (when - timestamp) < soonest) {
@@ -406,8 +408,8 @@ void psgRun(struct GBA* gba, int32_t timestamp, int channels) {
 	psg->nextChange = (uint32_t) timestamp + soonest;
 }
 
-// One tick of the frame sequencer: lengths every other tick, the sweep every fourth, envelopes every
-// eighth
+// Runs one tick of the frame sequencer: lengths every other tick, the sweep every fourth, envelopes
+// every eighth.
 void psgUpdateFrame(struct GBA* gba, int32_t now) {
 	struct Psg* psg = &gba->audio.psg;
 	if (!psg->enable) {
@@ -434,7 +436,7 @@ void psgUpdateFrame(struct GBA* gba, int32_t now) {
 				*nr52(gba) |= psg->playingCh1;
 			}
 		}
-		// Fall through
+		// Fall through.
 	case 0:
 	case 4:
 		if (psg->ch1.control.length && psg->ch1.control.stop) {
@@ -497,7 +499,8 @@ void psgUpdateFrame(struct GBA* gba, int32_t now) {
 	}
 }
 
-// The four channels mixed to left and right as the panning register has them, then the master volume
+// Mixes the four channels to left and right as the panning register says, then applies the master
+// volume.
 void psgSample(struct GBA* gba, int16_t* left, int16_t* right) {
 	struct Psg* psg = &gba->audio.psg;
 	int sampleLeft = 0;
@@ -534,7 +537,7 @@ void psgSample(struct GBA* gba, int16_t* left, int16_t* right) {
 }
 
 // A square channel's frequency high bits, length enable and trigger. The length counter's extra
-// clock on enabling it at certain frame steps is the hardware's.
+// clock when enabled at certain frame steps is the hardware's behaviour.
 static void writeControlSquare(struct GBA* gba, struct PsgSquare* ch, bool* playing, int channel, uint8_t value, bool sweep) {
 	struct Psg* psg = &gba->audio.psg;
 	ch->control.frequency &= 0xFF;
@@ -568,13 +571,13 @@ static void writeControlSquare(struct GBA* gba, struct PsgSquare* ch, bool* play
 	*nr52(gba) |= *playing << channel;
 }
 
-// Register writes by Game Boy register number (10 = NR10, ...)
+// Handles register writes by Game Boy register number (10 = NR10, ...).
 void psgWrite(struct GBA* gba, int nr, uint8_t value) {
 	struct Psg* psg = &gba->audio.psg;
 	int32_t now = timingCurrentTime(gba);
 	audioCatchUp(gba, now, true);
 	switch (nr) {
-	// Channel 1: sweep, duty and length, envelope, frequency, and control
+	// Channel 1: sweep, duty and length, envelope, frequency, and control.
 	case 10:
 		psgRun(gba, now, 0x1);
 		if (!writeSweep(&psg->ch1, value)) {
@@ -603,7 +606,7 @@ void psgWrite(struct GBA* gba, int nr, uint8_t value) {
 		psgRun(gba, now, 0x1);
 		writeControlSquare(gba, &psg->ch1, &psg->playingCh1, 0, value, true);
 		break;
-	// Channel 2, a square wave with no sweep
+	// Channel 2, a square wave with no sweep.
 	case 21:
 		psgRun(gba, now, 0x2);
 		writeDuty(&psg->ch2.envelope, value);
@@ -625,7 +628,7 @@ void psgWrite(struct GBA* gba, int nr, uint8_t value) {
 		psgRun(gba, now, 0x2);
 		writeControlSquare(gba, &psg->ch2, &psg->playingCh2, 1, value, false);
 		break;
-	// Channel 3 plays the wave RAM: on/off and bank, length, volume, frequency, control
+	// Channel 3 plays the wave RAM: on/off and bank, length, volume, frequency, control.
 	case 30:
 		psgRun(gba, now, 0x4);
 		psg->ch3.enable = value >> 7;
@@ -685,7 +688,7 @@ void psgWrite(struct GBA* gba, int nr, uint8_t value) {
 		*nr52(gba) |= psg->playingCh3 << 2;
 		break;
 	}
-	// Channel 4, noise: length, envelope, the shift register's clock and width, control
+	// Channel 4, noise: length, envelope, the shift register's clock and width, control.
 	case 41:
 		psgRun(gba, now, 0x8);
 		writeDuty(&psg->ch4.envelope, value);
@@ -731,7 +734,7 @@ void psgWrite(struct GBA* gba, int nr, uint8_t value) {
 		*nr52(gba) |= psg->playingCh4 << 3;
 		break;
 	}
-	// The master volume and each channel's left and right switches
+	// The master volume and each channel's left and right switches.
 	case 50:
 		psgRun(gba, now, 0xF);
 		psg->volumeRight = value & 7;
@@ -751,7 +754,7 @@ void psgWrite(struct GBA* gba, int nr, uint8_t value) {
 	}
 }
 
-// The master switch. Off, every channel stops and the other sound registers are cleared.
+// The master switch. When off, every channel stops and the other sound registers are cleared.
 void psgWriteNr52(struct GBA* gba, uint8_t value) {
 	struct Psg* psg = &gba->audio.psg;
 	audioCatchUp(gba, timingCurrentTime(gba), true);

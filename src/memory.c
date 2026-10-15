@@ -8,7 +8,7 @@
 
 #include <string.h>
 
-// Bus timing follows mGBA exactly so the two can be compared cycle for cycle
+// Bus timing follows mGBA exactly, so the two can be compared cycle for cycle.
 
 // Wait states by region (the address's top byte) for a 16- or 32-bit access, nonsequential (N) and
 // sequential (S), as at power-on. An access costs these plus one cycle; a 32-bit access to a 16-bit
@@ -18,17 +18,17 @@ static const uint8_t BASE_WAIT_N32[16] = { 0, 0, 5, 0, 0, 1, 1, 0, 7, 7, 9, 9, 1
 static const uint8_t BASE_WAIT_S16[16] = { 0, 0, 2, 0, 0, 0, 0, 0, 2, 2, 4, 4, 8, 8, 4 };
 static const uint8_t BASE_WAIT_S32[16] = { 0, 0, 5, 0, 0, 1, 1, 0, 5, 5, 9, 9, 17, 17, 9 };
 // WAITCNT's choices for the cartridge: first-access waits, then each of the three cartridge areas'
-// sequential waits for its bit clear and set
+// sequential waits for its bit clear and set.
 static const uint8_t ROM_WAIT_N[] = { 4, 3, 2, 8 };
 static const uint8_t ROM_WAIT_S[] = { 2, 1, 4, 1, 8, 1 };
 
-// A misaligned 32-bit load reads the aligned word and rotates it
+// A misaligned 32-bit load reads the aligned word and rotates it.
 static inline uint32_t ror32(uint32_t value, unsigned rotate) {
 	rotate &= 31;
 	return rotate ? (value >> rotate) | (value << (32 - rotate)) : value;
 }
 
-// Guest memory is little-endian whatever the host is
+// Guest memory is little-endian whatever the host is.
 static inline uint32_t le32(const uint8_t* p) {
 	uint32_t v;
 	memcpy(&v, p, 4);
@@ -49,8 +49,8 @@ static inline void put16(uint8_t* p, uint16_t v) {
 	memcpy(p, &v, 2);
 }
 
-// What a write to the PC costs in each region the PC can land in: the pipeline refill is one
-// nonsequential and one sequential fetch there. Compiled code looks these up.
+// Works out what a write to the PC costs in each region the PC can land in: the pipeline refill is
+// one nonsequential and one sequential fetch there. Compiled code looks these up.
 static void updateWritePcCosts(struct GBA* gba) {
 	for (int i = 0; i < 256; ++i) {
 		bool code = i < 16 && i != 1 && i != REGION_IO && i < REGION_SRAM;
@@ -59,7 +59,8 @@ static void updateWritePcCosts(struct GBA* gba) {
 	}
 }
 
-// Power-on wait states. No region is active until the first PC write says where code runs from.
+// Sets the power-on wait states. No region is active until the first PC write says where code runs
+// from.
 void memoryInit(struct GBA* gba) {
 	for (int i = 0; i < 256; ++i) {
 		gba->waitN16[i] = i < 16 ? BASE_WAIT_N16[i] : 0;
@@ -72,7 +73,7 @@ void memoryInit(struct GBA* gba) {
 	gba->fetchRegion = REGION_BIOS;
 }
 
-// Work RAM and I/O cleared, wait states back to their reset values, the prefetch buffer off
+// Clears work RAM and I/O, resets the wait states, and turns the prefetch buffer off.
 void memoryReset(struct GBA* gba) {
 	if (gba->rom) {
 		memset(gba->ewram, 0, sizeof(gba->ewram));
@@ -87,7 +88,7 @@ void memoryReset(struct GBA* gba) {
 	gba->prefetchDisabled = false;
 }
 
-// Whether mGBA's GBASetActiveRegion finds memory to run code from at address
+// Whether mGBA's GBASetActiveRegion finds memory to run code from at address.
 bool memoryCanFetch(struct GBA* gba, uint32_t address) {
 	int region = address >> 24;
 	switch (region) {
@@ -103,8 +104,8 @@ bool memoryCanFetch(struct GBA* gba, uint32_t address) {
 	}
 }
 
-// The PC moved to another region, or off the end of the cartridge. Leaving the BIOS, the last word
-// fetched there is kept: it is what reads of the BIOS return from outside it.
+// Called when the PC moves to another region, or off the end of the cartridge. When leaving the
+// BIOS, the last word fetched there is kept: it is what reads of the BIOS return from outside it.
 void memorySetActiveRegion(struct GBA* gba, uint32_t address) {
 	int region = address >> 24;
 	gba->lastPrefetchedPc = 0;
@@ -122,18 +123,20 @@ void memorySetActiveRegion(struct GBA* gba, uint32_t address) {
 	}
 }
 
-// WAITCNT written: the cartridge's and SRAM's wait states, and the prefetch buffer switched on or off
+// Called when WAITCNT is written: sets the cartridge's and SRAM's wait states, and switches the
+// prefetch buffer on or off.
 void memoryAdjustWaitstates(struct GBA* gba, uint16_t parameters) {
 	int sram = parameters & 3;
 	int ws[3] = { (parameters >> 2) & 3, (parameters >> 5) & 3, (parameters >> 8) & 3 };
 	int wsSeq[3] = { (parameters >> 4) & 1, (parameters >> 7) & 1, (parameters >> 10) & 1 };
 
-	// SRAM has an 8-bit bus and no sequential accesses
+	// SRAM has an 8-bit bus and no sequential accesses.
 	for (int r = REGION_SRAM; r <= REGION_SRAM_MIRROR; ++r) {
 		gba->waitN16[r] = gba->waitS16[r] = ROM_WAIT_N[sram];
 		gba->waitN32[r] = gba->waitS32[r] = 2 * ROM_WAIT_N[sram] + 1;
 	}
-	// Each cartridge area is two regions. A 32-bit access is a 16-bit one and a sequential one after it.
+	// Each cartridge area is two regions. A 32-bit access is a 16-bit one followed by a sequential
+	// one.
 	for (int i = 0; i < 3; ++i) {
 		for (int r = REGION_ROM0 + 2 * i; r < REGION_ROM0 + 2 * i + 2; ++r) {
 			gba->waitN16[r] = ROM_WAIT_N[ws[i]];
@@ -144,7 +147,7 @@ void memoryAdjustWaitstates(struct GBA* gba, uint16_t parameters) {
 	}
 	if (gba->prefetchEnabled && !(parameters & 0x4000)) {
 		gba->prefetchDisabled = true;
-		// The read in flight finishes, and that is as far ahead as it gets
+		// The read in flight finishes, and that is as far ahead as it gets.
 		struct Prefetcher* p = &gba->prefetcher;
 		int32_t lead = timingCurrentTime(gba) - p->base;
 		if (gba->cpu.prefetching && lead < p->full) {
@@ -155,7 +158,7 @@ void memoryAdjustWaitstates(struct GBA* gba, uint16_t parameters) {
 	updateWritePcCosts(gba);
 }
 
-// The undocumented register at 0x04000800: external work RAM's wait states, 2 by default
+// The undocumented register at 0x04000800: external work RAM's wait states, 2 by default.
 void memoryAdjustEwramWaitstates(struct GBA* gba, uint16_t parameters) {
 	int wait = 15 - ((parameters >> 8) & 0xF);
 	if (!wait) {
@@ -166,9 +169,9 @@ void memoryAdjustEwramWaitstates(struct GBA* gba, uint16_t parameters) {
 	updateWritePcCosts(gba);
 }
 
-// mGBA's model of the prefetch buffer during a data access outside the cartridge, for the accesses
-// counted its way: the buffer fills while the bus is busy elsewhere, up to eight
-// halfwords, and what it loaded is taken off what the following fetches cost.
+// mGBA's model of the prefetch buffer during a data access outside the cartridge, for accesses
+// counted its way: the buffer fills while the bus is busy elsewhere, up to eight halfwords, and
+// what it loaded is taken off what the following fetches cost.
 int32_t memoryStall(struct GBA* gba, int32_t wait) {
 	if (gba->activeRegion < REGION_ROM0 || !gba->prefetchEnabled) {
 		return wait;
@@ -197,12 +200,12 @@ int32_t memoryStall(struct GBA* gba, int32_t wait) {
 }
 
 // Open bus: a read of nothing returns what was last on the bus, which is the most recent prefetch.
-// In Thumb the two halves of the word depend on where the code runs and its alignment.
+// In Thumb, the two halves of the word depend on where the code runs and its alignment.
 uint32_t memoryLoadBad(struct GBA* gba) {
 	struct CPU* cpu = &gba->cpu;
 	jitSyncPc(gba);
 	bool thumb = cpu->cpsr & PSR_T;
-	// Straight after a DMA access, the last value DMA moved
+	// Straight after a DMA access, it's the last value DMA moved.
 	if (gba->lastAccessDma) {
 		return gba->dmaLatch;
 	}
@@ -227,17 +230,18 @@ uint32_t memoryLoadBad(struct GBA* gba) {
 	return value;
 }
 
-// In the bitmap modes the mirror of the first 32 KiB above the sprite tiles is not there: reads give 0
+// In the bitmap modes, the mirror of the first 32 KiB above the sprite tiles isn't there: reads
+// give 0.
 static bool vramHole(struct GBA* gba, uint32_t address) {
 	return (address & (SIZE_VRAM | 0x14000)) == SIZE_VRAM && (gba->io[0] & 7) >= 3;
 }
 
-// VRAM is 96 KiB in a 128 KiB space; the last 32 KiB mirrors the sprite tiles
+// VRAM is 96 KiB in a 128 KiB space; the last 32 KiB mirrors the sprite tiles.
 static uint32_t vramOffset(uint32_t address) {
 	return (address & 0x1FFFF) >= SIZE_VRAM ? address & 0x17FFF : address & 0x1FFFF;
 }
 
-// VRAM changes go by page
+// VRAM changes are tracked by page.
 static inline void videoChanged(struct GBA* gba, uint8_t* p, uint8_t what) {
 	if (what == RENDER_VRAM) {
 		gba->renderer.vramChanged[(p - gba->vram) >> 11] = 1;
@@ -246,14 +250,14 @@ static inline void videoChanged(struct GBA* gba, uint8_t* p, uint8_t what) {
 	}
 }
 
-// Lines whose H-blank has come are drawn before what they show changes
+// Lines whose H-blank has come are drawn before what they show changes.
 static inline void drawFirst(struct GBA* gba) {
 	if ((int32_t) (timingCurrentTime(gba) - gba->video.drawDue) >= 0) {
 		videoSync(gba);
 	}
 }
 
-// Stores the renderer hears about only when they change something, as in mGBA
+// The renderer only hears about these stores when they change something, as in mGBA.
 static inline void videoStore16(struct GBA* gba, uint8_t* p, uint16_t value, uint8_t what) {
 	uint16_t old;
 	memcpy(&old, p, 2);
@@ -274,10 +278,10 @@ static inline void videoStore32(struct GBA* gba, uint8_t* p, uint32_t value, uin
 	}
 }
 
-// After a store: compiled code may cover the word
+// After a store, compiled code may cover the word.
 static inline void codeWritten(struct GBA* gba, uint32_t address, int size) {
 	switch (address >> 24) {
-	// RAM code is tracked a word at a time: the map says whether compiled code covers this one
+	// RAM code is tracked a word at a time: the map says whether compiled code covers this one.
 	case REGION_EWRAM:
 		if (gba->ewramCode[(address & (SIZE_EWRAM - 1)) >> 2]) {
 			jitCodeWritten(gba, address, size);
@@ -288,7 +292,7 @@ static inline void codeWritten(struct GBA* gba, uint32_t address, int size) {
 			jitCodeWritten(gba, address, size);
 		}
 		break;
-	// Code run from video memory is rare enough to look up the slow way
+	// Code run from video memory is rare enough to look up the slow way.
 	case REGION_PALETTE:
 	case REGION_VRAM:
 	case REGION_OAM:
@@ -299,7 +303,8 @@ static inline void codeWritten(struct GBA* gba, uint32_t address, int size) {
 	}
 }
 
-// DMA units between RAM, palette, VRAM, OAM and cartridge ROM: the accesses memoryLoad/memoryStore make, without the cycle counting
+// DMA units between RAM, palette, VRAM, OAM and cartridge ROM: the accesses memoryLoad and
+// memoryStore make, without the cycle counting.
 static inline uint32_t plainLoad(struct GBA* gba, uint32_t address, bool wide) {
 	uint32_t align = wide ? ~3u : ~1u;
 	const uint8_t* p;
@@ -386,9 +391,9 @@ static inline void plainStore(struct GBA* gba, uint32_t address, uint32_t value,
 	codeWritten(gba, address, wide ? 4 : 2);
 }
 
-// DMA units between plain memory, each timed and done as busDmaRead and busDmaWrite would, up to
-// count of them. Stops before an access in another region or one that starts a new cartridge burst,
-// and once an event has asked DMA to stop. Returns the units moved.
+// Moves up to count DMA units between plain memory, each timed and done as busDmaRead and
+// busDmaWrite would. Stops before an access in another region or one that starts a new cartridge
+// burst, and once an event has asked DMA to stop. Returns the units moved.
 int memoryDmaCopy(struct GBA* gba, struct Dma* dma, int count, bool wide, int32_t sourceStep, int32_t destStep) {
 	struct CPU* cpu = &gba->cpu;
 	int size = wide ? 4 : 2;
@@ -433,12 +438,12 @@ int memoryDmaCopy(struct GBA* gba, struct Dma* dma, int count, bool wide, int32_
 }
 
 // A 32-bit load without the final cycle counting: adds the region's wait from waits (the N or the S
-// table) to *wait. Shared by single loads and by block transfers, which differ in what they add.
+// table) to *wait. Shared by single loads and block transfers, which differ in what they add.
 static uint32_t load32Raw(struct GBA* gba, uint32_t address, int* wait, const uint8_t* waits) {
 	switch (address >> 24) {
 	case REGION_BIOS:
 		if (address < SIZE_BIOS) {
-			// The BIOS can be read only by code running in it
+			// The BIOS can only be read by code running in it.
 			return gba->activeRegion == REGION_BIOS ? le32(&gba->bios[address & ~3u]) : gba->biosPrefetch;
 		}
 		return memoryLoadBad(gba);
@@ -467,11 +472,12 @@ static uint32_t load32Raw(struct GBA* gba, uint32_t address, int* wait, const ui
 		if (gba->cart.vfame) {
 			return cartVfameRead(address, 4);
 		}
-		// Past the end of the cartridge the bus holds the address it was given, halved, in each halfword
+		// Past the end of the cartridge, the bus holds the address it was given, halved, in each
+		// halfword.
 		return (((address & ~3u) >> 1) & 0xFFFF) | ((((address & ~3u) + 2) >> 1) << 16);
 	case REGION_SRAM:
 	case REGION_SRAM_MIRROR: {
-		// The 8-bit save memory answers every byte of a wider read with the same byte
+		// The 8-bit save memory answers every byte of a wider read with the same byte.
 		*wait = gba->waitN16[address >> 24];
 		uint32_t value = memoryLoad8(gba, address, NULL);
 		value |= value << 8;
@@ -483,8 +489,8 @@ static uint32_t load32Raw(struct GBA* gba, uint32_t address, int* wait, const ui
 }
 
 // The loads and stores the exact CPU and compiled code's slow paths use. With cycles, the access is
-// counted into it: wait states, the access itself and a load's extra internal cycle. Without, as for
-// the debugger's and DMA's reads, nothing is counted.
+// counted into it: wait states, the access itself, and a load's extra internal cycle. Without
+// cycles, as for the debugger's and DMA's reads, nothing is counted.
 uint32_t memoryLoad32(struct GBA* gba, uint32_t address, int* cycles) {
 	int wait = 0;
 	uint32_t value = load32Raw(gba, address, &wait, gba->waitN32);
@@ -498,7 +504,7 @@ uint32_t memoryLoad32(struct GBA* gba, uint32_t address, int* cycles) {
 	return ror32(value, (address & 3) << 3);
 }
 
-// A 16-bit load: the aligned halfword, rotated by a byte for an odd address as the CPU sees it
+// A 16-bit load: the aligned halfword, rotated by a byte for an odd address as the CPU sees it.
 uint32_t memoryLoad16(struct GBA* gba, uint32_t address, int* cycles) {
 	uint32_t value;
 	int wait = 0;
@@ -536,7 +542,7 @@ uint32_t memoryLoad16(struct GBA* gba, uint32_t address, int* cycles) {
 	case REGION_ROM0 ... REGION_ROM2_EX:
 		wait = gba->waitN16[address >> 24];
 		if ((address >> 24) == REGION_ROM2_EX && (gba->savedata.type == SAVEDATA_EEPROM || gba->savedata.type == SAVEDATA_EEPROM512)) {
-			// An EEPROM sits at the top of the cartridge space and is read a bit at a time
+			// An EEPROM sits at the top of the cartridge space and is read a bit at a time.
 			value = savedataReadEeprom(gba);
 		} else if ((address & (SIZE_ROM - 2)) < gba->romSize) {
 			value = le16(&gba->rom[address & (SIZE_ROM - 2)]);
@@ -567,7 +573,8 @@ uint32_t memoryLoad16(struct GBA* gba, uint32_t address, int* cycles) {
 	return ror32(value, (address & 1) << 3);
 }
 
-// An 8-bit load. Save memory is reached only this way, and the first access to it says what kind it is.
+// An 8-bit load. Save memory is only reached this way, and the first access to it says what kind it
+// is.
 uint32_t memoryLoad8(struct GBA* gba, uint32_t address, int* cycles) {
 	uint32_t value;
 	int wait = 0;
@@ -615,11 +622,11 @@ uint32_t memoryLoad8(struct GBA* gba, uint32_t address, int* cycles) {
 	case REGION_SRAM:
 	case REGION_SRAM_MIRROR:
 		wait = gba->waitN16[address >> 24];
-		// A read before any Flash command means SRAM
+		// A read before any Flash command means SRAM.
 		if (gba->savedata.type == SAVEDATA_AUTODETECT) {
 			savedataInitSram(gba);
 		}
-		// DMA 0 cannot read the cartridge's save memory
+		// DMA 0 cannot read the cartridge's save memory.
 		if (gba->performingDma == 1) {
 			value = 0;
 			break;
@@ -655,7 +662,7 @@ uint32_t memoryLoad8(struct GBA* gba, uint32_t address, int* cycles) {
 	return value;
 }
 
-// A 32-bit store without the final cycle counting, as load32Raw. Video memory goes through the
+// A 32-bit store without the final cycle counting, like load32Raw. Video memory goes through the
 // renderer's change tracking, and any store may have landed on compiled code.
 static void store32Raw(struct GBA* gba, uint32_t address, uint32_t value, int* wait, int* cycles, const uint8_t* waits) {
 	switch (address >> 24) {
@@ -710,11 +717,11 @@ void memoryStore32(struct GBA* gba, uint32_t address, uint32_t value, int* cycle
 	}
 }
 
-// A 16-bit store
+// A 16-bit store.
 void memoryStore16(struct GBA* gba, uint32_t address, uint16_t value, int* cycles) {
 	int wait = 0;
 	if (((address >> 24) | 1) == (REGION_ROM0 | 1) && (address & 0x00FFFFFF) >= 0x00FD0000 && (address & (SIZE_ROM - 2)) >= gba->romSize) {
-		// A development cartridge's debug output
+		// A development cartridge's debug output.
 		cartPrintWrite(gba, address, value);
 	}
 	switch (address >> 24) {
@@ -778,8 +785,8 @@ void memoryStore16(struct GBA* gba, uint32_t address, uint16_t value, int* cycle
 	}
 }
 
-// An 8-bit store. To save memory, a write to 0x0E005555 is how a Flash command starts; any other
-// first write means SRAM.
+// An 8-bit store. For save memory, a write to 0x0E005555 starts a Flash command; any other first
+// write means SRAM.
 void memoryStore8(struct GBA* gba, uint32_t address, uint8_t value, int* cycles) {
 	int wait = 0;
 	switch (address >> 24) {
@@ -853,36 +860,36 @@ void memoryStore8(struct GBA* gba, uint32_t address, uint8_t value, int* cycles)
 }
 
 enum {
-	// Block transfer directions: before (the address moves first) and down
+	// Block transfer directions: before (the address moves first) and down.
 	LSM_B = 1,
 	LSM_D = 2,
 };
 
-// LDM as mGBA counts it: the registers in mask from ascending addresses, the first access
+// LDM as mGBA counts it: loads the registers in mask from ascending addresses, the first access
 // nonsequential and the rest sequential. Returns the address the base register is left with.
 uint32_t memoryLoadMultiple(struct GBA* gba, uint32_t address, int mask, int direction, int* cycles) {
 	struct CPU* cpu = &gba->cpu;
 	int offset = 4;
 	int popcount = 0;
-	// Down, the lowest address comes first all the same
+	// Going down, the lowest address still comes first.
 	if (direction & LSM_D) {
 		offset = -4;
-		// An empty list moves the address as sixteen registers would
+		// An empty list moves the address as sixteen registers would.
 		popcount = mask ? __builtin_popcount(mask) : 16;
 		address -= (popcount << 2) - 4;
 	}
 	if (direction & LSM_B) {
 		address += offset;
 	}
-	// The transfers are word-aligned; the base keeps its low bits
+	// The transfers are word-aligned; the base keeps its low bits.
 	uint32_t misalign = address & 3;
 	int region = address >> 24;
 	if (region < REGION_SRAM) {
 		address &= ~3u;
 	}
-	// Counted as all sequential, less the difference for the first
+	// Counted as all sequential, minus the difference for the first.
 	int wait = gba->waitS32[region] - gba->waitN32[region];
-	// An empty list transfers the PC and moves the base by 64
+	// An empty list transfers the PC and moves the base by 64.
 	if (!mask) {
 		cpu->r[15] = load32Raw(gba, address, &wait, gba->waitS32);
 		wait += 16;
@@ -911,14 +918,14 @@ uint32_t memoryLoadMultiple(struct GBA* gba, uint32_t address, int mask, int dir
 	return address | misalign;
 }
 
-// STM, the same way. A stored PC is 12 ahead of the instruction in ARM.
+// STM, counted the same way. A stored PC is 12 ahead of the instruction in ARM.
 uint32_t memoryStoreMultiple(struct GBA* gba, uint32_t address, int mask, int direction, int* cycles) {
 	struct CPU* cpu = &gba->cpu;
 	int offset = 4;
 	int popcount = 0;
 	if (direction & LSM_D) {
 		offset = -4;
-		// An empty list moves the address as sixteen registers would
+		// An empty list moves the address as sixteen registers would.
 		popcount = mask ? __builtin_popcount(mask) : 16;
 		address -= (popcount << 2) - 4;
 	}
@@ -973,7 +980,7 @@ uint32_t memoryView32(struct GBA* gba, uint32_t address) {
 	return value;
 }
 
-// The halfword at address out of its word
+// Returns the halfword at address out of its word.
 uint16_t memoryView16(struct GBA* gba, uint32_t address) {
 	uint32_t value = memoryView32(gba, address & ~3u);
 	return address & 2 ? value >> 16 : value;
