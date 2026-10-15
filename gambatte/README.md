@@ -1,8 +1,9 @@
 > **In armGBA:** this is Gambatte-Speedrun's emulation core (`libgambatte` and `common`) from
-> pokemon-speedrunning/gambatte-core at its master of 2026-10-12, without its frontend, tests and
-> build scripts, so the build steps below don't apply here. armGBA's changes are marked `armGBA:` in
-> the source, and six files are its own: `mbc7.cpp`, `pkjd.cpp`, `sachen.cpp`, `tama5.cpp`, `unl.cpp`
-> and `vf001.cpp` in `libgambatte/src/mem/mbc/`. The rest of this file is Gambatte-Speedrun's.
+> pokemon-speedrunning/gambatte-core at commit 5a41a68c25402421fb1983ddadc9faf2418ddb0f (its master
+> as of 2026-10-12), without its frontend, tests and build scripts, so the build steps below don't
+> apply here. armGBA's changes are marked `armGBA:` in the source, and six files are its own:
+> `mbc7.cpp`, `pkjd.cpp`, `sachen.cpp`, `tama5.cpp`, `unl.cpp` and `vf001.cpp` in
+> `libgambatte/src/mem/mbc/`. The rest of this file is Gambatte-Speedrun's.
 
 # Gambatte-Speedrun
 
