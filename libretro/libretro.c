@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// The libretro core: Game Boy Advance games on armGBA, and Game Boy and Game Boy Color games on the
-// Gambatte core in gambatte/ where it builds (ARMGBA_GB)
+// The libretro core. Game Boy Advance games run on armGBA; Game Boy and Game Boy Color games run on
+// the Gambatte core in gambatte/ when it is built in (ARMGBA_GB).
 
 #include "libretro.h"
 
@@ -36,19 +36,23 @@ static retro_log_printf_t logPrintf;
 
 static struct GBA* gba;
 static bool skipBios;
-// What moves a cartridge's tilt sensor or gyro: 0 the left stick, 1 the right, 2 the D-pad
+// What moves a cartridge's tilt sensor or gyro: 0 is the left stick, 1 the right stick, 2 the
+// D-pad.
 static int tiltControl;
-// Turbo A and B: the frames in each press and release, and how many of the first are pressed
+// Turbo timing: each press-and-release cycle lasts turboPeriod frames, and the button is held for
+// the first turboPulse of them.
 static unsigned turboPeriod = 4;
 static unsigned turboPulse = 2;
-// The sunlight Boktai's sensor sees, 0 to 10
+// Sunlight level for Boktai's solar sensor, 0 to 10.
 static int solarLevel = 5;
-// The frontend's rumble, if it has one, and whether the motor is on
+// The frontend's rumble callback, if it has one, and whether the motor is currently on.
 static retro_set_rumble_state_t setRumble;
 static bool rumbling;
-// 0 off, 1 on, 2 on with each frame shown a frame late, which lets drawing overlap the next frame
+// Threaded video: 0 off, 1 on, 2 on with each frame shown one frame late so drawing can overlap the
+// next frame.
 static int threadedVideo;
-// The frame as the Game Boy Advance's screen showed it: every RGB565 color, less the low bit of green
+// Color correction for the Game Boy Advance's screen: a lookup table from each RGB565 color
+// (ignoring green's low bit) to its corrected color.
 static bool colorCorrection;
 static uint16_t* correctedColors;
 static uint16_t correctedFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
@@ -56,26 +60,26 @@ static uint16_t correctedFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
 static bool gameBoy;
 static enum LibretroGbModel gbModel;
 static bool gbColorCorrection;
-// A game running as on a Game Boy Advance is shown as that console shows it: in the middle of its
-// screen, or stretched across it. Cropped, the black around the picture is left out.
+// On the Game Boy Advance model, a Game Boy game is shown as that console shows it: centered on its
+// screen, or stretched across it. When cropped, the black border is left out.
 static bool gbOnAdvance;
 static bool gbStretched;
 static bool gbCropped;
 static uint32_t gbAdvanceFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
 #endif
 
-// The cheat codes the frontend has set, by its index, and the Game Boy Advance operations they decode
-// to. All of them are decoded again, in order, when one changes: a master code changes how the codes
-// after it decode.
+// Cheat codes from the frontend, by index, and the Game Boy Advance operations they decode to. All
+// codes are decoded again, in order, whenever one changes, because a master code changes how the
+// codes after it decode.
 static char** cheatCodes;
 static size_t cheatCodeCount;
 static struct CheatSet cheats;
 #ifdef ARMGBA_GB
-// Whether the memory map the frontend has is a Game Boy Color's, which has more work RAM
+// Whether the memory map given to the frontend is a Game Boy Color's, which has more work RAM.
 static bool gbMapColor;
 #endif
 
-// A line to the frontend's log, if it has one
+// Writes a line to the frontend's log, or to stderr if it has none.
 static void logMessage(enum retro_log_level level, const char* message) {
 	if (logPrintf) {
 		logPrintf(level, "%s\n", message);
@@ -84,14 +88,14 @@ static void logMessage(enum retro_log_level level, const char* message) {
 	}
 }
 
-// A message on screen for a few seconds, and in the log
+// Shows a message on screen for a few seconds and logs it.
 static void showMessage(const char* message) {
 	struct retro_message shown = { message, 180 };
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
 	logMessage(RETRO_LOG_ERROR, message);
 }
 
-// The rumble motor, told to the frontend when it changes
+// Tells the frontend when the rumble motor turns on or off.
 static void updateRumble(bool on) {
 	if (on != rumbling && setRumble) {
 		setRumble(0, RETRO_RUMBLE_STRONG, on ? 0xFFFF : 0);
@@ -100,16 +104,16 @@ static void updateRumble(bool on) {
 	rumbling = on;
 }
 
-// The frontend's callbacks, and this core's options
+// Stores the frontend's callbacks and declares this core's options.
 void retro_set_environment(retro_environment_t callback) {
 	environment = callback;
 	struct retro_log_callback logging;
 	if (callback(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging)) {
 		logPrintf = logging.log;
 	}
-	// The keys and values stay as saved configurations have them; the labels are what the menu shows.
-	// One short list in order of use, since each game sees only its own console's few options: turbo
-	// first, then how it starts and runs, its colors, then its controls.
+	// Option keys and values match saved configurations; the labels are what the menu shows. Each
+	// game sees only its own console's options, listed in order of use: turbo first, then starting
+	// and running, colors, and controls.
 	static struct retro_core_option_v2_definition definitions[] = {
 		{ "armgba_turbo_period", "Turbo Button Period", NULL,
 		  "How many frames apart X and Y press A and B while held, and L3 and R3 press L and R in Game Boy Advance games, as in gambatte's and gpSP's cores.", NULL, NULL,
@@ -212,12 +216,12 @@ void retro_set_input_state(retro_input_state_t callback) {
 	inputState = callback;
 }
 
-// The libretro API this is written to
+// The libretro API version this core implements.
 unsigned retro_api_version(void) {
 	return RETRO_API_VERSION;
 }
 
-// The core's name, version and the file types it loads
+// Reports the core's name, version and the file types it loads.
 void retro_get_system_info(struct retro_system_info* info) {
 	memset(info, 0, sizeof(*info));
 	info->library_name = "armGBA";
@@ -231,8 +235,8 @@ void retro_get_system_info(struct retro_system_info* info) {
 	info->block_extract = false;
 }
 
-// The picture's size: 240x160, or 160x144 for a Game Boy game not running as on a Game Boy Advance.
-// One running as on it, cropped, is 160x144, or 240x144 stretched.
+// The picture size: 240x160, or 160x144 for a Game Boy game. On the Game Boy Advance model, a Game
+// Boy game is 240x160 with the border shown, or 160x144 cropped (240x144 when stretched).
 static void geometry(struct retro_game_geometry* geometry) {
 	geometry->base_width = SCREEN_WIDTH;
 	geometry->base_height = SCREEN_HEIGHT;
@@ -254,7 +258,7 @@ static void geometry(struct retro_game_geometry* geometry) {
 }
 
 #ifdef ARMGBA_GB
-// Tells the frontend the picture's size changed
+// Tells the frontend the picture size has changed.
 static void announceGeometry(void) {
 	struct retro_game_geometry changed;
 	geometry(&changed);
@@ -262,35 +266,36 @@ static void announceGeometry(void) {
 }
 #endif
 
-// Picture size and timing for the game loaded, at the consoles' own frame rates
+// Reports the picture size and timing for the loaded game, at the consoles' own frame rates.
 void retro_get_system_av_info(struct retro_system_av_info* info) {
 	memset(info, 0, sizeof(*info));
 #ifdef ARMGBA_GB
 	gbOnAdvance = gameBoy && libretroGbOnAdvance();
 #endif
 	geometry(&info->geometry);
-	// The Game Boy's frame takes as long as the Game Boy Advance's
+	// A Game Boy frame lasts as long as a Game Boy Advance frame.
 	info->timing.fps = FRAME_RATE;
 	info->timing.sample_rate = AUDIO_RATE;
 }
 
-// Nothing to set up before a game is loaded
+// Nothing needs setting up before a game is loaded.
 void retro_init(void) {
 	cheatsInit(&cheats);
 }
 
-// The frontend is done with the core
+// Frees what the core allocated once the frontend is done with it.
 void retro_deinit(void) {
 	free(correctedColors);
 	correctedColors = NULL;
 	colorCorrection = false;
 }
 
-// One controller, always
+// The core always uses one controller.
 void retro_set_controller_port_device(unsigned port, unsigned device) {
 }
 
-// Pokefan531's measurements of the screen: its primaries mixed in linear light, at a gamma of 2.2
+// Builds the color correction table from Pokefan531's measurements of the screen: its primaries
+// mixed in linear light, at a gamma of 2.2.
 static bool buildCorrectedColors(void) {
 	if (correctedColors) {
 		return true;
@@ -321,7 +326,7 @@ static bool buildCorrectedColors(void) {
 	return true;
 }
 
-// An option's current value, or NULL if the frontend has none
+// Returns an option's current value, or NULL if the frontend has none.
 static const char* option(const char* key) {
 	struct retro_variable variable = { key, NULL };
 	return environment(RETRO_ENVIRONMENT_GET_VARIABLE, &variable) ? variable.value : NULL;
@@ -329,7 +334,7 @@ static const char* option(const char* key) {
 
 static void showButtons(bool forGameBoy);
 
-// Whether the game loaded is a Game Boy one
+// Whether the loaded game is a Game Boy one.
 static bool gameBoyLoaded(void) {
 #ifdef ARMGBA_GB
 	return gameBoy;
@@ -338,7 +343,7 @@ static bool gameBoyLoaded(void) {
 #endif
 }
 
-// Reads every option and applies the ones that can change while a game runs
+// Reads every option and applies the ones that can change while a game runs.
 static void readOptions(void) {
 	const char* value = option("armgba_skip_bios");
 	skipBios = value && !strcmp(value, "enabled");
@@ -401,7 +406,7 @@ static void readOptions(void) {
 	}
 }
 
-// Reads gba_bios.bin from the system directory
+// Loads gba_bios.bin from the system directory.
 static bool loadBios(void) {
 	const char* directory = NULL;
 	if (!environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory) || !directory) {
@@ -423,8 +428,8 @@ static bool loadBios(void) {
 	return gbaLoadBios(gba, bios, sizeof(bios));
 }
 
-// Names the buttons for the console whose game is loaded, and the stick, D-pad or click that works a
-// cartridge's tilt sensor where the Tilt Sensor option puts it
+// Tells the frontend what each button does for the loaded console, including the stick, D-pad or
+// click that moves a cartridge's tilt sensor, wherever the Tilt Sensor option puts it.
 static void showButtons(bool forGameBoy) {
 	static struct retro_input_descriptor shown[24];
 	size_t n = 0;
@@ -442,8 +447,8 @@ static void showButtons(bool forGameBoy) {
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Fast Forward");
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Fast Forward");
 	if (forGameBoy) {
-		// A Game Boy has no L or R; on the Game Boy Advance model they stretch the picture. With the tilt
-		// sensor on the D-pad, L is the flick.
+		// A Game Boy has no L or R; on the Game Boy Advance model they stretch the picture. With
+		// the tilt sensor on the D-pad, L is the flick.
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, tiltControl == 2 ? "Flick (Motion Sensor)" : "Stretch (Game Boy Advance Model)");
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "Stretch (Game Boy Advance Model)");
 	} else {
@@ -469,7 +474,7 @@ static void showButtons(bool forGameBoy) {
 	environment(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, shown);
 }
 
-// The menu lists the options of the console whose game is loaded, and names its buttons
+// Shows only the options of the loaded game's console, and names its buttons.
 static void showOptions(bool forGameBoy) {
 	static const char* const advance[] = { "armgba_skip_bios", "armgba_threaded_video", "armgba_color_correction", "armgba_solar_sensor" };
 	static const char* const gameBoyKeys[] = { "armgba_gb_model", "armgba_gb_boot_rom", "armgba_gb_color_correction", "armgba_gb_screen", "armgba_gb_advance_border", "armgba_gb_screen_off" };
@@ -485,8 +490,8 @@ static void showOptions(bool forGameBoy) {
 }
 
 #ifdef ARMGBA_GB
-// The memory a frontend's achievements and cheat search read, described as mGBA's and
-// gambatte-libretro's cores describe it
+// Describes memory for the frontend's achievements and cheat search, the same way mGBA's and
+// gambatte-libretro's cores do.
 static void announceMemory(void) {
 	struct retro_memory_descriptor descriptors[11];
 	size_t count = 0;
@@ -521,7 +526,8 @@ static void announceMemory(void) {
 }
 
 #ifdef ARMGBA_GB
-// A restart or a state can make the machine a Game Boy Color, or no longer one
+// A restart or a loaded state can switch the machine to or from a Game Boy Color, which changes the
+// memory map.
 static void checkGameBoyMemory(void) {
 	if (gbMapColor != libretroGbIsColor()) {
 		announceMemory();
@@ -529,13 +535,13 @@ static void checkGameBoyMemory(void) {
 }
 #endif
 
-// Game Boy and Game Boy Color games are told from Game Boy Advance ones by file extension
+// Game Boy and Game Boy Color games are told apart from Game Boy Advance games by file extension.
 static bool isGameBoy(const char* path) {
 	const char* dot = path ? strrchr(path, '.') : NULL;
 	return dot && (!strcasecmp(dot, ".gb") || !strcasecmp(dot, ".gbc"));
 }
 
-// Starts a Game Boy or Game Boy Color game on the Gambatte side
+// Starts a Game Boy or Game Boy Color game on the Gambatte side.
 static bool loadGameBoy(const struct retro_game_info* game) {
 	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_XRGB8888;
 	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
@@ -558,7 +564,7 @@ static bool loadGameBoy(const struct retro_game_info* game) {
 }
 #endif
 
-// Starts a game on whichever side it belongs to
+// Starts a game on the side it belongs to.
 bool retro_load_game(const struct retro_game_info* game) {
 	if (!game || !game->data) {
 		return false;
@@ -578,7 +584,7 @@ bool retro_load_game(const struct retro_game_info* game) {
 	if (!gba) {
 		return false;
 	}
-	// RetroArch loads the save file into the save memory after this and writes it back from there
+	// RetroArch loads the save file into save memory after this, and writes it back from there.
 	gba->savedata.backed = true;
 	gba->renderer.rgb565 = true;
 	if (!loadBios() || !gbaLoadRom(gba, game->data, game->size)) {
@@ -597,12 +603,12 @@ bool retro_load_game(const struct retro_game_info* game) {
 	return true;
 }
 
-// No multi-file content
+// Multi-file content isn't supported.
 bool retro_load_game_special(unsigned type, const struct retro_game_info* info, size_t count) {
 	return false;
 }
 
-// Frees whichever machine was running, and the cheat codes it had
+// Frees whichever machine was running, and its cheat codes.
 void retro_unload_game(void) {
 	updateRumble(false);
 	cheatsClear(&cheats, NULL);
@@ -624,9 +630,10 @@ void retro_unload_game(void) {
 	}
 }
 
-// The frontend's Restart
+// The frontend's Restart.
 void retro_reset(void) {
-	// The menu's Restart can come right after an option changed, before a frame has read it
+	// Restart can come straight after an option change, before a frame has read it, so read the
+	// options first.
 	readOptions();
 #ifdef ARMGBA_GB
 	if (gameBoy) {
@@ -638,8 +645,9 @@ void retro_reset(void) {
 	gbaReset(gba, skipBios);
 }
 
-// What the motion sensors read: a stick, or the D-pad all the way over, each way from -0x7FFF to
-// 0x7FFF; and whether the stick is clicked, or L held with the D-pad
+// Reads the motion sensor control: a stick, or the D-pad pushed all the way, giving -0x7FFF to
+// 0x7FFF on each axis. Also reports whether the stick is clicked, or L is held when using the
+// D-pad.
 static void readMotion(uint16_t keys, int* x, int* y, bool* click) {
 	if (tiltControl == 2) {
 		*x = keys & 0x10 ? 0x7FFF : keys & 0x20 ? -0x7FFF : 0;
@@ -654,8 +662,8 @@ static void readMotion(uint16_t keys, int* x, int* y, bool* click) {
 }
 
 #ifdef ARMGBA_GB
-// The tilt sensor of a Game Boy cartridge that has one (Kirby Tilt 'n' Tumble). Clicking the stick is
-// a flick of the console upwards, which is how Kirby jumps.
+// Feeds the tilt sensor of a Game Boy cartridge that has one (Kirby Tilt 'n' Tumble). Clicking the
+// stick flicks the console upwards, which is how Kirby jumps.
 static void readTilt(uint16_t keys) {
 	static bool held;
 	int x;
@@ -670,9 +678,10 @@ static void readTilt(uint16_t keys) {
 }
 #endif
 
-// A Game Boy Advance cartridge's sensors, read before each frame. The tilt sensor and the gyro, whose
-// turn is the control's left and right, are scaled as mGBA's SDL frontend scales a stick. The light
-// sensor reads mGBA's levels, and the right stick pushed up or down changes the level a step.
+// Feeds a Game Boy Advance cartridge's sensors before each frame. The tilt sensor and the gyro
+// (whose turn is the control's left and right) are scaled as mGBA's SDL frontend scales a stick.
+// The light sensor uses mGBA's levels, and pushing the right stick up or down changes the level by
+// one step.
 static void readSensors(uint16_t keys) {
 	int devices = gba->gpio.devices;
 	if (devices & (HW_TILT | HW_GYRO)) {
@@ -702,10 +711,8 @@ static void readSensors(uint16_t keys) {
 	}
 }
 
-// KEYINPUT's bits, pressed as 1
-
-// A turbo button held presses its button for the first frames of every turbo period, as gambatte's
-// core does
+// Returns whether a held turbo button presses its button this frame: pressed for the first frames
+// of every turbo period, as in gambatte's core.
 static bool turbo(unsigned button, unsigned* counter) {
 	if (!inputState(0, RETRO_DEVICE_JOYPAD, 0, button)) {
 		*counter = 0;
@@ -716,13 +723,13 @@ static bool turbo(unsigned button, unsigned* counter) {
 	return down;
 }
 
-// L3 and R3 held press a Game Boy Advance game's L and R
+// Turbo L and R: L3 and R3 held press a Game Boy Advance game's L and R.
 static uint16_t readTurboShoulders(void) {
 	static unsigned turboL, turboR;
 	return (turbo(RETRO_DEVICE_ID_JOYPAD_L3, &turboL) ? 0x200 : 0) | (turbo(RETRO_DEVICE_ID_JOYPAD_R3, &turboR) ? 0x100 : 0);
 }
 
-// The buttons held, a bit each in the order of the GBA's KEYINPUT register
+// Returns the buttons held, one bit each in the order of the GBA's KEYINPUT register.
 static uint16_t readKeys(void) {
 	static const unsigned buttons[10] = {
 		RETRO_DEVICE_ID_JOYPAD_A,
@@ -742,11 +749,11 @@ static uint16_t readKeys(void) {
 			keys |= 1 << i;
 		}
 	}
-	// X and Y held press A and B
+	// Turbo A and B: X and Y held press A and B.
 	static unsigned turboA, turboB;
 	keys |= turbo(RETRO_DEVICE_ID_JOYPAD_X, &turboA) ? 0x1 : 0;
 	keys |= turbo(RETRO_DEVICE_ID_JOYPAD_Y, &turboB) ? 0x2 : 0;
-	// As mGBA's core does by default: opposite directions at once press neither
+	// As in mGBA's core by default, pressing opposite directions together presses neither.
 	if ((keys & 0x30) == 0x30) {
 		keys &= ~0x30;
 	}
@@ -757,8 +764,9 @@ static uint16_t readKeys(void) {
 }
 
 #ifdef ARMGBA_GB
-// L or R switches a game running as on a Game Boy Advance between its own size and stretched across
-// the screen, as that console's shoulder buttons do. With the tilt sensor on the D-pad, L is its flick.
+// On the Game Boy Advance model, L or R switches between the game's own size and stretched across
+// the screen, like that console's shoulder buttons. With the tilt sensor on the D-pad, only R does,
+// since L is the flick.
 static void readStretch(uint16_t keys) {
 	static bool held;
 	bool now = keys & (tiltControl == 2 ? 0x100 : 0x300);
@@ -771,8 +779,8 @@ static void readStretch(uint16_t keys) {
 	held = now;
 }
 
-// The picture as a Game Boy Advance shows it on black: in the middle of its 240x160 screen, or 240x144
-// with every other column doubled
+// Returns the picture as a Game Boy Advance shows it, on black: centered on its 240x160 screen, or
+// stretched to 240x144 by doubling every other column.
 static const uint32_t* advanceFrame(const uint32_t* picture) {
 	uint32_t* row = gbAdvanceFrame + (SCREEN_HEIGHT - LIBRETRO_GB_HEIGHT) / 2 * SCREEN_WIDTH;
 	int const border = (SCREEN_WIDTH - LIBRETRO_GB_WIDTH) / 2;
@@ -791,7 +799,8 @@ static const uint32_t* advanceFrame(const uint32_t* picture) {
 }
 #endif
 
-// L2 or R2 held runs the game at the frontend's fast-forward speed (its Maximum Run Speed), as in gpSP's core
+// Holding L2 or R2 fast-forwards at the frontend's fast-forward speed (its Maximum Run Speed), as
+// in gpSP's core.
 static void readFastForward(void) {
 	static bool held;
 	bool now = inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2) || inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2);
@@ -803,7 +812,7 @@ static void readFastForward(void) {
 	environment(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &override);
 }
 
-// The frame from BGR555 to RGB565
+// Runs one frame of the game and hands its picture and sound to the frontend.
 void retro_run(void) {
 	bool updated = false;
 	if (environment(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated) {
@@ -818,7 +827,7 @@ void retro_run(void) {
 		uint16_t keys = readKeys();
 		readTilt(keys);
 		const uint32_t* picture = libretroGbRunFrame(keys, &samples, &frames);
-		// A restart or a state can change the model
+		// A restart or a loaded state can change the model.
 		if (gbOnAdvance != libretroGbOnAdvance()) {
 			gbOnAdvance = !gbOnAdvance;
 			announceGeometry();
@@ -829,7 +838,7 @@ void retro_run(void) {
 		if (gbOnAdvance && !gbCropped) {
 			videoRefresh(advanceFrame(picture), SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint32_t));
 		} else if (gbOnAdvance && gbStretched) {
-			// The stretched picture without the black above and below it
+			// The stretched picture, without the black above and below it.
 			videoRefresh(advanceFrame(picture) + (SCREEN_HEIGHT - LIBRETRO_GB_HEIGHT) / 2 * SCREEN_WIDTH, SCREEN_WIDTH, LIBRETRO_GB_HEIGHT,
 			             SCREEN_WIDTH * sizeof(uint32_t));
 		} else {
@@ -861,7 +870,7 @@ void retro_run(void) {
 }
 
 // Save states: the size, then saving and loading. A Game Boy Advance state is the machine's whole
-// state; a Game Boy one is Gambatte's.
+// state; a Game Boy state is Gambatte's.
 size_t retro_serialize_size(void) {
 #ifdef ARMGBA_GB
 	if (gameBoy) {
@@ -895,7 +904,7 @@ bool retro_unserialize(const void* data, size_t size) {
 	return gba && gbaLoadState(gba, data, size);
 }
 
-// Every code set, decoded again in order
+// Decodes every code again, in order.
 static void applyCheatCodes(void) {
 #ifdef ARMGBA_GB
 	if (gameBoy) {
@@ -915,8 +924,8 @@ static void applyCheatCodes(void) {
 	}
 }
 
-// Cheat codes: GameShark, Action Replay and CodeBreaker for the Game Boy Advance, Game Genie and
-// GameShark for the Game Boy
+// Cheat codes: GameShark, Action Replay and CodeBreaker for the Game Boy Advance; Game Genie and
+// GameShark for the Game Boy.
 void retro_cheat_reset(void) {
 	for (size_t i = 0; i < cheatCodeCount; ++i) {
 		free(cheatCodes[i]);
@@ -942,13 +951,13 @@ void retro_cheat_set(unsigned index, bool enabled, const char* code) {
 	applyCheatCodes();
 }
 
-// NTSC timing, in libretro's terms
+// NTSC timing, in libretro's terms.
 unsigned retro_get_region(void) {
 	return RETRO_REGION_NTSC;
 }
 
-// Memory the frontend may read or keep: the cartridge's save memory, which it loads and saves as
-// the save file, a Game Boy cartridge's clock as the .rtc file, and work RAM for achievements and cheats
+// Memory the frontend may read or keep: the cartridge's save memory (loaded and saved as the save
+// file), a Game Boy cartridge's clock (as the .rtc file), and work RAM for achievements and cheats.
 void* retro_get_memory_data(unsigned id) {
 #ifdef ARMGBA_GB
 	if (gameBoy) {
@@ -970,8 +979,8 @@ void* retro_get_memory_data(unsigned id) {
 	}
 }
 
-// Save memory is as large as the largest save until the game shows its type, as in mGBA's core, so a
-// save file from either core loads
+// Until the game shows its save type, save memory is as large as the largest save type, as in
+// mGBA's core, so a save file from either core loads.
 size_t retro_get_memory_size(unsigned id) {
 #ifdef ARMGBA_GB
 	if (gameBoy) {
