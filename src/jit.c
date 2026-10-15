@@ -2282,11 +2282,8 @@ uint32_t jitMultiplyCarry(struct GBA* gba, uint32_t kind) {
 	return cpuMultiplyCarryLow(multiplicand, multiplier, accumLo);
 }
 
-static struct Jit* statsJit;
-
-// With ARMGBA_STATS set, prints the counts at exit.
-static void printStats(void) {
-	struct Jit* jit = statsJit;
+// With ARMGBA_STATS set, prints the counts when the recompiler is freed.
+static void printStats(const struct Jit* jit) {
 	fprintf(stderr, "code writes: %llu other shape, %llu patchable, %llu same shape but compiled in; flushes: %llu requested %llu full\n",
 	        (unsigned long long) jit->writeReasons[0], (unsigned long long) jit->writeReasons[1], (unsigned long long) jit->writeReasons[2],
 	        (unsigned long long) jit->flushReasons[0], (unsigned long long) jit->flushReasons[1]);
@@ -2343,10 +2340,6 @@ bool jitInit(struct GBA* gba) {
 	}
 	jit->codeStart = jit->codeNext;
 	backendReset(jit);
-	if (getenv("ARMGBA_STATS")) {
-		statsJit = jit;
-		atexit(printStats);
-	}
 	return true;
 }
 
@@ -2355,6 +2348,9 @@ void jitDeinit(struct GBA* gba) {
 	struct Jit* jit = gba->jit;
 	if (!jit) {
 		return;
+	}
+	if (getenv("ARMGBA_STATS")) {
+		printStats(jit);
 	}
 	freeAll(jit);
 	for (int kind = 0; kind < CODE_KINDS; ++kind) {
