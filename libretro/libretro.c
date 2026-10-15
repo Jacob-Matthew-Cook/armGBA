@@ -41,8 +41,9 @@ static int tiltControl;
 // Turbo A and B: the frames in each press and release, and how many of the first are pressed
 static unsigned turboPeriod = 4;
 static unsigned turboPulse = 2;
-// The sunlight Boktai's sensor sees, 0 to 10, and the frontend's rumble, if it has one
+// The sunlight Boktai's sensor sees, 0 to 10
 static int solarLevel = 5;
+// The frontend's rumble, if it has one, and whether the motor is on
 static retro_set_rumble_state_t setRumble;
 static bool rumbling;
 // 0 off, 1 on, 2 on with each frame shown a frame late, which lets drawing overlap the next frame
