@@ -4,10 +4,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// Save states: the machine as it stands between two instructions, for the same game in the same build.
-// The state is struct GBA as it lies in memory. What in it belongs to the host rather than the machine
-// (the game, the BIOS, the recompiler's bookkeeping, pointers) stays as it is on loading, and the
-// event queue is kept as the order of the events in it.
+// Save states: the machine as it stands between two instructions, for the same game in the same
+// build. The state is struct GBA as it lies in memory. The parts that belong to the host rather
+// than the machine (the game, the BIOS, the recompiler's bookkeeping, pointers) stay as they are on
+// loading, and the event queue is stored as the order of its events.
 
 #include "gba.h"
 #include "jit-internal.h"
@@ -17,23 +17,23 @@
 
 enum {
 	STATE_MAGIC = 0x3553424A,
-	// The events of the machine, as events() lists them
+	// The machine's events, as events() lists them.
 	EVENTS = 12 + 4 + 12 + 7 + 3,
 };
 
 struct StateHeader {
 	uint32_t magic;
 	uint32_t size;
-	// Where the saved struct GBA was, for the pointers into it
+	// Where the saved struct GBA was, to fix up pointers into it.
 	uint64_t base;
-	// The queue, soonest first, as indices into events(); queued of them
+	// The queue, soonest first, as indices into events(); queued is how many.
 	uint8_t queue[EVENTS];
 	uint8_t queued;
-	// Whether the video event is an H-blank's or a line's
+	// Whether the video event is an H-blank's or a line's.
 	bool hblank;
 };
 
-// Every event inside the machine, in a fixed order, so that a state can name them by number
+// Lists every event inside the machine in a fixed order, so a state can name them by number.
 static void events(struct GBA* gba, struct Event* all[EVENTS]) {
 	int n = 0;
 	for (int i = 0; i < 4; ++i) {
@@ -57,12 +57,12 @@ static void events(struct GBA* gba, struct Event* all[EVENTS]) {
 	all[n++] = &gba->sio.completeEvent;
 }
 
-// A state is a header and the whole struct GBA
+// A state is a header and the whole struct GBA.
 size_t gbaStateSize(void) {
 	return sizeof(struct StateHeader) + sizeof(struct GBA);
 }
 
-// With a render thread, the lines drawn so far are in its copy of the renderer
+// With a render thread, the lines drawn so far are in its copy of the renderer.
 static void takeRenderer(struct GBA* gba, struct Renderer* out) {
 	if (!gba->renderThread) {
 		return;
@@ -77,13 +77,13 @@ static void takeRenderer(struct GBA* gba, struct Renderer* out) {
 	out->copy = false;
 }
 
-// Copies the machine as it is. The header records where the struct was, so that pointers into it
-// can be moved when it is loaded, and which events were queued, by number.
+// Copies the machine as it is. The header records where the struct was, so pointers into it can be
+// moved when it is loaded, and which events were queued, by number.
 void gbaSaveState(struct GBA* gba, void* state) {
 	struct StateHeader header = { .magic = STATE_MAGIC, .size = sizeof(struct GBA), .base = (uintptr_t) gba };
 	struct Event* all[EVENTS];
 	events(gba, all);
-	// Events from outside the machine, a frontend's, aren't part of it
+	// Events from outside the machine, such as a frontend's, aren't part of it.
 	for (struct Event* event = gba->timing.root; event; event = event->next) {
 		for (int i = 0; i < EVENTS; ++i) {
 			if (all[i] == event) {
@@ -99,13 +99,13 @@ void gbaSaveState(struct GBA* gba, void* state) {
 	takeRenderer(gba, &saved->renderer);
 }
 
-// A pointer into the saved struct GBA, for this one
+// Converts a pointer into the saved struct GBA into one for this struct.
 static uint8_t* moved(struct GBA* gba, const struct StateHeader* header, const uint8_t* pointer) {
 	return pointer ? (uint8_t*) gba + ((uintptr_t) pointer - header->base) : NULL;
 }
 
 // Whether compiled code covers a word that the state holds differently, or was compiled for other
-// wait states
+// wait states.
 static bool codeChanged(const struct GBA* gba, const struct GBA* saved) {
 	if (gba->videoCode || gba->prefetchEnabled != saved->prefetchEnabled || memcmp(gba->waitN16, saved->waitN16, sizeof(gba->waitN16)) ||
 	    memcmp(gba->waitS16, saved->waitS16, sizeof(gba->waitS16)) || memcmp(gba->waitN32, saved->waitN32, sizeof(gba->waitN32)) ||
@@ -125,8 +125,8 @@ static bool codeChanged(const struct GBA* gba, const struct GBA* saved) {
 	return false;
 }
 
-// The reverse. Refused if the header is not this version's. What belongs to the host, such as the
-// ROM, the compiled code and the frontend's callbacks, is kept from the running machine.
+// Loads a state. It is refused if the header isn't this version's. What belongs to the host, such
+// as the ROM, the compiled code and the frontend's callbacks, is kept from the running machine.
 bool gbaLoadState(struct GBA* gba, const void* state, size_t size) {
 	struct StateHeader header;
 	if (size < gbaStateSize()) {
@@ -137,7 +137,7 @@ bool gbaLoadState(struct GBA* gba, const void* state, size_t size) {
 		return false;
 	}
 	const struct GBA* saved = (const struct GBA*) ((const uint8_t*) state + sizeof(header));
-	// A multi-game cartridge's size is that of the game showing
+	// A multi-game cartridge's size is that of the game showing.
 	if ((saved->romSize != gba->romSize && !gba->cart.multi) || saved->multibootSize != gba->multibootSize) {
 		return false;
 	}
@@ -153,7 +153,7 @@ bool gbaLoadState(struct GBA* gba, const void* state, size_t size) {
 	events(host, was);
 	memcpy(gba, saved, sizeof(*gba));
 
-	// The host's side of it
+	// The host's side of it.
 	gba->rom = host->rom;
 	gba->multiboot = host->multiboot;
 	gba->cart.file = host->cart.file;
@@ -190,7 +190,7 @@ bool gbaLoadState(struct GBA* gba, const void* state, size_t size) {
 	memcpy(gba->ewramCode, host->ewramCode, sizeof(gba->ewramCode));
 	gba->videoCode = host->videoCode;
 
-	// The events: what they call is the host's, when they come and in what order the state's
+	// The events: what they call is the host's; when they come and in what order is the state's.
 	for (int i = 0; i < EVENTS; ++i) {
 		all[i]->callback = was[i]->callback;
 		all[i]->context = was[i]->context;

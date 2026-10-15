@@ -8,9 +8,9 @@
 
 #include <limits.h>
 
-// Same ordering rules as mGBA's mTiming: events due at the same time run in priority order
+// The same ordering rules as mGBA's mTiming: events due at the same time run in priority order.
 
-// No events, the clock at zero
+// No events, and the clock at zero.
 void timingClear(struct GBA* gba) {
 	gba->timing.root = NULL;
 	gba->timing.reroot = NULL;
@@ -18,7 +18,8 @@ void timingClear(struct GBA* gba) {
 	gba->timing.globalCycles = 0;
 }
 
-// Events are a list in time order, and by priority where times are equal. when is in cycles from now.
+// Events are a list in time order, and by priority where times are equal. when is in cycles from
+// now.
 void timingSchedule(struct GBA* gba, struct Event* event, int32_t when) {
 	struct Timing* timing = &gba->timing;
 	int32_t nextEvent = when + gba->cpu.cycles;
@@ -40,12 +41,12 @@ void timingSchedule(struct GBA* gba, struct Event* event, int32_t when) {
 	*previous = event;
 }
 
-// The same with when on the clock itself
+// The same, with when on the clock itself.
 void timingScheduleAbsolute(struct GBA* gba, struct Event* event, int32_t when) {
 	timingSchedule(gba, event, when - timingCurrentTime(gba));
 }
 
-// Takes an event off the list if it is on it
+// Takes an event off the list if it is on it.
 void timingDeschedule(struct GBA* gba, struct Event* event) {
 	struct Timing* timing = &gba->timing;
 	struct Event** previous = timing->reroot ? &timing->reroot : &timing->root;
@@ -60,7 +61,7 @@ void timingDeschedule(struct GBA* gba, struct Event* event) {
 	}
 }
 
-// Whether an event is waiting
+// Whether an event is waiting.
 bool timingIsScheduled(struct GBA* gba, struct Event* event) {
 	struct Event* next = gba->timing.root ? gba->timing.root : gba->timing.reroot;
 	for (; next; next = next->next) {
@@ -71,7 +72,7 @@ bool timingIsScheduled(struct GBA* gba, struct Event* event) {
 	return false;
 }
 
-// Cycles until the first event, as the CPU's cycle counter counts them
+// Returns the cycles until the first event, as the CPU's cycle counter counts them.
 int32_t timingNextEvent(struct GBA* gba) {
 	struct Event* next = gba->timing.root;
 	if (!next) {
@@ -80,12 +81,12 @@ int32_t timingNextEvent(struct GBA* gba) {
 	return next->when - gba->timing.masterCycles - gba->cpu.cycles;
 }
 
-// Cycles from now until an event that is scheduled
+// Returns the cycles from now until a scheduled event.
 int32_t timingUntil(struct GBA* gba, struct Event* event) {
 	return event->when - gba->timing.masterCycles - gba->cpu.cycles;
 }
 
-// Makes the event loop return after the event running now, with the rest kept for the next call
+// Makes the event loop return after the event running now, keeping the rest for the next call.
 void timingInterrupt(struct GBA* gba) {
 	if (!gba->timing.root) {
 		return;
@@ -94,7 +95,7 @@ void timingInterrupt(struct GBA* gba) {
 	gba->timing.root = NULL;
 }
 
-// The clock moves on by cycles and every event due runs, each told how late it is. Returns the
+// Moves the clock on by cycles and runs every event due, each told how late it is. Returns the
 // cycles until the next one.
 int32_t timingTick(struct GBA* gba, int32_t cycles) {
 	struct Timing* timing = &gba->timing;
@@ -130,14 +131,14 @@ bool timingDeferrable(struct GBA* gba, int32_t time) {
 	return true;
 }
 
-// After compiled code moved nextEvent up to leave early
+// After compiled code moved nextEvent up to leave early.
 void timingResetNextEvent(struct GBA* gba) {
 	struct Event* next = gba->timing.root;
 	gba->cpu.nextEvent = next ? (int32_t) (next->when - gba->timing.masterCycles) : INT_MAX;
 }
 
 // Called when the CPU's cycle counter reaches nextEvent: the counter is folded into the clock, the
-// due events run, and a halted CPU is moved straight to the next event
+// due events run, and a halted CPU is moved straight to the next event.
 void processEvents(struct GBA* gba) {
 	struct CPU* cpu = &gba->cpu;
 	++gba->eventRuns;
@@ -149,8 +150,8 @@ void processEvents(struct GBA* gba) {
 		cpu->cycles = 0;
 		nextEvent = timingTick(gba, cycles < nextEvent ? nextEvent : cycles);
 		cpu->nextEvent = nextEvent;
-		// Halted, the CPU sleeps until IE & IF, whatever IME and the I flag say; waking takes a cycle.
-		// DMA still runs.
+		// While halted, the CPU sleeps until IE & IF, whatever IME and the I flag say; waking takes
+		// a cycle. DMA still runs.
 		if (cpu->halted && !gba->performingDma) {
 			if (gba->irq.available) {
 				cpu->halted = 0;

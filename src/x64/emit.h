@@ -37,7 +37,7 @@ struct Opnd {
 };
 
 // An operand is a register, or memory at a base register plus a displacement, with an optional
-// scaled index register
+// scaled index register.
 static inline struct Opnd R(int reg) {
 	return (struct Opnd) { .mem = false, .reg = reg };
 }
@@ -50,7 +50,7 @@ static inline struct Opnd MI(int base, int index, int scale, int32_t disp) {
 	return (struct Opnd) { .mem = true, .base = base, .index = index, .scale = scale, .disp = disp };
 }
 
-// Bytes, 32-bit and 64-bit values into the code stream
+// Writes bytes, and 32-bit and 64-bit values, into the code stream.
 static inline void e8(struct Emitter* e, uint8_t b) {
 	*e->p++ = b;
 }
@@ -90,7 +90,8 @@ static inline void emitRex(struct Emitter* e, int width, int reg, struct Opnd rm
 	}
 }
 
-// The ModRM byte and what follows it: SIB byte and displacement, in the shortest form that fits
+// Writes the ModRM byte and what follows it: the SIB byte and displacement, in the shortest form
+// that fits.
 static inline void emitModrm(struct Emitter* e, int reg, struct Opnd rm) {
 	reg &= 7;
 	if (!rm.mem) {
@@ -122,7 +123,7 @@ static inline void emitModrm(struct Emitter* e, int reg, struct Opnd rm) {
 	}
 }
 
-// opcode with a ModRM: [66] [REX] op... modrm
+// An opcode with a ModRM: [66] [REX] op... modrm
 static inline void emitOp(struct Emitter* e, int width, const uint8_t* op, int opLen, int reg, struct Opnd rm) {
 	if (width == 2) {
 		e8(e, 0x66);
@@ -154,7 +155,7 @@ enum AluX {
 	X_CMP = 7,
 };
 
-// alu dst, src: dst is a register or memory, src a register
+// alu dst, src: dst is a register or memory, src a register.
 static inline void xAluRR(struct Emitter* e, int alu, int width, struct Opnd dst, int src) {
 	emitOp1(e, width, (alu << 3) | (width == 1 ? 0 : 1), src, dst);
 }
@@ -182,7 +183,7 @@ static inline void xAluI(struct Emitter* e, int alu, int width, struct Opnd dst,
 	}
 }
 
-// Register to register; nothing is emitted for a register to itself
+// Register to register; nothing is emitted for a register to itself.
 static inline void xMovRR(struct Emitter* e, int width, int dst, int src) {
 	if (dst == src && width != 4) {
 		return;
@@ -190,7 +191,7 @@ static inline void xMovRR(struct Emitter* e, int width, int dst, int src) {
 	emitOp1(e, width, width == 1 ? 0x88 : 0x89, src, R(dst));
 }
 
-// Memory to register and register to memory
+// Memory to register, and register to memory.
 static inline void xLoad(struct Emitter* e, int width, int dst, struct Opnd src) {
 	emitOp1(e, width, width == 1 ? 0x8A : 0x8B, dst, src);
 }
@@ -199,7 +200,7 @@ static inline void xStore(struct Emitter* e, int width, struct Opnd dst, int src
 	emitOp1(e, width, width == 1 ? 0x88 : 0x89, src, dst);
 }
 
-// A 32-bit constant into a register: XOR for zero, which changes the flags
+// Loads a 32-bit constant into a register, using XOR for zero, which changes the flags.
 static inline void xMovI(struct Emitter* e, int dst, uint32_t imm) {
 	if (!imm) {
 		xAluRR(e, X_XOR, 4, R(dst), dst);
@@ -210,21 +211,21 @@ static inline void xMovI(struct Emitter* e, int dst, uint32_t imm) {
 	e32(e, imm);
 }
 
-// Doesn't touch flags
+// Doesn't touch the flags.
 static inline void xMovIKeepFlags(struct Emitter* e, int dst, uint32_t imm) {
 	emitRex(e, 4, 0, R(dst), false);
 	e8(e, 0xB8 | (dst & 7));
 	e32(e, imm);
 }
 
-// A 64-bit constant, for C function addresses
+// Loads a 64-bit constant, for C function addresses.
 static inline void xMovI64(struct Emitter* e, int dst, uint64_t imm) {
 	emitRex(e, 8, 0, R(dst), false);
 	e8(e, 0xB8 | (dst & 7));
 	e64(e, imm);
 }
 
-// A constant into memory
+// Stores a constant into memory.
 static inline void xStoreI(struct Emitter* e, int width, struct Opnd dst, uint32_t imm) {
 	emitOp1(e, width, width == 1 ? 0xC6 : 0xC7, 0, dst);
 	if (width == 1) {
@@ -237,12 +238,12 @@ static inline void xStoreI(struct Emitter* e, int width, struct Opnd dst, uint32
 	}
 }
 
-// LEA, used as an add that leaves the flags alone
+// LEA, used as an add that leaves the flags alone.
 static inline void xLea(struct Emitter* e, int width, int dst, struct Opnd src) {
 	emitOp1(e, width, 0x8D, dst, src);
 }
 
-// Extends a byte or halfword into a 32-bit register; byte registers 4-7 need an empty REX prefix
+// Extends a byte or halfword into a 32-bit register; byte registers 4-7 need an empty REX prefix.
 static inline void xExtend(struct Emitter* e, uint8_t op, int dst, int srcWidth, struct Opnd src) {
 	struct Opnd probe = src;
 	int rex = (dst & 8) ? 4 : 0;
@@ -268,7 +269,7 @@ static inline void xMovsx(struct Emitter* e, int dst, int srcWidth, struct Opnd 
 	xExtend(e, srcWidth == 1 ? 0xBE : 0xBF, dst, srcWidth, src);
 }
 
-// TEST with a register and with a constant
+// TEST with a register and with a constant.
 static inline void xTest(struct Emitter* e, int width, struct Opnd a, int b) {
 	emitOp1(e, width, width == 1 ? 0x84 : 0x85, b, a);
 }
@@ -292,7 +293,7 @@ enum ShiftX {
 	X_SAR = 7,
 };
 
-// Shifts and rotates by a constant, and by CL
+// Shifts and rotates by a constant, and by CL.
 static inline void xShiftI(struct Emitter* e, int shift, int width, struct Opnd dst, int amount) {
 	if (amount == 1) {
 		emitOp1(e, width, width == 1 ? 0xD0 : 0xD1, shift, dst);
@@ -306,7 +307,7 @@ static inline void xShiftCl(struct Emitter* e, int shift, int width, struct Opnd
 	emitOp1(e, width, width == 1 ? 0xD2 : 0xD3, shift, dst);
 }
 
-// NOT and NEG
+// NOT and NEG.
 static inline void xNot(struct Emitter* e, int width, struct Opnd dst) {
 	emitOp1(e, width, 0xF7, 2, dst);
 }
@@ -329,7 +330,7 @@ static inline void xImul(struct Emitter* e, int width, int dst, struct Opnd src)
 	emitOp2(e, width, 0x0F, 0xAF, dst, src);
 }
 
-// SETcc and CMOVcc
+// SETcc and CMOVcc.
 static inline void xSetcc(struct Emitter* e, int cc, struct Opnd dst) {
 	emitOp2(e, 1, 0x0F, 0x90 | cc, 0, dst);
 }
@@ -338,7 +339,7 @@ static inline void xCmov(struct Emitter* e, int cc, int width, int dst, struct O
 	emitOp2(e, width, 0x0F, 0x40 | cc, dst, src);
 }
 
-// BT of a constant bit into the carry flag, and BSR
+// BT of a constant bit into the carry flag, and BSR.
 static inline void xBtI(struct Emitter* e, int width, struct Opnd dst, int bit) {
 	emitOp2(e, width, 0x0F, 0xBA, 4, dst);
 	e8(e, bit);
@@ -370,7 +371,7 @@ static inline void xClc(struct Emitter* e) {
 	e8(e, 0xF8);
 }
 
-// RET, PUSH and POP
+// RET, PUSH and POP.
 static inline void xRet(struct Emitter* e) {
 	e8(e, 0xC3);
 }
@@ -389,7 +390,7 @@ static inline void xPop(struct Emitter* e, int reg) {
 	e8(e, 0x58 | (reg & 7));
 }
 
-// Calls and jumps through a register or memory
+// Calls and jumps through a register or memory.
 static inline void xCallR(struct Emitter* e, int reg) {
 	emitOp1(e, 4, 0xFF, 2, R(reg));
 }
@@ -402,7 +403,7 @@ static inline void xJmpM(struct Emitter* e, struct Opnd m) {
 	emitOp1(e, 4, 0xFF, 4, m);
 }
 
-// Relative branches return the address of their 32-bit displacement for patching
+// Relative branches return the address of their 32-bit displacement, for patching.
 static inline uint8_t* xJmp(struct Emitter* e, const void* target) {
 	e8(e, 0xE9);
 	uint8_t* site = e->p;
@@ -425,13 +426,13 @@ static inline uint8_t* xJcc(struct Emitter* e, int cc, const void* target) {
 	return site;
 }
 
-// Points the jump or call at a site to target
+// Points the jump or call at a site to target.
 static inline void patchRel32(uint8_t* site, const void* target) {
 	int32_t rel = (int32_t) ((const uint8_t*) target - (site + 4));
 	memcpy(site, &rel, 4);
 }
 
-// Points a forward jump at the code about to be emitted
+// Points a forward jump at the code about to be emitted.
 static inline void patchHere(struct Emitter* e, uint8_t* site) {
 	patchRel32(site, e->p);
 }

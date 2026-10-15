@@ -7,7 +7,7 @@
 
 #include <string.h>
 
-// Cartridges whose save type or extra hardware can't be detected, from mGBA's override list
+// Cartridges whose save type or extra hardware can't be detected, from mGBA's override list.
 
 struct Override {
 	char id[5];
@@ -128,7 +128,7 @@ static const uint32_t pokemonTable[] = {
 	0x61641576, 0xAEAC73E6, 0xF0815EE7,
 };
 
-// CRC-32, for checking the header's logo and for the cartridges the list knows by checksum
+// CRC-32, for checking the header's logo and for the cartridges the list knows by checksum.
 static uint32_t crc32(const uint8_t* data, size_t size) {
 	uint32_t crc = ~0u;
 	for (size_t i = 0; i < size; ++i) {
@@ -140,12 +140,12 @@ static uint32_t crc32(const uint8_t* data, size_t size) {
 	return ~crc;
 }
 
-// The Nintendo logo in the header, which the BIOS checks before it starts a cartridge
+// The Nintendo logo in the header, which the BIOS checks before it starts a cartridge.
 bool overridesLogoValid(struct GBA* gba) {
 	return gba->rom && gba->romSize >= 0xA0 && crc32(&gba->rom[4], 0x9C) == 0xD0BEB55E;
 }
 
-// The save chip as the save library the game was built with names it. EEPROM is left to its first
+// The save chip, as named by the save library the game was built with. EEPROM is left to its first
 // access, which also tells its size.
 static void detectSaveLibrary(struct GBA* gba) {
 	static const struct {
@@ -175,14 +175,14 @@ static void detectSaveLibrary(struct GBA* gba) {
 	}
 }
 
-// Returns the hardware flags to emulate
+// Returns the hardware flags to emulate.
 int overridesApply(struct GBA* gba) {
 	const char* rom = (const char*) gba->rom;
 	if (!rom || gba->romSize < 0xC0) {
 		return HW_NONE;
 	}
 	if (gba->cart.multi) {
-		// Its menu's header is another game's; the cartridge itself has plain save memory
+		// Its menu's header is another game's; the cartridge itself has plain save memory.
 		savedataForceType(gba, SAVEDATA_SRAM);
 		return HW_NONE;
 	}
@@ -194,7 +194,7 @@ int overridesApply(struct GBA* gba) {
 			known = known || crc == pokemonTable[i];
 		}
 		if (!known) {
-			// ROM hacks of these get Flash 1M, the clock, and VBA's pin behavior (bit 16)
+			// ROM hacks of these get Flash 1M, the clock, and VBA's pin behavior (bit 16).
 			savedataForceType(gba, SAVEDATA_FLASH1M);
 			return HW_RTC | 0x10000;
 		}
@@ -210,7 +210,7 @@ int overridesApply(struct GBA* gba) {
 		}
 	}
 	if (rom[0xAC] == 'F') {
-		// Classic NES Series
+		// Classic NES Series.
 		savedataForceType(gba, SAVEDATA_EEPROM);
 	} else {
 		detectSaveLibrary(gba);

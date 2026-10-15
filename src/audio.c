@@ -8,15 +8,15 @@
 
 #include <string.h>
 
-// Direct sound FIFOs and the mixer. Timing follows mGBA, since FIFO refills are DMA transfers
-// that take CPU time.
+// Direct sound FIFOs and the mixer. Timing follows mGBA, since FIFO refills are DMA transfers that
+// take CPU time.
 
 enum {
 	SAMPLE_INTERVAL = CPU_FREQUENCY / 0x4000,
 	MASTER_VOLUME = 0x100,
 };
 
-// SOUNDBIAS: the level the output swings around, and how many bits and how fast the PWM output is
+// SOUNDBIAS: the level the output swings around, and the PWM output's bit depth and rate.
 static int biasLevel(uint16_t soundbias) {
 	return soundbias & 0x3FE;
 }
@@ -29,7 +29,7 @@ void audioInit(struct GBA* gba) {
 	psgInit(gba);
 }
 
-// Sound off, FIFOs empty, the default bias, and the frame sequencer started
+// Resets the sound: off, FIFOs empty, the default bias, and the frame sequencer started.
 void audioReset(struct GBA* gba) {
 	struct Audio* audio = &gba->audio;
 	psgReset(gba);
@@ -57,7 +57,8 @@ void audioReset(struct GBA* gba) {
 	audio->outCount = 0;
 }
 
-// The FIFO channels' volume, panning, timer and reset bits, and the tone channels' share of the mix
+// The FIFO channels' volume, panning, timer and reset bits, and the tone channels' share of the
+// mix.
 void audioWriteSoundcntHi(struct GBA* gba, uint16_t value) {
 	struct Audio* audio = &gba->audio;
 	audioSync(gba);
@@ -81,7 +82,7 @@ void audioWriteSoundcntHi(struct GBA* gba, uint16_t value) {
 	}
 }
 
-// The master switch
+// The master switch.
 void audioWriteSoundcntX(struct GBA* gba, uint16_t value) {
 	struct Audio* audio = &gba->audio;
 	audioSync(gba);
@@ -102,7 +103,7 @@ void audioWriteSoundcntX(struct GBA* gba, uint16_t value) {
 	}
 }
 
-// The bias, and with it the rate samples are made at
+// Sets the bias, which also sets the rate samples are made at.
 void audioWriteSoundbias(struct GBA* gba, uint16_t value) {
 	struct Audio* audio = &gba->audio;
 	int32_t timestamp = timingCurrentTime(gba);
@@ -119,13 +120,13 @@ void audioWriteSoundbias(struct GBA* gba, uint16_t value) {
 	}
 }
 
-// Channel 3's wave RAM is two banks: a game reads and writes the one that is not playing
+// Channel 3's wave RAM is two banks: a game reads and writes the one that isn't playing.
 static int waveBank(struct GBA* gba) {
-	// With the hardware off, bank 0 acts selected, so access goes to bank 1
+	// With the hardware off, bank 0 counts as selected, so access goes to bank 1.
 	return gba->audio.enable ? !gba->audio.psg.ch3.bank : 1;
 }
 
-// Channel 3 is brought up to date first, since what it plays is about to change
+// Channel 3 is brought up to date first, since what it plays is about to change.
 void audioWriteWaveRam(struct GBA* gba, int address, uint32_t value) {
 	audioSync(gba);
 	int bank = waveBank(gba);
@@ -140,8 +141,8 @@ uint32_t audioReadWaveRam(struct GBA* gba, int address) {
 	return gba->audio.psg.ch3.wavedata32[address | (bank * 4)];
 }
 
-// Four bytes into a FIFO, which is a ring of words. The timers' quiet overflows were planned around
-// its old fill, so they are planned again.
+// Writes four bytes into a FIFO, which is a ring of words. The timers' quiet overflows were planned
+// around its old fill level, so they are planned again.
 uint32_t audioWriteFifo(struct GBA* gba, uint32_t address, uint32_t value) {
 	struct Fifo* channel;
 	switch (address) {
@@ -163,9 +164,9 @@ uint32_t audioWriteFifo(struct GBA* gba, uint32_t address, uint32_t value) {
 	return channel->fifo[channel->fifoWrite];
 }
 
-// A timer overflow clocks a FIFO: with room for four words it asks its DMA channel for more, and its
-// next byte becomes the sample. The byte holds from this overflow to the end of the output sample
-// under way, which is what the loop over samples[] fills in.
+// A timer overflow clocks a FIFO: with room for four words, it asks its DMA channel for more, and
+// its next byte becomes the sample. The byte holds from this overflow to the end of the output
+// sample under way, which the loop over samples[] fills in.
 void audioSampleFifo(struct GBA* gba, int fifoId, uint32_t time) {
 	struct Audio* audio = &gba->audio;
 	audioCatchUp(gba, time, true);
@@ -204,7 +205,7 @@ void audioSampleFifo(struct GBA* gba, int fifoId, uint32_t time) {
 	}
 }
 
-// The mixed sample with the bias added, clipped to the 10-bit output's range
+// Returns the mixed sample with the bias added, clipped to the 10-bit output's range.
 static inline int16_t applyBias(int bias, int sample) {
 	sample += bias;
 	if (sample >= 0x400) {
@@ -215,9 +216,10 @@ static inline int16_t applyBias(int bias, int sample) {
 	return ((sample - bias) * MASTER_VOLUME * 3) >> 4;
 }
 
-// One output sample: the tone channels and the two FIFOs mixed, biased, and written to the buffer
-// the frontend takes each frame. The settings hold for the whole call, so they are read once: the
-// tone channels' catching up, a call, would otherwise have them read again for every sample.
+// Makes one output sample: the tone channels and the two FIFOs mixed, biased, and written to the
+// buffer the frontend takes each frame. The settings hold for the whole call, so they are read
+// once; otherwise the tone channels' catching up, which is a call, would make them be read again
+// for every sample.
 void audioSample(struct GBA* gba, int32_t timestamp) {
 	struct Audio* audio = &gba->audio;
 	timestamp -= audio->lastSample;
@@ -271,14 +273,15 @@ void audioSample(struct GBA* gba, int32_t timestamp) {
 	}
 }
 
-// The end of a sample interval
+// The end of a sample interval.
 static void finishInterval(struct GBA* gba, int32_t time) {
 	struct Audio* audio = &gba->audio;
 	audioSample(gba, time);
 	int samples = 2 << resolution(audio->soundbias);
 	memset(audio->chA.samples, audio->chA.samples[samples - 1], sizeof(audio->chA.samples));
 	memset(audio->chB.samples, audio->chB.samples[samples - 1], sizeof(audio->chB.samples));
-	// The frontend gets 32768 Hz at any resolution: two samples an interval, each the mean of its half
+	// The frontend gets 32768 Hz at any resolution: two samples per interval, each the mean of its
+	// half.
 	int half = samples / 2;
 	for (int h = 0; h < 2 && audio->outCount < sizeof(audio->out) / sizeof(*audio->out); ++h) {
 		int left = 0;
@@ -291,24 +294,24 @@ static void finishInterval(struct GBA* gba, int32_t time) {
 	}
 }
 
-// The CPU can't see the mixer, so intervals are finished in batches rather than as events
+// The CPU can't see the mixer, so intervals are finished in batches rather than as events.
 void audioCatchUp(struct GBA* gba, int32_t time, bool inclusive) {
 	struct Audio* audio = &gba->audio;
 	while ((int32_t) (audio->nextSample - time) < (inclusive ? 1 : 0)) {
-		// The FIFOs' samples before the interval ends go in it
+		// The FIFOs' samples from before the interval ends go in it.
 		timerCatchUp(gba, audio->nextSample, false);
 		finishInterval(gba, audio->nextSample);
 		audio->nextSample += SAMPLE_INTERVAL;
 	}
 }
 
-// Before a change to what the mixer reads: the sound up to now goes out as it was, the FIFOs' samples
-// due by now in it
+// Called before a change to what the mixer reads: the sound up to now goes out as it was, with the
+// FIFOs' samples due by now in it.
 void audioSync(struct GBA* gba) {
 	int32_t now = timingCurrentTime(gba);
 	audioCatchUp(gba, now, true);
 	timerCatchUp(gba, now, true);
 	audioSample(gba, now);
-	// What comes next changes it
+	// What comes next changes it.
 	gba->audio.psg.cached = false;
 }
