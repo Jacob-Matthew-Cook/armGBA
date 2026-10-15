@@ -32,25 +32,25 @@ static const int8_t hostReg[16] = { RBX, RSI, RDI, R8, R9, R10, R11, R12, -1, -1
 static const int pinned[] = { RBX, RSI, RDI, R8, R9, R10, R11, R12, R13 };
 static const int pinnedGuest[] = { 0, 1, 2, 3, 4, 5, 6, 7, 13 };
 
-// Where a guest register is: its host register, or its slot in the CPU state
+// Where a guest register lives: its host register, or its slot in the CPU state.
 static struct Opnd guest(int r) {
 	return hostReg[r] >= 0 ? R(hostReg[r]) : M(R15, REG(r));
 }
 
-// A call to a C function anywhere in the address space
+// Calls a C function anywhere in the address space.
 static void callAbs(struct Emitter* e, const void* fn) {
 	xMovI64(e, RAX, (uint64_t) (uintptr_t) fn);
 	xCallR(e, RAX);
 }
 
-// Points the branch at site somewhere else: how blocks are linked and unlinked
+// Points the branch at site somewhere else. This is how blocks are linked and unlinked.
 void backendPatchJump(uint8_t* site, const void* target) {
 	patchRel32(site, target);
 }
 
-// Shared routines
+// Shared routines.
 
-// The prefetch buffer's base as C code keeps it, from jitBase and back
+// Converts the prefetch buffer's base between jitBase and the form C code keeps.
 static void storeBase(struct Emitter* e, int scratch) {
 	xLoad(e, 4, scratch, M(R15, OFF(jitBase)));
 	xAluRM(e, X_ADD, 4, scratch, M(R15, OFF(cpu.nextEvent)));
@@ -58,7 +58,7 @@ static void storeBase(struct Emitter* e, int scratch) {
 	xStore(e, 4, M(R15, OFF(prefetcher.base)), scratch);
 }
 
-// The prefetch buffer's start time, in the same terms as the cycle counter
+// The prefetch buffer's start time, in the same terms as the cycle counter.
 static void loadBase(struct Emitter* e, int scratch) {
 	xLoad(e, 4, scratch, M(R15, OFF(prefetcher.base)));
 	xAluRM(e, X_SUB, 4, scratch, M(R15, OFF(timing.masterCycles)));
@@ -67,7 +67,7 @@ static void loadBase(struct Emitter* e, int scratch) {
 }
 
 // The routine that stores the guest registers held in host registers, and the cycle counter, to the
-// CPU state
+// CPU state.
 static void emitSpill(struct Emitter* e) {
 	for (int i = 0; i < 9; ++i) {
 		xStore(e, 4, M(R15, REG(pinnedGuest[i])), pinned[i]);
@@ -94,7 +94,7 @@ static void emitSpill(struct Emitter* e) {
 	xRet(e);
 }
 
-// Preserves rax
+// Preserves rax.
 static void emitReload(struct Emitter* e) {
 	for (int i = 0; i < 9; ++i) {
 		xLoad(e, 4, pinned[i], M(R15, REG(pinnedGuest[i])));
@@ -116,8 +116,8 @@ static void emitReload(struct Emitter* e) {
 	xRet(e);
 }
 
-// The routine C calls to run compiled code: saves the host's registers, loads the guest's, and jumps
-// to the block it was given
+// The routine C calls to run compiled code: saves the host's registers, loads the guest's, and
+// jumps to the given block.
 static void emitEnter(struct Jit* jit, struct Emitter* e) {
 	xPush(e, RBX);
 	xPush(e, RBP);
@@ -133,7 +133,7 @@ static void emitEnter(struct Jit* jit, struct Emitter* e) {
 	xJmpR(e, RAX);
 }
 
-// The way back out: guest registers stored, the host's restored, the reason returned
+// The way back out: stores the guest registers, restores the host's, and returns the reason.
 static void emitExit(struct Jit* jit, struct Emitter* e) {
 	xLoad(e, 8, RSP, M(R15, OFF(hostStack)));
 	xCall(e, jit->spillRoutine);
@@ -148,7 +148,7 @@ static void emitExit(struct Jit* jit, struct Emitter* e) {
 	xRet(e);
 }
 
-// Looks the block for a key up and jumps to it; compiles it first if need be
+// Looks up the block for a key and jumps to it, compiling it first if needed.
 static void emitDispatchKey(struct Jit* jit, struct Emitter* e) {
 	xMovRR(e, 4, RDX, RAX);
 	xShiftI(e, X_SHR, 4, R(RDX), 13);
@@ -165,8 +165,8 @@ static void emitDispatchKey(struct Jit* jit, struct Emitter* e) {
 	xJmp(e, jit->exitRoutine);
 }
 
-// memorySetActiveRegion's bookkeeping for a PC write into a region compiled code refills itself:
-// edx = new region
+// memorySetActiveRegion's bookkeeping for a PC write into a region compiled code refills itself;
+// edx holds the new region.
 static uint8_t* emitRegionUpdate(struct Emitter* e) {
 	uint8_t* start = e->p;
 	xLoad(e, 4, RCX, M(R15, OFF(activeRegion)));
@@ -184,19 +184,20 @@ static uint8_t* emitRegionUpdate(struct Emitter* e) {
 	return start;
 }
 
-// eax = target, edx = its region, at least 8: busRefillCartridge's two fetches, when nothing can come
-// between them; the others go to the exact CPU through slow
+// busRefillCartridge's two fetches, for eax = target and edx = its region (at least 8), when
+// nothing can come between them; other refills go to the exact CPU through slow.
 static void emitCartridgeRefill(struct Jit* jit, struct Emitter* e, bool thumb, uint8_t* regionUpdate, uint8_t** slow, int* slowCount) {
 	int size = thumb ? 2 : 4;
 	xAluI(e, X_CMP, 4, R(RDX), REGION_ROM2_EX);
 	slow[(*slowCount)++] = xJcc(e, CC_A, NULL);
 	xAluI(e, X_CMP, 1, M(R15, OFF(prefetchDisabled)), 0);
 	slow[(*slowCount)++] = xJcc(e, CC_NE, NULL);
-	// A new burst at the second fetch
+	// A new burst starts at the second fetch.
 	xLea(e, 4, RCX, M(RAX, size));
 	xTestI(e, 4, R(RCX), 0x1FFFF);
 	slow[(*slowCount)++] = xJcc(e, CC_E, NULL);
-	// The stop of a read in flight: prefetcherStop's table, by how far into the reads
+	// The cost of stopping a read in flight: prefetcherStop's table, indexed by how far into the
+	// read it is.
 	xMovI(e, RCX, 0);
 	xAluI(e, X_CMP, 1, M(R15, OFF(cpu.prefetching)), 0);
 	uint8_t* stopped = xJcc(e, CC_E, NULL);
@@ -219,7 +220,7 @@ static void emitCartridgeRefill(struct Jit* jit, struct Emitter* e, bool thumb, 
 	xMovI(e, RCX, 0);
 	patchHere(e, stopped);
 	patchHere(e, counted);
-	// Then the nonsequential fetch and the sequential one
+	// Then the nonsequential fetch and the sequential one.
 	xMovRR(e, 4, RDX, RAX);
 	xShiftI(e, X_SHR, 4, R(RDX), 24);
 	xMovzx(e, RDX, 1, MI(R15, RDX, 1, thumb ? OFF(writePcCost16) : OFF(writePcCost32)));
@@ -229,7 +230,7 @@ static void emitCartridgeRefill(struct Jit* jit, struct Emitter* e, bool thumb, 
 	xStoreI(e, 1, M(R15, OFF(cpu.prefetching)), 0);
 	xAluI(e, X_CMP, 1, M(R15, OFF(prefetchEnabled)), 0);
 	uint8_t* off = xJcc(e, CC_E, NULL);
-	// Started by the first fetch, which the second waits on
+	// Started by the first fetch, which the second waits on.
 	xStoreI(e, 1, M(R15, OFF(cpu.prefetching)), 1);
 	xStoreI(e, 4, M(R15, OFF(prefetcher.width)), size);
 	xMovRR(e, 4, RDX, RAX);
@@ -250,7 +251,7 @@ static void emitCartridgeRefill(struct Jit* jit, struct Emitter* e, bool thumb, 
 	xStoreI(e, 1, M(R15, OFF(cpu.fetchSeq)), 1);
 	xStoreI(e, 1, M(R15, OFF(lastAccessDma)), 0);
 	xStoreI(e, 4, M(R15, OFF(dmaIdleCredit)), 0);
-	// The IRQ check after a refill uses the mask as it is
+	// After a refill, the IRQ check uses the mask as it is now.
 	xTestI(e, 4, M(R15, OFF(cpu.cpsr)), PSR_I);
 	xSetcc(e, CC_NE, M(R15, OFF(cpu.irqMasked)));
 	xMovRR(e, 4, RDX, RAX);
@@ -265,9 +266,9 @@ static void emitCartridgeRefill(struct Jit* jit, struct Emitter* e, bool thumb, 
 	slow[(*slowCount)++] = xJmp(e, NULL);
 }
 
-// eax = target address in the given instruction set. Compiled code refills from BIOS, RAM, palette,
-// VRAM and OAM itself; refills elsewhere, or that an event would fall inside, are the exact CPU's.
-// Like mGBA, an ARM-state PC keeps bit 1; fetches ignore it but PC reads see it
+// Branches to eax, a target address in the given instruction set. Compiled code refills from BIOS,
+// RAM, palette, VRAM and OAM itself; refills elsewhere, or ones an event would fall inside, go to
+// the exact CPU. As in mGBA, an ARM-state PC keeps bit 1: fetches ignore it, but PC reads see it.
 static void emitDispatchPc(struct Jit* jit, struct Emitter* e, bool thumb, uint8_t* regionUpdate) {
 	xAluI(e, X_AND, 4, R(RAX), ~1);
 	xMovRR(e, 4, RDX, RAX);
@@ -312,7 +313,7 @@ static void emitDispatchPc(struct Jit* jit, struct Emitter* e, bool thumb, uint8
 
 static void emitPreserveCall(struct Emitter* e, const void* fn, void (*args)(struct Emitter*), bool aligned);
 
-// BX's target: bit 0 chooses the instruction set, the CPSR follows, then the block is looked up
+// BX's target: bit 0 chooses the instruction set, the CPSR follows, then the block is looked up.
 static void emitDispatchBx(struct Jit* jit, struct Emitter* e) {
 	xTestI(e, 1, R(RAX), 1);
 	uint8_t* toThumb = xJcc(e, CC_NE, NULL);
@@ -327,20 +328,22 @@ static void emitDispatchBx(struct Jit* jit, struct Emitter* e) {
 	xJmp(e, jit->dispatchThumb);
 }
 
-// Register-specified shifts: edx = value, ecx = shift register; returns edx = result, ecx = carry
+// Register-specified shifts take edx = value and ecx = the shift register, and return edx = result
+// and ecx = carry.
 static void carryFromFlags(struct Emitter* e) {
 	xMovRR(e, 4, RCX, RBP);
 	xShiftI(e, X_SHR, 4, R(RCX), 8);
 	xAluI(e, X_AND, 4, R(RCX), 1);
 }
 
-// The host's carry flag into a register
+// Copies the host's carry flag into a register.
 static void setcEcx(struct Emitter* e) {
 	xSetcc(e, CC_B, R(RCX));
 	xMovzx(e, RCX, 1, R(RCX));
 }
 
-// The shared routines for shifts by a register, which have ARM's rules for amounts of 32 and over
+// The shared routines for shifts by a register, which follow ARM's rules for amounts of 32 and
+// over.
 static uint8_t* emitShiftRoutine(struct Emitter* e, int type) {
 	uint8_t* start = e->p;
 	xAluI(e, X_AND, 4, R(RCX), 0xFF);
@@ -402,8 +405,8 @@ static uint8_t* emitShiftRoutine(struct Emitter* e, int type) {
 	return start;
 }
 
-// Calls a C function from inside a routine, keeping guest registers, rax and rdx: ecx in, ecx out.
-// The stack is 16-byte aligned on entry when aligned is set, otherwise 8 bytes off.
+// Calls a C function from inside a routine, preserving guest registers, rax and rdx: ecx in, ecx
+// out. The stack is 16-byte aligned on entry when aligned is set, otherwise 8 bytes off.
 static void emitPreserveCall(struct Emitter* e, const void* fn, void (*args)(struct Emitter*), bool aligned) {
 	static const int saved[] = { RAX, RDX, RSI, RDI, R8, R9, R10, R11 };
 	for (int i = 0; i < 8; ++i) {
@@ -431,22 +434,23 @@ static void emitPreserveCall(struct Emitter* e, const void* fn, void (*args)(str
 	}
 }
 
-// The helper's second argument, into the register the C calling convention passes it in
+// Moves the helper's second argument into the register the C calling convention passes it in.
 static void multiplyCarryArgs(struct Emitter* e) {
 	xMovRR(e, 4, RSI, RCX);
 }
 
-// Likewise for the helper called when a store lands on compiled code
+// The same for the helper called when a store lands on compiled code.
 static void codeWriteArgs(struct Emitter* e) {
 	xMovRR(e, 4, RSI, RCX);
 }
 
-// Memory access routines. Each inline path takes the bus's cycles for its region, a load's internal
-// cycle included; one an event would fall inside goes to the exact CPU's access instead.
+// Memory access routines. Each inline path takes the bus's cycles for its region, including a
+// load's internal cycle. An access an event would fall inside goes to the exact CPU's access
+// instead.
 
-// Through bus.c, events and all; ecx = address, edx = a value to store
+// Goes through bus.c, events and all; ecx = address, edx = a value to store.
 static void emitSlowPath(struct Emitter* e, int kind) {
-	// The return address identifies the guest instruction for open-bus reads
+	// The return address identifies the guest instruction for open-bus reads.
 	xLoad(e, 8, RAX, M(RSP, 0));
 	xStore(e, 8, M(R15, OFF(siteReturn)), RAX);
 	xLoad(e, 4, RAX, M(R15, OFF(cpu.nextEvent)));
@@ -457,7 +461,7 @@ static void emitSlowPath(struct Emitter* e, int kind) {
 	for (int i = 0; i < 6; ++i) {
 		xPush(e, saved[i]);
 	}
-	// The address, for sign extension; this also aligns the stack
+	// The address, for sign extension; this also aligns the stack.
 	xPush(e, RCX);
 	xMovRR(e, 8, RDI, R15);
 	xMovI(e, RSI, kind);
@@ -486,7 +490,7 @@ static void emitSlowPath(struct Emitter* e, int kind) {
 	xRet(e);
 }
 
-// Bytes moved by each kind of memory routine
+// Bytes moved by each kind of memory routine.
 static int accessSize(int kind) {
 	switch (kind) {
 	case MEM_LOAD32:
@@ -501,7 +505,7 @@ static int accessSize(int kind) {
 	}
 }
 
-// eax = loaded data at [base + rax], ecx still holding the address
+// Loads data into eax from [base + rax]; ecx still holds the address.
 static void emitLoadData(struct Emitter* e, int kind, int base, int32_t disp) {
 	switch (kind) {
 	case MEM_LOAD32:
@@ -546,8 +550,8 @@ static void emitLoadData(struct Emitter* e, int kind, int base, int32_t disp) {
 	}
 }
 
-// Off to the slow path unless the access ends before the next event: cycles is fixed, plus the wait
-// table entry at tableOffset when there is one. Uses eax.
+// Goes to the slow path unless the access ends before the next event: cycles is fixed, plus the
+// wait table entry at tableOffset when there is one. Uses eax.
 static void emitGuard(struct Emitter* e, int cycles, int32_t tableOffset, uint8_t** toSlow, int* slowCount) {
 	if (tableOffset < 0) {
 		xAluI(e, X_CMP, 4, R(R14), -cycles);
@@ -560,16 +564,16 @@ static void emitGuard(struct Emitter* e, int cycles, int32_t tableOffset, uint8_
 	toSlow[(*slowCount)++] = xJcc(e, CC_NS, NULL);
 }
 
-// VRAM below the mirrors; ecx = address
+// VRAM below the mirrors; ecx = address.
 static void emitVramAccess(struct Emitter* e, int kind, uint8_t** toSlow, int* slowCount) {
 	bool store = kind >= MEM_STORE32;
 	int size = accessSize(kind);
 	int cycles = (size == 4 ? 2 : 1) + (store ? 0 : 1);
-	// While the display keeps the CPU out of VRAM the wait is C's to work out
+	// While the display keeps the CPU out of VRAM, C works out the wait.
 	xAluI(e, X_CMP, 1, M(R15, OFF(vramStall)), 0);
 	toSlow[(*slowCount)++] = xJcc(e, CC_NE, NULL);
 	if (store) {
-		// Once a line's H-blank has come, C draws it first
+		// Once a line's H-blank has come, C draws the line first.
 		xLea(e, 4, RAX, M(R14, cycles));
 		xAluRM(e, X_ADD, 4, RAX, M(R15, OFF(cpu.nextEvent)));
 		xAluRM(e, X_ADD, 4, RAX, M(R15, OFF(timing.masterCycles)));
@@ -588,7 +592,7 @@ static void emitVramAccess(struct Emitter* e, int kind, uint8_t** toSlow, int* s
 	toSlow[(*slowCount)++] = xJcc(e, CC_GE, NULL);
 	xAluI(e, X_AND, 4, R(RAX), 0x1FFFF & ~(size - 1));
 	if (store) {
-		// The renderer hears about stores that change something, by page
+		// Tells the renderer about stores that change something, by page.
 		xAluRM(e, X_CMP, size, RDX, MI(R15, RAX, 1, OFF(vram)));
 		uint8_t* same = xJcc(e, CC_E, NULL);
 		xStore(e, size, MI(R15, RAX, 1, OFF(vram)), RDX);
@@ -602,12 +606,12 @@ static void emitVramAccess(struct Emitter* e, int kind, uint8_t** toSlow, int* s
 	xRet(e);
 }
 
-// A byte to VRAM, as memoryStore8 has it: into both halves of its halfword below the sprite tiles, and
-// nowhere among them; ecx = address, dl = value
+// A byte store to VRAM, as memoryStore8 does it: into both halves of its halfword below the sprite
+// tiles, and nowhere among them. ecx = address, dl = value.
 static void emitVramByteStore(struct Emitter* e, uint8_t** toSlow, int* slowCount) {
 	xAluI(e, X_CMP, 1, M(R15, OFF(vramStall)), 0);
 	toSlow[(*slowCount)++] = xJcc(e, CC_NE, NULL);
-	// Once a line's H-blank has come, C draws it first
+	// Once a line's H-blank has come, C draws the line first.
 	xLea(e, 4, RAX, M(R14, 1));
 	xAluRM(e, X_ADD, 4, RAX, M(R15, OFF(cpu.nextEvent)));
 	xAluRM(e, X_ADD, 4, RAX, M(R15, OFF(timing.masterCycles)));
@@ -617,7 +621,7 @@ static void emitVramByteStore(struct Emitter* e, uint8_t** toSlow, int* slowCoun
 	toSlow[(*slowCount)++] = xJcc(e, CC_NE, NULL);
 	xAluI(e, X_CMP, 4, R(R14), -1);
 	toSlow[(*slowCount)++] = xJcc(e, CC_GE, NULL);
-	// The sprite tiles start at 0x10000, or 0x14000 in the bitmap modes
+	// The sprite tiles start at 0x10000, or 0x14000 in the bitmap modes.
 	xMovRR(e, 4, RAX, RCX);
 	xAluI(e, X_AND, 4, R(RAX), 0x1FFFF);
 	xMovzx(e, RCX, 2, M(R15, OFF(io)));
@@ -636,7 +640,7 @@ static void emitVramByteStore(struct Emitter* e, uint8_t** toSlow, int* slowCoun
 	xMovRR(e, 4, RCX, RDX);
 	xShiftI(e, X_SHL, 4, R(RDX), 8);
 	xAluRR(e, X_OR, 4, R(RDX), RCX);
-	// The renderer hears about stores that change something, by page
+	// Tells the renderer about stores that change something, by page.
 	xAluRM(e, X_CMP, 2, RDX, MI(R15, RAX, 1, OFF(vram)));
 	uint8_t* same = xJcc(e, CC_E, NULL);
 	xStore(e, 2, MI(R15, RAX, 1, OFF(vram)), RDX);
@@ -649,13 +653,14 @@ static void emitVramByteStore(struct Emitter* e, uint8_t** toSlow, int* slowCoun
 	xRet(e);
 }
 
-// romCode: for cartridge code with the prefetch buffer, whose data accesses there stop it
+// romCode is set for cartridge code with the prefetch buffer, whose data accesses to the cartridge
+// stop it.
 static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, bool romCode) {
 	uint8_t* start = e->p;
 	bool store = kind >= MEM_STORE32;
 	int size = accessSize(kind);
 	int32_t waitN = size == 4 ? OFF(waitN32) : OFF(waitN16);
-	// The access and a load's internal cycle
+	// The access and a load's internal cycle.
 	int fixed = store ? 1 : 2;
 	uint8_t* toSlow[24];
 	int slowCount = 0;
@@ -697,8 +702,8 @@ static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, boo
 			xShiftI(e, X_SHR, 4, R(RAX), 2);
 			xAluI(e, X_CMP, 1, MI(R15, RAX, 1, map), 0);
 			uint8_t* clean = xJcc(e, CC_E, NULL);
-			// Code that checks the word when it runs needs the helper only for a store into the two
-			// instructions after it (its r15 is in the state), which are already prefetched
+			// Code that checks the word when it runs only needs the helper for a store into the two
+			// instructions after it (its r15 is in the state), which are already prefetched.
 			xAluI(e, X_CMP, 1, MI(R15, RAX, 1, map), CODE_MAP_CHECKED);
 			uint8_t* other = xJcc(e, CC_NE, NULL);
 			xLoad(e, 4, RDX, M(R15, REG(15)));
@@ -728,14 +733,14 @@ static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, boo
 	}
 
 	if (toRom) {
-		// Data from the cartridge stops the prefetch buffer, which costs nothing outside cartridge code
-		// and is never running in cartridge code compiled without it
+		// Data from the cartridge stops the prefetch buffer. That costs nothing outside cartridge
+		// code, and the buffer is never running in cartridge code compiled without it.
 		patchHere(e, toRom);
 		xMovRR(e, 4, RAX, RCX);
 		xAluI(e, X_AND, 4, R(RAX), SIZE_ROM - size);
 		xAluRM(e, X_CMP, 4, RAX, M(R15, OFF(romSize)));
 		toSlow[slowCount++] = xJcc(e, CC_AE, NULL);
-		// An EEPROM answers in the cartridge's last region, whatever the cartridge's size
+		// An EEPROM answers in the cartridge's last region, whatever the cartridge's size.
 		xMovRR(e, 4, RAX, RCX);
 		xShiftI(e, X_SHR, 4, R(RAX), 24);
 		xAluI(e, X_CMP, 4, R(RAX), REGION_ROM2_EX);
@@ -745,7 +750,7 @@ static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, boo
 		xAluI(e, X_CMP, 4, M(R15, OFF(savedata.type)), SAVEDATA_EEPROM512);
 		toSlow[slowCount++] = xJcc(e, CC_E, NULL);
 		patchHere(e, notTop);
-		// The cycle a stop can cost, in edx
+		// The cycle a stop can cost, in edx.
 		xAluRR(e, X_XOR, 4, R(RDX), RDX);
 		if (romCode) {
 			xAluI(e, X_CMP, 1, M(R15, OFF(cpu.prefetching)), 0);
@@ -794,9 +799,9 @@ static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, boo
 	}
 
 	if (toIo) {
-		// Registers games poll that ioRead returns as stored: KEYINPUT, and VCOUNT and DISPSTAT until
-		// the next line or H-blank, IF until an HBlank IRQ request it works out, when ioRead brings
-		// them up to date
+		// Registers games poll that ioRead returns as stored: KEYINPUT; VCOUNT and DISPSTAT until
+		// the next line or H-blank; and IF until an H-blank IRQ request it works out, when ioRead
+		// brings them up to date.
 		static const uint32_t plain[] = { REG_DISPCNT, REG_DISPSTAT, REG_VCOUNT, REG_IF, REG_KEYINPUT };
 		patchHere(e, toIo);
 		emitGuard(e, fixed, -1, toSlow, &slowCount);
@@ -837,20 +842,20 @@ static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, boo
 	return start;
 }
 
-// Bodies and cold code share the one run of memory here
+// Bodies and cold code share one run of memory here.
 void backendReset(struct Jit* jit) {
 	(void) jit;
 }
 
-// This backend keeps a block's cold code with its body, so nothing is on a cold side
+// This backend keeps a block's cold code with its body, so nothing is on a cold side.
 bool backendColdSide(const struct Jit* jit, const uint8_t* p) {
 	(void) jit;
 	(void) p;
 	return false;
 }
 
-// Emits everything that is shared: the entry and exit, the dispatchers, the memory and shift
-// routines. They are emitted once and sit before the first block.
+// Emits everything shared: the entry and exit, the dispatchers, and the memory and shift routines.
+// They are emitted once and sit before the first block.
 bool backendInit(struct Jit* jit) {
 	struct Emitter e = { .start = jit->codeNext, .p = jit->codeNext, .end = jit->codeEnd };
 	jit->spillRoutine = e.p;
@@ -880,7 +885,7 @@ bool backendInit(struct Jit* jit) {
 	jit->multiplyCarryRoutine = e.p;
 	emitPreserveCall(&e, jitMultiplyCarry, multiplyCarryArgs, false);
 	xRet(&e);
-	// For ARMGBA_PERFMAP
+	// For ARMGBA_PERFMAP.
 	static const char* const kinds[8] = { "load32", "load16", "load8", "loadS8", "loadS16", "store32", "store16", "store8" };
 	jitNameCode(jit->spillRoutine, jit->reloadRoutine, "spill");
 	jitNameCode(jit->reloadRoutine, (void*) jit->enter, "reload");
@@ -900,7 +905,7 @@ bool backendInit(struct Jit* jit) {
 	return true;
 }
 
-// Block compiler
+// Block compiler.
 
 enum {
 	CARRY_SAME,
@@ -920,10 +925,10 @@ struct Stub {
 	uint8_t* site;
 	uint32_t pc;
 	int pending;
-	// The instruction it comes before
+	// The instruction it comes before.
 	int index;
-	// In a careful copy: the instruction's most cycles, where its code goes on after the check, and
-	// whether events inside it can run after it
+	// In a careful copy: the instruction's maximum cycles, where its code continues after the
+	// check, and whether events inside it can run after it.
 	int cost;
 	uint8_t* resume;
 	bool deferrable;
@@ -943,8 +948,8 @@ struct Compiler {
 	int S;
 	int N;
 	int P;
-	// Cartridge code with the prefetch buffer: its fetches' duty cycle, how far ahead it gets, a
-	// nonsequential fetch's cycles, and its row of jitStopPenalty
+	// For cartridge code with the prefetch buffer: its fetches' duty cycle, how far ahead it gets,
+	// a nonsequential fetch's cycles, and its row of jitStopPenalty.
 	bool prefetch;
 	int D;
 	int full;
@@ -952,7 +957,8 @@ struct Compiler {
 	int32_t penaltyRow;
 	bool careful;
 	// Where a waiting loop's way back out of the block goes, or 0, and the loads it makes through
-	// registers it doesn't change, which have to be from RAM, DISPSTAT or VCOUNT for it to go by
+	// registers it doesn't change, which must be from RAM, DISPSTAT or VCOUNT for the loop to be
+	// skipped.
 	uint32_t idleExit;
 	struct {
 		uint8_t base;
@@ -962,7 +968,8 @@ struct Compiler {
 	uint8_t* fastDone[2];
 	int fastDoneCount;
 
-	// Where the guest flags are: in host EFLAGS (C inverted after subtraction) and/or in ebp
+	// Where the guest flags are: in the host EFLAGS (C inverted after subtraction), in ebp, or
+	// both.
 	bool hostFlags;
 	bool hostInverted;
 
@@ -970,22 +977,22 @@ struct Compiler {
 	uint8_t liveAfter[MAX_BLOCK_INSTS];
 	bool checkpoint[MAX_BLOCK_INSTS + 1];
 	int cur;
-	// Cycles counted but not yet added to r14d. In cartridge code with the prefetch buffer they map the
-	// time t and the buffer's base B in (max, +): t' = max(t + pending, B + pendB) and
-	// B' = max(t + pendC, B + pendD), NONE standing for no term
+	// Cycles counted but not yet added to r14d. In cartridge code with the prefetch buffer, they
+	// map the time t and the buffer's base B in (max, +) algebra: t' = max(t + pending, B + pendB)
+	// and B' = max(t + pendC, B + pendD), with NONE standing for no term.
 	int pending;
 	int pendB;
 	int pendC;
 	int pendD;
 	struct Stub stubs[MAX_BLOCK_INSTS + 2];
 	int stubCount;
-	// In a careful copy, the checks after instructions whose events were put off
+	// In a careful copy, the checks after instructions whose events were put off.
 	struct {
 		uint8_t* site;
 		int index;
 	} deferred[MAX_BLOCK_INSTS];
 	int deferredCount;
-	// A conditional branch can need two; a rewritten word's forms count as instructions
+	// A conditional branch can need two; a rewritten word's forms count as instructions.
 	struct Link links[3 * MAX_BLOCK_INSTS + 16];
 	uint8_t* linkSites[3 * MAX_BLOCK_INSTS + 16];
 	int linkCount;
@@ -1002,22 +1009,22 @@ enum {
 	NONE = INT32_MIN / 4,
 };
 
-// Sums that carry NONE (not known when compiling) through
+// Adds two terms, passing NONE (not known when compiling) through.
 static int plus(int a, int b) {
 	return a == NONE || b == NONE ? NONE : a + b;
 }
 
-// The larger of two
+// Returns the larger of two terms.
 static int most(int a, int b) {
 	return a > b ? a : b;
 }
 
-// Code that can store into the instructions after a store: memory routines get its r15
+// Whether code can store into the instructions after a store; if so, memory routines get its r15.
 static bool ramCode(const struct Compiler* c) {
 	return c->region == REGION_IWRAM || c->region == REGION_EWRAM;
 }
 
-// The operations whose carry comes from the shifter, not from an addition
+// The operations whose carry comes from the shifter, not from an addition.
 static bool isLogical(int op) {
 	switch (op) {
 	case ALU_AND:
@@ -1034,22 +1041,22 @@ static bool isLogical(int op) {
 	}
 }
 
-// The four that only set flags
+// The four that only set flags.
 static bool isTest(int op) {
 	return op >= ALU_TST && op <= ALU_CMN;
 }
 
-// A data processing instruction that is a jump
+// Whether a data-processing instruction is a jump.
 static bool aluWritesPc(const struct Inst* in) {
 	return in->kind == I_ALU && !isTest(in->op) && in->rd == 15;
 }
 
-// The last instruction a block can hold
+// Whether this is the last instruction a block can hold.
 static bool isTerminator(const struct Inst* in) {
 	return instEndsBlock(in);
 }
 
-// Costs that don't depend on run-time values; dynamic instructions are followed by a cycle check
+// Costs that don't depend on run-time values; dynamic instructions are followed by a cycle check.
 static bool isDynamic(struct Compiler* c, const struct Inst* in) {
 	if (in->poly) {
 		return true;
@@ -1069,13 +1076,13 @@ static bool isDynamic(struct Compiler* c, const struct Inst* in) {
 	}
 }
 
-// After a data access the next fetch is nonsequential: compiled code adds the difference to the
-// access and counts every fetch as sequential
+// After a data access, the next fetch is nonsequential: compiled code adds the difference to the
+// access and counts every fetch as sequential.
 static int nonseq(const struct Compiler* c) {
 	return c->prefetch ? 0 : c->N - c->S;
 }
 
-// An internal cycle to shift by a register
+// An internal cycle to shift by a register.
 static int aluExtra(struct Compiler* c, const struct Inst* in) {
 	if (in->cond != 0xF && !in->op2.isImm && in->op2.byReg) {
 		return 1 + nonseq(c);
@@ -1083,13 +1090,13 @@ static int aluExtra(struct Compiler* c, const struct Inst* in) {
 	return 0;
 }
 
-// A word moved to or from the stack, which is in internal RAM unless a game is doing something
-// unusual: its access is done inline, with a check
+// Whether a word is moved to or from the stack, which is in internal RAM unless a game is doing
+// something unusual; such an access is done inline, with a check.
 static bool stackAccess(const struct Compiler* c, const struct Inst* in) {
 	return in->rn == 13 && in->size == 4 && in->rd != 15 && c->slowCount < MAX_BLOCK_INSTS;
 }
 
-// A load or a block load that writes r15, and so is a jump
+// Whether a load or block load writes r15, and so is a jump.
 static bool loadsPc(const struct Inst* in) {
 	if (in->kind == I_MEM) {
 		return in->load && in->rd == 15;
@@ -1099,8 +1106,8 @@ static bool loadsPc(const struct Inst* in) {
 
 static int directBranchCost(const struct Compiler* c, uint32_t target);
 
-// The cycles of an instruction that a check before it has to cover: all but those of accesses and
-// refills that check for events themselves
+// Returns the cycles of an instruction that a check before it has to cover: all except those of
+// accesses and refills that check for events themselves.
 static int checkedCost(struct Compiler* c, const struct Inst* in, int index) {
 	if (in->cond == 0xF) {
 		return c->P;
@@ -1108,17 +1115,17 @@ static int checkedCost(struct Compiler* c, const struct Inst* in, int index) {
 	int wait;
 	if (jitRomLiteral(c->gba, in, NULL, &wait)) {
 		if (c->prefetch) {
-			// A cycle to stop the prefetch buffer, and the next fetch nonsequential
+			// A cycle to stop the prefetch buffer, and the next fetch is nonsequential.
 			return c->P + 1 + wait + most(0, c->Ncyc - c->D);
 		}
 		return c->P + nonseq(c) + wait;
 	}
 	if (jitStepOnly(in)) {
-		// Only skipped does it run in compiled code
+		// It only runs in compiled code when skipped.
 		return in->cond == COND_AL ? 0 : c->P;
 	}
 	if (jitSystem(in)) {
-		// Its refill checks for events itself
+		// Its refill checks for events itself.
 		return c->P;
 	}
 	switch (in->kind) {
@@ -1134,7 +1141,7 @@ static int checkedCost(struct Compiler* c, const struct Inst* in, int index) {
 	case I_SWP:
 		return c->P + nonseq(c);
 	case I_MUL:
-		// The most multiplier stages there are
+		// The maximum number of multiplier stages.
 		return c->P + nonseq(c) + 4 + in->accumulate;
 	case I_MULL:
 		return c->P + nonseq(c) + 5 + in->accumulate;
@@ -1150,7 +1157,7 @@ static int checkedCost(struct Compiler* c, const struct Inst* in, int index) {
 	}
 }
 
-// The flags each condition code looks at
+// The flags each condition code reads.
 static uint8_t condReads(int cond) {
 	switch (cond) {
 	case 0x0:
@@ -1180,11 +1187,11 @@ static uint8_t condReads(int cond) {
 }
 
 // Where the shifter's carry out comes from for an operand: unchanged, known when compiling, or
-// worked out when it runs
+// worked out when it runs.
 static int shifterCarry(const struct Inst* in) {
 	const struct Operand* op = &in->op2;
 	if (op->isImm) {
-		// A constant read when it runs may be unrotated, which passes C through
+		// A constant read at run time may be unrotated, which passes C through.
 		return op->immRotated && !in->patchable ? CARRY_ECX : CARRY_SAME;
 	}
 	if (op->byReg) {
@@ -1196,7 +1203,7 @@ static int shifterCarry(const struct Inst* in) {
 	return CARRY_ECX;
 }
 
-// The flags an instruction reads, its condition's among them
+// The flags an instruction reads, including its condition's.
 static uint8_t flagReads(const struct Inst* in) {
 	uint8_t reads = in->cond != COND_AL ? condReads(in->cond) : 0;
 	switch (in->kind) {
@@ -1230,7 +1237,7 @@ static uint8_t flagReads(const struct Inst* in) {
 	return reads;
 }
 
-// The flags it is sure to write. A conditional one may not run, so it is sure of none.
+// The flags it is sure to write. A conditional instruction may not run, so it is sure of none.
 static uint8_t flagWrites(const struct Inst* in) {
 	if (in->cond != COND_AL || !in->setFlags) {
 		return 0;
@@ -1252,19 +1259,19 @@ static uint8_t flagWrites(const struct Inst* in) {
 	}
 }
 
-// The opcode i instructions into the block, or of the ones prefetched past its end
+// Returns the opcode i instructions into the block, or of those prefetched past its end.
 static uint32_t opcodeAt(struct Compiler* c, int i) {
 	return i < c->count ? c->insts[i].opcode : c->nextOps[i - c->count];
 }
 
-// What r15 reads as in an instruction: two instructions ahead
+// What r15 reads as in an instruction: two instructions ahead.
 static uint32_t pcRead(struct Compiler* c, const struct Inst* in) {
 	return in->address + (c->thumb ? 4 : 8);
 }
 
-// Flags
+// Flags.
 
-// The host's flags after an operation, moved to where the guest's are kept
+// Moves the host's flags after an operation to where the guest's are kept.
 static void captureFlags(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	if (c->hostInverted) {
@@ -1276,7 +1283,7 @@ static void captureFlags(struct Compiler* c) {
 	xMovzx(e, RBP, 2, R(RAX));
 }
 
-// Called before emitting anything that changes host flags
+// Called before emitting anything that changes the host flags.
 static void clobberFlags(struct Compiler* c) {
 	if (c->hostFlags) {
 		captureFlags(c);
@@ -1284,8 +1291,8 @@ static void clobberFlags(struct Compiler* c) {
 	}
 }
 
-// Cycles are counted up while compiling and added to the counter in one go: pending is what has been
-// counted since the last add. The other terms track what the prefetch buffer has to be told.
+// Cycles are counted up while compiling and added to the counter in one go; pending is what has
+// been counted since the last add. The other terms track what the prefetch buffer has to be told.
 static void resetPending(struct Compiler* c) {
 	c->pending = 0;
 	c->pendB = NONE;
@@ -1293,25 +1300,25 @@ static void resetPending(struct Compiler* c) {
 	c->pendD = 0;
 }
 
-// Whether only the plain count is outstanding
+// Whether only the plain count is outstanding.
 static bool pendingScalar(const struct Compiler* c) {
 	return c->pendB == NONE && c->pendC == NONE && c->pendD == 0;
 }
 
-// Counts cycles to add later
+// Counts cycles to add later.
 static void pendAdd(struct Compiler* c, int cycles) {
 	c->pending += cycles;
 	c->pendB = plus(c->pendB, cycles);
 }
 
-// The buffer's base becomes the time plus cycles
+// Sets the buffer's base to the time plus cycles.
 static void pendSetBase(struct Compiler* c, int cycles) {
 	c->pendC = c->pending + cycles;
 	c->pendD = plus(c->pendB, cycles);
 }
 
-// A fetch from the buffer: once the read in flight is done, at least a cycle. The buffer fills at
-// most full ahead.
+// A fetch from the buffer costs at least a cycle, once the read in flight is done. The buffer fills
+// at most full ahead.
 static void pendFetch(struct Compiler* c) {
 	if (!c->prefetch) {
 		pendAdd(c, c->P);
@@ -1328,7 +1335,7 @@ static void pendFetch(struct Compiler* c) {
 	c->pendD = dd;
 }
 
-// Adds the cycles counted so far to the cycle counter
+// Adds the cycles counted so far to the cycle counter.
 static void flushPending(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	if (pendingScalar(c)) {
@@ -1364,7 +1371,7 @@ static void flushPending(struct Compiler* c) {
 	resetPending(c);
 }
 
-// Jumps when the ARM condition holds (or fails, if negate). Leaves canonical flags valid.
+// Jumps when the ARM condition holds (or fails, if negate). Leaves the canonical flags valid.
 static uint8_t* emitCondJump(struct Compiler* c, int cond, bool negate) {
 	struct Emitter* e = &c->e;
 	if (negate) {
@@ -1383,7 +1390,7 @@ static uint8_t* emitCondJump(struct Compiler* c, int cond, bool negate) {
 		c->hostFlags = true;
 		c->hostInverted = false;
 	}
-	// Host flags hold N=SF Z=ZF V=OF, and C=CF unless inverted
+	// The host flags hold N=SF, Z=ZF, V=OF, and C=CF unless inverted.
 	int cc;
 	switch (cond) {
 	case 0x0: cc = CC_E; break;
@@ -1410,9 +1417,9 @@ static uint8_t* emitCondJump(struct Compiler* c, int cond, bool negate) {
 	return xJcc(e, cc, NULL);
 }
 
-// Values
+// Values.
 
-// A guest register's value into a host register. r15 is a constant when compiling.
+// Loads a guest register's value into a host register. r15 is a constant when compiling.
 static void loadGuest(struct Compiler* c, int dst, int r, const struct Inst* in) {
 	if (r == 15) {
 		xMovIKeepFlags(&c->e, dst, pcRead(c, in));
@@ -1423,7 +1430,8 @@ static void loadGuest(struct Compiler* c, int dst, int r, const struct Inst* in)
 	}
 }
 
-// A host register's value into a guest register. r15 lives in the CPU state, not in a host register.
+// Stores a host register's value into a guest register. r15 lives in the CPU state, not in a host
+// register.
 static void storeGuest(struct Compiler* c, int r, int src) {
 	if (hostReg[r] >= 0) {
 		xMovRR(&c->e, 4, hostReg[r], src);
@@ -1432,7 +1440,7 @@ static void storeGuest(struct Compiler* c, int r, int src) {
 	}
 }
 
-// A constant into a guest register
+// Stores a constant into a guest register.
 static void storeGuestImm(struct Compiler* c, int r, uint32_t value) {
 	if (hostReg[r] >= 0) {
 		xMovIKeepFlags(&c->e, hostReg[r], value);
@@ -1441,21 +1449,21 @@ static void storeGuestImm(struct Compiler* c, int r, uint32_t value) {
 	}
 }
 
-// Rotate right, as ARM's rotated constants are
+// Rotates right, as ARM's rotated constants do.
 static uint32_t ror32(uint32_t value, int rotate) {
 	rotate &= 31;
 	return rotate ? (value >> rotate) | (value << (32 - rotate)) : value;
 }
 
-// The shifter operand, in edx unless it's a constant or an unshifted register; a computed carry
-// lands in ecx as 0 or 1
+// Computes the shifter operand, in edx unless it's a constant or an unshifted register; a computed
+// carry lands in ecx as 0 or 1.
 static struct Operand2 emitShifter(struct Compiler* c, const struct Inst* in, bool wantCarry) {
 	struct Emitter* e = &c->e;
 	const struct Operand* op = &in->op2;
 	struct Operand2 out = { .carry = CARRY_SAME };
 	if (op->isImm && in->patchable) {
-		// The game rewrites the constant: rotate it from the instruction word, with C passed through
-		// when it isn't rotated
+		// The game rewrites this constant: rotate it from the instruction word at run time, passing
+		// C through when it isn't rotated.
 		clobberFlags(c);
 		int32_t word = c->region == REGION_IWRAM ? OFF(iwram) + (int32_t) (in->address & (SIZE_IWRAM - 1)) : OFF(ewram) + (int32_t) (in->address & (SIZE_EWRAM - 1));
 		xLoad(e, 4, RDX, M(R15, word));
@@ -1502,8 +1510,8 @@ static struct Operand2 emitShifter(struct Compiler* c, const struct Inst* in, bo
 		return out;
 	}
 	if (in->patchable) {
-		// The game rewrites the amount: LSL by the one in the instruction word, which passes C through
-		// for 0
+		// The game rewrites this amount: shift LSL by the one in the instruction word, which passes
+		// C through when it is 0.
 		clobberFlags(c);
 		int32_t word = c->region == REGION_IWRAM ? OFF(iwram) + (int32_t) (in->address & (SIZE_IWRAM - 1)) : OFF(ewram) + (int32_t) (in->address & (SIZE_EWRAM - 1));
 		xLoad(e, 4, RCX, M(R15, word));
@@ -1515,7 +1523,8 @@ static struct Operand2 emitShifter(struct Compiler* c, const struct Inst* in, bo
 			loadGuest(c, RDX, op->rm, in);
 		}
 		if (wantCarry) {
-			// SHL leaves the last bit out in CF, and the flags alone for 0
+			// SHL leaves the last bit shifted out in CF, and leaves the flags alone for an amount
+			// of 0.
 			xTest(e, 4, R(RCX), RCX);
 			uint8_t* zero = xJcc(e, CC_E, NULL);
 			xShiftCl(e, X_SHL, 4, R(RDX));
@@ -1537,7 +1546,7 @@ static struct Operand2 emitShifter(struct Compiler* c, const struct Inst* in, bo
 	int amount = op->amount;
 	int type = op->type;
 	if (op->rm == 15) {
-		// A constant: fold the shift
+		// A constant: fold the shift in when compiling.
 		uint32_t v = pcRead(c, in);
 		uint32_t result;
 		int carry;
@@ -1559,7 +1568,7 @@ static struct Operand2 emitShifter(struct Compiler* c, const struct Inst* in, bo
 				result = ror32(v, amount);
 				carry = ((v >> (amount - 1)) & 1) ? CARRY_1 : CARRY_0;
 			} else {
-				// RRX needs the carry; do it at run time
+				// RRX needs the carry, so do it at run time.
 				clobberFlags(c);
 				xMovI(e, RDX, v);
 				xBtI(e, 4, R(RBP), 8);
@@ -1643,7 +1652,7 @@ static void aluWith(struct Compiler* c, int alu, int dst, const struct Operand2*
 	}
 }
 
-// An operand (a constant, a host register or a slot in the CPU state) into a host register
+// Loads an operand (a constant, a host register or a slot in the CPU state) into a host register.
 static void movOperand(struct Compiler* c, int dst, const struct Operand2* op) {
 	if (op->isImm) {
 		xMovIKeepFlags(&c->e, dst, op->imm);
@@ -1654,7 +1663,7 @@ static void movOperand(struct Compiler* c, int dst, const struct Operand2* op) {
 	}
 }
 
-// N and Z from a result, C from the shifter (or kept), V kept
+// Sets N and Z from a result, C from the shifter (or kept), and keeps V.
 static void logicalFlags(struct Compiler* c, int result, int carry, uint8_t live) {
 	struct Emitter* e = &c->e;
 	xTest(e, 4, R(result), result);
@@ -1686,7 +1695,7 @@ static void logicalFlags(struct Compiler* c, int result, int carry, uint8_t live
 	c->hostFlags = false;
 }
 
-// Leaves for the exact CPU unless the instructions up to the next check end before the next event
+// Leaves for the exact CPU unless the instructions up to the next check end before the next event.
 static void emitCheck(struct Compiler* c, int index, int ahead) {
 	struct Emitter* e = &c->e;
 	clobberFlags(c);
@@ -1701,7 +1710,7 @@ static void emitCheck(struct Compiler* c, int index, int ahead) {
 	stub->index = index;
 }
 
-// Calls a runtime helper with guest state in memory; the helper's result stays in eax
+// Calls a runtime helper with the guest state in memory; the helper's result stays in eax.
 static void callHelper(struct Compiler* c, const struct Inst* in, const void* fn) {
 	struct Emitter* e = &c->e;
 	int index = (in->address - c->insts[0].address) / c->width;
@@ -1713,14 +1722,14 @@ static void callHelper(struct Compiler* c, const struct Inst* in, const void* fn
 	xCall(e, c->jit->reloadRoutine);
 }
 
-// Before calling C: flags and cycles brought up to date and the guest registers stored
+// Before calling C: brings the flags and cycles up to date and stores the guest registers.
 static void spill(struct Compiler* c) {
 	clobberFlags(c);
 	flushPending(c);
 	xCall(&c->e, c->jit->spillRoutine);
 }
 
-// A jump to the block at a guest address. It is emitted as a jump to a stub that looks the block up
+// Jumps to the block at a guest address. It is emitted as a jump to a stub that looks the block up,
 // and is patched to go straight there once the block exists.
 static void emitLinkTo(struct Compiler* c, uint32_t pc, bool thumb) {
 	struct Link* link = &c->links[c->linkCount];
@@ -1729,14 +1738,14 @@ static void emitLinkTo(struct Compiler* c, uint32_t pc, bool thumb) {
 	link->from = c->block;
 }
 
-// The cartridge's six regions
+// The cartridge's six regions.
 static bool inCartridge(int region) {
 	return region >= REGION_ROM0 && region <= REGION_ROM2_EX;
 }
 
-// Whether compiled code refills from a branch target itself: cartridge code from cartridge code
-// compiled without the prefetch buffer, other code it can run from anywhere. The exact CPU refills
-// from the rest.
+// Whether compiled code refills from a branch target itself: for cartridge code, only from
+// cartridge code compiled without the prefetch buffer; for other code, from anywhere it can run.
+// The exact CPU refills from the rest.
 static bool inlineRefill(const struct Compiler* c, uint32_t target) {
 	int region = target >> 24;
 	if (codeKindOf(c->gba, target) == CODE_NONE) {
@@ -1748,16 +1757,17 @@ static bool inlineRefill(const struct Compiler* c, uint32_t target) {
 	if (!inCartridge(c->region)) {
 		return false;
 	}
-	// A refill's second fetch at a 128 KiB boundary starts a new burst, which only the exact CPU counts
+	// A refill's second fetch at a 128 KiB boundary starts a new burst, which only the exact CPU
+	// counts.
 	if (!c->prefetch && !((target + c->width) & 0x1FFFF)) {
 		return false;
 	}
-	// With the buffer, only to the same wait states
+	// With the buffer, only to the same wait states.
 	return !c->prefetch || (region - REGION_ROM0) / 2 == (c->region - REGION_ROM0) / 2;
 }
 
-// A direct PC write's refill, when compiled code counts it; through the prefetch buffer, the most
-// it takes
+// Returns a direct PC write's refill cost when compiled code counts it; through the prefetch
+// buffer, the most it can take.
 static int directBranchCost(const struct Compiler* c, uint32_t target) {
 	if (!inlineRefill(c, target)) {
 		return 0;
@@ -1769,15 +1779,15 @@ static int directBranchCost(const struct Compiler* c, uint32_t target) {
 	return c->thumb ? c->gba->writePcCost16[region] : c->gba->writePcCost32[region];
 }
 
-// Where the prefetch buffer reads next, for code that leaves the cartridge or C code that refills
+// Where the prefetch buffer reads next, for code that leaves the cartridge or C code that refills.
 static void storeHead(struct Compiler* c, uint32_t head) {
 	if (c->prefetch) {
 		xStoreI(&c->e, 4, M(R15, OFF(prefetcher.head)), head);
 	}
 }
 
-// Data or a refill from the cartridge stops the prefetch buffer: a cycle more if a read is about to
-// finish
+// Data or a refill from the cartridge stops the prefetch buffer: one cycle more if a read is about
+// to finish.
 static void emitStop(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	clobberFlags(c);
@@ -1791,9 +1801,9 @@ static void emitStop(struct Compiler* c) {
 	patchHere(e, far);
 }
 
-// After an access that may have stopped the buffer: the next fetch starts it again, nonsequential.
-// Compiled code takes that as a fetch from the buffer whose read finishes then; until the fetch, the
-// buffer stays stopped for the exact CPU.
+// Called after an access that may have stopped the buffer: the next fetch restarts it,
+// nonsequential. Compiled code treats that as a fetch from the buffer whose read finishes then;
+// until the fetch, the buffer stays stopped for the exact CPU.
 static void emitMissCheck(struct Compiler* c) {
 	if (!c->prefetch) {
 		return;
@@ -1809,28 +1819,28 @@ static void emitMissCheck(struct Compiler* c) {
 	patchHere(e, running);
 }
 
-// The fetch after one that may have stopped the buffer starts it again
+// The fetch after one that may have stopped the buffer restarts it.
 static void emitRestarted(struct Compiler* c) {
 	xStoreI(&c->e, 1, M(R15, OFF(cpu.prefetching)), 1);
 	xStoreI(&c->e, 1, M(R15, OFF(cpu.fetchSeq)), 1);
 }
 
 // In the BIOS, the word that will be on the bus after a jump out of it, which is what reads of the
-// BIOS from outside return
+// BIOS from outside return.
 static void setBiosPrefetchNext(struct Compiler* c, const struct Inst* in) {
 	if (c->region == REGION_BIOS) {
 		xStoreI(&c->e, 4, M(R15, OFF(biosPrefetchNext)), opcodeAt(c, (in->address - c->insts[0].address) / c->width + 2));
 	}
 }
 
-// On a waiting loop's way back to its start
+// On a waiting loop's way back to its start.
 static void emitIdleMark(struct Compiler* c, uint32_t to) {
 	if (c->idleExit && c->cur == c->count - 1 && to == c->idleExit) {
 		xStoreI(&c->e, 4, M(R15, OFF(idleMark)), blockKey(c->insts[0].address, c->thumb));
 	}
 }
 
-// The cost and bookkeeping of a direct PC write, then a jump to the target block
+// Emits the cost and bookkeeping of a direct PC write, then a jump to the target block.
 static void emitDirectBranch(struct Compiler* c, const struct Inst* in, uint32_t target) {
 	struct Emitter* e = &c->e;
 	clobberFlags(c);
@@ -1852,8 +1862,8 @@ static void emitDirectBranch(struct Compiler* c, const struct Inst* in, uint32_t
 		return;
 	}
 	if (c->prefetch && inCartridge(region)) {
-		// Through the buffer: from it if the target is where it reads next, else stopped and started
-		// again there
+		// Through the buffer: from it if the target is where it reads next; otherwise it is stopped
+		// and restarted there.
 		if ((target & ~1u) == head) {
 			pendFetch(c);
 			pendFetch(c);
@@ -1864,7 +1874,7 @@ static void emitDirectBranch(struct Compiler* c, const struct Inst* in, uint32_t
 			pendFetch(c);
 		}
 	} else {
-		// Leaving the cartridge, the buffer reads on by itself
+		// When leaving the cartridge, the buffer keeps reading on by itself.
 		storeHead(c, head);
 		pendAdd(c, directBranchCost(c, target));
 	}
@@ -1879,7 +1889,7 @@ static void emitDirectBranch(struct Compiler* c, const struct Inst* in, uint32_t
 	emitLinkTo(c, target & ~1u, c->thumb);
 }
 
-// eax = target address; the instruction's cost is already pending
+// eax = target address; the instruction's cost is already pending.
 static void emitIndirect(struct Compiler* c, const struct Inst* in, uint8_t* dispatch) {
 	struct Emitter* e = &c->e;
 	if (c->hostFlags || !pendingScalar(c)) {
@@ -1894,21 +1904,21 @@ static void emitIndirect(struct Compiler* c, const struct Inst* in, uint8_t* dis
 	xJmp(&c->e, dispatch);
 }
 
-// A data processing instruction. Flags are computed only if something later reads them, and the
-// host's own flags are used where they come out the same.
+// Compiles a data-processing instruction. Flags are computed only if something later reads them,
+// and the host's own flags are used where they come out the same.
 static void emitAlu(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	int op = in->op;
 	uint8_t live = c->liveAfter[c->cur];
 	bool setFlags = in->setFlags;
 	bool logical = isLogical(op);
-	// A write to r15 that sets flags is left to the exact CPU
+	// A write to r15 that sets flags is left to the exact CPU.
 	bool writesPc = aluWritesPc(in);
 	bool wantCarry = setFlags && logical && (live & F_C);
 	struct Operand2 op2 = emitShifter(c, in, wantCarry);
 
 	if (!writesPc && !setFlags && (op == ALU_MOV || op == ALU_MVN)) {
-		// Doesn't need to touch host flags
+		// Doesn't need to touch the host flags.
 		if (hostReg[in->rd] >= 0) {
 			movOperand(c, hostReg[in->rd], &op2);
 			if (op == ALU_MVN) {
@@ -1929,7 +1939,7 @@ static void emitAlu(struct Compiler* c, const struct Inst* in) {
 	int rn = in->rn;
 	bool needsRn = op != ALU_MOV && op != ALU_MVN;
 	int dst = (!writesPc && !isTest(op) && hostReg[in->rd] >= 0) ? hostReg[in->rd] : RAX;
-	// Work in place only when the destination isn't also the operand register
+	// Works in place only when the destination isn't also the operand register.
 	bool inPlace = needsRn && rn != 15 && dst != RAX && hostReg[rn] == dst && op != ALU_RSB && op != ALU_RSC;
 	if (!inPlace) {
 		dst = RAX;
@@ -2021,7 +2031,7 @@ static void emitAlu(struct Compiler* c, const struct Inst* in) {
 
 	pendAdd(c, aluExtra(c, in));
 	if (writesPc) {
-		// The register shift's internal cycle comes before the refill, not a nonsequential fetch
+		// The register shift's internal cycle comes before the refill, not a nonsequential fetch.
 		if (!in->op2.isImm && in->op2.byReg) {
 			pendAdd(c, -nonseq(c));
 		}
@@ -2030,10 +2040,10 @@ static void emitAlu(struct Compiler* c, const struct Inst* in) {
 }
 
 // The multiplier's internal cycles, which stop early once the rest of the operand is all zeros (or
-// all ones, signed)
+// all ones, when signed).
 static void emitMulWait(struct Compiler* c, const struct Inst* in, int waitReg, bool sign, int extra) {
 	struct Emitter* e = &c->e;
-	// After the fetch, which the prefetch buffer can make wait
+	// After the fetch, which the prefetch buffer can make wait.
 	flushPending(c);
 	loadGuest(c, RAX, waitReg, in);
 	if (sign) {
@@ -2048,19 +2058,20 @@ static void emitMulWait(struct Compiler* c, const struct Inst* in, int waitReg, 
 }
 
 // The C flag the multiplier leaves, from operands put in jitScratch first: ecx = 0 for MUL, 1 for
-// UMULL and 2 for SMULL; the carry comes back in ecx
+// UMULL and 2 for SMULL; the carry comes back in ecx.
 static void emitMultiplyCarry(struct Compiler* c, int kind) {
 	xMovI(&c->e, RCX, kind);
 	xCall(&c->e, c->jit->multiplyCarryRoutine);
 }
 
-// Operands put where the C helper that works out a multiply's carry looks for them
+// Puts the operands where the C helper that works out a multiply's carry looks for them.
 static void storeScratch(struct Compiler* c, int slot, int r, const struct Inst* in) {
 	loadGuest(c, RAX, r, in);
 	xStore(&c->e, 4, M(R15, OFF(jitScratch) + 4 * slot), RAX);
 }
 
-// MUL and MLA. The cycle count depends on the multiplier's value, so it is worked out when it runs.
+// Compiles MUL and MLA. The cycle count depends on the multiplier's value, so it is worked out at
+// run time.
 static void emitMul(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	clobberFlags(c);
@@ -2068,7 +2079,7 @@ static void emitMul(struct Compiler* c, const struct Inst* in) {
 	if (in->rd == 15 || (in->accumulate && in->rn == 15)) {
 		return;
 	}
-	// Thumb's MUL times by the destination's old value; ARM's by Rs
+	// Thumb's MUL multiplies by the destination's old value; ARM's by Rs.
 	int multiplier = c->thumb ? in->rd : in->rs;
 	int multiplicand = c->thumb ? in->rs : in->rm;
 	emitMulWait(c, in, multiplier, true, in->accumulate ? 1 : 0);
@@ -2102,7 +2113,7 @@ static void emitMul(struct Compiler* c, const struct Inst* in) {
 	}
 }
 
-// The 64-bit multiplies
+// Compiles the 64-bit multiplies.
 static void emitMulLong(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	clobberFlags(c);
@@ -2125,7 +2136,7 @@ static void emitMulLong(struct Compiler* c, const struct Inst* in) {
 	loadGuest(c, RAX, in->rm, in);
 	xMulWide(e, 4, guest(in->rs), in->signedMul);
 	if (in->accumulate) {
-		// The low half adds as unsigned, the high half takes the carry
+		// The low halves add as unsigned, and the high halves take the carry.
 		if (hostReg[in->rd] >= 0) {
 			xAluRR(e, X_ADD, 4, R(RAX), hostReg[in->rd]);
 		} else {
@@ -2141,7 +2152,7 @@ static void emitMulLong(struct Compiler* c, const struct Inst* in) {
 	storeGuest(c, in->rdHi, RDX);
 	if (in->setFlags) {
 		emitMultiplyCarry(c, in->signedMul ? 2 : 1);
-		// N from bit 63, Z from all 64 bits, C from the multiplier, V kept
+		// N from bit 63, Z from all 64 bits, C from the multiplier; V is kept.
 		xShiftI(e, X_SHL, 4, R(RCX), 8);
 		xAluI(e, X_AND, 4, R(RBP), 0x0001);
 		xAluRR(e, X_OR, 4, R(RBP), RCX);
@@ -2157,13 +2168,13 @@ static void emitMulLong(struct Compiler* c, const struct Inst* in) {
 	}
 }
 
-// The shared routine for a kind of access: cartridge code has its own set, which stop the prefetch
-// buffer on a data access
+// Returns the shared routine for a kind of access. Cartridge code has its own set, which stop the
+// prefetch buffer on a data access.
 static uint8_t* memRoutine(const struct Compiler* c, int kind) {
 	return c->prefetch ? c->jit->romMemRoutines[kind] : c->jit->memRoutines[kind];
 }
 
-// The kind of memory routine an instruction needs
+// Returns the kind of memory routine an instruction needs.
 static int memKind(const struct Inst* in) {
 	if (!in->load) {
 		return in->size == 4 ? MEM_STORE32 : in->size == 2 ? MEM_STORE16 : MEM_STORE8;
@@ -2178,8 +2189,8 @@ static int memKind(const struct Inst* in) {
 }
 
 // A word access through the stack pointer, which points into IWRAM: inline when it lands there
-// aligned and misses compiled code, otherwise through the memory routine out of line. ecx holds
-// the address and edx a value to store. The check before it covers the inline path's cycles.
+// aligned and misses compiled code, otherwise through the memory routine out of line. ecx holds the
+// address and edx a value to store. The check before it covers the inline path's cycles.
 static void emitStackAccess(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	struct SlowAccess* slow = &c->slow[c->slowCount++];
@@ -2210,8 +2221,8 @@ static void emitStackAccess(struct Compiler* c, const struct Inst* in) {
 	pendAdd(c, nonseq(c));
 }
 
-// A load or a store: the address worked out, the shared routine called, the base written back. A load
-// from the cartridge at a fixed address is a constant.
+// Compiles a load or store: works out the address, calls the shared routine and writes the base
+// back. A load from the cartridge at a fixed address becomes a constant.
 static void emitMem(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	uint32_t literal;
@@ -2230,10 +2241,10 @@ static void emitMem(struct Compiler* c, const struct Inst* in) {
 		return;
 	}
 	clobberFlags(c);
-	// The fetch comes first, so an I/O access sees the time it happens at
+	// The fetch comes first, so an I/O access sees the time it happens at.
 	flushPending(c);
 
-	// Base in ecx, offset as a constant or in edx
+	// Base in ecx, offset as a constant or in edx.
 	bool regOffset = !in->op2.isImm;
 	int32_t offset = 0;
 	if (regOffset) {
@@ -2245,7 +2256,7 @@ static void emitMem(struct Compiler* c, const struct Inst* in) {
 			movOperand(c, RDX, &off);
 		}
 	} else if (in->patchable) {
-		// The game rewrites this offset and its direction; read them from the instruction word
+		// The game rewrites this offset and its direction, so read them from the instruction word.
 		uint32_t word = in->address & ~3u;
 		int32_t base = (word >> 24) == REGION_IWRAM ? OFF(iwram) + (word & (SIZE_IWRAM - 1)) : OFF(ewram) + (word & (SIZE_EWRAM - 1));
 		xLoad(e, 4, RDX, M(R15, base));
@@ -2279,7 +2290,7 @@ static void emitMem(struct Compiler* c, const struct Inst* in) {
 			xLea(e, 4, RCX, M(RCX, offset));
 		}
 	}
-	// The stored register is read before the base is written back
+	// The stored register is read before the base is written back.
 	bool writeback = in->writeback && in->rn != 15;
 	if (writeback) {
 		if (in->pre) {
@@ -2329,8 +2340,8 @@ enum {
 	BLOCK_THUMB = 1 << 25,
 };
 
-// One RAM region's copy of the inline transfer; ecx = first address. Jumps to slow when a store would
-// hit compiled code, or an event would fall inside it.
+// One RAM region's copy of the inline transfer; ecx = first address. Jumps to slow when a store
+// would hit compiled code, or an event would fall inside it.
 static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int region, uint8_t** slow, int* slowCount) {
 	struct Emitter* e = &c->e;
 	bool iwram = region == REGION_IWRAM;
@@ -2338,7 +2349,7 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 	int32_t data = iwram ? OFF(iwram) : OFF(ewram);
 	int32_t map = iwram ? OFF(iwramCode) : OFF(ewramCode);
 	int count = __builtin_popcount(in->list);
-	// The same wait for every word, nonsequential or not, and a load's internal cycle
+	// The same wait for every word, nonsequential or not, and a load's internal cycle.
 	struct GBA* gba = c->jit->gba;
 	int cycles = count * (1 + gba->waitS32[region]) + (in->load ? 1 : 0);
 	xAluI(e, X_CMP, 4, R(R14), -cycles);
@@ -2380,7 +2391,7 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 	xLea(e, 4, R14, M(R14, cycles + (loadsPc(in) ? 0 : nonseq(c))));
 }
 
-// Pushes, pops and copies within IWRAM or EWRAM run inline; anything else goes to jitHelperBlock
+// Pushes, pops and copies within IWRAM or EWRAM run inline; anything else goes to jitHelperBlock.
 static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t** slow, int* slowCount) {
 	struct Emitter* e = &c->e;
 	int count = __builtin_popcount(in->list);
@@ -2416,7 +2427,7 @@ static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t*
 	}
 }
 
-// Calls the exact CPU for the instruction, its fetch counted; eax = the next block key, or ~0
+// Calls the exact CPU for the instruction, with its fetch counted; eax = the next block key, or ~0.
 static void emitExecute(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	storeHead(c, in->address + 3 * c->width);
@@ -2426,13 +2437,13 @@ static void emitExecute(struct Compiler* c, const struct Inst* in) {
 	callHelper(c, in, jitHelperExecute);
 }
 
-// LDM and STM. To work RAM they are done inline; anything else goes to the exact CPU.
+// Compiles LDM and STM. Transfers to work RAM are done inline; anything else goes to the exact CPU.
 static void emitBlockTransfer(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	uint8_t* slow[40];
 	int slowCount = 0;
 	c->fastDoneCount = 0;
-	// The fetch comes first, so I/O sees the time it happens at
+	// The fetch comes first, so I/O sees the time it happens at.
 	clobberFlags(c);
 	flushPending(c);
 	if (!in->userBank && in->list && in->rn != 15 && (in->load || !(in->list & 0x8000)) && !storesMovedBase(in)) {
@@ -2461,14 +2472,15 @@ static void emitBlockTransfer(struct Compiler* c, const struct Inst* in) {
 	}
 }
 
-// SWP, which the exact CPU runs
+// SWP, which the exact CPU runs.
 static void emitSwap(struct Compiler* c, const struct Inst* in) {
 	emitExecute(c, in);
 	pendAdd(c, nonseq(c));
 	emitMissCheck(c);
 }
 
-// MRS: the flags are kept apart from the CPSR while compiled code runs, and are put back for the read
+// MRS: the flags are kept apart from the CPSR while compiled code runs, so they are put back for
+// the read.
 static void emitMrs(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	clobberFlags(c);
@@ -2481,9 +2493,8 @@ static void emitMrs(struct Compiler* c, const struct Inst* in) {
 	storeGuest(c, in->rd, RAX);
 }
 
-// Leaves for the exact CPU to run the instruction
-// The exact CPU runs it from here, as a careful copy's stub has it run the instruction an event falls in,
-// and compiled code goes on where it can
+// Leaves for the exact CPU to run the instruction from here, as a careful copy's stub does for the
+// instruction an event falls in; compiled code continues where it can.
 static void emitStepExit(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	clobberFlags(c);
@@ -2502,8 +2513,8 @@ static void emitStepExit(struct Compiler* c, const struct Inst* in) {
 	xJmp(e, c->jit->exitRoutine);
 }
 
-// An instruction that writes the CPSR, run by the exact CPU; compiled code goes on after it, or where it
-// went, unless the exact CPU has to take over
+// An instruction that writes the CPSR, run by the exact CPU. Compiled code continues after it, or
+// wherever it went, unless the exact CPU has to take over.
 static void emitSystem(struct Compiler* c, const struct Inst* in) {
 	struct Emitter* e = &c->e;
 	bool writesPc = in->kind != I_MSR && !(in->kind == I_ALU && isTest(in->op));
@@ -2525,13 +2536,13 @@ static void emitSystem(struct Compiler* c, const struct Inst* in) {
 	xJmp(e, c->jit->exitRoutine);
 }
 
-// BX to a register
+// BX to a register.
 static void emitBx(struct Compiler* c, const struct Inst* in) {
 	loadGuest(c, RAX, in->rm, in);
 	emitIndirect(c, in, c->jit->dispatchBx);
 }
 
-// The branches: a known target is a linked jump, and BL also sets the return address
+// The branches: a known target is a linked jump, and BL also sets the return address.
 static void emitBranch(struct Compiler* c, const struct Inst* in, int index) {
 	struct Emitter* e = &c->e;
 	switch (in->kind) {
@@ -2558,7 +2569,7 @@ static void emitBranch(struct Compiler* c, const struct Inst* in, int index) {
 	}
 }
 
-// One instruction's code, by kind
+// Emits one instruction's code, by kind.
 static void emitBody(struct Compiler* c, const struct Inst* in, int index) {
 	if (jitStepOnly(in)) {
 		emitStepExit(c, in);
@@ -2605,9 +2616,8 @@ static void emitBody(struct Compiler* c, const struct Inst* in, int index) {
 	}
 }
 
-// An instruction with its condition
-// An instruction with its condition. Its fetch comes first, whether it runs or not; the exact CPU makes
-// the fetch of one left to it.
+// Emits an instruction with its condition. Its fetch comes first, whether it runs or not; for an
+// instruction left to the exact CPU, the exact CPU makes the fetch.
 static void emitOne(struct Compiler* c, const struct Inst* in, int index) {
 	struct Emitter* e = &c->e;
 	bool step = jitStepOnly(in);
@@ -2632,11 +2642,11 @@ static void emitOne(struct Compiler* c, const struct Inst* in, int index) {
 	}
 	flushPending(c);
 	uint8_t* skip = emitCondJump(c, in->cond, true);
-	// Both paths continue from the flags in ebp
+	// Both paths continue from the flags in ebp.
 	c->hostFlags = false;
 	emitBody(c, in, index);
 	if (isTerminator(in) || step) {
-		// Skipped, it costs its fetch and the block goes on past it
+		// When skipped, it costs its fetch and the block continues past it.
 		patchHere(e, skip);
 		c->hostFlags = false;
 		if (step) {
@@ -2653,7 +2663,8 @@ static void emitOne(struct Compiler* c, const struct Inst* in, int index) {
 	c->hostFlags = false;
 }
 
-// A word the game keeps rewriting: the code for the form it holds now, or out to compile for a new one
+// A word the game keeps rewriting: runs the code for the form it holds now, or leaves to compile a
+// new form.
 static void emitPoly(struct Compiler* c, const struct Inst* in, int index) {
 	struct Emitter* e = &c->e;
 	const struct Poly* poly = in->poly;
@@ -2695,10 +2706,10 @@ static void emitPoly(struct Compiler* c, const struct Inst* in, int index) {
 	c->hostFlags = false;
 }
 
-// What a check before instruction index covers: up to the next check, which comes after the next
-// dynamic instruction
+// Returns what a check before instruction index covers: up to the next check, which comes after the
+// next dynamic instruction.
 static int ahead(struct Compiler* c, int index) {
-	// After an access that stopped the prefetch buffer, the first fetch is nonsequential
+	// After an access that stopped the prefetch buffer, the first fetch is nonsequential.
 	int cycles = c->prefetch ? most(0, c->Ncyc - c->D) : 0;
 	for (int j = index; j < c->count; ++j) {
 		const struct Inst* in = &c->insts[j];
@@ -2719,7 +2730,7 @@ static int ahead(struct Compiler* c, int index) {
 	return cycles;
 }
 
-// One instruction's cycles that a check before it covers
+// One instruction's cycles that a check before it covers.
 static int ownCost(struct Compiler* c, int index) {
 	const struct Inst* in = &c->insts[index];
 	int cycles = c->prefetch ? most(0, c->Ncyc - c->D) : 0;
@@ -2733,26 +2744,27 @@ static int ownCost(struct Compiler* c, int index) {
 	return cycles + most_;
 }
 
-// Whether events inside an instruction can run once it is done: after it in the copy, or where it goes,
-// at the check there (or the run loop) before anything else runs
+// Whether events inside an instruction can run once it is done: after it in the copy, or where it
+// goes, at the check there (or in the run loop) before anything else runs.
 static bool deferrable(const struct Compiler* c, int index) {
 	const struct Inst* in = &c->insts[index];
-	// Not past a CPSR write: an IRQ an event asks for would then see the mask after it, not before
+	// Not past a CPSR write: an IRQ an event asks for would then see the mask from after it, not
+	// before.
 	return !in->poly && !jitStepOnly(in) && (!jitSystem(in) || (in->kind == I_MSR && in->spsr)) && in->cond != 0xF;
 }
 
-// Whether a deferral is taken up straight after the instruction, in the copy
+// Whether a deferral is taken up straight after the instruction, in the copy.
 static bool fallsThrough(const struct Compiler* c, int index) {
 	return index + 1 < c->count && !isTerminator(&c->insts[index]);
 }
 
-// One instruction with what surrounds it: the entry point a careful copy needs before it, its
-// condition's test, and the cycle counting after it
+// Emits one instruction with what surrounds it: the entry point a careful copy needs before it, its
+// condition's test, and the cycle counting after it.
 static void emitInst(struct Compiler* c, int index) {
 	const struct Inst* in = &c->insts[index];
 	c->cur = index;
 	if (c->careful) {
-		// Comes in here between instructions, flags in ebp and nothing pending
+		// Enters here between instructions, with the flags in ebp and nothing pending.
 		c->block->entries[index] = c->e.p;
 		int cost = ownCost(c, index);
 		emitCheck(c, index, cost);
@@ -2782,7 +2794,7 @@ static void emitInst(struct Compiler* c, int index) {
 	}
 }
 
-// What any of a rewritten word's forms read and what all of them write
+// What any of a rewritten word's forms read, and what all of them write.
 static uint8_t polyReads(const struct Compiler* c, const struct Inst* in, int index) {
 	(void) c;
 	(void) index;
@@ -2793,7 +2805,7 @@ static uint8_t polyReads(const struct Compiler* c, const struct Inst* in, int in
 	return reads;
 }
 
-// The flags every form of a rewritten instruction writes
+// The flags every form of a rewritten instruction writes.
 static uint8_t polyWrites(const struct Inst* in) {
 	uint8_t writes = F_ALL;
 	for (int i = 0; i < in->poly->count; ++i) {
@@ -2802,10 +2814,10 @@ static uint8_t polyWrites(const struct Inst* in) {
 	return writes;
 }
 
-// A pass over the block before emitting: which flags are live after each instruction, so that only
-// those are computed, and where the state has to be complete
+// A pass over the block before emitting: works out which flags are live after each instruction, so
+// only those are computed, and where the state has to be complete.
 static void analyze(struct Compiler* c) {
-	// A careful copy can hand any instruction to the exact CPU, which sees all the flags
+	// A careful copy can hand any instruction to the exact CPU, which sees all the flags.
 	for (int i = 0; i < c->count; ++i) {
 		c->checkpoint[i] = c->careful || i == 0 || isDynamic(c, &c->insts[i - 1]);
 	}
@@ -2827,7 +2839,7 @@ static void analyze(struct Compiler* c) {
 	}
 }
 
-// A lone branch at address back to start, in the cartridge, which doesn't change
+// Whether there is a lone branch at address back to start, in the cartridge, which doesn't change.
 static bool branchesBack(struct Compiler* c, uint32_t address, uint32_t start) {
 	if (codeKindOf(c->gba, address) != CODE_ROM) {
 		return false;
@@ -2841,7 +2853,7 @@ static bool branchesBack(struct Compiler* c, uint32_t address, uint32_t start) {
 	return in.kind == I_B && !in.link && in.cond == COND_AL && in.target == start;
 }
 
-// A known register shifted left or right by a constant, or a constant
+// A known register shifted left or right by a constant, or a constant.
 static bool knownOperand(const struct Operand* op, uint16_t known, const uint32_t* value, uint32_t* out) {
 	if (op->isImm) {
 		*out = op->imm;
@@ -2861,11 +2873,12 @@ static bool knownOperand(const struct Operand* op, uint16_t known, const uint32_
 	return false;
 }
 
-// A loop waiting on memory: it goes from the block's start round to it again, through the last
-// instruction to the start or to a lone branch back there; it stores nothing, loads only from fixed
-// addresses (in IWRAM and EWRAM, the cartridge's literals, or through a register it never changes) and
-// each register and flag it reads it either set first that time round or never sets. Each time round
-// then goes as the one before, as long as no event comes. Where the way back leaves the block, or 0.
+// Finds a loop waiting on memory: it goes from the block's start round to it again, through the
+// last instruction to the start or to a lone branch back there. It stores nothing, loads only from
+// fixed addresses (in IWRAM and EWRAM, the cartridge's literals, or through a register it never
+// changes), and each register and flag it reads is either set first that time round or never set.
+// Each time round then goes like the one before, as long as no event comes. Returns where the way
+// back leaves the block, or 0.
 static uint32_t idleExit(struct Compiler* c) {
 	const struct Inst* last = &c->insts[c->count - 1];
 	uint32_t start = c->insts[0].address;
@@ -2984,9 +2997,10 @@ static uint32_t idleExit(struct Compiler* c) {
 	return exit;
 }
 
-// At a waiting loop's start: when the last time round came back the same way, with no event run and the
-// prefetch buffer as it was, the times round that end before the next event go by at once; for a loop
-// reading DISPSTAT or VCOUNT, ones that end before they change, if they didn't change the last time round
+// At a waiting loop's start: when the last time round came back the same way, with no event run and
+// the prefetch buffer as it was, the times round that end before the next event are skipped at
+// once. For a loop reading DISPSTAT or VCOUNT, only those that end before they change, if they
+// didn't change last time round.
 static void emitIdleSkip(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	uint8_t* again[16];
@@ -3005,7 +3019,7 @@ static void emitIdleSkip(struct Compiler* c) {
 		xAluRM(e, X_CMP, 4, RAX, M(R15, OFF(idleLead)));
 		again[count++] = xJcc(e, CC_NE, NULL);
 	}
-	// ecx = one time round, eax = the cycles before the next event less one
+	// ecx = one time round, eax = the cycles before the next event minus one.
 	xMovRR(e, 4, RCX, R14);
 	xAluRM(e, X_SUB, 4, RCX, M(R15, OFF(idleCycles)));
 	again[count++] = xJcc(e, CC_LE, NULL);
@@ -3069,16 +3083,14 @@ static void emitIdleSkip(struct Compiler* c) {
 	}
 }
 
-// Compiles a block: analysis, then each instruction, then the cold code the instructions left for
-// the end (slow paths, exits and stubs). Fails if the code memory is full, and the caller flushes.
-// An idle loop's head (jitIsIdleHead): once events have run since the run loop last looked at it, it
-// leaves for the run loop to look again
+// An idle loop's head (jitIsIdleHead): once events have run since the run loop last looked at it,
+// it leaves for the run loop to look again.
 static void emitIdleHead(struct Compiler* c) {
 	struct Emitter* e = &c->e;
 	xLoad(e, 4, RAX, M(R15, OFF(eventRuns)));
 	xAluRM(e, X_CMP, 4, RAX, M(R15, OFF(idleHeadRuns)));
 	uint8_t* same = xJcc(e, CC_E, NULL);
-	// As a deferred event's exit leaves things
+	// As a deferred event's exit leaves things.
 	uint32_t pc = c->insts[0].address;
 	storeHead(c, pc + 2 * c->width);
 	xStoreI(e, 4, M(R15, OFF(exitPc)), pc);
@@ -3087,6 +3099,8 @@ static void emitIdleHead(struct Compiler* c) {
 	patchHere(e, same);
 }
 
+// Compiles a block: the analysis, then each instruction, then the cold code the instructions left for
+// the end (slow paths, exits and stubs). Fails if the code memory is full; the caller then flushes.
 bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, int count, const uint32_t* nextOps) {
 	struct GBA* gba = jit->gba;
 	struct Compiler c = {
@@ -3128,7 +3142,7 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 	for (int i = 0; i < count; ++i) {
 		emitInst(&c, i);
 	}
-	// A rewritten word's other forms go on past the one it held when compiled
+	// A rewritten word's other forms continue past the one it held when compiled.
 	const struct Inst* last = &insts[count - 1];
 	if ((!isTerminator(last) && !jitStepOnly(last)) || last->poly) {
 		clobberFlags(&c);
@@ -3136,7 +3150,8 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		emitLinkTo(&c, last->address + c.width, c.thumb);
 	}
 
-	// Cold code: memory accesses that missed the inline path, cycle-check exits and unlinked branches
+	// Cold code: memory accesses that missed the inline path, cycle-check exits, and unlinked
+	// branches.
 	struct Emitter* e = &c.e;
 	uint8_t* cold = e->p;
 	resetPending(&c);
@@ -3166,7 +3181,7 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 			xLea(e, 4, R14, M(R14, stub->pending));
 		}
 		if (!block->careful) {
-			// On in the careful copy from the same instruction, once there is one
+			// Continues in the careful copy from the same instruction, once there is one.
 			struct Link* link = &c.links[c.linkCount];
 			c.linkSites[c.linkCount++] = xJmp(e, NULL);
 			link->targetKey = blockKey(stub->pc, c.thumb);
@@ -3175,7 +3190,7 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 			link->from = block;
 			continue;
 		}
-		// Events inside the instruction run after it, or the exact CPU runs it
+		// Events inside the instruction run after it, or the exact CPU runs it.
 		storeHead(&c, stub->pc + 2 * c.width);
 		uint8_t* leaveHere = NULL;
 		if (!block->precharged) {
@@ -3191,8 +3206,8 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 			xAluI(e, X_CMP, 4, R(RAX), CAREFUL_LEAVE);
 			leaveHere = xJcc(e, CC_E, NULL);
 		}
-		// The exact CPU runs the instruction an event falls in; compiled code goes on after it, here if the
-		// copy is still there
+		// The exact CPU runs the instruction an event falls in; compiled code continues after it,
+		// here if the copy is still there.
 		xCall(e, jit->spillRoutine);
 		xMovRR(e, 8, RDI, R15);
 		xMovI(e, RSI, stub->pc);
@@ -3215,7 +3230,7 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		xStoreI(e, 4, M(R15, OFF(exitReason)), EXIT_EXACT);
 		xJmp(e, jit->exitRoutine);
 		if (leaveHere) {
-			// Out between instructions, for the run loop
+			// Leaves between instructions, for the run loop.
 			patchHere(e, leaveHere);
 			xStoreI(e, 4, M(R15, OFF(exitPc)), stub->pc);
 			xStoreI(e, 4, M(R15, OFF(exitReason)), EXIT_LOOKUP);
@@ -3223,7 +3238,7 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		}
 	}
 	for (int i = 0; i < c.deferredCount; ++i) {
-		// The events inside the instruction just done
+		// The events inside the instruction just done.
 		int index = c.deferred[i].index;
 		uint32_t next = c.insts[0].address + (index + 1) * c.width;
 		patchHere(e, c.deferred[i].site);
