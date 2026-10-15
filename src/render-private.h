@@ -12,24 +12,24 @@
 #include <string.h>
 
 // What render.c shares with its SIMD versions (render-neon.c, render-x86.c): row pixel flags,
-// register fields, blending and compositing
+// register fields, blending and compositing.
 
 enum {
-	// Where the priority and the layer's number sit in a row pixel
+	// Where the priority and the layer's number sit in a row pixel.
 	OFFSET_PRIORITY = 30,
 	OFFSET_INDEX = 28,
-	// A background counts as on at this value
+	// A background counts as on at this value.
 	ENABLED_MAX = 4,
-	// The sprite tiles start here in VRAM
+	// The sprite tiles start here in VRAM.
 	BASE_TILE = 0x10000,
-	// The cycles a line has for drawing sprites, with and without H-blank left free for the game
+	// The cycles a line has for drawing sprites, with and without H-blank left free for the game.
 	OBJ_HBLANK_FREE_LENGTH = 954,
 	OBJ_LENGTH = 1210,
 	TOTAL_LINES_ = 228,
 };
 
 enum {
-	// BLDCNT's effects
+	// BLDCNT's effects.
 	BLEND_NONE = 0,
 	BLEND_ALPHA = 1,
 	BLEND_BRIGHTEN = 2,
@@ -37,7 +37,7 @@ enum {
 };
 
 enum {
-	// A sprite's mode: ordinary, always a first blend target, or part of the object window's shape
+	// A sprite's mode: ordinary, always a first blend target, or part of the object window's shape.
 	OBJ_MODE_NORMAL = 0,
 	OBJ_MODE_SEMITRANSPARENT = 1,
 	OBJ_MODE_OBJWIN = 2,
@@ -50,17 +50,17 @@ enum {
 #define FLAG_INDEX 0x30000000u
 #define FLAG_IS_BACKGROUND 0x08000000u
 #define FLAG_UNWRITTEN 0xFC000000u
-// A sprite pixel that blends with whatever second target ends up under it
+// A sprite pixel that blends with whatever second target ends up under it.
 #define FLAG_REBLEND 0x04000000u
 // Whether the pixel is a first or a second target of the blend. The sprite layer reuses the second
 // target's bit for object window pixels.
 #define FLAG_TARGET_1 0x02000000u
 #define FLAG_TARGET_2 0x01000000u
 #define FLAG_OBJWIN 0x01000000u
-// The bits that order two pixels
+// The bits that order two pixels.
 #define FLAG_ORDER_MASK 0xF8000000u
 
-// Whether a pixel can still be drawn over or blended with
+// Whether a pixel can still be drawn over or blended with.
 #define IS_WRITABLE(PIXEL) ((PIXEL) & 0xFE000000u)
 
 #define COLOR_WHITE 0x7FFF
@@ -68,7 +68,7 @@ enum {
 #define UNLIKELY(X) __builtin_expect(!!(X), 0)
 #define LIKELY(X) __builtin_expect(!!(X), 1)
 
-// Width and height by shape and size: square, wide, tall
+// Width and height by shape and size: square, wide, tall.
 static const int objSizes[16][2] = {
 	{ 8, 8 }, { 16, 16 }, { 32, 32 }, { 64, 64 },
 	{ 16, 8 }, { 32, 8 }, { 32, 16 }, { 64, 32 },
@@ -89,24 +89,24 @@ static const int objSizes[16][2] = {
 #define DISPCNT_WIN1_ENABLE(D) ((D) & 0x4000)
 #define DISPCNT_OBJWIN_ENABLE(D) ((D) & 0x8000)
 
-// A window's control byte: the layers it shows, and whether blending happens inside it
+// A window's control byte: the layers it shows, and whether blending happens inside it.
 #define WIN_BG_ENABLE(W, N) (((W) >> (N)) & 1)
 #define WIN_OBJ_ENABLE(W) (((W) >> 4) & 1)
 #define WIN_BLEND_ENABLE(W) (((W) >> 5) & 1)
 
-// MOSAIC: each size is one less than the block's
+// MOSAIC: each size is one less than the block's.
 #define MOSAIC_BG_H(M) ((M) & 0xF)
 #define MOSAIC_BG_V(M) (((M) >> 4) & 0xF)
 #define MOSAIC_OBJ_H(M) (((M) >> 8) & 0xF)
 #define MOSAIC_OBJ_V(M) (((M) >> 12) & 0xF)
 
-// A text background's map entry
+// A text background's map entry.
 #define TEXT_MAP_TILE(MAP) ((MAP) & 0x03FF)
 #define TEXT_MAP_HFLIP(MAP) ((MAP) & 0x0400)
 #define TEXT_MAP_VFLIP(MAP) ((MAP) & 0x0800)
 #define TEXT_MAP_PALETTE(MAP) (((MAP) & 0xF000) >> 12)
 
-// A sprite's three attribute words. Bit 9 of the first means off for an ordinary sprite and double
+// A sprite's three attribute words. Bit 9 of the first means off for an ordinary sprite, and double
 // size for a transformed one.
 #define OBJ_A_Y(A) ((A) & 0xFF)
 #define OBJ_A_TRANSFORMED(A) (((A) >> 8) & 1)
@@ -125,7 +125,7 @@ static const int objSizes[16][2] = {
 #define OBJ_C_PRIORITY(C) (((C) >> 10) & 3)
 #define OBJ_C_PALETTE(C) (((C) >> 12) & 0xF)
 
-// Unaligned little-endian loads from guest memory
+// Unaligned little-endian loads from guest memory.
 static inline uint32_t load16(const uint8_t* base, uint32_t offset) {
 	uint16_t value;
 	memcpy(&value, base + offset, 2);
@@ -138,8 +138,8 @@ static inline uint32_t load32(const uint8_t* base, uint32_t offset) {
 	return value;
 }
 
-// Two 15-bit colors mixed with weights in sixteenths, each channel clipped: green is moved clear of
-// red and blue so that all three are done in one multiply
+// Mixes two 15-bit colors with weights in sixteenths, clipping each channel. Green is moved clear
+// of red and blue so all three are done in one multiply.
 static inline unsigned mix5(int weightA, unsigned colorA, int weightB, unsigned colorB) {
 	unsigned a = colorA & 0x7C1F;
 	unsigned b = colorB & 0x7C1F;
@@ -180,8 +180,8 @@ static inline unsigned darken(unsigned color, int y) {
 	return c;
 }
 
-// A row pixel as one 32-bit word, the color below the flags. On AArch64 the row is two planes, which
-// these join and split.
+// A row pixel as one 32-bit word, with the color below the flags. On AArch64 the row is two planes,
+// which these join and split.
 static inline uint32_t rowGet(const struct Renderer* renderer, int x) {
 #if defined(__aarch64__)
 	return (uint32_t) renderer->rowFlags[x] << 16 | renderer->rowColor[x];
@@ -199,7 +199,7 @@ static inline void rowSet(struct Renderer* renderer, int x, uint32_t value) {
 #endif
 }
 
-// The color of a row pixel, as the frame takes it
+// Returns the color of a row pixel, as the frame takes it.
 static inline uint16_t rowColorAt(const struct Renderer* renderer, int x) {
 #if defined(__aarch64__)
 	return renderer->rowColor[x];
@@ -208,7 +208,7 @@ static inline uint16_t rowColorAt(const struct Renderer* renderer, int x) {
 #endif
 }
 
-// Compositing: the flags in the top bits order the layers, and target 1 pixels may blend
+// Compositing: the flags in the top bits order the layers, and target 1 pixels may blend.
 
 static inline void compositeBlendObjwin(struct Renderer* renderer, int x, uint32_t color, uint32_t current) {
 	if (color >= current) {
@@ -254,13 +254,13 @@ static inline void compositeNoBlendNoObjwin(struct Renderer* renderer, int x, ui
 	rowSet(renderer, x, color);
 }
 
-// SIMD versions of the hot paths: AVX2 (picked at run time) on x86-64, NEON on AArch64
+// SIMD versions of the hot paths: AVX2 (chosen at run time) on x86-64, NEON on AArch64.
 #if defined(__x86_64__) || defined(__aarch64__)
 #define RENDER_SIMD 1
 #else
 #define RENDER_SIMD 0
 #endif
-// Mode 4 with mosaic: only AVX2 beats the scalar loop; on the A55 the NEON path lost 3-5%
+// Mode 4 with mosaic: only AVX2 beats the scalar loop; on the A55, the NEON path was 3-5% slower.
 #if defined(__x86_64__)
 #define RENDER_SIMD_MOSAIC 1
 #else
@@ -270,17 +270,17 @@ static inline void compositeNoBlendNoObjwin(struct Renderer* renderer, int x, ui
 bool renderHasSimd(void);
 bool renderTextSimd(struct GBA*, struct RenderBackground*, int y);
 
-// One sprite's pixels on a line, after preprocessSprite has worked out where they come from
+// One sprite's pixels on a line, after preprocessSprite has worked out where they come from.
 struct SpriteRun {
 	int outX;
 	int condition;
 	bool transformed;
 	bool wide;
-	// Untransformed: the column of the first pixel and its step, and the row
+	// Untransformed: the column of the first pixel and its step, and the row.
 	int inX;
 	int xOffset;
 	int inY;
-	// Transformed: the accumulators before the first pixel and their steps
+	// Transformed: the accumulators before the first pixel, and their steps.
 	int xAccum;
 	int yAccum;
 	int a;
@@ -292,11 +292,12 @@ struct SpriteRun {
 	unsigned maskLo;
 	unsigned maskHi;
 	uint32_t flags;
-	// The 32-bit palette and the offset of this sprite's colors in it
+	// The 32-bit palette, and the offset of this sprite's colors in it.
 	const uint32_t* palette;
 	int paletteBase;
 };
-// One row of a sprite, by localX, as SPRITE_DRAW_PIXEL_*_NORMAL reads it: texel and the bytes of its color
+// One row of a sprite, by localX, as SPRITE_DRAW_PIXEL_*_NORMAL reads it: the texel and the bytes
+// of its color.
 static inline void spriteRow(struct GBA* gba, const struct SpriteRun* run, int localY, uint8_t* texels, uint8_t* colorLow, uint8_t* colorHigh) {
 	const uint8_t* tiles = &gba->vram[BASE_TILE];
 	int rowBytes = run->wide ? 8 : 4;

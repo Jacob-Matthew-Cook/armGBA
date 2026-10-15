@@ -4,12 +4,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// The renderer on a second thread. The emulation thread keeps the renderer's registers as before but
-// draws nothing: it logs each call to the renderer, and with each line the VRAM pages, OAM and palette
-// changed since the last one. The worker makes the same calls in the same order on a copy of the
-// renderer and of that memory, so it draws what one thread would have. The frame is waited for where
-// it ends; or, started late, the frame before it is handed over there instead, so that drawing a frame
-// goes on alongside the next one's emulation, at the cost of a frame's delay.
+// The renderer on a second thread. The emulation thread keeps the renderer's registers as before
+// but draws nothing: it logs each call to the renderer, and with each line, the VRAM pages, OAM and
+// palette changed since the last one. The worker makes the same calls in the same order on a copy
+// of the renderer and of that memory, so it draws what one thread would have. The frame is waited
+// for where it ends; or, when started late, the frame before it is handed over there instead, so
+// drawing a frame overlaps the next one's emulation, at the cost of a frame's delay.
 
 #include "gba.h"
 
@@ -21,7 +21,7 @@
 
 enum {
 	LOG_SIZE = 8 << 20,
-	// The most one entry takes: a line with all of VRAM, OAM and the palette
+	// The most one entry takes: a line with all of VRAM, OAM and the palette.
 	LOG_MOST = 16 + SIZE_VRAM + SIZE_OAM + SIZE_PALETTE,
 	PAGE_SIZE = 0x800,
 	PAGES = SIZE_VRAM / PAGE_SIZE,
@@ -29,7 +29,7 @@ enum {
 
 enum {
 	LOG_REGISTER,
-	// The rest of the log up to its end is unused: entries don't wrap round
+	// The rest of the log up to its end is unused, since entries don't wrap around.
 	LOG_SKIP,
 	LOG_LINE,
 	LOG_START_LINE,
@@ -42,25 +42,27 @@ struct RenderThread {
 	pthread_mutex_t mutex;
 	pthread_cond_t wake;
 	pthread_cond_t idle;
-	// The copy the worker draws from; only its renderer, VRAM, OAM and palette are used
+	// The copy the worker draws from; only its renderer, VRAM, OAM and palette are used.
 	struct GBA* copy;
-	// A ring: positions only grow, and an entry is at its position modulo LOG_SIZE
+	// A ring: positions only grow, and an entry is at its position modulo LOG_SIZE.
 	uint8_t* log;
-	// How much is logged, and how much of that the worker has done
+	// How much is logged, and how much of that the worker has done.
 	atomic_ullong written;
 	atomic_ullong done;
 	atomic_bool asleep;
 	atomic_bool awaited;
 	bool quit;
-	// Late: the last frame the worker finished, and where in the log the last one logged ends
+	// When late: the last frame the worker finished, and where in the log the last frame logged
+	// ends.
 	bool late;
 	uint64_t finishLogged;
 	uint16_t finished[SCREEN_HEIGHT][SCREEN_WIDTH];
 };
 
-// Waking a sleeping core takes longer than most waits here, so a thread first looks for a while for what
-// it waits for: the worker for something logged, the other for the worker to have done up to target.
-// Until then, or a millisecond has gone by; whether it came.
+// Waking a sleeping core takes longer than most waits here, so a thread first spins for a while on
+// what it waits for: the worker for something logged, the other thread for the worker to have done
+// up to target. It spins until then or until a millisecond has passed, and returns whether the wait
+// ended.
 static bool spin(struct RenderThread* t, bool worker, uint64_t target) {
 	struct timespec start;
 	clock_gettime(CLOCK_MONOTONIC, &start);
@@ -81,7 +83,7 @@ static bool spin(struct RenderThread* t, bool worker, uint64_t target) {
 	return true;
 }
 
-// Makes a logged call on the copy; the entry's kind
+// Makes a logged call on the copy; returns the entry's kind.
 static uint32_t play(struct GBA* copy, const uint8_t* entry, uint32_t* size) {
 	uint32_t head[4];
 	memcpy(head, entry, sizeof(head));
@@ -132,7 +134,7 @@ static uint32_t play(struct GBA* copy, const uint8_t* entry, uint32_t* size) {
 }
 
 // The worker: takes entries off the log as they are written and makes the renderer calls they
-// describe on its own copy. With nothing to do it sleeps until woken.
+// describe on its own copy. With nothing to do, it sleeps until woken.
 static void* work(void* context) {
 	struct RenderThread* t = context;
 	for (;;) {
@@ -172,7 +174,7 @@ static void* work(void* context) {
 	}
 }
 
-// Until the worker has done the log up to target: the end of a frame, or all that is logged
+// Waits until the worker has done the log up to target: the end of a frame, or everything logged.
 static void await(struct RenderThread* t, uint64_t target) {
 	if (spin(t, false, target)) {
 		return;
@@ -186,12 +188,12 @@ static void await(struct RenderThread* t, uint64_t target) {
 	pthread_mutex_unlock(&t->mutex);
 }
 
-// Waits until the worker has done everything written so far
+// Waits until the worker has done everything written so far.
 static void drain(struct RenderThread* t) {
 	await(t, atomic_load(&t->written));
 }
 
-// Makes an entry of size bytes visible to the worker, and wakes it if it sleeps
+// Makes an entry of size bytes visible to the worker, and wakes it if it sleeps.
 static void publish(struct RenderThread* t, uint32_t size) {
 	atomic_store(&t->written, atomic_load(&t->written) + size);
 	if (atomic_load(&t->asleep)) {
@@ -201,7 +203,7 @@ static void publish(struct RenderThread* t, uint32_t size) {
 	}
 }
 
-// Room for the biggest entry, in one piece and clear of what the worker has yet to do
+// Finds room for the biggest entry, in one piece and clear of what the worker has yet to do.
 static uint8_t* reserve(struct RenderThread* t) {
 	uint64_t written = atomic_load(&t->written);
 	uint32_t at = written & (LOG_SIZE - 1);
@@ -218,7 +220,7 @@ static uint8_t* reserve(struct RenderThread* t) {
 	return &t->log[at];
 }
 
-// A log entry that is a call with up to three arguments
+// Logs an entry that is a call with up to three arguments.
 static void entry(struct GBA* gba, uint32_t kind, uint32_t a, uint32_t b, uint32_t c) {
 	struct RenderThread* t = gba->renderThread;
 	uint32_t head[4] = { kind, a, b, c };
@@ -226,8 +228,8 @@ static void entry(struct GBA* gba, uint32_t kind, uint32_t a, uint32_t b, uint32
 	publish(t, sizeof(head));
 }
 
-// The calls the emulation thread logs instead of making: a register write, a line start, a latch,
-// a line to draw, and the end of a frame
+// The calls the emulation thread logs instead of making: a register write, a line start, a latch, a
+// line to draw, and the end of a frame.
 void renderThreadRegister(struct GBA* gba, uint32_t address, uint16_t value) {
 	entry(gba, LOG_REGISTER, address, value, timingCurrentTime(gba) - gba->video.lineStart);
 }
@@ -266,7 +268,7 @@ void renderThreadScanline(struct GBA* gba, int y) {
 	}
 	uint32_t head[4] = { LOG_LINE, y | changed << 8, (uint32_t) pages, (uint32_t) (pages >> 32) };
 	memcpy(start, head, sizeof(head));
-	// Entries start on word boundaries
+	// Entries start on word boundaries.
 	publish(t, (data - start + 3) & ~3u);
 }
 
@@ -278,7 +280,7 @@ void renderThreadFinishFrame(struct GBA* gba) {
 		memcpy(gba->renderer.frame, t->copy->renderer.frame, sizeof(gba->renderer.frame));
 		return;
 	}
-	// The frame before this one, taken before the worker can finish another over it
+	// Takes the frame before this one, before the worker can finish another over it.
 	if (t->finishLogged) {
 		await(t, t->finishLogged);
 		memcpy(gba->renderer.frame, t->finished, sizeof(gba->renderer.frame));
@@ -287,7 +289,7 @@ void renderThreadFinishFrame(struct GBA* gba) {
 	t->finishLogged = atomic_load(&t->written);
 }
 
-// The copy takes on the renderer and its memory as they are, with nothing logged outstanding
+// The copy takes on the renderer and its memory as they are, with nothing logged outstanding.
 void renderThreadClone(struct GBA* gba) {
 	struct RenderThread* t = gba->renderThread;
 	struct GBA* copy = t->copy;
@@ -297,18 +299,18 @@ void renderThreadClone(struct GBA* gba) {
 	memcpy(copy->oam, gba->oam, sizeof(copy->oam));
 	memcpy(copy->palette, gba->palette, sizeof(copy->palette));
 	copy->renderer.copy = true;
-	// Late, the frame handed over next is the one this renderer last finished
+	// When late, the frame handed over next is the one this renderer last finished.
 	memcpy(t->finished, gba->renderer.frame, sizeof(t->finished));
 }
 
-// The worker's renderer, for the frontend to take the frame from
+// The worker's renderer, for the frontend to take the frame from.
 const struct Renderer* renderThreadRenderer(struct GBA* gba) {
 	drain(gba->renderThread);
 	return &gba->renderThread->copy->renderer;
 }
 
-// Starts the worker with a copy of the renderer and of video memory as they are now. late hands
-// each frame over one frame after it was made, so the emulation thread never waits.
+// Starts the worker with a copy of the renderer and of video memory as they are now. With late,
+// each frame is handed over one frame after it was made, so the emulation thread never waits.
 bool renderThreadStart(struct GBA* gba, bool late) {
 	if (gba->renderThread) {
 		return true;
@@ -342,7 +344,7 @@ bool renderThreadStart(struct GBA* gba, bool late) {
 	return true;
 }
 
-// Lets the worker finish what is logged, stops it, and gives drawing back to the emulation thread
+// Lets the worker finish what is logged, stops it, and gives drawing back to the emulation thread.
 void renderThreadStop(struct GBA* gba) {
 	struct RenderThread* t = gba->renderThread;
 	if (!t) {
@@ -354,8 +356,8 @@ void renderThreadStop(struct GBA* gba) {
 	pthread_cond_signal(&t->wake);
 	pthread_mutex_unlock(&t->mutex);
 	pthread_join(t->thread, NULL);
-	// The lines the copy has drawn, this renderer hasn't: it takes the copy's state to go on alone,
-	// with the changes not yet logged
+	// Covers the lines the copy has drawn but this renderer hasn't: this renderer takes the copy's
+	// state to carry on alone, with the changes not yet logged.
 	struct Renderer* renderer = &gba->renderer;
 	uint8_t memoryChanged = renderer->memoryChanged;
 	uint8_t vramChanged[PAGES];

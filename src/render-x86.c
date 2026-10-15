@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// AVX2 versions of the renderer's hot paths. They compute what render.c computes, eight pixels
-// at a time: the same compositing order, flags and 5-bit blending.
+// AVX2 versions of the renderer's hot paths. They compute what render.c computes, eight pixels at a
+// time, with the same compositing order, flags and 5-bit blending.
 
 #include "render-private.h"
 
@@ -13,8 +13,8 @@
 
 #define AVX2 __attribute__((target("avx2")))
 
-// The fast paths need AVX2; without it the reference loops draw. A build for machines that all have
-// it doesn't ask the CPU, which also spares linking libgcc's CPU check into the core.
+// The fast paths need AVX2; without it, the reference loops draw. A build for machines that all
+// have it doesn't ask the CPU, which also avoids linking libgcc's CPU check into the core.
 bool renderHasSimd(void) {
 #ifdef __AVX2__
 	return true;
@@ -24,7 +24,7 @@ bool renderHasSimd(void) {
 #endif
 }
 
-// mix5 on eight pixels
+// mix5 on eight pixels.
 AVX2 static inline __m256i mix5x8(__m256i weightA, __m256i colorA, __m256i weightB, __m256i colorB) {
 	const __m256i rb = _mm256_set1_epi32(0x7C1F);
 	const __m256i g = _mm256_set1_epi32(0x3E0);
@@ -41,13 +41,13 @@ AVX2 static inline __m256i mix5x8(__m256i weightA, __m256i colorA, __m256i weigh
 	return _mm256_or_si256(_mm256_and_si256(c, rb), _mm256_and_si256(_mm256_srli_epi32(c, 16), g));
 }
 
-// Eight entries of a row where the first count are real: plain loads and stores when all eight are,
-// since masked stores are slow on some CPUs
+// Loads eight entries of a row where the first count are real: plain loads and stores when all
+// eight are, since masked stores are slow on some CPUs.
 AVX2 static inline __m256i loadLanes(const uint32_t* p, int count, __m256i lanes) {
 	return count >= 8 ? _mm256_loadu_si256((const __m256i*) p) : _mm256_maskload_epi32((const int*) p, lanes);
 }
 
-// Stores the first count of eight lanes, for the end of a line
+// Stores the first count of eight lanes, for the end of a line.
 AVX2 static inline void storeLanes(uint32_t* p, int count, __m256i lanes, __m256i value) {
 	if (count >= 8) {
 		_mm256_storeu_si256((__m256i*) p, value);
@@ -56,7 +56,7 @@ AVX2 static inline void storeLanes(uint32_t* p, int count, __m256i lanes, __m256
 	}
 }
 
-// 32-bit copies of the palettes for gathers, and each bank split into bytes for shuffles
+// 32-bit copies of the palettes for gathers, and each bank split into bytes for shuffles.
 static void updatePalette32(struct GBA* gba) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16_t* normal = (const uint16_t*) gba->palette;
@@ -74,14 +74,14 @@ static void updatePalette32(struct GBA* gba) {
 	renderer->palette32Stale = 0;
 }
 
-// Eight pixels' colors from one 16-color bank: index bytes in, 32-bit colors out
+// Eight pixels' colors from one 16-color bank: index bytes in, 32-bit colors out.
 AVX2 static inline __m256i bankColors(const uint8_t (*bank)[16], __m128i indices) {
 	__m128i lo = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i*) bank[0]), indices);
 	__m128i hi = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i*) bank[1]), indices);
 	return _mm256_cvtepu16_epi32(_mm_unpacklo_epi8(lo, hi));
 }
 
-// One composite step for eight pixels: render.c's COMPOSITE_*_NO_OBJWIN where drawn is set
+// One composite step for eight pixels: render.c's COMPOSITE_*_NO_OBJWIN where drawn is set.
 AVX2 static inline __m256i compositeEight(struct Renderer* renderer, __m256i current, __m256i color, __m256i drawn, bool blend) {
 	const __m256i keep = _mm256_set1_epi32(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN);
 	const __m256i zero = _mm256_setzero_si256();
@@ -104,7 +104,7 @@ AVX2 static inline __m256i compositeEight(struct Renderer* renderer, __m256i cur
 	return _mm256_blendv_epi8(current, result, drawn);
 }
 
-// render.c's COMPOSITE_*_OBJWIN for eight pixels, once the color for each lane is chosen
+// render.c's COMPOSITE_*_OBJWIN for eight pixels, once the color for each lane is chosen.
 AVX2 static inline __m256i compositeEightObjwin(struct Renderer* renderer, __m256i current, __m256i color, __m256i drawn, bool blend) {
 	const __m256i keep = _mm256_set1_epi32(0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN);
 	const __m256i objwin = _mm256_set1_epi32(FLAG_OBJWIN);
@@ -129,8 +129,9 @@ AVX2 static inline __m256i compositeEightObjwin(struct Renderer* renderer, __m25
 	return _mm256_blendv_epi8(current, result, drawn);
 }
 
-// Composites palette indices onto the row: renderer.c's BACKGROUND_DRAW_PIXEL with COMPOSITE_*_NO_OBJWIN.
-// index[i] holds pixel start + i; an index of 0 within its tile (opaque[i] zero) draws nothing.
+// Composites palette indices onto the row: render.c's BACKGROUND_DRAW_PIXEL with
+// COMPOSITE_*_NO_OBJWIN. index[i] holds pixel start + i; an index of 0 within its tile (opaque[i]
+// zero) draws nothing.
 AVX2 static void compositeIndices(struct GBA* gba, const uint32_t* index, const uint32_t* opaque, uint32_t flags, bool variant) {
 	struct Renderer* renderer = &gba->renderer;
 	const int* normal = (const int*) renderer->normal32;
@@ -184,7 +185,8 @@ AVX2 static void compositeIndices(struct GBA* gba, const uint32_t* index, const 
 	}
 }
 
-// A text background without mosaic or the object window, as render.c's drawBackgroundMode0 draws it
+// Draws a text background without mosaic or the object window, as render.c's drawBackgroundMode0
+// does.
 AVX2 bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, int y) {
 	struct Renderer* renderer = &gba->renderer;
 	int length = renderer->end - renderer->start;
@@ -205,10 +207,10 @@ AVX2 bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, i
 	yBase = (background->screenBase >> 1) + (yBase << 2);
 	const uint8_t* vram = gba->vram;
 
-	// Indices from the start of the first tile; lead pixels of it lie before the window
+	// Indices from the start of the first tile; its lead pixels lie before the window.
 	int lead = inX & 7;
 	int count = lead + length;
-	// When the window ends inside the first, partial tile, mGBA lines its pixels up differently
+	// When the window ends inside the first, partial tile, mGBA lines its pixels up differently.
 	if (lead && count < 8) {
 		return false;
 	}
@@ -221,7 +223,8 @@ AVX2 bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, i
 	const __m256i zero = _mm256_setzero_si256();
 	int localY0 = inY & 0x7;
 	if (!background->multipalette) {
-		// Each tile's eight colors come from one 16-color bank: two byte shuffles, composited in place
+		// Each tile's eight colors come from one 16-color bank: two byte shuffles, composited in
+		// place.
 		const __m128i nibbleMask = _mm_set1_epi8(0x0F);
 		const __m128i flip = _mm_setr_epi8(7, 6, 5, 4, 3, 2, 1, 0, 8, 9, 10, 11, 12, 13, 14, 15);
 		const __m256i laneIndex = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
@@ -233,7 +236,8 @@ AVX2 bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, i
 		const __m256i last = _mm256_set1_epi32(renderer->end);
 		bool blend = background->flags & FLAG_TARGET_2;
 		bool variant = background->variant;
-		// With the object window on, pixels under it take objwinFlags and the object window palette
+		// With the object window on, pixels under it take objwinFlags and the object window
+		// palette.
 		bool objwinSlowPath = DISPCNT_OBJWIN_ENABLE(renderer->dispcnt);
 		bool objwinVariant = objwinSlowPath && background->target1 && WIN_BLEND_ENABLE(renderer->objwin.packed) &&
 		                     (renderer->blendEffect == BLEND_BRIGHTEN || renderer->blendEffect == BLEND_DARKEN);
@@ -250,7 +254,8 @@ AVX2 bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, i
 			uint16_t mapData = load16(vram, (yBase + (xBase >> 3)) << 1);
 			int localY = TEXT_MAP_VFLIP(mapData) ? 7 - localY0 : localY0;
 			uint32_t charBase = background->charBase + (TEXT_MAP_TILE(mapData) << 5) + (localY << 2);
-			// mGBA skips whole tiles past 64 KiB, but draws the partial ones at the ends of the run
+			// mGBA skips whole tiles past 64 KiB, but draws the partial ones at the ends of the
+			// run.
 			bool partial = (t == 0 && lead) || (t == tiles - 1 && (count & 7));
 			if (!partial && charBase >= 0x10000) {
 				continue;
@@ -298,7 +303,8 @@ AVX2 bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, i
 			} else {
 				__m256i underObjwin = _mm256_cmpeq_epi32(_mm256_and_si256(current, objwinBit), objwinBit);
 				if (!forceEnable) {
-					// (!(current & FLAG_OBJWIN)) == objwinOnly: drawn where being under the object window differs from objwinOnly
+					// (!(current & FLAG_OBJWIN)) == objwinOnly: drawn where being under the object
+					// window differs from objwinOnly.
 					drawn = _mm256_and_si256(drawn, _mm256_xor_si256(underObjwin, objwinOnly));
 				}
 				__m256i objwinColor = objwinVariant ? bankColors(renderer->bankBytes[1][bank], nibbles) : normal;
@@ -321,7 +327,8 @@ AVX2 bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, i
 		}
 		uint16_t mapData = load16(vram, (yBase + (xBase >> 3)) << 1);
 		int localY = TEXT_MAP_VFLIP(mapData) ? 7 - localY0 : localY0;
-		// mGBA skips whole tiles past 64 KiB, but draws the partial ones at the ends of a 16-color run
+		// mGBA skips whole tiles past 64 KiB, but draws the partial ones at the ends of a 16-color
+		// run.
 		bool partial = (t == 0 && lead) || (t == tiles - 1 && (count & 7));
 		__m256i idx;
 		if (!background->multipalette) {
@@ -356,8 +363,8 @@ AVX2 bool renderTextSimd(struct GBA* gba, struct RenderBackground* background, i
 	return true;
 }
 
-// render.c's postprocessSprite without the object window: sprites of one priority onto the row
-// Sprites wrote only columns [from, to) on this line
+// Merges the sprites of one priority onto the row: render.c's postprocessSprite without the object
+// window. Sprites wrote only columns [from, to) on this line.
 AVX2 void renderSpritesSimd(struct GBA* gba, unsigned priority, int from, int to) {
 	struct Renderer* renderer = &gba->renderer;
 	const __m256i unwritten = _mm256_set1_epi32(FLAG_UNWRITTEN);
@@ -381,7 +388,7 @@ AVX2 void renderSpritesSimd(struct GBA* gba, unsigned priority, int from, int to
 		}
 		__m256i current = edge ? _mm256_maskload_epi32((const int*) &renderer->row[x], inside) : _mm256_loadu_si256((const __m256i*) &renderer->row[x]);
 		__m256i color = _mm256_or_si256(sprite, flags);
-		// compositeBlendNoObjwin: blends whenever target 1 meets target 2
+		// compositeBlendNoObjwin: blends whenever target 1 meets target 2.
 		__m256i result = compositeEight(renderer, current, color, drawn, true);
 		if (edge) {
 			_mm256_maskstore_epi32((int*) &renderer->row[x], inside, result);
@@ -391,7 +398,7 @@ AVX2 void renderSpritesSimd(struct GBA* gba, unsigned priority, int from, int to
 	}
 }
 
-// The first part of render.c's postprocessBuffer: target 1 pixels blended with the backdrop
+// The first part of render.c's postprocessBuffer: blends target 1 pixels with the backdrop.
 AVX2 void renderBlendBackdropSimd(struct GBA* gba, int x, int end, uint32_t backdrop) {
 	struct Renderer* renderer = &gba->renderer;
 	const __m256i target1 = _mm256_set1_epi32(FLAG_TARGET_1);
@@ -412,20 +419,21 @@ AVX2 void renderBlendBackdropSimd(struct GBA* gba, int x, int end, uint32_t back
 	}
 }
 
-// Byte i of a 64-byte table for each index byte
+// Byte i of a 64-byte table for each index byte.
 AVX2 static inline __m128i lookup64(const __m128i* table, __m128i index) {
 	__m128i low = _mm_blendv_epi8(_mm_shuffle_epi8(table[0], index), _mm_shuffle_epi8(table[1], index), _mm_cmpgt_epi8(index, _mm_set1_epi8(15)));
 	__m128i high = _mm_blendv_epi8(_mm_shuffle_epi8(table[2], index), _mm_shuffle_epi8(table[3], index), _mm_cmpgt_epi8(index, _mm_set1_epi8(47)));
 	return _mm_blendv_epi8(low, high, _mm_cmpgt_epi8(index, _mm_set1_epi8(31)));
 }
 
-// Eight 32-bit lanes of small values as bytes
+// Eight 32-bit lanes of small values narrowed to bytes.
 AVX2 static inline __m128i packBytes(__m256i lanes) {
 	__m128i words = _mm_packus_epi32(_mm256_castsi256_si128(lanes), _mm256_extracti128_si256(lanes, 1));
 	return _mm_packus_epi16(words, words);
 }
 
-// render.c's SPRITE_NORMAL_LOOP and SPRITE_TRANSFORMED_LOOP with SPRITE_DRAW_PIXEL_*_NORMAL, eight pixels at a time
+// Draws a run of a sprite's pixels eight at a time: render.c's SPRITE_NORMAL_LOOP and
+// SPRITE_TRANSFORMED_LOOP with SPRITE_DRAW_PIXEL_*_NORMAL.
 AVX2 void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 	struct Renderer* renderer = &gba->renderer;
 	if (renderer->palette32Stale) {
@@ -453,8 +461,8 @@ AVX2 void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 	int inX = run->inX;
 	int xAccum = run->xAccum;
 	int yAccum = run->yAccum;
-	// An affine sprite whose rows don't turn (c == 0) reads a single row of itself, so its texels and
-	// their colors go in tables once
+	// An affine sprite whose rows don't turn (c == 0) reads a single row of itself, so its texels
+	// and their colors go into tables once.
 	int rowY = yAccum >> 8;
 	bool rowTable = run->transformed && !run->c && run->width <= 64 && !(rowY & ~(run->height - 1));
 	__m128i rowTexels[4];
@@ -479,7 +487,8 @@ AVX2 void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 		__m256i texel;
 		__m256i color;
 		if (!run->transformed && !run->wide && left >= 8 && (run->xOffset == 1 ? !(inX & 7) : run->xOffset == -1 && (inX & 7) == 7)) {
-			// One whole row of a 16-color tile: its two halfwords, as SPRITE_DRAW_PIXEL_16_NORMAL reads them
+			// One whole row of a 16-color tile: its two halfwords, as SPRITE_DRAW_PIXEL_16_NORMAL
+			// reads them.
 			unsigned xBase = (inX & ~7) * 4;
 			unsigned yBase = (run->inY & ~7) * run->stride + (run->inY & 7) * 4 + run->maskHi;
 			const uint8_t* tiles = &gba->vram[BASE_TILE];
@@ -504,7 +513,7 @@ AVX2 void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 				__m256i ys = _mm256_add_epi32(_mm256_set1_epi32(yAccum), _mm256_mullo_epi32(step, _mm256_set1_epi32(run->c)));
 				localX = _mm256_srai_epi32(xs, 8);
 				localY = _mm256_srai_epi32(ys, 8);
-				// The loop stops at the first pixel outside the sprite
+				// The loop stops at the first pixel outside the sprite.
 				__m256i outside = _mm256_or_si256(_mm256_and_si256(localX, _mm256_set1_epi32(~(run->width - 1))),
 				                                  _mm256_and_si256(localY, _mm256_set1_epi32(~(run->height - 1))));
 				outside = _mm256_and_si256(_mm256_xor_si256(_mm256_cmpeq_epi32(outside, zero), _mm256_set1_epi32(-1)), lanes);
@@ -565,9 +574,9 @@ AVX2 void renderSpriteRunSimd(struct GBA* gba, const struct SpriteRun* run) {
 	}
 }
 
-// render.c's drawBackgroundMode2 without mosaic or the object window: eight pixels' map and character
-// bytes gathered at once, then composited as a 256-color text background is. x and y are the coordinates
-// of the pixel before the window's first, as BACKGROUND_BITMAP_INIT leaves them.
+// render.c's drawBackgroundMode2 without mosaic or the object window: eight pixels' map and
+// character bytes gathered at once, then composited as a 256-color text background is. x and y are
+// the coordinates of the pixel before the window's first, as BACKGROUND_BITMAP_INIT leaves them.
 AVX2 void renderAffineSimd(struct GBA* gba, struct RenderBackground* background, int32_t x, int32_t y) {
 	struct Renderer* renderer = &gba->renderer;
 	if (renderer->palette32Stale) {
@@ -590,7 +599,7 @@ AVX2 void renderAffineSimd(struct GBA* gba, struct RenderBackground* background,
 	const __m256i zero = _mm256_setzero_si256();
 	const __m128i size = _mm_cvtsi32_si128(background->size);
 	for (int i = 0; i < length; i += 8) {
-		// The loop adds dx and dy before each pixel
+		// The loop adds dx and dy before each pixel.
 		__m256i xs = _mm256_add_epi32(_mm256_set1_epi32(x + i * background->dx), _mm256_mullo_epi32(step, dx));
 		__m256i ys = _mm256_add_epi32(_mm256_set1_epi32(y + i * background->dy), _mm256_mullo_epi32(step, dy));
 		__m256i inside = _mm256_set1_epi32(-1);
@@ -613,9 +622,9 @@ AVX2 void renderAffineSimd(struct GBA* gba, struct RenderBackground* background,
 	compositeIndices(gba, index, opaque, background->flags, background->variant);
 }
 
-// render.c's drawBackgroundMode4 without the object window. x and y are the coordinates of the pixel
-// before the window's first, as BACKGROUND_BITMAP_INIT leaves them; with mosaic, picked holds the
-// color index each pixel took instead, 0 for none.
+// render.c's drawBackgroundMode4 without the object window. x and y are the coordinates of the
+// pixel before the window's first, as BACKGROUND_BITMAP_INIT leaves them; with mosaic, picked holds
+// the color index each pixel took instead, or 0 for none.
 AVX2 void renderMode4Simd(struct GBA* gba, struct RenderBackground* background, int32_t x, int32_t y, const uint8_t* picked) {
 	struct Renderer* renderer = &gba->renderer;
 	if (renderer->palette32Stale) {
@@ -633,12 +642,13 @@ AVX2 void renderMode4Simd(struct GBA* gba, struct RenderBackground* background, 
 	const __m256i dx = _mm256_set1_epi32(background->dx);
 	const __m256i dy = _mm256_set1_epi32(background->dy);
 	const __m256i step = _mm256_add_epi32(laneIndex, _mm256_set1_epi32(1));
-	// Without rotation a row reads one line; shrunk at most by half, eight pixels lie within 16 bytes of it
+	// Without rotation, a row reads one line; shrunk at most by half, eight pixels lie within 16
+	// bytes of it.
 	bool flat = background->dy == 0 && background->dx > 0 && background->dx <= 0x200;
 	int length = renderer->end - renderer->start;
 	for (int i = 0; i < length; i += 8) {
 		__m256i lanes = _mm256_cmpgt_epi32(_mm256_set1_epi32(length - i), laneIndex);
-		// The loop adds dx and dy before each pixel
+		// The loop adds dx and dy before each pixel.
 		__m256i xs = _mm256_add_epi32(_mm256_set1_epi32(x + i * background->dx), _mm256_mullo_epi32(step, dx));
 		__m256i column = _mm256_srai_epi32(xs, 8);
 		__m256i inside;
@@ -658,7 +668,7 @@ AVX2 void renderMode4Simd(struct GBA* gba, struct RenderBackground* background, 
 		} else {
 			__m256i ys = _mm256_add_epi32(_mm256_set1_epi32(y + i * background->dy), _mm256_mullo_epi32(step, dy));
 			__m256i line = _mm256_srai_epi32(ys, 8);
-			// x and y in range: (unsigned) column < 240 and line < 160
+			// x and y in range: (unsigned) column < 240 and line < 160.
 			inside = _mm256_and_si256(_mm256_cmpgt_epi32(width, column), _mm256_cmpgt_epi32(height, line));
 			inside = _mm256_and_si256(inside, _mm256_cmpgt_epi32(_mm256_or_si256(column, line), _mm256_set1_epi32(-1)));
 			inside = _mm256_and_si256(inside, lanes);
