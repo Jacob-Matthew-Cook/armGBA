@@ -2,9 +2,10 @@
 
 A Game Boy Advance, Game Boy and Game Boy Color libretro core for low-power handhelds.
 
-armGBA builds on years of work by others. Much of its Game Boy Advance side is mGBA's code (Jeffrey
-Pfau and contributors), and mGBA is the reference it's tested against. Its Game Boy and Game Boy
-Color games run on Gambatte-Speedrun's core. See Credits for the full list.
+armGBA builds on years of work by others. Parts of its Game Boy Advance side come from mGBA (Jeffrey
+Pfau and contributors), notably the renderer, cheat engine, sound channels and save chips, and mGBA
+is the reference it's tested against. Its Game Boy and Game Boy Color games run on Gambatte-Speedrun's
+core. See Credits for the full list.
 
 What armGBA adds is a recompiler for the Game Boy Advance's CPU, so games run with headroom on slow
 handheld chips such as the Cortex-A35 and Cortex-A55. It stays accurate wherever a game could notice:
