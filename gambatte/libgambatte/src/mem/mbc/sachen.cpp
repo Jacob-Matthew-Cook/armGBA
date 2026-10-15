@@ -17,7 +17,7 @@ namespace gambatte {
 
 // Sachen's multicart mapper, as it is once its logo check has let the game start. The ROM is held
 // twice: the lower half with the header page as the cartridge's scrambled address lines show it,
-// for the fixed area; the upper half as dumped, for the switchable one.
+// for the fixed area; and the upper half as dumped, for the switchable one.
 Sachen::Sachen(MemPtrs &memptrs)
 : memptrs_(memptrs)
 , bank_(1)
@@ -77,8 +77,9 @@ void Sachen::SyncState(NewState *ns, bool isReader) {
 void Sachen::setBanks() const {
 	unsigned const half = rombanks(memptrs_) / 2;
 	unsigned base = base_ & mask_;
-	// A 512 KiB cartridge of two games (Rocman X Gold + 4 in 1) has the second at its upper half and
-	// picks it with the base's bit 6, as its own start-up code shows by comparing the two headers
+	// A 512 KiB cartridge of two games (Rocman X Gold + 4 in 1) has the second game in its upper
+	// half and picks it with the base's bit 6, as its own start-up code shows by comparing the two
+	// headers.
 	if (half == 32 && base & 0x40)
 		base = (base & 0x1F) | 0x10;
 	memptrs_.setRombank0(base & (half - 1));

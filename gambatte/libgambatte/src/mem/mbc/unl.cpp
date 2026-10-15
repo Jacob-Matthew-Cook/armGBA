@@ -17,8 +17,8 @@ namespace gambatte {
 
 // The unlicensed cartridges that are MBC5 with a lock on top: bank numbers with their bits out of
 // order, and the switchable bank's data with its bits out of order (BBD, Hitek, GGB81) or XORed
-// (Sintax). The tables are mGBA's and hhugboy's. A bank read through such a lock is unpacked into
-// a spare bank past the ROM's own when it is switched in.
+// (Sintax). The tables are mGBA's and hhugboy's. A bank read through such a lock is unpacked into a
+// spare bank past the ROM's own when it is switched in.
 namespace {
 
 typedef unsigned char Order[8];
@@ -121,7 +121,8 @@ void UnlMbc5::romWrite(unsigned const p, unsigned data, unsigned long const cc) 
 			sintaxBank_ = data;
 			data = reorder(data, sintaxBank[sintaxMode_]);
 		} else if ((p & 0xF0F0) == 0x5010) {
-			// The order of a bank number's bits; the bank last asked for is looked up again
+			// Applies the order of a bank number's bits; the bank last asked for is looked up
+			// again.
 			sintaxMode_ = data & 0xF;
 			romWrite(0x2000, sintaxBank_, cc);
 			return;
@@ -133,7 +134,7 @@ void UnlMbc5::romWrite(unsigned const p, unsigned data, unsigned long const cc) 
 		break;
 	case ntold1:
 	case ntold2:
-		// MBC3's RAM switch, a bank number, and at 5000 the multicart's menu choosing a game
+		// MBC3's RAM switch, a bank number, and, at 5000, the multicart's menu choosing a game.
 		if (p < 0x2000) {
 			enableRam_ = (data & 0xF) == 0xA;
 		} else if (p < 0x4000) {
@@ -161,8 +162,8 @@ void UnlMbc5::romWrite(unsigned const p, unsigned data, unsigned long const cc) 
 		setRombank();
 		return;
 	case ntnew:
-		// 55 written to 14xx splits the switchable area; the halves are then picked at 20xx and
-		// 24xx (hhugboy's conditions, narrower than mGBA's)
+		// Writing 55 to 14xx splits the switchable area; the halves are then picked at 20xx and
+		// 24xx (hhugboy's conditions, narrower than mGBA's).
 		if (p >> 8 == 0x14 && data == 0x55) {
 			split_ = true;
 			return;
@@ -266,7 +267,7 @@ void UnlMbc5::setRombank() {
 		return;
 	}
 	if (kind_ == ntnew && split_) {
-		// Two halves side by side in the spare bank
+		// Two halves side by side in the spare bank.
 		for (unsigned i = 0; i < 2; ++i) {
 			std::memcpy(spare + i * 0x2000, memptrs_.romdata() + (half_[i] & (banks_ * 2 - 1)) * 0x2000ul, 0x2000);
 		}

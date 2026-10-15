@@ -38,7 +38,7 @@ void Pkjd::romWrite(unsigned const p, unsigned const data, unsigned long const /
 		rombank_ = data & 0x7F;
 		break;
 	case 2:
-		// A RAM bank, or one of the counters (D, E) or their command register (F)
+		// A RAM bank, or one of the counters (D, E), or their command register (F).
 		if (data < 8 || (data >= 0xD && data <= 0xF))
 			select_ = data;
 		break;

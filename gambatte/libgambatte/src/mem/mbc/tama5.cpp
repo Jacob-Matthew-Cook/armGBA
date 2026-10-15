@@ -16,8 +16,8 @@
 namespace gambatte {
 
 // Bandai's TAMA5 with its TAMA6 clock, as mGBA documents them. All of it is kept in the cartridge
-// RAM bank past the chip's own 32 bytes, so that save states and the save file carry it. The clock
-// runs on emulated time.
+// RAM bank past the chip's own 32 bytes, so save states and the save file carry it. The clock runs
+// on emulated time.
 namespace {
 
 enum {
@@ -44,7 +44,7 @@ unsigned char const rtcMask[32] = {
 	0x0, 0x0, 0xF, 0x7, 0xF, 0x3, 0x7, 0xF, 0x3, 0x0, 0x1, 0x3, 0x0, 0x0, 0x0, 0x0,
 };
 
-// One more of a two-digit count kept as two nibbles; true when it wraps to `first`
+// Adds one to a two-digit count kept as two nibbles; returns true when it wraps to `first`.
 bool step(unsigned char *const ones, unsigned const first, unsigned const count) {
 	unsigned const value = ones[0] + ones[1] * 10 + 1;
 	bool const wrapped = value >= first + count;
@@ -65,7 +65,7 @@ Tama5::Tama5(MemPtrs &memptrs)
 unsigned char * Tama5::chip() const {
 	unsigned char *const s = memptrs_.rambankdata();
 	if (s[marker] != marked) {
-		// New memory, or a save from elsewhere with only the chip's 32 bytes
+		// New memory, or a save from elsewhere with only the chip's 32 bytes.
 		std::memset(s + ram_size, 0, 0x80 - ram_size);
 		s[alarm_page + page] = 1;
 		s[free_page0 + page] = 2;
@@ -90,7 +90,7 @@ void Tama5::resetCc(unsigned long const oldCc, unsigned long const newCc) {
 		s[last_cc + i] = last >> i * 8;
 }
 
-// The clock up to now: 2^22 cycles to the second
+// Brings the clock up to now: 2^22 cycles to the second.
 void Tama5::tick(unsigned long const cc) const {
 	unsigned char *const s = chip();
 	unsigned long last = s[last_cc] | s[last_cc + 1] << 8 | s[last_cc + 2] << 16 | 1ul * s[last_cc + 3] << 24;
