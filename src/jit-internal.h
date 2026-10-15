@@ -422,8 +422,6 @@ enum MemKind {
 };
 
 int codeKindOf(struct GBA*, uint32_t address);
-uint32_t codeFetch32(struct GBA*, uint32_t address);
-uint16_t codeFetch16(struct GBA*, uint32_t address);
 
 void jitRecordSite(struct Block*, uint32_t offset, uint32_t pc, uint32_t op0, uint32_t op1);
 // With ARMGBA_PERFMAP set, names generated code for perf in /tmp/perf-<pid>.map.
@@ -462,7 +460,6 @@ enum {
 int jitHelperCareful(struct GBA*, int32_t cost, int deferrable, const struct Block*);
 int jitHelperDeferred(struct GBA*, const struct Block*);
 void jitHelperReload(struct GBA*, uint32_t target);
-void jitHelperMsr(struct GBA*, uint32_t value, uint32_t packed);
 // Returns the C flag a flag-setting multiply leaves: kind 0 is MUL, 1 UMULL, 2 SMULL; operands are
 // in jitScratch.
 uint32_t jitMultiplyCarry(struct GBA*, uint32_t kind);

@@ -707,6 +707,7 @@ bool cpuModeHasSpsr(unsigned mode);
 bool cpuMultiplyCarryFull(uint32_t multiplier);
 bool cpuMultiplyCarryLow(uint32_t multiplicand, uint32_t multiplier, uint32_t accum);
 bool cpuMultiplyCarryHigh(uint32_t multiplicand, uint32_t multiplier, uint32_t accumHi, bool sign);
+void jitHelperMsr(struct GBA*, uint32_t value, uint32_t packed);
 
 // gba.c
 struct GBA* gbaCreate(void);
@@ -736,6 +737,9 @@ void gbaSaveState(struct GBA*, void* state);
 bool gbaLoadState(struct GBA*, const void* state, size_t size);
 
 // memory.c
+const uint8_t* codePointer(struct GBA*, uint32_t address);
+uint32_t codeFetch32(struct GBA*, uint32_t address);
+uint16_t codeFetch16(struct GBA*, uint32_t address);
 void memoryInit(struct GBA*);
 void memoryReset(struct GBA*);
 void memorySetActiveRegion(struct GBA*, uint32_t address);

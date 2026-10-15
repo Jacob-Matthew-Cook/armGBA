@@ -985,3 +985,54 @@ uint16_t memoryView16(struct GBA* gba, uint32_t address) {
 	uint32_t value = memoryView32(gba, address & ~3u);
 	return address & 2 ? value >> 16 : value;
 }
+
+// Returns where the code at an address lies in host memory, or NULL where there is nothing to fetch from.
+const uint8_t* codePointer(struct GBA* gba, uint32_t address) {
+	switch (address >> 24) {
+	case REGION_BIOS:
+		return address < SIZE_BIOS ? &gba->bios[address] : NULL;
+	case REGION_EWRAM:
+		return &gba->ewram[address & (SIZE_EWRAM - 1)];
+	case REGION_IWRAM:
+		return &gba->iwram[address & (SIZE_IWRAM - 1)];
+	case REGION_PALETTE:
+		return &gba->palette[address & (SIZE_PALETTE - 1)];
+	case REGION_VRAM:
+		return &gba->vram[vramOffset(address)];
+	case REGION_OAM:
+		return &gba->oam[address & (SIZE_OAM - 1)];
+	case REGION_ROM0 ... REGION_ROM2_EX: {
+		uint32_t offset = address & (SIZE_ROM - 1);
+		return offset < gba->romSize ? &gba->rom[offset] : cartPrintCode(gba, address);
+	}
+	default:
+		return NULL;
+	}
+}
+
+// Fetching from unmapped memory gives the undefined instruction mGBA uses there.
+enum {
+	DEAD_CODE = 0xE710B710,
+};
+
+// Returns the instruction word at an address as memory holds it now, without timing, or DEAD_CODE
+// where there is no memory to fetch from.
+uint32_t codeFetch32(struct GBA* gba, uint32_t address) {
+	const uint8_t* p = codePointer(gba, address & ~3u);
+	uint32_t value = DEAD_CODE;
+	if (p) {
+		memcpy(&value, p, 4);
+	}
+	return value;
+}
+
+// The same for a Thumb instruction.
+uint16_t codeFetch16(struct GBA* gba, uint32_t address) {
+	const uint8_t* p = codePointer(gba, address & ~1u);
+	if (!p) {
+		return (uint16_t) DEAD_CODE;
+	}
+	uint16_t value;
+	memcpy(&value, p, 2);
+	return value;
+}

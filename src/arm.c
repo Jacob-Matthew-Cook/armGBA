@@ -160,3 +160,32 @@ bool cpuMultiplyCarryHigh(uint32_t multiplicand, uint32_t multiplier, uint32_t a
 	sum += addend & 0x40000000;
 	return (sum ^ accum) >> 31;
 }
+
+enum {
+	PSR_USER_MASK = 0xF0000000,
+	PSR_PRIV_MASK = 0x000000CF,
+	PSR_STATE_MASK = 0x00000020,
+};
+
+// MSR: writes the fields named in the mask, leaving alone the bits a mode may not change; a change
+// of mode switches the banked registers.
+void jitHelperMsr(struct GBA* gba, uint32_t value, uint32_t packed) {
+	struct CPU* cpu = &gba->cpu;
+	uint32_t mask = packed & 0xFF0000FF;
+	if (packed & 0x100) {
+		mask &= PSR_USER_MASK | PSR_PRIV_MASK | PSR_STATE_MASK;
+		cpu->spsr = (cpu->spsr & ~mask) | (value & mask) | 0x10;
+		return;
+	}
+	uint32_t cpsr = cpu->cpsr;
+	if (mask & PSR_USER_MASK) {
+		cpsr = (cpsr & ~PSR_USER_MASK) | (value & PSR_USER_MASK);
+	}
+	if (mask & PSR_STATE_MASK) {
+		cpsr = (cpsr & ~PSR_STATE_MASK) | (value & PSR_STATE_MASK);
+	}
+	if (cpu->mode != MODE_USER && (mask & PSR_PRIV_MASK)) {
+		cpsr = (cpsr & ~PSR_PRIV_MASK) | (value & PSR_PRIV_MASK);
+	}
+	cpuWriteCpsr(gba, cpsr);
+}
