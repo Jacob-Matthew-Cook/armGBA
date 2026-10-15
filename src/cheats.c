@@ -16,8 +16,8 @@
 #include <string.h>
 
 // mGBA's cheat engine (core/cheats.c) and its GameShark, Action Replay v3 and CodeBreaker decoders
-// (gba/cheats/), with one difference: a code naming a hook in the game is still applied as the frame
-// ends, where mGBA applies the codes without one
+// (gba/cheats/), with one difference: a code naming a hook in the game is still applied as the
+// frame ends, as mGBA applies codes without one.
 
 #define COMPLETE ((size_t) -1)
 
@@ -49,7 +49,7 @@ enum {
 	OFFSET_MASK = 0x00FFFFFF,
 };
 
-// Which encryption the GameShark and Action Replay codes use, worked out from the first one
+// Which encryption the GameShark and Action Replay codes use, worked out from the first one.
 enum GameSharkVersion {
 	GS_NOT_SET,
 	GS_GSAV1,
@@ -141,7 +141,7 @@ enum {
 static const uint32_t gameSharkSeeds[4] = { 0x09F4FBBD, 0x9681884A, 0x352027E9, 0xF3DEE5A7 };
 static const uint32_t actionReplaySeeds[4] = { 0x7AA9648F, 0x7FAE6994, 0xC0EFAAD5, 0x42712C57 };
 
-// The tables a GameShark and an Action Replay reseed their keys from
+// The tables a GameShark and an Action Replay reseed their keys from.
 static const uint8_t gsa1T1[256] = {
 	0x31, 0x1C, 0x23, 0xE5, 0x89, 0x8E, 0xA1, 0x37, 0x74, 0x6D, 0x67, 0xFC, 0x1F, 0xC0, 0xB1, 0x94,
 	0x3B, 0x05, 0x56, 0x86, 0x00, 0x24, 0xF0, 0x17, 0x72, 0xA2, 0x3D, 0x1B, 0xE3, 0x17, 0xC5, 0x0B,
@@ -239,7 +239,7 @@ void cheatsClear(struct CheatSet* set, struct GBA* gba) {
 	cheatsInit(set);
 }
 
-// A new operation, all zero, and where it is in the list
+// Adds a new operation, all zero, and returns where it is in the list.
 static struct Cheat* append(struct CheatSet* set) {
 	if (set->count == set->capacity) {
 		set->capacity = set->capacity ? set->capacity * 2 : 16;
@@ -264,7 +264,7 @@ static struct CheatPatch* appendPatch(struct CheatSet* set) {
 	return patch;
 }
 
-// Exactly digits hex digits; NULL if they aren't there
+// Reads exactly digits hex digits; returns NULL if they aren't there.
 static const char* hex(const char* line, int digits, uint32_t* out) {
 	uint32_t value = 0;
 	for (int i = 0; i < digits; ++i) {
@@ -279,7 +279,7 @@ static const char* hex(const char* line, int digits, uint32_t* out) {
 	return line + digits;
 }
 
-// How likely an address is to be one a code would touch
+// Scores how likely an address is to be one a code would touch.
 static int addressIsReal(uint32_t address) {
 	switch (address >> 24) {
 	case REGION_BIOS:
@@ -311,7 +311,7 @@ static int addressIsReal(uint32_t address) {
 	}
 }
 
-// GameShark and Action Replay: TEA (https://en.wikipedia.org/wiki/Tiny_Encryption_Algorithm)
+// GameShark and Action Replay: TEA (https://en.wikipedia.org/wiki/Tiny_Encryption_Algorithm).
 static void decryptGameShark(uint32_t* op1, uint32_t* op2, const uint32_t* seeds) {
 	uint32_t sum = 0xC6EF3720;
 	for (int i = 0; i < 32; ++i) {
@@ -485,10 +485,10 @@ static bool addGameShark(struct CheatSet* set, uint32_t op1, uint32_t op2) {
 	switch (set->gsaVersion) {
 	default:
 		setGameSharkVersion(set, GS_GSAV1);
-		// Fall through
+		// Fall through.
 	case GS_GSAV1:
 		decryptGameShark(&op1, &op2, set->gsaSeeds);
-		// Fall through
+		// Fall through.
 	case GS_GSAV1_RAW:
 		return addGameSharkRaw(set, op1, op2);
 	}
@@ -554,7 +554,7 @@ static int gameSharkProbability(uint32_t op1, uint32_t op2) {
 	return probability;
 }
 
-// Action Replay v3
+// Action Replay v3.
 static uint32_t parAddress(uint32_t x) {
 	return (x & 0xFFFFF) | ((x << 4) & 0x0F000000);
 }
@@ -578,7 +578,7 @@ static bool addParCondition(struct CheatSet* set, uint32_t op1, uint32_t op2) {
 	uint32_t condition = op1 & PAR3_COND;
 	int width = 1 << ((op1 & PAR3_WIDTH) >> PAR3_WIDTH_BASE);
 	if ((op1 & PAR3_ACTION) == PAR3_ACTION_DISABLE) {
-		// Codes that disable others: not supported, as in mGBA
+		// Codes that disable others aren't supported, as in mGBA.
 		return false;
 	}
 
@@ -643,7 +643,7 @@ static bool addParSpecial(struct CheatSet* set, uint32_t op2) {
 	struct Cheat* cheat;
 	switch (op2 & 0xFF000000) {
 	case PAR3_OTHER_SLOWDOWN:
-		// Not supported, as in mGBA
+		// Not supported, as in mGBA.
 		return false;
 	case PAR3_OTHER_BUTTON_1:
 	case PAR3_OTHER_BUTTON_2:
@@ -728,7 +728,7 @@ static bool addActionReplayRaw(struct CheatSet* set, uint32_t op1, uint32_t op2)
 	}
 
 	if (op1 >> 24 == 0xC4) {
-		// The hook a master code names
+		// The hook a master code names.
 		return true;
 	}
 
@@ -777,10 +777,10 @@ static bool addActionReplay(struct CheatSet* set, uint32_t op1, uint32_t op2) {
 	switch (set->gsaVersion) {
 	default:
 		setGameSharkVersion(set, GS_PARV3);
-		// Fall through
+		// Fall through.
 	case GS_PARV3:
 		decryptGameShark(&op1, &op2, set->gsaSeeds);
-		// Fall through
+		// Fall through.
 	case GS_PARV3_RAW:
 		return addActionReplayRaw(set, op1, op2);
 	}
@@ -842,7 +842,7 @@ static int actionReplayProbability(uint32_t op1, uint32_t op2) {
 			if (op2 & ~((1 << width) - 1)) {
 				probability -= 0x10;
 			}
-			// Fall through
+			// Fall through.
 		case PAR3_BASE_ASSIGN:
 		case PAR3_BASE_INDIRECT:
 			probability += addressIsReal(address);
@@ -857,7 +857,7 @@ static int actionReplayProbability(uint32_t op1, uint32_t op2) {
 	return probability;
 }
 
-// CodeBreaker, whose codes may be encrypted with keys a type 9 code gives
+// CodeBreaker, whose codes may be encrypted with keys a type 9 code gives.
 static void cbLoadByteswap(uint8_t* buffer, uint32_t op1, uint16_t op2) {
 	buffer[0] = op1 >> 24;
 	buffer[1] = op1 >> 16;
@@ -890,7 +890,7 @@ static void cbDecrypt(struct CheatSet* set, uint32_t* op1, uint16_t* op2) {
 		}
 		buffer[offsetX] = x2;
 
-		// After the store above: the two bits may be in the same byte
+		// After the store above, the two bits may be in the same byte.
 		uint8_t y2 = buffer[offsetY] & ~(1 << bitY);
 		if (x) {
 			y2 |= 1 << bitY;
@@ -920,7 +920,7 @@ static void cbDecrypt(struct CheatSet* set, uint32_t* op1, uint16_t* op2) {
 }
 
 static uint32_t cbRand(struct CheatSet* set) {
-	// The LCG rolled three times for enough bits
+	// The LCG is rolled three times for enough bits.
 	uint32_t roll = set->cbRngState * 0x41C64E6D + 0x3039;
 	uint32_t roll2 = roll * 0x41C64E6D + 0x3039;
 	uint32_t roll3 = roll2 * 0x41C64E6D + 0x3039;
@@ -1007,7 +1007,7 @@ static void cbReseed(struct CheatSet* set, uint32_t op1, uint16_t op2) {
 	for (size_t i = 0; i < sizeof(set->cbTable); ++i) {
 		set->cbTable[i] = i;
 	}
-	// Entries swapped as the code says
+	// Entries swapped as the code says.
 	for (size_t i = 0; i < 0x50; ++i) {
 		size_t x = cbSwapIndex(set);
 		size_t y = cbSwapIndex(set);
@@ -1143,7 +1143,7 @@ static bool addCodeBreaker(struct CheatSet* set, uint32_t op1, uint16_t op2) {
 		cheat->width = 2;
 		break;
 	case CB_IF_SPECIAL:
-		// Only "if these buttons are held", read from KEYINPUT, as in mGBA
+		// Only "if these buttons are held", read from KEYINPUT, as in mGBA.
 		if ((op1 & 0x0FFFFFFF) != 0x20) {
 			return false;
 		}
@@ -1173,8 +1173,8 @@ static bool addCodeBreaker(struct CheatSet* set, uint32_t op1, uint16_t op2) {
 	return true;
 }
 
-// An eight-by-eight line: GameShark or Action Replay, encrypted or not, as the first such line seems
-// most likely to be
+// An eight-by-eight line: GameShark or Action Replay, encrypted or not, whichever the first such
+// line seems most likely to be.
 static bool addAutodetect(struct CheatSet* set, uint32_t op1, uint32_t op2) {
 	if (set->gsaVersion != GS_NOT_SET) {
 		return set->gsaVersion < GS_PARV3 ? addGameShark(set, op1, op2) : addActionReplay(set, op1, op2);
@@ -1214,7 +1214,7 @@ static bool addAutodetect(struct CheatSet* set, uint32_t op1, uint32_t op2) {
 	return set->gsaVersion < GS_PARV3 ? addGameShark(set, op1, op2) : addActionReplay(set, op1, op2);
 }
 
-// VBA's "address:value", the value one, two or four bytes: a store, or a ROM patch
+// VBA's "address:value", the value one, two or four bytes: a store, or a ROM patch.
 static bool addVba(struct CheatSet* set, uint32_t address, const char* line) {
 	uint32_t value = 0;
 	int width = 0;
@@ -1242,7 +1242,7 @@ static bool addVba(struct CheatSet* set, uint32_t address, const char* line) {
 	return true;
 }
 
-// "XXXXXXXX XXXX" is CodeBreaker, "XXXXXXXX XXXXXXXX" GameShark or Action Replay
+// "XXXXXXXX XXXX" is CodeBreaker; "XXXXXXXX XXXXXXXX" is GameShark or Action Replay.
 static bool addLine(struct CheatSet* set, const char* line) {
 	uint32_t op1;
 	uint32_t op2;
@@ -1253,7 +1253,7 @@ static bool addLine(struct CheatSet* set, const char* line) {
 	}
 	if (*line == ':') {
 		// VBA's form when the address is somewhere a GBA has memory; otherwise a CodeBreaker code
-		// written with a colon
+		// written with a colon.
 		if (op1 >> 24 >= REGION_EWRAM && op1 >> 24 <= 0xD) {
 			return addVba(set, op1, line + 1);
 		}
@@ -1276,8 +1276,8 @@ static bool addLine(struct CheatSet* set, const char* line) {
 	return addAutodetect(set, op1, op2 << 16 | op3);
 }
 
-// A frontend's code is split into lines as mGBA's libretro core splits it: thirteen characters for a
-// CodeBreaker line, seventeen for the others
+// A frontend's code is split into lines as mGBA's libretro core splits it: thirteen characters for
+// a CodeBreaker line, seventeen for the others.
 bool cheatsAdd(struct CheatSet* set, const char* code) {
 	char line[18];
 	size_t length = strlen(code) + 1;
@@ -1307,7 +1307,7 @@ static uint32_t readMemory(struct GBA* gba, uint32_t address, int width) {
 	return 0;
 }
 
-// A store as the CPU would make it, compiled code and all, but taking no time
+// Makes a store as the CPU would, compiled code and all, but taking no time.
 static void writeMemory(struct GBA* gba, uint32_t address, int width, uint32_t value) {
 	int cycles = 0;
 	switch (width) {
@@ -1422,7 +1422,7 @@ void cheatsApply(struct CheatSet* set, struct GBA* gba) {
 				case CHEAT_IF_NAND:
 					condition = !(read & operand);
 					break;
-				// No button for codes to wait on, as in mGBA's libretro core
+				// There's no button for codes to wait on, as in mGBA's libretro core.
 				case CHEAT_IF_BUTTON:
 				case CHEAT_NEVER:
 					condition = false;

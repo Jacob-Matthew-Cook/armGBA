@@ -7,7 +7,8 @@
 #ifndef ARMGBA_CHEATS_H
 #define ARMGBA_CHEATS_H
 
-// Cheat codes: GameShark, Action Replay and CodeBreaker, decoded and applied as mGBA's cheat engine does
+// Cheat codes: GameShark, Action Replay and CodeBreaker, decoded and applied as mGBA's cheat engine
+// does.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,7 +16,7 @@
 
 struct GBA;
 
-// One operation a code decodes to
+// One operation a code decodes to.
 struct Cheat {
 	int type;
 	int width;
@@ -27,7 +28,7 @@ struct Cheat {
 	int32_t operandOffset;
 };
 
-// A ROM halfword a code replaces, and what was there before
+// A ROM halfword a code replaces, and what was there before.
 struct CheatPatch {
 	uint32_t address;
 	uint32_t value;
@@ -36,8 +37,8 @@ struct CheatPatch {
 	bool applied;
 };
 
-// The codes in force. They are decoded in the order given, since a master code changes how the codes
-// after it are decrypted.
+// The codes in force. They are decoded in the order given, since a master code changes how the
+// codes after it are decrypted.
 struct CheatSet {
 	struct Cheat* list;
 	size_t count;
@@ -45,8 +46,8 @@ struct CheatSet {
 	struct CheatPatch* patches;
 	size_t patchCount;
 	size_t patchCapacity;
-	// Where decoding stands: a code still waiting for its next line, the open Action Replay block, and
-	// each format's keys
+	// Where decoding stands: a code still waiting for its next line, the open Action Replay block,
+	// and each format's keys.
 	size_t incompleteCheat;
 	size_t incompletePatch;
 	size_t currentBlock;
@@ -60,12 +61,13 @@ struct CheatSet {
 };
 
 void cheatsInit(struct CheatSet*);
-// Undoes the codes' ROM changes and forgets them
+// Undoes the codes' ROM changes and forgets them.
 void cheatsClear(struct CheatSet*, struct GBA*);
-// A code as a libretro frontend gives it: lines of eight and four hex digits (CodeBreaker) or eight
-// and eight (GameShark, Action Replay), split by spaces or '+'. False if a line isn't a code.
+// Adds a code as a libretro frontend gives it: lines of eight and four hex digits (CodeBreaker) or
+// eight and eight (GameShark, Action Replay), split by spaces or '+'. Returns false if a line isn't
+// a code.
 bool cheatsAdd(struct CheatSet*, const char* code);
-// Runs the codes, once a frame as it ends
+// Runs the codes once a frame, as it ends.
 void cheatsApply(struct CheatSet*, struct GBA*);
 
 #endif
