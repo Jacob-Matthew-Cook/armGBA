@@ -8,13 +8,13 @@
 
 #include <string.h>
 
-// Cartridge save memory: SRAM, Flash and EEPROM, detected on first use like mGBA does
+// Cartridge save memory: SRAM, Flash and EEPROM, detected on first use as in mGBA.
 
 enum {
-	// How long an EEPROM reads busy after a write, in CPU cycles: about 7 ms
+	// How long an EEPROM reads busy after a write, in CPU cycles: about 7 ms.
 	EEPROM_SETTLE_CYCLES = 115000,
-	// And Flash after a sector is erased, as mGBA has it: 1.8 ms. A programmed byte reads back at
-	// once, as jsmolka's test has it on hardware; mGBA keeps the chip busy 39 us there.
+	// And Flash after a sector is erased, as in mGBA: 1.8 ms. A programmed byte reads back at once,
+	// as jsmolka's test shows on hardware; mGBA keeps the chip busy 39 us there.
 	FLASH_ERASE_CYCLES = 30000,
 };
 
@@ -43,14 +43,15 @@ enum {
 };
 
 enum {
-	// How far into that three-write sequence the chip is
+	// How far into that three-write sequence the chip is.
 	FLASH_STATE_RAW = 0,
 	FLASH_STATE_START = 1,
 	FLASH_STATE_CONTINUE = 2,
 };
 
 enum {
-	// The chip IDs games look for to tell a 64 KiB chip from a 128 KiB one, and the two command addresses
+	// The chip IDs games look for to tell a 64 KiB chip from a 128 KiB one, and the two command
+	// addresses.
 	FLASH_PANASONIC_MN63F805MNP = 0x1B32,
 	FLASH_SANYO_LE26FV10N1TS = 0x1362,
 	FLASH_BASE_HI = 0x5555,
@@ -75,13 +76,13 @@ void savedataInit(struct GBA* gba) {
 	memset(savedata->storage, 0xFF, sizeof(savedata->storage));
 }
 
-// A reset leaves the chip's contents and type alone and drops any command in progress
+// A reset leaves the chip's contents and type alone, and drops any command in progress.
 void savedataReset(struct GBA* gba) {
 	gba->savedata.command = EEPROM_COMMAND_NULL;
 	gba->savedata.flashState = FLASH_STATE_RAW;
 }
 
-// The save's size in bytes for the detected type; 0 until one is detected
+// Returns the save's size in bytes for the detected type, or 0 until one is detected.
 size_t savedataSize(struct GBA* gba) {
 	switch (gba->savedata.type) {
 	case SAVEDATA_SRAM:
@@ -101,7 +102,7 @@ size_t savedataSize(struct GBA* gba) {
 	}
 }
 
-// The first Flash access: the small chip until a game switches bank
+// On the first Flash access: the small chip, until a game switches bank.
 void savedataInitFlash(struct GBA* gba) {
 	struct Savedata* savedata = &gba->savedata;
 	if (savedata->type == SAVEDATA_AUTODETECT) {
@@ -114,7 +115,7 @@ void savedataInitFlash(struct GBA* gba) {
 	savedata->currentBank = savedata->data;
 }
 
-// The first EEPROM access: the small one until a game addresses past its end
+// On the first EEPROM access: the small one, until a game addresses past its end.
 void savedataInitEeprom(struct GBA* gba) {
 	struct Savedata* savedata = &gba->savedata;
 	if (savedata->type == SAVEDATA_AUTODETECT) {
@@ -123,14 +124,15 @@ void savedataInitEeprom(struct GBA* gba) {
 		return;
 	}
 	savedata->data = savedata->storage;
-	// Without a save file, a fresh EEPROM reads erased for the first 512 bytes and zero past them, as in mGBA
+	// Without a save file, a fresh EEPROM reads erased for the first 512 bytes and zero past them,
+	// as in mGBA.
 	if (!savedata->backed) {
 		memset(savedata->storage, 0, SIZE_EEPROM);
 		memset(savedata->storage, 0xFF, SIZE_EEPROM512);
 	}
 }
 
-// The first SRAM access
+// On the first SRAM access.
 void savedataInitSram(struct GBA* gba) {
 	struct Savedata* savedata = &gba->savedata;
 	if (savedata->type != SAVEDATA_AUTODETECT) {
@@ -140,7 +142,7 @@ void savedataInitSram(struct GBA* gba) {
 	savedata->data = savedata->storage;
 }
 
-// For cartridges whose type the override list gives: set it up as that type from the start
+// For cartridges whose type the override list gives: sets it up as that type from the start.
 void savedataForceType(struct GBA* gba, enum SavedataType type) {
 	struct Savedata* savedata = &gba->savedata;
 	if (savedata->type == type) {
@@ -173,7 +175,7 @@ void savedataForceType(struct GBA* gba, enum SavedataType type) {
 	}
 }
 
-// A byte from the current bank, or the chip's ID while a game has asked for it
+// Returns a byte from the current bank, or the chip's ID while a game has asked for it.
 uint8_t savedataReadFlash(struct GBA* gba, uint16_t address) {
 	struct Savedata* savedata = &gba->savedata;
 	if (savedata->command == FLASH_COMMAND_ID) {
@@ -184,15 +186,15 @@ uint8_t savedataReadFlash(struct GBA* gba, uint16_t address) {
 			return FLASH_SANYO_LE26FV10N1TS >> (address * 8);
 		}
 	}
-	// While the chip is busy the sector last erased reads as its status. Like mGBA, only the bit games
-	// poll: the top one, the opposite of the data's.
+	// While the chip is busy, the sector last erased reads as its status. As in mGBA, only the bit
+	// games poll is set: the top one, the opposite of the data's.
 	if (timingIsScheduled(gba, &savedata->dust) && (address >> 12) == savedata->settling) {
 		return (savedata->currentBank[address] ^ 0x80) & 0x80;
 	}
 	return savedata->currentBank[address];
 }
 
-// Only the 128 KiB chip has a second bank, so asking for it shows which chip the game expects
+// Only the 128 KiB chip has a second bank, so asking for it shows which chip the game expects.
 static void flashSwitchBank(struct GBA* gba, int bank) {
 	struct Savedata* savedata = &gba->savedata;
 	if (bank > 0 && savedata->type == SAVEDATA_FLASH512) {
@@ -208,7 +210,7 @@ static void flashErase(struct GBA* gba) {
 	memset(savedata->data, 0xFF, savedata->type == SAVEDATA_FLASH1M ? SIZE_FLASH1M : SIZE_FLASH512);
 }
 
-// One 4 KiB sector of the current bank
+// One 4 KiB sector of the current bank.
 static void flashEraseSector(struct GBA* gba, uint16_t sectorStart) {
 	struct Savedata* savedata = &gba->savedata;
 	savedata->dirty = true;
@@ -218,13 +220,14 @@ static void flashEraseSector(struct GBA* gba, uint16_t sectorStart) {
 	memset(&savedata->currentBank[sectorStart & ~0xFFF], 0xFF, 0x1000);
 }
 
-// A write to the Flash chip: a step of the command sequence, or the byte a command was waiting for
+// Handles a write to the Flash chip: a step of the command sequence, or the byte a command was
+// waiting for.
 void savedataWriteFlash(struct GBA* gba, uint16_t address, uint8_t value) {
 	struct Savedata* savedata = &gba->savedata;
 	switch (savedata->flashState) {
 	case FLASH_STATE_RAW:
 		switch (savedata->command) {
-		// The byte to program, or the bank to switch to, follows its command directly
+		// The byte to program, or the bank to switch to, follows its command directly.
 		case FLASH_COMMAND_PROGRAM:
 			savedata->dirty = true;
 			savedata->currentBank[address] = value;
@@ -250,7 +253,7 @@ void savedataWriteFlash(struct GBA* gba, uint16_t address, uint8_t value) {
 			savedata->flashState = FLASH_STATE_RAW;
 		}
 		break;
-	// The third write: a new command, or the second half of an erase
+	// The third write: a new command, or the second half of an erase.
 	case FLASH_STATE_CONTINUE:
 		savedata->flashState = FLASH_STATE_RAW;
 		if (address == FLASH_BASE_HI) {
@@ -288,7 +291,7 @@ void savedataWriteFlash(struct GBA* gba, uint16_t address, uint8_t value) {
 	}
 }
 
-// An address past the small EEPROM's 512 bytes means the 8 KiB one
+// An address past the small EEPROM's 512 bytes means the 8 KiB one.
 static void ensureEeprom(struct GBA* gba, uint32_t size) {
 	if (size < SIZE_EEPROM512 || gba->savedata.type == SAVEDATA_EEPROM) {
 		return;
@@ -296,8 +299,8 @@ static void ensureEeprom(struct GBA* gba, uint32_t size) {
 	gba->savedata.type = SAVEDATA_EEPROM;
 }
 
-// One bit to the EEPROM, sent by DMA; writeSize is how many of the transfer's words are left, which is
-// how the end of the address and the stop bit are told apart from data
+// Sends one bit to the EEPROM by DMA. writeSize is how many of the transfer's words are left, which
+// is how the end of the address and the stop bit are told apart from data.
 void savedataWriteEeprom(struct GBA* gba, uint16_t value, uint32_t writeSize) {
 	struct Savedata* savedata = &gba->savedata;
 	switch (savedata->command) {
@@ -315,7 +318,7 @@ void savedataWriteEeprom(struct GBA* gba, uint16_t value, uint32_t writeSize) {
 		}
 		break;
 	case EEPROM_COMMAND_WRITE:
-		// Address bits come before the 64 data bits and the stop bit; they end up as a bit offset
+		// Address bits come before the 64 data bits and the stop bit; they end up as a bit offset.
 		if (writeSize > 65) {
 			savedata->writeAddress <<= 1;
 			savedata->writeAddress |= (value & 0x1) << 6;
@@ -347,8 +350,8 @@ void savedataWriteEeprom(struct GBA* gba, uint16_t value, uint32_t writeSize) {
 	}
 }
 
-// One bit from the EEPROM. Outside a read it is the ready line: low while a write settles. A read is
-// four dummy bits and then the 64 bits of the block addressed.
+// Reads one bit from the EEPROM. Outside a read, it is the ready line: low while a write settles. A
+// read is four dummy bits, then the 64 bits of the addressed block.
 uint16_t savedataReadEeprom(struct GBA* gba) {
 	struct Savedata* savedata = &gba->savedata;
 	if (savedata->command != EEPROM_COMMAND_READ) {

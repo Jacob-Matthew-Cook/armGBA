@@ -7,11 +7,12 @@
 
 #include <string.h>
 
-// The four timers: overflows as events, or counted later where only sound FIFOs and cascades see them
+// The four timers: overflows as events, or counted later where only sound FIFOs and cascades see
+// them.
 
 static const int PRESCALE_BITS[4] = { 0, 6, 8, 10 };
 
-// Counting resumes `offset` cycles into the current prescaler period; `now` is when that happens
+// Counting resumes `offset` cycles into the current prescaler period; `now` is when that happens.
 static void start(struct GBA* gba, struct Timer* timer, uint32_t now, int32_t offset, uint32_t late) {
 	int32_t cycles = ((0x10000 - timer->counter) << timer->prescaleBits) - offset;
 	timer->quiet = 0;
@@ -21,12 +22,12 @@ static void start(struct GBA* gba, struct Timer* timer, uint32_t now, int32_t of
 	timingSchedule(gba, &timer->event, cycles - (int32_t) late);
 }
 
-// Cycles between overflows with the reload value as it stands
+// Returns the cycles between overflows with the reload value as it stands.
 static int32_t period(const struct Timer* timer) {
 	return (0x10000 - timer->reload) << timer->prescaleBits;
 }
 
-// Whether timer id clocks a sound FIFO that is switched on
+// Whether timer id clocks a sound FIFO that is switched on.
 static bool feeds(struct GBA* gba, int fifo, int id) {
 	struct Audio* audio = &gba->audio;
 	if (!audio->enable || id >= 2) {
@@ -35,7 +36,7 @@ static bool feeds(struct GBA* gba, int fifo, int id) {
 	return fifo ? (audio->chBLeft || audio->chBRight) && audio->chBTimer == id : (audio->chALeft || audio->chARight) && audio->chATimer == id;
 }
 
-// An overflow at time: each FIFO it clocks puts out its next sample
+// An overflow at time: each FIFO it clocks puts out its next sample.
 static void feedFifos(struct GBA* gba, int id, uint32_t time) {
 	for (int fifo = 0; fifo < 2; ++fifo) {
 		if (feeds(gba, fifo, id)) {
@@ -44,8 +45,8 @@ static void feedFifos(struct GBA* gba, int id, uint32_t time) {
 	}
 }
 
-// A timer overflows: it reloads, asks for its interrupt, clocks the FIFOs, and ticks the next timer
-// if that one counts overflows
+// Overflows a timer: it reloads, requests its interrupt, clocks the FIFOs, and ticks the next timer
+// if that one counts overflows.
 static void overflow(struct GBA* gba, int id, uint32_t late) {
 	struct Timer* timer = &gba->timers[id];
 	timer->counter = timer->reload;
@@ -65,20 +66,20 @@ enum {
 	QUIET_MAX = 64,
 };
 
-// Whether the timer after this one counts its overflows
+// Whether the timer after this one counts its overflows.
 static bool cascades(struct GBA* gba, int id) {
 	return id < 3 && gba->timers[id + 1].enable && gba->timers[id + 1].countUp;
 }
 
-// How many overflows after the one now only feed the FIFOs, none asking for DMA; following the FIFOs as
-// they empty, since a refill means planning again
+// Returns how many overflows after the current one only feed the FIFOs, with none requesting DMA.
+// It follows the FIFOs as they empty, since a refill means planning again.
 static int quietOverflows(struct GBA* gba, int id) {
 	if (gba->timers[id].doIrq) {
 		return 0;
 	}
 	int limit = QUIET_MAX;
 	if (cascades(gba, id)) {
-		// Ticking the timer after it is quiet too, up to the tick that overflows it
+		// Ticking the timer after it is quiet too, up to the tick that overflows it.
 		int ticks = 0xFFFF - (int) gba->timers[id + 1].counter;
 		if (ticks < limit) {
 			limit = ticks;
@@ -118,7 +119,7 @@ static int quietOverflows(struct GBA* gba, int id) {
 	return limit;
 }
 
-// Runs a timer's quiet overflows up to time. inclusive says whether one exactly at time counts.
+// Runs a timer's quiet overflows up to time; inclusive says whether one exactly at time counts.
 static void catchUp(struct GBA* gba, int id, uint32_t time, bool inclusive) {
 	struct Timer* timer = &gba->timers[id];
 	while (timer->quiet) {
@@ -137,21 +138,21 @@ static void catchUp(struct GBA* gba, int id, uint32_t time, bool inclusive) {
 }
 
 // Whether a timer event can run after the instruction it falls in instead of inside it: not if it
-// can start DMA, which an overflow asking for more FIFO data does
+// can start DMA, which an overflow asking for more FIFO data does.
 bool timerDeferrable(struct GBA* gba, const struct Event* event) {
 	for (int id = 0; id < 4; ++id) {
 		struct Timer* timer = &gba->timers[id];
 		if (event != &timer->event && event != &timer->controlWrite && event != &timer->reloadWrite) {
 			continue;
 		}
-		// An overflow can ask a FIFO's channel for more
+		// An overflow can ask a FIFO's channel for more data.
 		for (int fifo = 0; fifo < 2; ++fifo) {
 			struct Fifo* channel = fifo ? &gba->audio.chB : &gba->audio.chA;
 			for (int t = id; t < 4; ++t) {
 				if (feeds(gba, fifo, t) && channel->dmaSource > 0 && dmaFifoArmed(gba, channel->dmaSource)) {
 					return false;
 				}
-				// Cascaded, it ticks the timers after it
+				// When cascaded, it ticks the timers after it.
 				if (t + 1 < 4 && !(gba->timers[t + 1].enable && gba->timers[t + 1].countUp)) {
 					break;
 				}
@@ -162,15 +163,15 @@ bool timerDeferrable(struct GBA* gba, const struct Event* event) {
 	return true;
 }
 
-// All four timers' quiet overflows up to time
+// Runs all four timers' quiet overflows up to time.
 void timerCatchUp(struct GBA* gba, uint32_t time, bool inclusive) {
 	for (int id = 0; id < 4; ++id) {
 		catchUp(gba, id, time, inclusive);
 	}
 }
 
-// Something the quiet overflows were planned around is about to change: they are caught up, and the
-// timers go back to an event at their next overflow
+// Called when something the quiet overflows were planned around is about to change: they are caught
+// up, and the timers go back to an event at their next overflow.
 void timerReplan(struct GBA* gba, uint32_t time) {
 	for (int id = 0; id < 4; ++id) {
 		struct Timer* timer = &gba->timers[id];
@@ -183,7 +184,7 @@ void timerReplan(struct GBA* gba, uint32_t time) {
 	}
 }
 
-// A running timer stops: its count so far is kept
+// Stops a running timer, keeping its count so far.
 static void stop(struct GBA* gba, int id, uint32_t now, uint32_t late) {
 	struct Timer* timer = &gba->timers[id];
 	timer->counter += (now - timer->started) >> timer->prescaleBits;
@@ -194,8 +195,8 @@ static void stop(struct GBA* gba, int id, uint32_t now, uint32_t late) {
 	timer->running = false;
 }
 
-// The event at an overflow that is not quiet. Afterwards as many of the following ones as are quiet
-// are skipped over: the next event is the first that is not.
+// The event at an overflow that isn't quiet. Afterwards, as many of the following ones as are quiet
+// are skipped over: the next event is the first that isn't.
 static void overflowEvent(struct GBA* gba, void* context, uint32_t late) {
 	int id = (int) (intptr_t) context;
 	struct Timer* timer = &gba->timers[id];
@@ -211,14 +212,14 @@ static void overflowEvent(struct GBA* gba, void* context, uint32_t late) {
 	}
 }
 
-// A reload value reaches the timer a cycle after the write; it is used from the next overflow
+// A reload value reaches the timer one cycle after the write; it is used from the next overflow.
 static void reloadWritten(struct GBA* gba, void* context, uint32_t late) {
 	timerReplan(gba, timingCurrentTime(gba) - late);
 	struct Timer* timer = &gba->timers[(intptr_t) context];
 	timer->reload = timer->pendingReload;
 }
 
-// The control register, a cycle after the write: prescaler, cascade, interrupt, start and stop
+// The control register, one cycle after the write: prescaler, cascade, interrupt, start and stop.
 static void controlWritten(struct GBA* gba, void* context, uint32_t late) {
 	int id = (int) (intptr_t) context;
 	struct Timer* timer = &gba->timers[id];
@@ -239,7 +240,7 @@ static void controlWritten(struct GBA* gba, void* context, uint32_t late) {
 	if (!timer->enable) {
 		return;
 	}
-	// The prescaler runs off the system clock, whatever the timer does
+	// The prescaler runs off the system clock, whatever the timer does.
 	int32_t offset = now & ((1 << timer->prescaleBits) - 1);
 	if (wasEnabled) {
 		if (!timer->countUp) {
@@ -248,7 +249,7 @@ static void controlWritten(struct GBA* gba, void* context, uint32_t late) {
 	} else if (timer->countUp) {
 		timer->counter = timer->reload;
 	} else if (timer->counter == 0xFFFF && !offset) {
-		// Loading the reload value takes a cycle, in which the old count can still tick over
+		// Loading the reload value takes a cycle, in which the old count can still tick over.
 		start(gba, timer, now, 0, late);
 	} else {
 		timer->counter = timer->reload;
@@ -266,10 +267,11 @@ void timerInit(struct GBA* gba) {
 	}
 }
 
-// The counter as it reads now: worked out from when the timer was started, not counted
+// Returns the counter as it reads now, worked out from when the timer was started rather than
+// counted.
 uint16_t timerReadCounter(struct GBA* gba, int id) {
 	struct Timer* timer = &gba->timers[id];
-	// The timers before it can have ticks for it waiting
+	// The timers before it may have ticks waiting for it.
 	for (int i = 0; i <= id; ++i) {
 		catchUp(gba, i, timingCurrentTime(gba), true);
 	}
@@ -280,7 +282,7 @@ uint16_t timerReadCounter(struct GBA* gba, int id) {
 	return counter;
 }
 
-// Writes to a timer take effect a cycle later, so they are events
+// Writes to a timer take effect one cycle later, so they are events.
 void timerWriteReload(struct GBA* gba, int id, uint16_t reload) {
 	struct Timer* timer = &gba->timers[id];
 	timer->pendingReload = reload;

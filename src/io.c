@@ -6,15 +6,16 @@
 #include "gba.h"
 #include "jit.h"
 
-// I/O register reads and writes, with mGBA's masking and side effects
+// I/O register reads and writes, with mGBA's masking and side effects.
 
-// The registers as the hardware leaves them at power-on. Without a BIOS to run, as the BIOS leaves them.
+// Sets the registers as the hardware leaves them at power-on, or, without a BIOS to run, as the
+// BIOS leaves them.
 void ioInit(struct GBA* gba) {
 	gba->io[IO(REG_DISPCNT)] = 0x0080;
 	gba->io[IO(REG_RCNT)] = 0x8000;
 	gba->io[IO(REG_KEYINPUT)] = 0x3FF ^ gba->keysActive;
 	gba->io[IO(REG_SOUNDBIAS)] = 0x200;
-	// The affine backgrounds' matrices start as the identity: 1.0 in 8.8 fixed point
+	// The affine backgrounds' matrices start as the identity: 1.0 in 8.8 fixed point.
 	gba->io[IO(0x020)] = 0x100;
 	gba->io[IO(0x026)] = 0x100;
 	gba->io[IO(0x030)] = 0x100;
@@ -27,14 +28,14 @@ void ioInit(struct GBA* gba) {
 	}
 }
 
-// Only the BIOS can set POSTFLG or halt the CPU, and POSTFLG can't be cleared
+// Only the BIOS can set POSTFLG or halt the CPU, and POSTFLG can't be cleared.
 static void writePostflg(struct GBA* gba, uint8_t value) {
 	if (gba->activeRegion == REGION_BIOS) {
 		gba->io[IO(REG_POSTFLG)] |= value & 1;
 	}
 }
 
-// HALTCNT: sleep until an interrupt, or with the top bit set until a key is pressed
+// HALTCNT: sleeps until an interrupt or, with the top bit set, until a key is pressed.
 static void writeHaltcnt(struct GBA* gba, uint8_t value) {
 	if (gba->activeRegion != REGION_BIOS) {
 		return;
@@ -46,8 +47,8 @@ static void writeHaltcnt(struct GBA* gba, uint8_t value) {
 	}
 }
 
-// A write to one of the four tone and noise channels. The sound so far is mixed first, as it was made
-// with the old value.
+// Handles a write to one of the four tone and noise channels. The sound so far is mixed first,
+// since it was made with the old value.
 static void writeSound(struct GBA* gba, uint32_t address, uint16_t value) {
 	audioSync(gba);
 	switch (address) {
@@ -98,12 +99,13 @@ static void writeSound(struct GBA* gba, uint32_t address, uint16_t value) {
 	}
 }
 
-// A 16-bit write to an I/O register at address (an offset into the I/O space). Each case does what the
-// write does and masks value down to the bits that read back; a case that returns has stored its own.
+// Handles a 16-bit write to an I/O register at address (an offset into the I/O space). Each case
+// does what the write does and masks value down to the bits that read back; a case that returns has
+// stored its own.
 void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
-	// The video registers, apart from DISPSTAT and VCOUNT, belong to the renderer
+	// The video registers, apart from DISPSTAT and VCOUNT, belong to the renderer.
 	if (address < REG_SOUND1CNT_LO && (address > REG_VCOUNT || address < REG_DISPSTAT)) {
-		// Lines that started have taken what they latch at their start
+		// Lines that have started have taken what they latch at their start.
 		videoSync(gba);
 		gba->io[address >> 1] = renderWriteRegister(gba, address, value);
 		if (gba->renderThread) {
@@ -111,7 +113,7 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 		}
 		return;
 	}
-	// With the master switch off the sound registers cannot be written
+	// With the master switch off, the sound registers can't be written.
 	if (address >= REG_SOUND1CNT_LO && address <= REG_SOUNDCNT_LO && !gba->audio.enable) {
 		return;
 	}
@@ -120,7 +122,7 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	case REG_DISPSTAT:
 		value = videoWriteDispstat(gba, value);
 		break;
-	// Read-only
+	// Read-only.
 	case REG_VCOUNT:
 		return;
 
@@ -182,8 +184,8 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 		audioWriteSoundbias(gba, value);
 		break;
 
-	// The wave RAM and the DMA addresses are 32-bit registers: a write to either half goes on as a
-	// write of the whole, with the other half as it stands
+	// The wave RAM and the DMA addresses are 32-bit registers: a write to either half becomes a
+	// write of the whole, with the other half as it stands.
 	case 0x090:
 	case 0x094:
 	case 0x098:
@@ -221,7 +223,7 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 		ioWrite32(gba, address - 2, gba->io[(address >> 1) - 1] | (value << 16));
 		return;
 
-	// The DMA counts, which are write-only and need nothing done until the control word is written
+	// The DMA counts, which are write-only and need nothing done until the control word is written.
 	case 0x0B8:
 	case 0x0C4:
 	case 0x0D0:
@@ -240,7 +242,7 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 		value = dmaWriteControl(gba, 3, value);
 		break;
 
-	// A timer's reload and control each reach the timer a cycle later, which the timer sees to
+	// A timer's reload and control each reach the timer one cycle later, which the timer handles.
 	case 0x100:
 	case 0x104:
 	case 0x108:
@@ -254,16 +256,16 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 		timerWriteControl(gba, (address - 0x102) >> 2, value);
 		return;
 
-	// The serial port
+	// The serial port.
 	case REG_SIODATA32_LO ... 0x12E:
 	case REG_RCNT ... REG_JOYSTAT:
 		sioWrite(gba, address, value);
 		return;
 
 	case REG_KEYINPUT:
-		// Read-only, and kept as the keys are
+		// Read-only, and kept up to date with the keys.
 		return;
-	// The key interrupt's mask and condition
+	// The key interrupt's mask and condition.
 	case REG_KEYCNT:
 		value &= 0xC3FF;
 		if (gba->keysLast < 0x400) {
@@ -272,8 +274,8 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 		gba->io[address >> 1] = value;
 		gbaTestKeypadIrq(gba, 0);
 		return;
-	// The cartridge's wait states. Compiled code has them built in, so a change is passed on with how
-	// far the fetch in progress has got.
+	// The cartridge's wait states. Compiled code has them built in, so a change is passed on with
+	// how far the fetch in progress has got.
 	case REG_WAITCNT: {
 		value &= 0x5FFF;
 		int32_t gap = jitFetchGap(gba);
@@ -294,12 +296,12 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 		return;
 	case REG_MAX:
 		break;
-	// POSTFLG and HALTCNT are the two bytes of this halfword
+	// POSTFLG and HALTCNT are the two bytes of this halfword.
 	case REG_POSTFLG:
 		writePostflg(gba, value);
 		writeHaltcnt(gba, value >> 8);
 		return;
-	// The undocumented work RAM wait control at 0x800, kept past the end of the ordinary registers
+	// The undocumented work RAM wait control at 0x800, kept past the end of the ordinary registers.
 	case REG_EXWAITCNT_HI:
 		address = REG_INTERNAL_EXWAITCNT_HI;
 		value &= 0xFF00;
@@ -317,8 +319,8 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	gba->io[address >> 1] = value;
 }
 
-// A byte write: a few registers act on a single byte, and the rest become a write of the halfword
-// with its other byte as it stands
+// Handles a byte write: a few registers act on a single byte, and the rest become a write of the
+// halfword with its other byte as it stands.
 void ioWrite8(struct GBA* gba, uint32_t address, uint8_t value) {
 	if (address > SIZE_IO) {
 		return;
@@ -425,7 +427,7 @@ void ioWrite8(struct GBA* gba, uint32_t address, uint8_t value) {
 	case REG_POSTFLG + 1:
 		writeHaltcnt(gba, value);
 		return;
-	// A timer's reload can be written a byte at a time; its control is one byte
+	// A timer's reload can be written a byte at a time; its control is one byte.
 	case 0x100 ... 0x10F: {
 		struct Timer* timer = &gba->timers[(address - 0x100) >> 2];
 		switch (address & 3) {
@@ -450,7 +452,8 @@ void ioWrite8(struct GBA* gba, uint32_t address, uint8_t value) {
 	}
 }
 
-// A 32-bit write: the registers that are 32 bits wide, or else two 16-bit writes, low half first
+// Handles a 32-bit write: the registers that are 32 bits wide, otherwise two 16-bit writes, low
+// half first.
 void ioWrite32(struct GBA* gba, uint32_t address, uint32_t value) {
 	switch (address) {
 	case 0x090:
@@ -496,8 +499,8 @@ void ioWrite32(struct GBA* gba, uint32_t address, uint32_t value) {
 	gba->io[(address >> 1) + 1] = value >> 16;
 }
 
-// A 16-bit read. Registers that keep time are brought up to date; write-only ones read as open bus;
-// the rest read back what a write stored.
+// Handles a 16-bit read. Registers that keep time are brought up to date; write-only ones read as
+// open bus; the rest read back what a write stored.
 uint16_t ioRead(struct GBA* gba, uint32_t address) {
 	switch (address) {
 	case 0x100:
@@ -525,10 +528,10 @@ uint16_t ioRead(struct GBA* gba, uint32_t address) {
 	case 0x0BC ... 0x0C2:
 	case 0x0C8 ... 0x0CE:
 	case 0x0D4 ... 0x0DA:
-		// Write-only
+		// Write-only.
 		return memoryLoadBad(gba);
 
-	// The DMA counts and the unused register after IME read as 0
+	// The DMA counts and the unused register after IME read as 0.
 	case 0x0B8:
 	case 0x0C4:
 	case 0x0D0:
@@ -576,7 +579,7 @@ uint16_t ioRead(struct GBA* gba, uint32_t address) {
 		if (!(gba->io[IO(REG_SOUNDCNT_X)] & 0x80)) {
 			return 0;
 		}
-		// Fall through
+		// Fall through.
 	case REG_DISPCNT:
 	case REG_STEREOCNT:
 	case REG_BG0CNT:
@@ -605,7 +608,7 @@ uint16_t ioRead(struct GBA* gba, uint32_t address) {
 	case REG_IME:
 	case REG_POSTFLG:
 		break;
-	// Unused halves of the sound registers, which read as 0 instead of open bus
+	// Unused halves of the sound registers, which read as 0 instead of open bus.
 	case 0x066:
 	case 0x06A:
 	case 0x06E:
@@ -617,7 +620,7 @@ uint16_t ioRead(struct GBA* gba, uint32_t address) {
 	case 0x206:
 	case 0x302:
 		return 0;
-	// Stored out of the way, at the end of the array
+	// Stored out of the way, at the end of the array.
 	case REG_EXWAITCNT_LO:
 	case REG_EXWAITCNT_HI:
 		address += REG_INTERNAL_EXWAITCNT_LO - REG_EXWAITCNT_LO;

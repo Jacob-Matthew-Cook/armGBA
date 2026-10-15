@@ -7,21 +7,21 @@
 #include "jit-internal.h"
 
 // Timed bus accesses. Each moves the clock on by its own cycles and lets events due by then happen
-// before it reads or writes, so what it sees is what the hardware would. A DMA waiting for the bus
-// goes before the CPU's next access.
+// before it reads or writes, so it sees what the hardware would. A DMA waiting for the bus goes
+// before the CPU's next access.
 
-// The six regions the cartridge ROM is mirrored in
+// The six regions the cartridge ROM is mirrored in.
 static bool inRom(uint32_t address) {
 	return (address >> 24) >= REGION_ROM0 && (address >> 24) <= REGION_ROM2_EX;
 }
 
-// 1 plus the wait states
+// 1 plus the wait states.
 int32_t busCycles(struct GBA* gba, uint32_t address, int size, bool seq) {
 	unsigned region = address >> 24;
 	switch (region) {
 	case REGION_SRAM:
 	case REGION_SRAM_MIRROR:
-		// An 8-bit bus that takes the same time whatever the size
+		// An 8-bit bus that takes the same time whatever the size.
 		return 1 + gba->waitN16[region];
 	}
 	if (size == 4) {
@@ -30,7 +30,7 @@ int32_t busCycles(struct GBA* gba, uint32_t address, int size, bool seq) {
 	return 1 + (seq ? gba->waitS16[region] : gba->waitN16[region]);
 }
 
-// Moves the clock on and runs the events that have come due
+// Moves the clock on and runs the events that have come due.
 void busTick(struct GBA* gba, int32_t cycles) {
 	struct CPU* cpu = &gba->cpu;
 	cpu->cycles += cycles;
@@ -39,10 +39,10 @@ void busTick(struct GBA* gba, int32_t cycles) {
 	}
 }
 
-// A sequential cartridge access reads on from the cartridge's address counter, whatever address
-// it asks for; a nonsequential one sets the counter. The counter covers 128 KiB, so the GBA starts
-// a new burst at a boundary: for the CPU, an access there; for DMA, the access after one that ended
-// there, wherever the counter has really got to.
+// A sequential cartridge access reads on from the cartridge's address counter, whatever address it
+// asks for; a nonsequential one sets the counter. The counter covers 128 KiB, so the GBA starts a
+// new burst at a boundary: for the CPU, at an access there; for DMA, at the access after one that
+// ended there, wherever the counter has really got to.
 static uint32_t cartridge(struct GBA* gba, uint32_t address, int size, bool* seq, bool dma) {
 	if (!((dma ? gba->romNext : address) & 0x1FFFF)) {
 		*seq = false;
@@ -56,7 +56,7 @@ static uint32_t cartridge(struct GBA* gba, uint32_t address, int size, bool* seq
 	return latched;
 }
 
-// A read or a write of size bytes, without timing
+// Reads or writes size bytes, without timing.
 static uint32_t load(struct GBA* gba, uint32_t address, int size) {
 	switch (size) {
 	case 4:
@@ -82,9 +82,8 @@ static void store(struct GBA* gba, uint32_t address, uint32_t value, int size) {
 	}
 }
 
-// The access after a DMA starts a new burst
-// Data on the cartridge bus stops the prefetcher; it costs a cycle if a read was just finishing. A code
-// fetch from the cartridge has the PC there already.
+// Data on the cartridge bus stops the prefetcher, which costs a cycle if a read was just finishing.
+// A code fetch from the cartridge already has the PC there.
 static int32_t prefetcherStop(struct GBA* gba, bool codeFetch) {
 	struct Prefetcher* p = &gba->prefetcher;
 	if (!gba->cpu.prefetching) {
@@ -96,13 +95,13 @@ static int32_t prefetcherStop(struct GBA* gba, bool codeFetch) {
 		return 0;
 	}
 	if (!codeFetch) {
-		// Compiled code leaves the PC to be worked out when something asks
+		// Compiled code leaves the PC to be worked out when something asks.
 		jitSyncPc(gba);
 		if (!inRom(gba->cpu.r[15])) {
 			return 0;
 		}
 	}
-	// Less than full, eight reads at most
+	// Less than full: eight reads at most.
 	int32_t into = lead;
 	while (into >= p->duty) {
 		into -= p->duty;
@@ -110,7 +109,7 @@ static int32_t prefetcherStop(struct GBA* gba, bool codeFetch) {
 	return into == p->duty - 1 || (p->width == 4 && into == p->duty - p->duty / 2 - 1);
 }
 
-// What prefetcherStop would cost now for a code fetch, without stopping anything
+// Returns what prefetcherStop would cost now for a code fetch, without stopping anything.
 static int32_t stopCost(struct GBA* gba) {
 	struct Prefetcher* p = &gba->prefetcher;
 	if (!gba->cpu.prefetching) {
@@ -127,9 +126,9 @@ static int32_t stopCost(struct GBA* gba) {
 	return into == p->duty - 1 || (p->width == 4 && into == p->duty - p->duty / 2 - 1);
 }
 
-// The two fetches that refill the pipeline at pc in the cartridge, as busFetch makes them, when nothing
-// can come between them: no DMA waiting, no event due, the buffer not already reading there and no new
-// 128 KiB burst for the second. False, having done nothing, otherwise.
+// Makes the two fetches that refill the pipeline at pc in the cartridge, as busFetch makes them,
+// when nothing can come between them: no DMA waiting, no event due, the buffer not already reading
+// there, and no new 128 KiB burst for the second. Otherwise returns false, having done nothing.
 bool busRefillCartridge(struct GBA* gba, uint32_t pc, bool thumb) {
 	struct CPU* cpu = &gba->cpu;
 	struct Prefetcher* p = &gba->prefetcher;
@@ -150,7 +149,7 @@ bool busRefillCartridge(struct GBA* gba, uint32_t pc, bool thumb) {
 	gba->romLatch = gba->romNext;
 	gba->cpu.prefetching = false;
 	if (gba->prefetchEnabled) {
-		// Started by the first fetch, which the second waits on
+		// Started by the first fetch, which the second waits on.
 		gba->cpu.prefetching = true;
 		p->width = size;
 		p->duty = s;
@@ -167,7 +166,7 @@ bool busRefillCartridge(struct GBA* gba, uint32_t pc, bool thumb) {
 }
 
 // A code fetch from the cartridge: from the buffer, or once the read in flight finishes, or else as
-// an ordinary access, after which the prefetcher reads on from there
+// an ordinary access, after which the prefetcher reads on from there.
 static int32_t prefetcherFetch(struct GBA* gba, uint32_t address, int size, bool seq) {
 	struct Prefetcher* p = &gba->prefetcher;
 	uint32_t now = timingCurrentTime(gba);
@@ -198,20 +197,20 @@ static int32_t prefetcherFetch(struct GBA* gba, uint32_t address, int size, bool
 	return cycles;
 }
 
-// A data access's cycles; one on the cartridge bus stops the prefetcher first
+// A data access's cycles; one on the cartridge bus stops the prefetcher first.
 static int32_t dataCycles(struct GBA* gba, uint32_t address, int size, bool seq) {
 	int32_t cycles = busCycles(gba, address, size, seq);
 	unsigned region = address >> 24;
 	if (region >= REGION_ROM0 && region <= REGION_SRAM_MIRROR) {
 		cycles += prefetcherStop(gba, false);
 	} else if (region == REGION_VRAM && gba->vramStall) {
-		// The display has VRAM until H-blank
+		// The display has VRAM until H-blank.
 		cycles += videoVramStall(gba, cycles);
 	}
 	return cycles;
 }
 
-// Before any CPU access: DMA that is ready goes first, and the access after DMA is nonsequential
+// Before any CPU access, DMA that is ready goes first, and the access after DMA is nonsequential.
 static bool cpuAccess(struct GBA* gba, bool seq) {
 	if (gba->dmaRunnable) {
 		dmaRun(gba);
@@ -220,7 +219,7 @@ static bool cpuAccess(struct GBA* gba, bool seq) {
 	return seq && !gba->lastAccessDma;
 }
 
-// A data read by the CPU: events up to the end of the access happen first, then the value is read
+// A data read by the CPU: events up to the end of the access happen first, then the value is read.
 uint32_t busRead(struct GBA* gba, uint32_t address, int size, bool seq) {
 	seq = cpuAccess(gba, seq);
 	uint32_t at = address;
@@ -236,7 +235,7 @@ uint32_t busRead(struct GBA* gba, uint32_t address, int size, bool seq) {
 	return value;
 }
 
-// A data write by the CPU, likewise
+// A data write by the CPU, likewise.
 void busWrite(struct GBA* gba, uint32_t address, uint32_t value, int size, bool seq) {
 	if (gba->idleProbing) {
 		jitIdleWrite(gba, address, value, size);
@@ -250,7 +249,7 @@ void busWrite(struct GBA* gba, uint32_t address, uint32_t value, int size, bool 
 	gba->lastAccessDma = false;
 }
 
-// An instruction fetch. From the cartridge it goes through the prefetch buffer, which may already
+// An instruction fetch. From the cartridge, it goes through the prefetch buffer, which may already
 // have the word and so make the fetch cost one cycle.
 uint32_t busFetch(struct GBA* gba, uint32_t address, bool thumb) {
 	struct CPU* cpu = &gba->cpu;
@@ -268,7 +267,8 @@ uint32_t busFetch(struct GBA* gba, uint32_t address, bool thumb) {
 	return thumb ? codeFetch16(gba, address) : codeFetch32(gba, address);
 }
 
-// An internal cycle: a DMA waiting runs alongside, and covers the CPU's internal cycles while it lasts
+// An internal cycle: a waiting DMA runs alongside, and covers the CPU's internal cycles while it
+// lasts.
 void busIdle(struct GBA* gba) {
 	if (gba->dmaRunnable) {
 		gba->dmaIdleCredit = dmaRun(gba);
@@ -280,7 +280,7 @@ void busIdle(struct GBA* gba) {
 	busTick(gba, 1);
 }
 
-// DMA's reads and writes: the same bus, without the CPU's prefetch
+// DMA's reads and writes: the same bus, without the CPU's prefetch.
 uint32_t busDmaRead(struct GBA* gba, uint32_t address, int size, bool seq) {
 	uint32_t at = address;
 	if (inRom(address)) {
