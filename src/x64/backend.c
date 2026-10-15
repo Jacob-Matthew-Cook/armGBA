@@ -2391,7 +2391,7 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 	xLea(e, 4, R14, M(R14, cycles + (loadsPc(in) ? 0 : nonseq(c))));
 }
 
-// Pushes, pops and copies within IWRAM or EWRAM run inline; anything else goes to jitHelperBlock.
+// Pushes, pops and copies within IWRAM or EWRAM run inline; anything else goes to the exact CPU.
 static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t** slow, int* slowCount) {
 	struct Emitter* e = &c->e;
 	int count = __builtin_popcount(in->list);
