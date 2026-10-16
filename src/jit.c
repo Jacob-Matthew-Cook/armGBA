@@ -961,6 +961,10 @@ static struct Block* revive(struct GBA* gba, uint32_t key) {
 		if (blockKey(block->pc, block->thumb) != key) {
 			continue;
 		}
+		// A head's check left in a block that is no longer one would leave at its start forever.
+		if (block->idleHead != jitIsIdleHead(jit, key)) {
+			continue;
+		}
 		if (block->setAside) {
 			// Cartridge code that hasn't changed comes back once the wait states are what it was
 			// compiled for.
@@ -1104,6 +1108,7 @@ static struct Block* compileBlock(struct GBA* gba, uint32_t pc, bool thumb, cons
 		}
 	}
 	block->valid = true;
+	block->idleHead = jitIsIdleHead(jit, blockKey(pc, thumb));
 	if (careful) {
 		block->entries = calloc(count, sizeof(*block->entries));
 	}
