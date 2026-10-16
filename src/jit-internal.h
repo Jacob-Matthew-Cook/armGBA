@@ -422,6 +422,21 @@ enum MemKind {
 	MEM_STORE8,
 };
 
+// Bytes moved by each kind of memory routine.
+static inline int accessSize(int kind) {
+	switch (kind) {
+	case MEM_LOAD32:
+	case MEM_STORE32:
+		return 4;
+	case MEM_LOAD16:
+	case MEM_LOADS16:
+	case MEM_STORE16:
+		return 2;
+	default:
+		return 1;
+	}
+}
+
 int codeKindOf(struct GBA*, uint32_t address);
 
 void jitRecordSite(struct Block*, uint32_t offset, uint32_t pc, uint32_t op0, uint32_t op1);
