@@ -1026,6 +1026,11 @@ static void tinyEnd(struct Compiler* c, uint8_t* over) {
 	patchHere(&c->e, over);
 }
 
+// Calls a tiny routine.
+static void tinyCall(struct Compiler* c, const uint8_t* routine) {
+	aBl(&c->e, routine);
+}
+
 // Adds the prefetch buffer's terms of the pending cycles; uses r1-r3 and r12.
 static void emitPendingTerms(struct Compiler* c) {
 	struct Emitter* e = &c->e;

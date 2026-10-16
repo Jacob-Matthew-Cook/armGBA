@@ -1065,6 +1065,11 @@ static void tinyEnd(struct Compiler* c, uint8_t* over) {
 	patchHere(&c->e, over);
 }
 
+// Calls a tiny routine.
+static void tinyCall(struct Compiler* c, const uint8_t* routine) {
+	aBl(&c->e, routine);
+}
+
 // Uses w8, w16 and w17.
 static void emitPendingTerms(struct Compiler* c) {
 	struct Emitter* e = &c->e;
