@@ -1360,18 +1360,61 @@ static void pendFetch(struct Compiler* c) {
 	c->pendD = dd;
 }
 
-// Adds the cycles counted so far to the cycle counter. Uses r1-r3 and r12; only the scalar case
-// leaves the host flags alone.
-static void flushPending(struct Compiler* c) {
-	struct Emitter* e = &c->e;
-	if (pendingScalar(c)) {
-		if (c->pending) {
-			aAddI(e, R_CYC, R_CYC, c->pending, R12);
+// A timing sequence that depends only on a few small numbers is emitted once, where it is first
+// needed, and called from then on: on a core with a small cache, the code this saves is worth more
+// than the call. Returns the slot for the key, or NULL when the table is full or a number doesn't
+// fit.
+static struct TinyRoutine* tinySlot(struct Compiler* c, int kind, int n0, int n1, int n2, int n3) {
+	int numbers[4] = { n0, n1, n2, n3 };
+	uint64_t key = (uint64_t) kind << 60;
+	for (int i = 0; i < 4; ++i) {
+		int n = numbers[i];
+		if (n != NONE && (n < -0x3000 || n > 0x3000)) {
+			return NULL;
 		}
-		resetPending(c);
+		key |= (uint64_t) (n == NONE ? 0x7FFF : n + 0x3000) << (i * 15);
+	}
+	for (unsigned probe = 0; probe < 8; ++probe) {
+		struct TinyRoutine* slot = &c->jit->tiny[((key * 0x9E3779B97F4A7C15ull >> 54) + probe) & (TINY_ROUTINES - 1)];
+		if (!slot->code || slot->key == key) {
+			slot->key = key;
+			return slot;
+		}
+	}
+	return NULL;
+}
+
+// Starts a routine emitted inline: emits a jump over it, patched by tinyEnd.
+static uint8_t* tinyBegin(struct Compiler* c, struct TinyRoutine* slot) {
+	uint8_t* over = aB(&c->e, C_AL, NULL);
+	slot->code = c->e.p;
+	return over;
+}
+
+// Ends a tiny routine's body emitted in passing; the code around it jumps over it.
+static void tinyEnd(struct Compiler* c, uint8_t* over) {
+	aBx(&c->e, LR);
+	patchHere(&c->e, over);
+}
+
+// Calls the tiny routine for a slot, emitting it first if it's new; with no slot, emits the
+// sequence inline.
+static void callTiny(struct Compiler* c, struct TinyRoutine* slot, void (*body)(struct Compiler*)) {
+	if (!slot) {
+		body(c);
 		return;
 	}
-	clobberFlags(c);
+	if (!slot->code) {
+		uint8_t* over = tinyBegin(c, slot);
+		body(c);
+		tinyEnd(c, over);
+	}
+	aBl(&c->e, slot->code);
+}
+
+// Adds the prefetch buffer's terms of the pending cycles; uses r1-r3 and r12.
+static void emitPendingTerms(struct Compiler* c) {
+	struct Emitter* e = &c->e;
 	ldrF(e, R1, OFF(jitBase));
 	if (c->pendC != NONE || c->pendD != 0) {
 		if (c->pendC != NONE && c->pendD != NONE) {
@@ -1394,6 +1437,20 @@ static void flushPending(struct Compiler* c) {
 		aDpR(e, C_AL, D_CMP, true, 0, R_CYC, R2, S_LSL, 0);
 		aDpR(e, C_LT, D_MOV, false, R_CYC, 0, R2, S_LSL, 0);
 	}
+}
+
+// Adds the cycles counted so far to the cycle counter. Uses r1-r3, r12 and lr; only the scalar case
+// leaves the host flags alone.
+static void flushPending(struct Compiler* c) {
+	if (pendingScalar(c)) {
+		if (c->pending) {
+			aAddI(&c->e, R_CYC, R_CYC, c->pending, R12);
+		}
+		resetPending(c);
+		return;
+	}
+	clobberFlags(c);
+	callTiny(c, tinySlot(c, 1, c->pending, c->pendB, c->pendC, c->pendD), emitPendingTerms);
 	resetPending(c);
 }
 
@@ -1648,11 +1705,9 @@ static void storeHead(struct Compiler* c, uint32_t head) {
 }
 
 // Data or a refill from the cartridge stops the prefetch buffer: one cycle more if a read is about
-// to finish. Uses r1 and r2.
-static void emitStop(struct Compiler* c) {
+// to finish. Uses r1, r2 and r12.
+static void emitStopTerms(struct Compiler* c) {
 	struct Emitter* e = &c->e;
-	clobberFlags(c);
-	flushPending(c);
 	ldrF(e, R1, OFF(jitBase));
 	aDpR(e, C_AL, D_SUB, false, R1, R_CYC, R1, S_LSL, 0);
 	aDpI(e, C_AL, D_CMP, true, 0, R1, 127);
@@ -1663,16 +1718,17 @@ static void emitStop(struct Compiler* c) {
 	patchHere(e, far);
 }
 
-// Called after an access that may have stopped the buffer: the next fetch restarts it,
-// nonsequential. Compiled code treats that as a fetch from the buffer whose read finishes then;
-// until the fetch, the buffer stays stopped for the exact CPU.
-static void emitMissCheck(struct Compiler* c) {
-	if (!c->prefetch) {
-		return;
-	}
-	struct Emitter* e = &c->e;
+static void emitStop(struct Compiler* c) {
 	clobberFlags(c);
 	flushPending(c);
+	callTiny(c, tinySlot(c, 3, c->penaltyRow, 0, 0, 0), emitStopTerms);
+}
+
+// Called after an access that may have stopped the buffer: the next fetch restarts it,
+// nonsequential. Compiled code treats that as a fetch from the buffer whose read finishes then;
+// until the fetch, the buffer stays stopped for the exact CPU. Uses r1 and r12.
+static void emitMissTerms(struct Compiler* c) {
+	struct Emitter* e = &c->e;
 	ldrbF(e, R1, OFF(cpu.prefetching));
 	aDpI(e, C_AL, D_CMP, true, 0, R1, 0);
 	uint8_t* running = aB(e, C_NE, NULL);
@@ -1681,6 +1737,15 @@ static void emitMissCheck(struct Compiler* c) {
 	aAddI(e, R1, R_CYC, c->Ncyc - c->D, R12);
 	strF(e, R1, OFF(jitBase));
 	patchHere(e, running);
+}
+
+static void emitMissCheck(struct Compiler* c) {
+	if (!c->prefetch) {
+		return;
+	}
+	clobberFlags(c);
+	flushPending(c);
+	callTiny(c, tinySlot(c, 2, c->Ncyc - c->D, 0, 0, 0), emitMissTerms);
 }
 
 // The fetch after one that may have stopped the buffer restarts it.
