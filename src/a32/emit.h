@@ -201,6 +201,11 @@ static inline void aPop(struct Emitter* e, uint32_t list) {
 	emit32(e, cond(C_AL) | 0x08BD0000 | field(list, 16));
 }
 
+// LDMIA and STMIA from a base, without writeback.
+static inline void aLdmStm(struct Emitter* e, bool load, int rn, uint32_t list) {
+	emit32(e, cond(C_AL) | 0x08800000 | (uint32_t) load << 20 | field(rn, 4) << 16 | field(list, 16));
+}
+
 // Multiplies. The S variants set N and Z.
 static inline void aMul(struct Emitter* e, bool s, int rd, int rm, int rs) {
 	emit32(e, cond(C_AL) | 0x00000090 | (uint32_t) s << 20 | field(rd, 4) << 16 | field(rs, 4) << 8 | field(rm, 4));

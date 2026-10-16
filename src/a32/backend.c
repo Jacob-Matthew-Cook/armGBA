@@ -1809,6 +1809,23 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 		if (!(in->list & (1 << r))) {
 			continue;
 		}
+		// Words in a row whose registers are pinned move with one LDM or STM, since the pinned
+		// registers are in the guest's order.
+		uint32_t run = 0;
+		int last = r;
+		for (int n = r; n < 15 && (in->list & (1 << n)) && hostReg[n] >= 0; ++n) {
+			run |= 1u << hostReg[n];
+			last = n;
+		}
+		if (__builtin_popcount(run) > 1) {
+			if (k) {
+				aDpI(e, C_AL, D_ADD, false, R2, R0, 4 * k);
+			}
+			aLdmStm(e, in->load, k ? R2 : R0, run);
+			k += __builtin_popcount(run);
+			r = last;
+			continue;
+		}
 		if (!in->load) {
 			aStr(e, guestReg(c, r, in, R2), R0, 4 * k);
 		} else if (r == 15 || hostReg[r] < 0) {
