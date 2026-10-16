@@ -140,6 +140,15 @@ static void emitExit(struct Jit* jit, struct Emitter* e) {
 	xRet(e);
 }
 
+// The shared tail of the exit stubs of unlinked branches; rax holds the link.
+static void emitExitLink(struct Jit* jit, struct Emitter* e) {
+	xLoad(e, 4, RCX, M(RAX, offsetof(struct Link, targetKey)));
+	xStore(e, 4, M(R15, OFF(exitPc)), RCX);
+	xStore(e, 8, M(R15, OFF(exitLink)), RAX);
+	xStoreI(e, 4, M(R15, OFF(exitReason)), EXIT_LINK);
+	xJmp(e, jit->exitRoutine);
+}
+
 // Looks up the block for a key and jumps to it, compiling it first if needed.
 static void emitDispatchKey(struct Jit* jit, struct Emitter* e) {
 	xMovRR(e, 4, RDX, RAX);
@@ -819,18 +828,6 @@ static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, boo
 	return start;
 }
 
-// Bodies and cold code share one run of memory here.
-void backendReset(struct Jit* jit) {
-	(void) jit;
-}
-
-// This backend keeps a block's cold code with its body, so nothing is on a cold side.
-bool backendColdSide(const struct Jit* jit, const uint8_t* p) {
-	(void) jit;
-	(void) p;
-	return false;
-}
-
 // Emits everything shared: the entry and exit, the dispatchers, and the memory and shift routines.
 // They are emitted once and sit before the first block.
 bool backendInit(struct Jit* jit) {
@@ -843,6 +840,8 @@ bool backendInit(struct Jit* jit) {
 	emitEnter(jit, &e);
 	jit->exitRoutine = e.p;
 	emitExit(jit, &e);
+	jit->exitLinkRoutine = e.p;
+	emitExitLink(jit, &e);
 	jit->dispatchKey = e.p;
 	emitDispatchKey(jit, &e);
 	uint8_t* regionUpdate = emitRegionUpdate(&e);
@@ -867,7 +866,8 @@ bool backendInit(struct Jit* jit) {
 	jitNameCode(jit->spillRoutine, jit->reloadRoutine, "spill");
 	jitNameCode(jit->reloadRoutine, (void*) jit->enter, "reload");
 	jitNameCode((void*) jit->enter, jit->exitRoutine, "enter");
-	jitNameCode(jit->exitRoutine, jit->dispatchKey, "exit");
+	jitNameCode(jit->exitRoutine, jit->exitLinkRoutine, "exit");
+	jitNameCode(jit->exitLinkRoutine, jit->dispatchKey, "exitLink");
 	jitNameCode(jit->dispatchKey, jit->dispatchArm, "dispatch");
 	jitNameCode(jit->dispatchArm, jit->shiftRoutines[0], "dispatchPc");
 	jitNameCode(jit->shiftRoutines[0], jit->memRoutines[0], "shift");
@@ -937,17 +937,6 @@ struct Compiler {
 	int idleLoadCount;
 	uint8_t* fastDone[2];
 	int fastDoneCount;
-	// Block transfers that may move words to or from palette RAM, VRAM or OAM, whose copies for those
-	// go with the cold code: the jump there from the work RAM checks, and where the exact CPU's
-	// handling and the code after the transfer start.
-	struct VideoTransfer {
-		const struct Inst* in;
-		uint8_t* site;
-		uint8_t* exact;
-		uint8_t* join;
-	} videoTransfers[MAX_BLOCK_INSTS];
-	int videoCount;
-	struct VideoTransfer* video;
 
 	// Where the guest flags are: in the host EFLAGS (C inverted after subtraction), in ebp, or
 	// both.
@@ -983,9 +972,26 @@ struct Compiler {
 		uint8_t* resume;
 	} slow[MAX_BLOCK_INSTS];
 	int slowCount;
+	// Block transfers whose rarely run parts go with the cold code: the exact CPU's handling, and
+	// the copies for palette RAM, VRAM and OAM.
+	struct SlowTransfer {
+		const struct Inst* in;
+		int index;
+		uint8_t* sites[40];
+		int siteCount;
+		uint8_t* join;
+		// A transfer through the stack pointer keeps only IWRAM's copy inline, with a jump to
+		// EWRAM's or the slow path.
+		uint8_t* ewramSite;
+		// Where a transfer outside work RAM leaves for the copies for palette RAM, VRAM and OAM.
+		uint8_t* videoSite;
+	} transfers[MAX_BLOCK_INSTS];
+	int transferCount;
+	struct SlowTransfer* transfer;
 };
 
 #include "../jit-compile.h"
+#include "../jit-layout.h"
 
 // Flags.
 
@@ -2019,14 +2025,22 @@ static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t*
 	slow[(*slowCount)++] = xJcc(e, CC_NE, NULL);
 	xMovRR(e, 4, RAX, RCX);
 	xShiftI(e, X_SHR, 4, R(RAX), 24);
+	bool toPc = in->load && (in->list & 0x8000);
+	if (c->transfer && in->rn == 13) {
+		// The stack is in IWRAM in all but a few games.
+		xAluI(e, X_CMP, 4, R(RAX), REGION_IWRAM);
+		c->transfer->ewramSite = xJcc(e, CC_NE, NULL);
+		emitRamTransfer(c, in, REGION_IWRAM, slow, slowCount);
+		if (toPc) {
+			emitIndirect(c, in, c->thumb ? c->jit->dispatchThumb : c->jit->dispatchArm);
+		}
+		return;
+	}
 	xAluI(e, X_CMP, 4, R(RAX), REGION_EWRAM);
 	uint8_t* ewram = xJcc(e, CC_E, NULL);
-	bool toPc = in->load && (in->list & 0x8000);
 	xAluI(e, X_CMP, 4, R(RAX), REGION_IWRAM);
-	if (!toPc) {
-		c->video = &c->videoTransfers[c->videoCount++];
-		c->video->in = in;
-		c->video->site = xJcc(e, CC_NE, NULL);
+	if (c->transfer && !toPc) {
+		c->transfer->videoSite = xJcc(e, CC_NE, NULL);
 	} else {
 		slow[(*slowCount)++] = xJcc(e, CC_NE, NULL);
 	}
@@ -2037,17 +2051,85 @@ static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t*
 		emitRamTransfer(c, in, region, slow, slowCount);
 		if (toPc) {
 			emitIndirect(c, in, c->thumb ? c->jit->dispatchThumb : c->jit->dispatchArm);
-		} else {
+		} else if (!c->transfer || region != REGION_EWRAM) {
 			c->fastDone[c->fastDoneCount++] = xJmp(e, NULL);
 		}
+	}
+}
+
+// Calls the exact CPU for the instruction, with its fetch counted; eax = the next block key, or ~0.
+static void emitExecute(struct Compiler* c, const struct Inst* in) {
+	struct Emitter* e = &c->e;
+	storeHead(c, in->address + 3 * c->width);
+	spill(c);
+	xMovI(e, RSI, in->opcode);
+	xMovI(e, RDX, in->address | c->thumb);
+	callHelper(c, in, jitHelperExecute);
+}
+
+// Compiles LDM and STM. Transfers to work RAM are done inline; anything else goes to the exact CPU.
+static void emitBlockTransfer(struct Compiler* c, const struct Inst* in) {
+	struct Emitter* e = &c->e;
+	uint8_t* slow[40];
+	int slowCount = 0;
+	c->fastDoneCount = 0;
+	// The fetch comes first, so I/O sees the time it happens at.
+	clobberFlags(c);
+	flushPending(c);
+	if (!in->userBank && in->list && in->rn != 15 && (in->load || !(in->list & 0x8000)) && !storesMovedBase(in)) {
+		if (!c->careful && c->transferCount < MAX_BLOCK_INSTS) {
+			// The inline path stays here; the rest is emitted with the cold code by
+			// emitSlowTransfer, from the state it would have had here and to the state this leaves.
+			struct SlowTransfer* t = &c->transfers[c->transferCount++];
+			t->in = in;
+			t->index = c->cur;
+			t->siteCount = 0;
+			t->ewramSite = NULL;
+			t->videoSite = NULL;
+			c->transfer = t;
+			emitFastTransfer(c, in, t->sites, &t->siteCount);
+			c->transfer = NULL;
+			for (int i = 0; i < c->fastDoneCount; ++i) {
+				patchHere(e, c->fastDone[i]);
+			}
+			t->join = e->p;
+			resetPending(c);
+			if (!loadsPc(in) && isTerminator(in)) {
+				emitLinkTo(c, in->address + c->width, c->thumb);
+			}
+			return;
+		}
+		emitFastTransfer(c, in, slow, &slowCount);
+		for (int i = 0; i < slowCount; ++i) {
+			patchHere(e, slow[i]);
+		}
+	}
+	emitExecute(c, in);
+	if (loadsPc(in)) {
+		setBiosPrefetchNext(c, in);
+		xJmp(e, c->jit->dispatchKey);
+		for (int i = 0; i < c->fastDoneCount; ++i) {
+			patchHere(e, c->fastDone[i]);
+		}
+		return;
+	}
+	pendAdd(c, nonseq(c));
+	flushPending(c);
+	emitMissCheck(c);
+	for (int i = 0; i < c->fastDoneCount; ++i) {
+		patchHere(e, c->fastDone[i]);
+	}
+	if (isTerminator(in)) {
+		emitLinkTo(c, in->address + c->width, c->thumb);
 	}
 }
 
 // The copy of a block transfer for palette RAM, VRAM or OAM, in the cold code; ecx = first address,
 // in the region. As the exact CPU's: every word costs the same, a store goes to the renderer only if
 // it changes the word, and anything a store would make C do first (drawing a line whose H-blank
-// has come, compiled code in video memory, the display holding VRAM) goes to the exact CPU.
-static void emitVideoTransfer(struct Compiler* c, const struct VideoTransfer* t, int region) {
+// has come, compiled code in video memory, the display holding VRAM) goes to the exact CPU at
+// exact.
+static void emitVideoTransfer(struct Compiler* c, const struct SlowTransfer* t, int region, uint8_t* exact) {
 	struct Emitter* e = &c->e;
 	const struct Inst* in = t->in;
 	int count = __builtin_popcount(in->list);
@@ -2055,24 +2137,24 @@ static void emitVideoTransfer(struct Compiler* c, const struct VideoTransfer* t,
 	int32_t data = videoMemory(region);
 	uint32_t mask = region == REGION_VRAM ? 0x1FFFF : (region == REGION_OAM ? SIZE_OAM : SIZE_PALETTE) - 4;
 	xAluI(e, X_CMP, 4, R(R14), -cycles);
-	xJcc(e, CC_GE, t->exact);
+	xJcc(e, CC_GE, exact);
 	if (region == REGION_VRAM) {
 		xAluI(e, X_CMP, 1, M(R15, OFF(vramStall)), 0);
-		xJcc(e, CC_NE, t->exact);
+		xJcc(e, CC_NE, exact);
 		// Below the mirrors of the sprite tiles.
 		xMovRR(e, 4, RAX, RCX);
 		xAluI(e, X_AND, 4, R(RAX), 0x1FFFF);
 		xAluI(e, X_CMP, 4, R(RAX), SIZE_VRAM - 4 * count);
-		xJcc(e, CC_A, t->exact);
+		xJcc(e, CC_A, exact);
 	}
 	if (!in->load) {
 		xAluI(e, X_CMP, 1, M(R15, OFF(videoCode)), 0);
-		xJcc(e, CC_NE, t->exact);
+		xJcc(e, CC_NE, exact);
 		xLea(e, 4, RAX, M(R14, cycles));
 		xAluRM(e, X_ADD, 4, RAX, M(R15, OFF(cpu.nextEvent)));
 		xAluRM(e, X_ADD, 4, RAX, M(R15, OFF(timing.masterCycles)));
 		xAluRM(e, X_SUB, 4, RAX, M(R15, OFF(video.drawDue)));
-		xJcc(e, CC_NS, t->exact);
+		xJcc(e, CC_NS, exact);
 	}
 	int k = 0;
 	for (int r = 0; r < 16; ++r) {
@@ -2111,55 +2193,56 @@ static void emitVideoTransfer(struct Compiler* c, const struct VideoTransfer* t,
 	xJmp(e, t->join);
 }
 
-// Calls the exact CPU for the instruction, with its fetch counted; eax = the next block key, or ~0.
-static void emitExecute(struct Compiler* c, const struct Inst* in) {
+// Emits the parts of a block transfer kept with the cold code (see emitBlockTransfer).
+static void emitSlowTransfer(struct Compiler* c, struct SlowTransfer* t) {
 	struct Emitter* e = &c->e;
-	storeHead(c, in->address + 3 * c->width);
-	spill(c);
-	xMovI(e, RSI, in->opcode);
-	xMovI(e, RDX, in->address | c->thumb);
-	callHelper(c, in, jitHelperExecute);
-}
-
-// Compiles LDM and STM. Transfers to work RAM are done inline; anything else goes to the exact CPU.
-static void emitBlockTransfer(struct Compiler* c, const struct Inst* in) {
-	struct Emitter* e = &c->e;
-	uint8_t* slow[40];
-	int slowCount = 0;
-	c->fastDoneCount = 0;
-	c->video = NULL;
-	// The fetch comes first, so I/O sees the time it happens at.
-	clobberFlags(c);
-	flushPending(c);
-	if (!in->userBank && in->list && in->rn != 15 && (in->load || !(in->list & 0x8000)) && !storesMovedBase(in)) {
-		emitFastTransfer(c, in, slow, &slowCount);
-		for (int i = 0; i < slowCount; ++i) {
-			patchHere(e, slow[i]);
-		}
+	const struct Inst* in = t->in;
+	uint8_t* start = e->p;
+	for (int i = 0; i < t->siteCount; ++i) {
+		patchHere(e, t->sites[i]);
 	}
-	if (c->video) {
-		c->video->exact = e->p;
-	}
+	c->cur = t->index;
+	resetPending(c);
+	c->hostFlags = false;
 	emitExecute(c, in);
 	if (loadsPc(in)) {
 		setBiosPrefetchNext(c, in);
 		xJmp(e, c->jit->dispatchKey);
-		for (int i = 0; i < c->fastDoneCount; ++i) {
-			patchHere(e, c->fastDone[i]);
+	} else {
+		pendAdd(c, nonseq(c));
+		flushPending(c);
+		emitMissCheck(c);
+		xJmp(e, t->join);
+	}
+	if (t->ewramSite) {
+		// eax = the address's top byte, as at the test that led here.
+		uint8_t* sites[40];
+		int siteCount = 0;
+		patchHere(e, t->ewramSite);
+		xAluI(e, X_CMP, 4, R(RAX), REGION_EWRAM);
+		xJcc(e, CC_NE, start);
+		emitRamTransfer(c, in, REGION_EWRAM, sites, &siteCount);
+		for (int i = 0; i < siteCount; ++i) {
+			if (sites[i] + 4 <= e->end) {
+				patchRel32(sites[i], start);
+			}
 		}
-		return;
+		if (loadsPc(in)) {
+			emitIndirect(c, in, c->thumb ? c->jit->dispatchThumb : c->jit->dispatchArm);
+		} else {
+			xJmp(e, t->join);
+		}
 	}
-	pendAdd(c, nonseq(c));
-	flushPending(c);
-	emitMissCheck(c);
-	for (int i = 0; i < c->fastDoneCount; ++i) {
-		patchHere(e, c->fastDone[i]);
-	}
-	if (c->video) {
-		c->video->join = e->p;
-	}
-	if (isTerminator(in)) {
-		emitLinkTo(c, in->address + c->width, c->thumb);
+	if (t->videoSite) {
+		// eax = the first address's region, ecx = the first address.
+		patchHere(e, t->videoSite);
+		for (int region = REGION_PALETTE; region <= REGION_OAM; ++region) {
+			xAluI(e, X_CMP, 4, R(RAX), region);
+			uint8_t* other = xJcc(e, CC_NE, NULL);
+			emitVideoTransfer(c, t, region, start);
+			patchHere(e, other);
+		}
+		xJmp(e, start);
 	}
 }
 
@@ -2535,9 +2618,10 @@ static void emitIdleHead(struct Compiler* c) {
 	patchHere(e, same);
 }
 
-// Compiles a block: the analysis, then each instruction, then the cold code the instructions left for
-// the end (slow paths, exits and stubs). Fails if the code memory is full; the caller then flushes.
-bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, int count, const uint32_t* nextOps) {
+// Compiles a block into the stretch being filled: the analysis, then each instruction, then the cold
+// code the instructions left for the end (slow paths, exits and stubs). A careful copy goes whole
+// with the cold code. Fails if the block doesn't fit, writing nothing past either part.
+static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* insts, int count, const uint32_t* nextOps) {
 	struct GBA* gba = jit->gba;
 	struct Compiler c = {
 		.jit = jit,
@@ -2550,10 +2634,11 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		.width = block->thumb ? 2 : 4,
 		.region = block->pc >> 24,
 	};
-	if (jit->codeEnd - jit->codeNext < 64 * 1024) {
-		return false;
+	if (block->careful) {
+		c.e = (struct Emitter) { .start = jit->coldNext, .p = jit->coldNext, .end = jit->coldEnd };
+	} else {
+		c.e = (struct Emitter) { .start = jit->codeNext, .p = jit->codeNext, .end = jit->hotEnd };
 	}
-	c.e = (struct Emitter) { .start = jit->codeNext, .p = jit->codeNext, .end = jit->codeEnd };
 	c.S = c.thumb ? gba->waitS16[c.region] : gba->waitS32[c.region];
 	c.N = c.thumb ? gba->waitN16[c.region] : gba->waitN32[c.region];
 	c.P = 1 + c.S;
@@ -2589,7 +2674,22 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 	// Cold code: memory accesses that missed the inline path, cycle-check exits, and unlinked
 	// branches.
 	struct Emitter* e = &c.e;
+	uint8_t* bodyEnd = e->p;
+	if (e->p > e->end) {
+		// The body ran past its part: nothing is patched, since the sites past the end were never
+		// written.
+		abandon(&c);
+		return false;
+	}
+	if (!c.careful) {
+		e->p = jit->coldNext;
+		e->end = jit->coldEnd;
+	}
 	uint8_t* cold = e->p;
+	block->cold = c.careful ? block->entry : cold;
+	for (int i = 0; i < c.transferCount; ++i) {
+		emitSlowTransfer(&c, &c.transfers[i]);
+	}
 	resetPending(&c);
 	c.hostFlags = false;
 	for (int i = 0; i < c.slowCount; ++i) {
@@ -2609,18 +2709,6 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		}
 		emitMissCheck(&c);
 		xJmp(e, slow->resume);
-	}
-	for (int i = 0; i < c.videoCount; ++i) {
-		// eax = the first address's region, ecx = the first address.
-		struct VideoTransfer* t = &c.videoTransfers[i];
-		patchHere(e, t->site);
-		for (int region = REGION_PALETTE; region <= REGION_OAM; ++region) {
-			xAluI(e, X_CMP, 4, R(RAX), region);
-			uint8_t* other = xJcc(e, CC_NE, NULL);
-			emitVideoTransfer(&c, t, region);
-			patchHere(e, other);
-		}
-		xJmp(e, t->exact);
 	}
 	for (int i = 0; i < c.stubCount; ++i) {
 		struct Stub* stub = &c.stubs[i];
@@ -2712,24 +2800,20 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		if (inCartridge(link->targetKey >> 24)) {
 			storeHead(&c, (link->targetKey & ~1u) + 2 * c.width);
 		}
-		xStoreI(e, 4, M(R15, OFF(exitPc)), link->targetKey);
 		xMovI64(e, RAX, (uint64_t) (uintptr_t) link);
-		xStore(e, 8, M(R15, OFF(exitLink)), RAX);
-		xStoreI(e, 4, M(R15, OFF(exitReason)), EXIT_LINK);
-		xJmp(e, jit->exitRoutine);
+		xJmp(e, jit->exitLinkRoutine);
 	}
 	if (e->p > e->end) {
-		// It ran past the end of the code memory, writing nothing there; the caller flushes.
-		block->siteCount = 0;
-		free(block->out);
-		block->out = NULL;
-		block->outCount = 0;
+		abandon(&c);
 		return false;
 	}
 	for (int i = 0; i < block->outCount; ++i) {
 		patchRel32(block->out[i].site, block->out[i].stub);
 	}
-	jitNameBlock(block, cold, cold, e->p);
-	jit->codeNext = e->p;
+	if (!c.careful) {
+		jit->codeNext = bodyEnd;
+	}
+	jitNameBlock(block, bodyEnd, cold, e->p);
+	jit->coldNext = e->p;
 	return true;
 }
