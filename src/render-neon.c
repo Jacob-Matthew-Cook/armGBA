@@ -57,6 +57,14 @@ static inline uint32_t vmaxvq_u32(uint32x4_t a) {
 	uint32x2_t pair = vmax_u32(vget_low_u32(a), vget_high_u32(a));
 	return vget_lane_u32(vpmax_u32(pair, pair), 0);
 }
+
+#if !defined(__clang__) && __GNUC__ < 9
+// GCC added this one for 32-bit ARM in version 9.
+static inline uint8x16x4_t vld1q_u8_x4(const uint8_t* p) {
+	uint8x16x4_t r = { { vld1q_u8(p), vld1q_u8(p + 16), vld1q_u8(p + 32), vld1q_u8(p + 48) } };
+	return r;
+}
+#endif
 #endif
 
 // Eight 32-bit lanes; masks are all ones or all zeros per lane.
