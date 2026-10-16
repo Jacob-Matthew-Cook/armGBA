@@ -797,38 +797,6 @@ static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, boo
 	return start;
 }
 
-// Blocks' bodies are kept apart from their cold code (slow paths, exits, and whole careful copies),
-// so the code a game spends its time in is dense in the caches; on a Cortex-A7 or A55 with 32 KiB of
-// instruction cache, that decides much of a busy game's speed. The code memory is laid out in
-// stretches, each with a part for bodies and a part for cold code, so a block's cold code stays near
-// its body.
-enum {
-	HOT_PART = 352 << 10,
-	COLD_PART = 640 << 10,
-	STRETCH = HOT_PART + COLD_PART,
-	// Room a block may need in each part.
-	HOT_ROOM = 32 << 10,
-	COLD_ROOM = 64 << 10,
-};
-
-// Lays out a stretch at base: block bodies fill its first part and cold code its second.
-static void startStretch(struct Jit* jit, uint8_t* base) {
-	jit->codeNext = base;
-	jit->hotEnd = base + HOT_PART;
-	jit->coldNext = jit->hotEnd;
-	jit->coldEnd = base + STRETCH;
-}
-
-// After a flush, compiling starts in a new stretch.
-void backendReset(struct Jit* jit) {
-	startStretch(jit, jit->codeNext);
-}
-
-// Whether an address is in a stretch's cold part.
-bool backendColdSide(const struct Jit* jit, const uint8_t* p) {
-	return p >= jit->codeStart && (size_t) (p - jit->codeStart) % STRETCH >= HOT_PART;
-}
-
 // Emits everything shared: the entry and exit, the dispatchers, and the memory routines. They are
 // emitted once and sit before the first block. Shifts by a register need no routine here: the
 // host's follow ARM's rules.
@@ -1000,6 +968,7 @@ struct Compiler {
 };
 
 #include "../jit-compile.h"
+#include "../jit-layout.h"
 
 // Where in struct GBA the word of RAM code at address is.
 static int32_t codeWord(const struct Compiler* c, uint32_t address) {
@@ -1043,36 +1012,6 @@ static void canonical(struct Compiler* c) {
 	c->inHost = false;
 }
 
-// A timing sequence that depends only on a few small numbers is emitted once, where it is first
-// needed, and called from then on: on a core with a small cache, the code this saves is worth more
-// than the call. Returns the slot for the key, or NULL when the table is full or a number doesn't
-// fit.
-static struct TinyRoutine* tinySlot(struct Compiler* c, int kind, int n0, int n1, int n2, int n3) {
-	int numbers[4] = { n0, n1, n2, n3 };
-	uint64_t key = (uint64_t) kind << 60;
-	for (int i = 0; i < 4; ++i) {
-		int n = numbers[i];
-		if (n != NONE && (n < -0x3000 || n > 0x3000)) {
-			return NULL;
-		}
-		key |= (uint64_t) (n == NONE ? 0x7FFF : n + 0x3000) << (i * 15);
-	}
-	for (unsigned probe = 0; probe < 8; ++probe) {
-		struct TinyRoutine* slot = &c->jit->tiny[((key * 0x9E3779B97F4A7C15ull >> 54) + probe) & (TINY_ROUTINES - 1)];
-		if (slot->code && slot->key == key) {
-			return slot;
-		}
-		if (!slot->code) {
-			if (c->newTinyCount == (int) (sizeof(c->newTiny) / sizeof(*c->newTiny))) {
-				return NULL;
-			}
-			slot->key = key;
-			return slot;
-		}
-	}
-	return NULL;
-}
-
 // Starts a routine emitted inline: emits a jump over it, patched by tinyEnd.
 static uint8_t* tinyBegin(struct Compiler* c, struct TinyRoutine* slot) {
 	uint8_t* over = aB(&c->e, C_AL, NULL);
@@ -1085,21 +1024,6 @@ static uint8_t* tinyBegin(struct Compiler* c, struct TinyRoutine* slot) {
 static void tinyEnd(struct Compiler* c, uint8_t* over) {
 	aBx(&c->e, LR);
 	patchHere(&c->e, over);
-}
-
-// Calls the tiny routine for a slot, emitting it first if it's new; with no slot, emits the
-// sequence inline.
-static void callTiny(struct Compiler* c, struct TinyRoutine* slot, void (*body)(struct Compiler*)) {
-	if (!slot) {
-		body(c);
-		return;
-	}
-	if (!slot->code) {
-		uint8_t* over = tinyBegin(c, slot);
-		body(c);
-		tinyEnd(c, over);
-	}
-	aBl(&c->e, slot->code);
 }
 
 // Adds the prefetch buffer's terms of the pending cycles; uses r1-r3 and r12.
@@ -2379,17 +2303,6 @@ static void emitIdleHead(struct Compiler* c) {
 	patchHere(e, same);
 }
 
-// Forgets what a compile whose code didn't fit left behind.
-static void abandon(struct Compiler* c) {
-	for (int i = 0; i < c->newTinyCount; ++i) {
-		c->newTiny[i]->code = NULL;
-	}
-	c->block->siteCount = 0;
-	free(c->block->out);
-	c->block->out = NULL;
-	c->block->outCount = 0;
-}
-
 // Compiles a block into the current stretch: the analysis, then each instruction, then the cold code
 // the instructions left for the end (slow paths, exits and stubs). Returns false, having written
 // nothing outside the free space there, if its code didn't fit.
@@ -2606,22 +2519,3 @@ static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* 
 	return true;
 }
 
-// A block's code goes in the stretch being filled while there is room for a large block there,
-// otherwise in a new one; a block too large for the room left is compiled again in a new stretch.
-// Fails if the code memory is full; the caller then flushes.
-bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, int count, const uint32_t* nextOps) {
-	if (jit->hotEnd - jit->codeNext < HOT_ROOM || jit->coldEnd - jit->coldNext < COLD_ROOM) {
-		if (jit->codeEnd - jit->coldEnd < STRETCH) {
-			return false;
-		}
-		startStretch(jit, jit->coldEnd);
-	}
-	if (compileInStretch(jit, block, insts, count, nextOps)) {
-		return true;
-	}
-	if (jit->codeEnd - jit->coldEnd < STRETCH) {
-		return false;
-	}
-	startStretch(jit, jit->coldEnd);
-	return compileInStretch(jit, block, insts, count, nextOps);
-}
