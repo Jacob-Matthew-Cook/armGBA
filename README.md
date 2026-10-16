@@ -56,6 +56,17 @@ set to Shown, the black around it shows too, as on that console's screen.
 
 This makes `armgba_libretro.so`. `libretro/armgba_libretro.info` goes in RetroArch's info directory.
 
+The recompiler has backends for x86-64, AArch64 and 32-bit ARM (ARMv7 with NEON). For a 32-bit ARM
+device such as the Miyoo Mini, cross-compile with that device's own toolchain, whose toolchain file
+sets `CMAKE_SYSTEM_PROCESSOR` to `arm`, and the ARMv7 flags:
+
+    cmake -S . -B build-armv7 -G Ninja -DCMAKE_TOOLCHAIN_FILE=<toolchain file> \
+        -DCMAKE_C_FLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard" \
+        -DCMAKE_CXX_FLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard"
+    ninja -C build-armv7
+
+On any other CPU, or with `-DARMGBA_JIT=OFF`, the exact CPU runs everything.
+
 The system directory needs `gba_bios.bin`. Game Boy boot ROMs are optional, looked for under these
 names in this order:
 
@@ -114,7 +125,7 @@ Where the hardware gives no answer, these rules apply:
 
 ## Testing
 
-- **Lockstep:** twenty games compared frame by frame with the stepping CPU on both backends, and
+- **Lockstep:** twenty games compared frame by frame with the stepping CPU on all three backends, and
   every game of the Game Boy Advance set (4590) for 1500 frames on x86-64.
 - **`tests/cpufuzz`:** random ARM and Thumb programs against mGBA.
 - **Hardware test ROMs:** all 28 pass (jsmolka's gba-tests, FuzzARM, NanoBoyAdvance's).
@@ -124,7 +135,7 @@ Where the hardware gives no answer, these rules apply:
 - **Game Boy games:** every game of the Game Boy and Game Boy Color sets was started and compared with
   SameBoy: 2776 of 2796 and 2983 of 3055 match. The rest are not games (BIOS files, cheat cartridges),
   betas, and unlicensed carts that differ on the other cores too.
-- **Save states and runahead:** frame-exact on both backends for GBA, GBC and GB. A Game Boy state
+- **Save states and runahead:** frame-exact on x86-64 and AArch64 for GBA, GBC and GB. A Game Boy state
   made as one model loads as another: the machine becomes the state's model until the next restart.
 
 ## Performance
@@ -160,10 +171,11 @@ slower chips.
 
 ## How it works
 
-**Recompiler with an exact fallback.** ARM and Thumb code is compiled to AArch64 or x86-64 and counts
-its own cycles. When an event (timer, video line, DMA, IRQ) falls inside a block, a copy of the block
-with a check before each instruction takes over. An event the instruction cannot observe runs after
-it. For one it can observe, a cycle-exact stepping CPU (`src/step.c`) runs that single instruction.
+**Recompiler with an exact fallback.** ARM and Thumb code is compiled to AArch64, 32-bit ARM or
+x86-64 and counts its own cycles. When an event (timer, video line, DMA, IRQ) falls inside a block,
+a copy of the block with a check before each instruction takes over. An event the instruction cannot
+observe runs after it. For one it can observe, a cycle-exact stepping CPU (`src/step.c`) runs that
+single instruction.
 
 **Fewer events.** On a small core an event costs far more than its own work, because handling it
 pushes the game out of the instruction cache. Sound-timer overflows that only feed a FIFO or tick a
