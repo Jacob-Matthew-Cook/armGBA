@@ -998,6 +998,9 @@ struct Compiler {
 		uint8_t* resume;
 	} slow[MAX_BLOCK_INSTS];
 	int slowCount;
+	// Tiny routines emitted in this block, forgotten again if its code doesn't fit.
+	struct TinyRoutine* newTiny[8];
+	int newTinyCount;
 };
 
 enum {
@@ -1376,7 +1379,13 @@ static struct TinyRoutine* tinySlot(struct Compiler* c, int kind, int n0, int n1
 	}
 	for (unsigned probe = 0; probe < 8; ++probe) {
 		struct TinyRoutine* slot = &c->jit->tiny[((key * 0x9E3779B97F4A7C15ull >> 54) + probe) & (TINY_ROUTINES - 1)];
-		if (!slot->code || slot->key == key) {
+		if (slot->code && slot->key == key) {
+			return slot;
+		}
+		if (!slot->code) {
+			if (c->newTinyCount == 8) {
+				return NULL;
+			}
 			slot->key = key;
 			return slot;
 		}
@@ -1388,6 +1397,7 @@ static struct TinyRoutine* tinySlot(struct Compiler* c, int kind, int n0, int n1
 static uint8_t* tinyBegin(struct Compiler* c, struct TinyRoutine* slot) {
 	uint8_t* over = aB(&c->e, C_AL, NULL);
 	slot->code = c->e.p;
+	c->newTiny[c->newTinyCount++] = slot;
 	return over;
 }
 
@@ -2918,9 +2928,21 @@ static void emitIdleHead(struct Compiler* c) {
 	patchHere(e, same);
 }
 
-// Compiles a block: the analysis, then each instruction, then the cold code the instructions left for
-// the end (slow paths, exits and stubs). Fails if the code memory is full; the caller then flushes.
-bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, int count, const uint32_t* nextOps) {
+// Forgets what a compile whose code didn't fit left behind.
+static void abandon(struct Compiler* c) {
+	for (int i = 0; i < c->newTinyCount; ++i) {
+		c->newTiny[i]->code = NULL;
+	}
+	c->block->siteCount = 0;
+	free(c->block->out);
+	c->block->out = NULL;
+	c->block->outCount = 0;
+}
+
+// Compiles a block into the current stretch: the analysis, then each instruction, then the cold code
+// the instructions left for the end (slow paths, exits and stubs). Returns false, having written
+// nothing outside the free space there, if its code didn't fit.
+static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* insts, int count, const uint32_t* nextOps) {
 	struct GBA* gba = jit->gba;
 	struct Compiler c = {
 		.jit = jit,
@@ -2933,12 +2955,6 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		.width = block->thumb ? 2 : 4,
 		.region = block->pc >> 24,
 	};
-	if (jit->hotEnd - jit->codeNext < HOT_ROOM || jit->coldEnd - jit->coldNext < COLD_ROOM) {
-		if (jit->codeEnd - jit->coldEnd < STRETCH) {
-			return false;
-		}
-		startStretch(jit, jit->coldEnd);
-	}
 	if (block->careful) {
 		c.e = (struct Emitter) { .start = jit->coldNext, .p = jit->coldNext, .end = jit->coldEnd };
 	} else {
@@ -2981,6 +2997,12 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 	// branches.
 	struct Emitter* e = &c.e;
 	uint8_t* bodyEnd = e->p;
+	if (e->p > e->end) {
+		// The body ran past its part: nothing is patched, since the sites past the end were never
+		// written.
+		abandon(&c);
+		return false;
+	}
 	if (!c.careful) {
 		e->p = jit->coldNext;
 		e->end = jit->coldEnd;
@@ -3096,7 +3118,6 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		struct Link* link = &block->out[i];
 		link->site = c.linkSites[i];
 		link->stub = e->p;
-		patchBranch(link->site, link->stub);
 		if (inCartridge(link->targetKey >> 24)) {
 			storeHead(&c, (link->targetKey & ~1u) + 2 * c.width);
 		}
@@ -3105,6 +3126,13 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		strF(e, R0, OFF(exitLink));
 		storeConst(&c, OFF(exitReason), EXIT_LINK);
 		aB(e, C_AL, jit->exitRoutine);
+	}
+	if (e->p > e->end) {
+		abandon(&c);
+		return false;
+	}
+	for (int i = 0; i < block->outCount; ++i) {
+		patchBranch(block->out[i].site, block->out[i].stub);
 	}
 	if (c.careful) {
 		flushCode(c.e.start, e->p);
@@ -3116,4 +3144,24 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 	jitNameBlock(block, bodyEnd, cold, e->p);
 	jit->coldNext = e->p;
 	return true;
+}
+
+// A block's code goes in the stretch being filled while there is room for a large block there,
+// otherwise in a new one; a block too large for the room left is compiled again in a new stretch.
+// Fails if the code memory is full; the caller then flushes.
+bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, int count, const uint32_t* nextOps) {
+	if (jit->hotEnd - jit->codeNext < HOT_ROOM || jit->coldEnd - jit->coldNext < COLD_ROOM) {
+		if (jit->codeEnd - jit->coldEnd < STRETCH) {
+			return false;
+		}
+		startStretch(jit, jit->coldEnd);
+	}
+	if (compileInStretch(jit, block, insts, count, nextOps)) {
+		return true;
+	}
+	if (jit->codeEnd - jit->coldEnd < STRETCH) {
+		return false;
+	}
+	startStretch(jit, jit->coldEnd);
+	return compileInStretch(jit, block, insts, count, nextOps);
 }

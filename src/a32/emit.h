@@ -38,8 +38,11 @@ enum {
 };
 
 // A32 instructions are 32 bits each, always with a condition.
+// Past the end, nothing is written: p still advances, and the caller sees that the code didn't fit.
 static inline void emit32(struct Emitter* e, uint32_t insn) {
-	memcpy(e->p, &insn, 4);
+	if (e->p + 4 <= e->end) {
+		memcpy(e->p, &insn, 4);
+	}
 	e->p += 4;
 }
 
@@ -289,7 +292,9 @@ static inline void patchBranch(uint8_t* site, const void* target) {
 
 // Points a forward branch at the code about to be emitted.
 static inline void patchHere(struct Emitter* e, uint8_t* site) {
-	patchBranch(site, e->p);
+	if (site + 4 <= e->end) {
+		patchBranch(site, e->p);
+	}
 }
 
 #endif
