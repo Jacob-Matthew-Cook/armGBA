@@ -77,6 +77,7 @@ static uint32_t run(const struct FuzzState* in, uint32_t pc, uint16_t waitcnt, i
 	gba->activeRegion = -1;
 	cpu->r[15] = pc;
 	cpuWritePc(gba);
+	stepReset(gba);
 	cpu->cycles = 0;
 	cpu->nextEvent = 0;
 

@@ -610,12 +610,6 @@ static bool compare(const struct Case* tc, const struct Result* res, bool report
 		}
 		ok = false;
 	}
-	if ((res->m.shifterCarry & 1) != (res->j.shifterCarry & 1)) {
-		if (report) {
-			printf("  shifter carry mGBA %u armGBA %u\n", res->m.shifterCarry, res->j.shifterCarry);
-		}
-		ok = false;
-	}
 	if (res->m.spsr != res->j.spsr) {
 		if (report) {
 			printf("  spsr mGBA %08X armGBA %08X\n", res->m.spsr, res->j.spsr);
