@@ -811,16 +811,36 @@ static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, boo
 	return start;
 }
 
-// Bodies and cold code share one run of memory here.
-void backendReset(struct Jit* jit) {
-	(void) jit;
+// Blocks' bodies are kept apart from their cold code (slow paths, exits, and whole careful copies),
+// so the code a game spends its time in is dense in the caches; on a Cortex-A7 or A55 with 32 KiB of
+// instruction cache, that decides much of a busy game's speed. The code memory is laid out in
+// stretches, each with a part for bodies and a part for cold code, so a block's cold code stays near
+// its body.
+enum {
+	HOT_PART = 352 << 10,
+	COLD_PART = 640 << 10,
+	STRETCH = HOT_PART + COLD_PART,
+	// Room a block may need in each part.
+	HOT_ROOM = 32 << 10,
+	COLD_ROOM = 64 << 10,
+};
+
+// Lays out a stretch at base: block bodies fill its first part and cold code its second.
+static void startStretch(struct Jit* jit, uint8_t* base) {
+	jit->codeNext = base;
+	jit->hotEnd = base + HOT_PART;
+	jit->coldNext = jit->hotEnd;
+	jit->coldEnd = base + STRETCH;
 }
 
-// This backend keeps a block's cold code with its body, so nothing is on a cold side.
+// After a flush, compiling starts in a new stretch.
+void backendReset(struct Jit* jit) {
+	startStretch(jit, jit->codeNext);
+}
+
+// Whether an address is in a stretch's cold part.
 bool backendColdSide(const struct Jit* jit, const uint8_t* p) {
-	(void) jit;
-	(void) p;
-	return false;
+	return p >= jit->codeStart && (size_t) (p - jit->codeStart) % STRETCH >= HOT_PART;
 }
 
 // Emits everything shared: the entry and exit, the dispatchers, and the memory routines. They are
@@ -2848,10 +2868,17 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		.width = block->thumb ? 2 : 4,
 		.region = block->pc >> 24,
 	};
-	if (jit->codeEnd - jit->codeNext < 64 * 1024) {
-		return false;
+	if (jit->hotEnd - jit->codeNext < HOT_ROOM || jit->coldEnd - jit->coldNext < COLD_ROOM) {
+		if (jit->codeEnd - jit->coldEnd < STRETCH) {
+			return false;
+		}
+		startStretch(jit, jit->coldEnd);
 	}
-	c.e = (struct Emitter) { .start = jit->codeNext, .p = jit->codeNext, .end = jit->codeEnd };
+	if (block->careful) {
+		c.e = (struct Emitter) { .start = jit->coldNext, .p = jit->coldNext, .end = jit->coldEnd };
+	} else {
+		c.e = (struct Emitter) { .start = jit->codeNext, .p = jit->codeNext, .end = jit->hotEnd };
+	}
 	c.S = c.thumb ? gba->waitS16[c.region] : gba->waitS32[c.region];
 	c.N = c.thumb ? gba->waitN16[c.region] : gba->waitN32[c.region];
 	c.P = 1 + c.S;
@@ -2888,7 +2915,13 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 	// Cold code: memory accesses that missed the inline path, cycle-check exits, and unlinked
 	// branches.
 	struct Emitter* e = &c.e;
+	uint8_t* bodyEnd = e->p;
+	if (!c.careful) {
+		e->p = jit->coldNext;
+		e->end = jit->coldEnd;
+	}
 	uint8_t* cold = e->p;
+	block->cold = c.careful ? block->entry : cold;
 	resetPending(&c);
 	canonical(&c);
 	for (int i = 0; i < c.slowCount; ++i) {
@@ -3008,8 +3041,14 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		storeConst(&c, OFF(exitReason), EXIT_LINK);
 		aB(e, C_AL, jit->exitRoutine);
 	}
-	jitNameBlock(block, cold, cold, e->p);
-	flushCode(c.e.start, e->p);
-	jit->codeNext = e->p;
+	if (c.careful) {
+		flushCode(c.e.start, e->p);
+	} else {
+		flushCode(c.e.start, bodyEnd);
+		flushCode(cold, e->p);
+		jit->codeNext = bodyEnd;
+	}
+	jitNameBlock(block, bodyEnd, cold, e->p);
+	jit->coldNext = e->p;
 	return true;
 }
