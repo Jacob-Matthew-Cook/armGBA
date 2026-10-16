@@ -8,7 +8,7 @@
 
 // For backends that keep blocks' bodies apart from their cold code: how the code memory is laid out,
 // the retry of a block that doesn't fit, and the tiny routines. Included after jit-compile.h; the
-// backend defines compileInStretch, tinyBegin and tinyEnd.
+// backend defines compileInStretch, tinyBegin, tinyEnd and tinyCall.
 
 // Blocks' bodies are kept apart from their cold code (slow paths, exits, and whole careful copies),
 // so the code a game spends its time in is dense in the caches; on a Cortex-A7 or A55 with 32 KiB of
@@ -27,6 +27,7 @@ enum {
 static bool compileInStretch(struct Jit*, struct Block*, struct Inst* insts, int count, const uint32_t* nextOps);
 static uint8_t* tinyBegin(struct Compiler*, struct TinyRoutine*);
 static void tinyEnd(struct Compiler*, uint8_t* over);
+static void tinyCall(struct Compiler*, const uint8_t* routine);
 
 // Lays out a stretch at base: block bodies fill its first part and cold code its second.
 static void startStretch(struct Jit* jit, uint8_t* base) {
@@ -88,7 +89,7 @@ static void callTiny(struct Compiler* c, struct TinyRoutine* slot, void (*body)(
 		body(c);
 		tinyEnd(c, over);
 	}
-	aBl(&c->e, slot->code);
+	tinyCall(c, slot->code);
 }
 
 // Forgets what a compile whose code didn't fit left behind.
