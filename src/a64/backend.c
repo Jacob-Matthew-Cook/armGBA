@@ -1045,15 +1045,6 @@ struct Compiler {
 
 #include "../jit-compile.h"
 
-// The flags a data-processing instruction may set when it runs; a shift by a register changes C
-// unless the amount is zero.
-static uint8_t aluWrites(const struct Inst* in) {
-	if (!isLogical(in->op)) {
-		return F_ALL;
-	}
-	return F_N | F_Z | (shifterCarry(in) == CARRY_REG || in->op2.byReg ? F_C : 0);
-}
-
 // Flags.
 
 // Makes w21 hold the guest flags.
