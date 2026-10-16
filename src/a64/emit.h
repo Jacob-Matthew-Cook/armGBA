@@ -56,8 +56,11 @@ enum {
 };
 
 // AArch64 instructions are 32 bits each.
+// Past the end, nothing is written: p still advances, and the caller sees that the code didn't fit.
 static inline void emit32(struct Emitter* e, uint32_t insn) {
-	memcpy(e->p, &insn, 4);
+	if (e->p + 4 <= e->end) {
+		memcpy(e->p, &insn, 4);
+	}
 	e->p += 4;
 }
 
@@ -433,13 +436,15 @@ static inline void patchBranch(uint8_t* at, const void* target) {
 
 // Points a forward branch at the code about to be emitted.
 static inline void patchHere(struct Emitter* e, uint8_t* site) {
-	patchBranch(site, e->p);
+	if (site + 4 <= e->end) {
+		patchBranch(site, e->p);
+	}
 }
 
 // The branches. Each returns its site; with a NULL target, it is patched later.
 static inline uint8_t* aB(struct Emitter* e, const void* target) {
 	uint8_t* site = emitSite(e, 0x14000000);
-	if (target) {
+	if (target && site + 4 <= e->end) {
 		patchBranch(site, target);
 	}
 	return site;
@@ -447,7 +452,7 @@ static inline uint8_t* aB(struct Emitter* e, const void* target) {
 
 static inline uint8_t* aBl(struct Emitter* e, const void* target) {
 	uint8_t* site = emitSite(e, 0x94000000);
-	if (target) {
+	if (target && site + 4 <= e->end) {
 		patchBranch(site, target);
 	}
 	return site;
@@ -455,7 +460,7 @@ static inline uint8_t* aBl(struct Emitter* e, const void* target) {
 
 static inline uint8_t* aBcond(struct Emitter* e, int cond, const void* target) {
 	uint8_t* site = emitSite(e, 0x54000000 | cond);
-	if (target) {
+	if (target && site + 4 <= e->end) {
 		patchBranch(site, target);
 	}
 	return site;
@@ -464,7 +469,7 @@ static inline uint8_t* aBcond(struct Emitter* e, int cond, const void* target) {
 // Compare with zero and branch, and test a bit and branch.
 static inline uint8_t* aCbz(struct Emitter* e, int rt, const void* target) {
 	uint8_t* site = emitSite(e, 0x34000000 | rt);
-	if (target) {
+	if (target && site + 4 <= e->end) {
 		patchBranch(site, target);
 	}
 	return site;
@@ -472,7 +477,7 @@ static inline uint8_t* aCbz(struct Emitter* e, int rt, const void* target) {
 
 static inline uint8_t* aCbnz(struct Emitter* e, int rt, const void* target) {
 	uint8_t* site = emitSite(e, 0x35000000 | rt);
-	if (target) {
+	if (target && site + 4 <= e->end) {
 		patchBranch(site, target);
 	}
 	return site;
@@ -480,7 +485,7 @@ static inline uint8_t* aCbnz(struct Emitter* e, int rt, const void* target) {
 
 static inline uint8_t* aCbnzX(struct Emitter* e, int rt, const void* target) {
 	uint8_t* site = emitSite(e, 0xB5000000 | rt);
-	if (target) {
+	if (target && site + 4 <= e->end) {
 		patchBranch(site, target);
 	}
 	return site;
@@ -488,7 +493,7 @@ static inline uint8_t* aCbnzX(struct Emitter* e, int rt, const void* target) {
 
 static inline uint8_t* aTbz(struct Emitter* e, int rt, unsigned bit, const void* target) {
 	uint8_t* site = emitSite(e, 0x36000000 | ((bit & 31) << 19) | rt);
-	if (target) {
+	if (target && site + 4 <= e->end) {
 		patchBranch(site, target);
 	}
 	return site;
@@ -496,7 +501,7 @@ static inline uint8_t* aTbz(struct Emitter* e, int rt, unsigned bit, const void*
 
 static inline uint8_t* aTbnz(struct Emitter* e, int rt, unsigned bit, const void* target) {
 	uint8_t* site = emitSite(e, 0x37000000 | ((bit & 31) << 19) | rt);
-	if (target) {
+	if (target && site + 4 <= e->end) {
 		patchBranch(site, target);
 	}
 	return site;
