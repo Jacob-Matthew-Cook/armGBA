@@ -976,6 +976,17 @@ struct Compiler {
 	int idleLoadCount;
 	uint8_t* fastDone[2];
 	int fastDoneCount;
+	// Block transfers that may move words to or from palette RAM, VRAM or OAM, whose copies for those
+	// go with the cold code: the jump there from the work RAM checks, and where the exact CPU's
+	// handling and the code after the transfer start.
+	struct VideoTransfer {
+		const struct Inst* in;
+		uint8_t* site;
+		uint8_t* exact;
+		uint8_t* join;
+	} videoTransfers[MAX_BLOCK_INSTS];
+	int videoCount;
+	struct VideoTransfer* video;
 
 	// Where the guest flags are: the host's, r9, or both.
 	bool inHost;
@@ -2245,9 +2256,15 @@ static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t*
 	aDpR(e, C_AL, D_MOV, false, R0, 0, R1, S_LSR, 24);
 	aDpI(e, C_AL, D_CMP, true, 0, R0, REGION_EWRAM);
 	uint8_t* ewram = aB(e, C_EQ, NULL);
-	aDpI(e, C_AL, D_CMP, true, 0, R0, REGION_IWRAM);
-	slow[(*slowCount)++] = aB(e, C_NE, NULL);
 	bool toPc = in->load && (in->list & 0x8000);
+	aDpI(e, C_AL, D_CMP, true, 0, R0, REGION_IWRAM);
+	if (!toPc) {
+		c->video = &c->videoTransfers[c->videoCount++];
+		c->video->in = in;
+		c->video->site = aB(e, C_NE, NULL);
+	} else {
+		slow[(*slowCount)++] = aB(e, C_NE, NULL);
+	}
 	for (int region = REGION_IWRAM; region >= REGION_EWRAM; --region) {
 		if (region == REGION_EWRAM) {
 			patchHere(e, ewram);
@@ -2259,6 +2276,77 @@ static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t*
 			c->fastDone[c->fastDoneCount++] = aB(e, C_AL, NULL);
 		}
 	}
+}
+
+// The copy of a block transfer for palette RAM, VRAM or OAM, in the cold code; r1 = first address,
+// in the region. As the exact CPU's: every word costs the same, a store goes to the renderer only if
+// it changes the word, and anything a store would make C do first (drawing a line whose H-blank
+// has come, compiled code in video memory, the display holding VRAM) goes to the exact CPU.
+static void emitVideoTransfer(struct Compiler* c, const struct VideoTransfer* t, int region) {
+	struct Emitter* e = &c->e;
+	const struct Inst* in = t->in;
+	int count = __builtin_popcount(in->list);
+	int cycles = count * (1 + c->gba->waitS32[region]) + (in->load ? 1 : 0);
+	cmnCycles(e, cycles);
+	aB(e, C_GE, t->exact);
+	if (region == REGION_VRAM) {
+		ldrbF(e, R3, OFF(vramStall));
+		aDpI(e, C_AL, D_CMP, true, 0, R3, 0);
+		aB(e, C_NE, t->exact);
+		// Below the mirrors of the sprite tiles.
+		aUbfx(e, R0, R1, 0, 17);
+		aCmpI(e, R0, SIZE_VRAM - 4 * count, R12);
+		aB(e, C_HI, t->exact);
+	}
+	if (!in->load) {
+		ldrbF(e, R3, OFF(videoCode));
+		aDpI(e, C_AL, D_CMP, true, 0, R3, 0);
+		aB(e, C_NE, t->exact);
+		timeUntil(e, R0, R3, cycles, OFF(video.drawDue));
+		aB(e, C_PL, t->exact);
+	}
+	fieldAddr(e, R3, region == REGION_VRAM ? OFF(vram) : region == REGION_OAM ? OFF(oam) : OFF(palette));
+	int k = 0;
+	for (int r = 0; r < 16; ++r) {
+		if (!(in->list & (1 << r))) {
+			continue;
+		}
+		// r0 = the word's index in the region.
+		aAddI(e, R0, R1, 4 * k, R12);
+		aUbfx(e, R0, R0, 2, region == REGION_VRAM ? 15 : 8);
+		if (in->load) {
+			int dst = hostReg[r] >= 0 ? hostReg[r] : R2;
+			aMemR(e, true, false, dst, R3, R0, 2);
+			if (dst == R2) {
+				storeGuest(c, r, R2);
+			}
+		} else {
+			int src = guestReg(c, r, in, R2);
+			aMemR(e, true, false, LR, R3, R0, 2);
+			aDpR(e, C_AL, D_CMP, true, 0, LR, src, S_LSL, 0);
+			uint8_t* same = aB(e, C_EQ, NULL);
+			aMemR(e, false, false, src, R3, R0, 2);
+			if (region == REGION_VRAM) {
+				aDpR(e, C_AL, D_MOV, false, R0, 0, R0, S_LSR, 9);
+				fieldAddr(e, LR, OFF(renderer.vramChanged));
+				aMovI(e, R12, 1);
+				aMemR(e, false, true, R12, LR, R0, 0);
+			} else {
+				ldrbF(e, LR, OFF(renderer.memoryChanged));
+				aDpI(e, C_AL, D_ORR, false, LR, LR, region == REGION_OAM ? RENDER_OAM : RENDER_PALETTE);
+				strbF(e, LR, OFF(renderer.memoryChanged));
+			}
+			patchHere(e, same);
+		}
+		++k;
+	}
+	if (in->writeback && (!in->load || !(in->list & (1 << in->rn)))) {
+		int32_t start = in->up ? (in->pre ? 4 : 0) : (in->pre ? -4 * count : -4 * count + 4);
+		aAddI(e, R2, R1, (in->up ? 4 * count : -4 * count) - start, R12);
+		storeGuest(c, in->rn, R2);
+	}
+	aAddI(e, R_CYC, R_CYC, cycles + nonseq(c), R12);
+	aB(e, C_AL, t->join);
 }
 
 // Calls the exact CPU for the instruction, with its fetch counted; r0 = the next block key, or ~0.
@@ -2277,6 +2365,7 @@ static void emitBlockTransfer(struct Compiler* c, const struct Inst* in) {
 	uint8_t* slow[40];
 	int slowCount = 0;
 	c->fastDoneCount = 0;
+	c->video = NULL;
 	// The fetch comes first, so I/O sees the time it happens at.
 	clobberFlags(c);
 	flushPending(c);
@@ -2285,6 +2374,9 @@ static void emitBlockTransfer(struct Compiler* c, const struct Inst* in) {
 		for (int i = 0; i < slowCount; ++i) {
 			patchHere(e, slow[i]);
 		}
+	}
+	if (c->video) {
+		c->video->exact = e->p;
 	}
 	emitExecute(c, in);
 	if (loadsPc(in)) {
@@ -2300,6 +2392,9 @@ static void emitBlockTransfer(struct Compiler* c, const struct Inst* in) {
 	emitMissCheck(c);
 	for (int i = 0; i < c->fastDoneCount; ++i) {
 		patchHere(e, c->fastDone[i]);
+	}
+	if (c->video) {
+		c->video->join = e->p;
 	}
 	if (isTerminator(in)) {
 		emitLinkTo(c, in->address + c->width, c->thumb);
@@ -3040,6 +3135,18 @@ static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* 
 		}
 		emitMissCheck(&c);
 		aB(e, C_AL, slow->resume);
+	}
+	for (int i = 0; i < c.videoCount; ++i) {
+		// r0 = the first address's region, r1 = the first address.
+		struct VideoTransfer* t = &c.videoTransfers[i];
+		patchHere(e, t->site);
+		for (int region = REGION_PALETTE; region <= REGION_OAM; ++region) {
+			aDpI(e, C_AL, D_CMP, true, 0, R0, region);
+			uint8_t* other = aB(e, C_NE, NULL);
+			emitVideoTransfer(&c, t, region);
+			patchHere(e, other);
+		}
+		aB(e, C_AL, t->exact);
 	}
 	for (int i = 0; i < c.stubCount; ++i) {
 		struct Stub* stub = &c.stubs[i];
