@@ -3261,7 +3261,6 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		struct Link* link = &block->out[i];
 		link->site = c.linkSites[i];
 		link->stub = e->p;
-		patchRel32(link->site, link->stub);
 		if (inCartridge(link->targetKey >> 24)) {
 			storeHead(&c, (link->targetKey & ~1u) + 2 * c.width);
 		}
@@ -3270,6 +3269,17 @@ bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, in
 		xStore(e, 8, M(R15, OFF(exitLink)), RAX);
 		xStoreI(e, 4, M(R15, OFF(exitReason)), EXIT_LINK);
 		xJmp(e, jit->exitRoutine);
+	}
+	if (e->p > e->end) {
+		// It ran past the end of the code memory, writing nothing there; the caller flushes.
+		block->siteCount = 0;
+		free(block->out);
+		block->out = NULL;
+		block->outCount = 0;
+		return false;
+	}
+	for (int i = 0; i < block->outCount; ++i) {
+		patchRel32(block->out[i].site, block->out[i].stub);
 	}
 	jitNameBlock(block, cold, cold, e->p);
 	jit->codeNext = e->p;

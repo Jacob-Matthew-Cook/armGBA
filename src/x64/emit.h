@@ -50,18 +50,26 @@ static inline struct Opnd MI(int base, int index, int scale, int32_t disp) {
 	return (struct Opnd) { .mem = true, .base = base, .index = index, .scale = scale, .disp = disp };
 }
 
-// Writes bytes, and 32-bit and 64-bit values, into the code stream.
+// Writes bytes, and 32-bit and 64-bit values, into the code stream. Past the end, nothing is
+// written: p still advances, and the caller sees that the code didn't fit.
 static inline void e8(struct Emitter* e, uint8_t b) {
-	*e->p++ = b;
+	if (e->p < e->end) {
+		*e->p = b;
+	}
+	++e->p;
 }
 
 static inline void e32(struct Emitter* e, uint32_t v) {
-	memcpy(e->p, &v, 4);
+	if (e->p + 4 <= e->end) {
+		memcpy(e->p, &v, 4);
+	}
 	e->p += 4;
 }
 
 static inline void e64(struct Emitter* e, uint64_t v) {
-	memcpy(e->p, &v, 8);
+	if (e->p + 8 <= e->end) {
+		memcpy(e->p, &v, 8);
+	}
 	e->p += 8;
 }
 
@@ -434,7 +442,9 @@ static inline void patchRel32(uint8_t* site, const void* target) {
 
 // Points a forward jump at the code about to be emitted.
 static inline void patchHere(struct Emitter* e, uint8_t* site) {
-	patchRel32(site, e->p);
+	if (site + 4 <= e->end) {
+		patchRel32(site, e->p);
+	}
 }
 
 #endif
