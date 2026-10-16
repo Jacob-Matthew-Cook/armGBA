@@ -1065,6 +1065,8 @@ struct Compiler {
 		// A transfer through the stack pointer keeps only IWRAM's copy inline, with a branch to
 		// EWRAM's or the slow path.
 		uint8_t* ewramSite;
+		// Where a transfer outside work RAM leaves for the copies for palette RAM, VRAM and OAM.
+		uint8_t* videoSite;
 	} transfers[MAX_BLOCK_INSTS];
 	int transferCount;
 	struct SlowTransfer* transfer;
@@ -2662,7 +2664,11 @@ static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t*
 	aDpImm(e, A_SUBS_IMM, ZR, 3, REGION_EWRAM);
 	uint8_t* ewram = aBcond(e, C_EQ, NULL);
 	aDpImm(e, A_SUBS_IMM, ZR, 3, REGION_IWRAM);
-	slow[(*slowCount)++] = aBcond(e, C_NE, NULL);
+	if (c->transfer && !toPc) {
+		c->transfer->videoSite = aBcond(e, C_NE, NULL);
+	} else {
+		slow[(*slowCount)++] = aBcond(e, C_NE, NULL);
+	}
 	for (int region = REGION_IWRAM; region >= REGION_EWRAM; --region) {
 		if (region == REGION_EWRAM) {
 			patchHere(e, ewram);
@@ -2706,6 +2712,7 @@ static void emitBlockTransfer(struct Compiler* c, const struct Inst* in) {
 			t->wrapCount = 0;
 			t->siteCount = 0;
 			t->ewramSite = NULL;
+			t->videoSite = NULL;
 			c->transfer = t;
 			emitFastTransfer(c, in, t->sites, &t->siteCount);
 			c->transfer = NULL;
@@ -2744,6 +2751,72 @@ static void emitBlockTransfer(struct Compiler* c, const struct Inst* in) {
 	if (isTerminator(in)) {
 		emitLinkTo(c, in->address + c->width, c->thumb);
 	}
+}
+
+// The copy of a block transfer for palette RAM, VRAM or OAM, in the cold code; w0 = first address,
+// in the region. As the exact CPU's: every word costs the same, a store goes to the renderer only if
+// it changes the word, and anything a store would make C do first (drawing a line whose H-blank
+// has come, compiled code in video memory, the display holding VRAM) goes to the exact CPU at
+// exact.
+static void emitVideoTransfer(struct Compiler* c, const struct SlowTransfer* t, int region, uint8_t* exact) {
+	struct Emitter* e = &c->e;
+	const struct Inst* in = t->in;
+	int count = __builtin_popcount(in->list);
+	int cycles = count * (1 + c->gba->waitS32[region]) + (in->load ? 1 : 0);
+	aAddImm(e, 3, R_CYC, cycles, 6);
+	aDpImm(e, A_SUBS_IMM, ZR, 3, 0);
+	aBcond(e, C_GE, exact);
+	if (region == REGION_VRAM) {
+		loadField(e, 4, OFF(vramStall), 1);
+		aCbnz(e, 4, exact);
+		// Below the mirrors of the sprite tiles.
+		aAndBits(e, 4, 0, 0, 17);
+		aMovImm(e, 5, SIZE_VRAM - 4 * count);
+		aDp(e, A_SUBS, ZR, 4, 5, S_LSL, 0);
+		aBcond(e, C_HI, exact);
+	}
+	if (!in->load) {
+		loadField(e, 4, OFF(videoCode), 1);
+		aCbnz(e, 4, exact);
+		timeUntil(e, 4, 5, cycles, OFF(video.drawDue));
+		aDpImm(e, A_SUBS_IMM, ZR, 4, 0);
+		aBcond(e, C_GE, exact);
+	}
+	aAddImmX(e, 5, R_GBA, region == REGION_VRAM ? OFF(vram) : region == REGION_OAM ? OFF(oam) : OFF(palette));
+	int k = 0;
+	for (int r = 0; r < 16; ++r) {
+		if (!(in->list & (1 << r))) {
+			continue;
+		}
+		aDpImm(e, A_ADD_IMM, 6, 0, 4 * k);
+		aAndBits(e, 6, 6, 2, region == REGION_VRAM ? 15 : 8);
+		if (in->load) {
+			aLdst(e, L_LDR, hostReg[r], 5, 6, L_UXTW);
+		} else {
+			aLdst(e, L_LDR, 7, 5, 6, L_UXTW);
+			aDp(e, A_SUBS, ZR, 7, hostReg[r], S_LSL, 0);
+			uint8_t* same = aBcond(e, C_EQ, NULL);
+			aLdst(e, L_STR, hostReg[r], 5, 6, L_UXTW);
+			if (region == REGION_VRAM) {
+				aLsrImm(e, 7, 6, 11);
+				aAddImmX(e, 8, R_GBA, OFF(renderer.vramChanged));
+				aMovImm(e, 16, 1);
+				aLdst(e, L_STRB, 16, 8, 7, L_UXTW);
+			} else {
+				loadField(e, 7, OFF(renderer.memoryChanged), 1);
+				aLogicImm(e, A_ORR_IMM, 7, 7, region == REGION_OAM ? RENDER_OAM : RENDER_PALETTE);
+				storeField(e, 7, OFF(renderer.memoryChanged), 1);
+			}
+			patchHere(e, same);
+		}
+		++k;
+	}
+	if (in->writeback && (!in->load || !(in->list & (1 << in->rn)))) {
+		int32_t start = in->up ? (in->pre ? 4 : 0) : (in->pre ? -4 * count : -4 * count + 4);
+		aAddImm(e, hostReg[in->rn], 0, (in->up ? 4 * count : -4 * count) - start, 17);
+	}
+	aAddImm(e, R_CYC, R_CYC, cycles + nonseq(c), 17);
+	aB(e, t->join);
 }
 
 // Emits the parts of a block transfer kept with the cold code (see emitBlockTransfer).
@@ -2788,6 +2861,17 @@ static void emitSlowTransfer(struct Compiler* c, struct SlowTransfer* t) {
 		} else {
 			aB(e, t->join);
 		}
+	}
+	if (t->videoSite) {
+		// w3 = the first address's region, w0 = the first address.
+		patchHere(e, t->videoSite);
+		for (int region = REGION_PALETTE; region <= REGION_OAM; ++region) {
+			aDpImm(e, A_SUBS_IMM, ZR, 3, region);
+			uint8_t* other = aBcond(e, C_NE, NULL);
+			emitVideoTransfer(c, t, region, start);
+			patchHere(e, other);
+		}
+		aB(e, start);
 	}
 	for (int i = 0; i < t->wrapCount; ++i) {
 		patchHere(e, t->wraps[i].site);
