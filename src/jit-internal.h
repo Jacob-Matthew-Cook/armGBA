@@ -171,6 +171,8 @@ struct Block {
 	// they change back.
 	uint32_t waits;
 	bool setAside;
+	// Compiled as an idle loop's head, with the check that leaves for the run loop at its start.
+	bool idleHead;
 	// On the list of live cartridge blocks that a wait-state change goes through.
 	bool listed;
 };
