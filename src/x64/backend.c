@@ -1962,9 +1962,7 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 	int32_t data = iwram ? OFF(iwram) : OFF(ewram);
 	int32_t map = iwram ? OFF(iwramCode) : OFF(ewramCode);
 	int count = __builtin_popcount(in->list);
-	// The same wait for every word, nonsequential or not, and a load's internal cycle.
-	struct GBA* gba = c->jit->gba;
-	int cycles = count * (1 + gba->waitS32[region]) + (in->load ? 1 : 0);
+	int cycles = transferCycles(c, in, region);
 	xAluI(e, X_CMP, 4, R(R14), -cycles);
 	slow[(*slowCount)++] = xJcc(e, CC_GE, NULL);
 	if (!in->load) {
@@ -1997,8 +1995,7 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 		++k;
 	}
 	if (in->writeback && (!in->load || !(in->list & (1 << in->rn)))) {
-		int32_t start = in->up ? (in->pre ? 4 : 0) : (in->pre ? -4 * count : -4 * count + 4);
-		xLea(e, 4, RDX, M(RCX, (in->up ? 4 * count : -4 * count) - start));
+		xLea(e, 4, RDX, M(RCX, transferWriteback(in)));
 		storeGuest(c, in->rn, RDX);
 	}
 	xLea(e, 4, R14, M(R14, cycles + (loadsPc(in) ? 0 : nonseq(c))));
@@ -2008,7 +2005,7 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t** slow, int* slowCount) {
 	struct Emitter* e = &c->e;
 	int count = __builtin_popcount(in->list);
-	int32_t start = in->up ? (in->pre ? 4 : 0) : (in->pre ? -4 * count : -4 * count + 4);
+	int32_t start = transferStart(in);
 	clobberFlags(c);
 	loadGuest(c, RCX, in->rn, in);
 	if (start) {
@@ -2054,8 +2051,8 @@ static void emitVideoTransfer(struct Compiler* c, const struct VideoTransfer* t,
 	struct Emitter* e = &c->e;
 	const struct Inst* in = t->in;
 	int count = __builtin_popcount(in->list);
-	int cycles = count * (1 + c->gba->waitS32[region]) + (in->load ? 1 : 0);
-	int32_t data = region == REGION_VRAM ? OFF(vram) : region == REGION_OAM ? OFF(oam) : OFF(palette);
+	int cycles = transferCycles(c, in, region);
+	int32_t data = videoMemory(region);
 	uint32_t mask = region == REGION_VRAM ? 0x1FFFF : (region == REGION_OAM ? SIZE_OAM : SIZE_PALETTE) - 4;
 	xAluI(e, X_CMP, 4, R(R14), -cycles);
 	xJcc(e, CC_GE, t->exact);
@@ -2107,8 +2104,7 @@ static void emitVideoTransfer(struct Compiler* c, const struct VideoTransfer* t,
 		++k;
 	}
 	if (in->writeback && (!in->load || !(in->list & (1 << in->rn)))) {
-		int32_t start = in->up ? (in->pre ? 4 : 0) : (in->pre ? -4 * count : -4 * count + 4);
-		xLea(e, 4, RDX, M(RCX, (in->up ? 4 * count : -4 * count) - start));
+		xLea(e, 4, RDX, M(RCX, transferWriteback(in)));
 		storeGuest(c, in->rn, RDX);
 	}
 	xLea(e, 4, R14, M(R14, cycles + nonseq(c)));

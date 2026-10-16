@@ -1714,9 +1714,7 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 	int32_t data = iwram ? OFF(iwram) : OFF(ewram);
 	int32_t map = iwram ? OFF(iwramCode) : OFF(ewramCode);
 	int count = __builtin_popcount(in->list);
-	// The same wait for every word, nonsequential or not, and a load's internal cycle.
-	struct GBA* gba = c->jit->gba;
-	int cycles = count * (1 + gba->waitS32[region]) + (in->load ? 1 : 0);
+	int cycles = transferCycles(c, in, region);
 	cmnCycles(e, cycles);
 	slow[(*slowCount)++] = aB(e, C_GE, NULL);
 	if (!in->load) {
@@ -1750,8 +1748,7 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 		++k;
 	}
 	if (in->writeback && (!in->load || !(in->list & (1 << in->rn)))) {
-		int32_t start = in->up ? (in->pre ? 4 : 0) : (in->pre ? -4 * count : -4 * count + 4);
-		aAddI(e, R2, R1, (in->up ? 4 * count : -4 * count) - start, R12);
+		aAddI(e, R2, R1, transferWriteback(in), R12);
 		storeGuest(c, in->rn, R2);
 	}
 	aAddI(e, R_CYC, R_CYC, cycles + (loadsPc(in) ? 0 : nonseq(c)), R12);
@@ -1761,7 +1758,7 @@ static void emitRamTransfer(struct Compiler* c, const struct Inst* in, int regio
 static void emitFastTransfer(struct Compiler* c, const struct Inst* in, uint8_t** slow, int* slowCount) {
 	struct Emitter* e = &c->e;
 	int count = __builtin_popcount(in->list);
-	int32_t start = in->up ? (in->pre ? 4 : 0) : (in->pre ? -4 * count : -4 * count + 4);
+	int32_t start = transferStart(in);
 	clobberFlags(c);
 	loadGuest(c, R1, in->rn, in);
 	if (start) {
@@ -1806,7 +1803,7 @@ static void emitVideoTransfer(struct Compiler* c, const struct VideoTransfer* t,
 	struct Emitter* e = &c->e;
 	const struct Inst* in = t->in;
 	int count = __builtin_popcount(in->list);
-	int cycles = count * (1 + c->gba->waitS32[region]) + (in->load ? 1 : 0);
+	int cycles = transferCycles(c, in, region);
 	cmnCycles(e, cycles);
 	aB(e, C_GE, t->exact);
 	if (region == REGION_VRAM) {
@@ -1825,7 +1822,7 @@ static void emitVideoTransfer(struct Compiler* c, const struct VideoTransfer* t,
 		timeUntil(e, R0, R3, cycles, OFF(video.drawDue));
 		aB(e, C_PL, t->exact);
 	}
-	fieldAddr(e, R3, region == REGION_VRAM ? OFF(vram) : region == REGION_OAM ? OFF(oam) : OFF(palette));
+	fieldAddr(e, R3, videoMemory(region));
 	int k = 0;
 	for (int r = 0; r < 16; ++r) {
 		if (!(in->list & (1 << r))) {
@@ -1861,8 +1858,7 @@ static void emitVideoTransfer(struct Compiler* c, const struct VideoTransfer* t,
 		++k;
 	}
 	if (in->writeback && (!in->load || !(in->list & (1 << in->rn)))) {
-		int32_t start = in->up ? (in->pre ? 4 : 0) : (in->pre ? -4 * count : -4 * count + 4);
-		aAddI(e, R2, R1, (in->up ? 4 * count : -4 * count) - start, R12);
+		aAddI(e, R2, R1, transferWriteback(in), R12);
 		storeGuest(c, in->rn, R2);
 	}
 	aAddI(e, R_CYC, R_CYC, cycles + nonseq(c), R12);
