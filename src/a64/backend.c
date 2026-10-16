@@ -1038,8 +1038,9 @@ struct Compiler {
 	} transfers[MAX_BLOCK_INSTS];
 	int transferCount;
 	struct SlowTransfer* transfer;
-	// Tiny routines emitted in this block, forgotten again if its code doesn't fit.
-	struct TinyRoutine* newTiny[8];
+	// Tiny routines emitted in this block, forgotten again if its code doesn't fit: at most three
+	// for each instruction.
+	struct TinyRoutine* newTiny[3 * MAX_BLOCK_INSTS + 8];
 	int newTinyCount;
 };
 
@@ -1102,7 +1103,7 @@ static struct TinyRoutine* tinySlot(struct Compiler* c, int kind, int n0, int n1
 			return slot;
 		}
 		if (!slot->code) {
-			if (c->newTinyCount == 8) {
+			if (c->newTinyCount == (int) (sizeof(c->newTiny) / sizeof(*c->newTiny))) {
 				return NULL;
 			}
 			slot->key = key;
