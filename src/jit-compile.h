@@ -284,6 +284,17 @@ static uint8_t flagWrites(const struct Inst* in) {
 	}
 }
 
+// The flags a data-processing instruction may set when it runs: C for a logical one unless its
+// operand is a plain register or an unrotated constant compiled in.
+static inline uint8_t aluWrites(const struct Inst* in) {
+	if (!isLogical(in->op)) {
+		return F_ALL;
+	}
+	const struct Operand* op = &in->op2;
+	bool keepsC = !in->patchable && (op->isImm ? !op->immRotated : !op->byReg && op->type == SHIFT_LSL && !op->amount);
+	return F_N | F_Z | (keepsC ? 0 : F_C);
+}
+
 // Returns the opcode i instructions into the block, or of those prefetched past its end.
 static uint32_t opcodeAt(struct Compiler* c, int i) {
 	return i < c->count ? c->insts[i].opcode : c->nextOps[i - c->count];

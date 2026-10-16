@@ -1000,17 +1000,6 @@ struct Compiler {
 
 #include "../jit-compile.h"
 
-// The flags a data-processing instruction may set when it runs: C for a logical one unless its
-// operand is a plain register or an unrotated constant compiled in.
-static uint8_t aluWrites(const struct Inst* in) {
-	if (!isLogical(in->op)) {
-		return F_ALL;
-	}
-	const struct Operand* op = &in->op2;
-	bool keepsC = !in->patchable && (op->isImm ? !op->immRotated : !op->byReg && op->type == SHIFT_LSL && !op->amount);
-	return F_N | F_Z | (keepsC ? 0 : F_C);
-}
-
 // Where in struct GBA the word of RAM code at address is.
 static int32_t codeWord(const struct Compiler* c, uint32_t address) {
 	(void) c;
