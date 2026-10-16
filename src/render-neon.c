@@ -243,7 +243,7 @@ static inline uint16x8_t mix5x8h(uint16_t weightA, uint16x8_t colorA, uint16_t w
 }
 
 // compositeEight on halves: color >= current compares the flags, then the colors.
-static inline h8 compositeEightH(struct Renderer* renderer, h8 current, h8 color, uint16x8_t drawn, bool blend) {
+static inline __attribute__((always_inline)) h8 compositeEightH(struct Renderer* renderer, h8 current, h8 color, uint16x8_t drawn, bool blend) {
 	uint16x8_t notBelow = vorrq_u16(vcgtq_u16(color.hi, current.hi), vandq_u16(vceqq_u16(color.hi, current.hi), vcgeq_u16(color.lo, current.lo)));
 	// current & (0x00FFFFFF | FLAG_REBLEND | FLAG_OBJWIN)
 	uint16x8_t keptHi = vandq_u16(current.hi, vdupq_n_u16(0x05FF));
@@ -268,7 +268,7 @@ static inline h8 compositeEightH(struct Renderer* renderer, h8 current, h8 color
 
 // compositeEightH under the object window: a color drawn above keeps the pixel's object window bit,
 // as render.c's composite*Objwin do.
-static inline h8 compositeEightObjwinH(struct Renderer* renderer, h8 current, h8 color, uint16x8_t drawn, bool blend) {
+static inline __attribute__((always_inline)) h8 compositeEightObjwinH(struct Renderer* renderer, h8 current, h8 color, uint16x8_t drawn, bool blend) {
 	uint16x8_t notBelow = vorrq_u16(vcgtq_u16(color.hi, current.hi), vandq_u16(vceqq_u16(color.hi, current.hi), vcgeq_u16(color.lo, current.lo)));
 	uint16x8_t keptHi = vandq_u16(current.hi, vdupq_n_u16(0x05FF));
 	uint16x8_t objwinHi = vandq_u16(current.hi, vdupq_n_u16(FLAG_OBJWIN >> 16));
