@@ -205,6 +205,15 @@ static void emitExit(struct Jit* jit, struct Emitter* e) {
 	aPop(e, 0x9FF0);
 }
 
+// The shared tail of the exit stubs of unlinked branches; r0 holds the link.
+static void emitExitLink(struct Jit* jit, struct Emitter* e) {
+	aLdr(e, R1, R0, offsetof(struct Link, targetKey));
+	strF(e, R1, OFF(exitPc));
+	strF(e, R0, OFF(exitLink));
+	strFImm(e, OFF(exitReason), EXIT_LINK, 4, R1);
+	aB(e, C_AL, jit->exitRoutine);
+}
+
 // Looks up the block for the key in r0 and jumps to it, compiling it first if needed.
 static void emitDispatchKey(struct Jit* jit, struct Emitter* e) {
 	aDpR(e, C_AL, D_EOR, false, R1, R0, R0, S_LSR, 13);
@@ -856,6 +865,8 @@ bool backendInit(struct Jit* jit) {
 	emitEnter(jit, &e);
 	jit->exitRoutine = e.p;
 	emitExit(jit, &e);
+	jit->exitLinkRoutine = e.p;
+	emitExitLink(jit, &e);
 	jit->dispatchKey = e.p;
 	emitDispatchKey(jit, &e);
 	uint8_t* regionUpdate = emitRegionUpdate(&e);
@@ -877,7 +888,8 @@ bool backendInit(struct Jit* jit) {
 	jitNameCode(jit->spillRoutine, jit->reloadRoutine, "spill");
 	jitNameCode(jit->reloadRoutine, (void*) jit->enter, "reload");
 	jitNameCode((void*) jit->enter, jit->exitRoutine, "enter");
-	jitNameCode(jit->exitRoutine, jit->dispatchKey, "exit");
+	jitNameCode(jit->exitRoutine, jit->exitLinkRoutine, "exit");
+	jitNameCode(jit->exitLinkRoutine, jit->dispatchKey, "exitLink");
 	jitNameCode(jit->dispatchKey, jit->dispatchArm, "dispatch");
 	jitNameCode(jit->dispatchArm, jit->memRoutines[0], "dispatchPc");
 	for (int kind = 0; kind < 8; ++kind) {
@@ -3121,11 +3133,8 @@ static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* 
 		if (inCartridge(link->targetKey >> 24)) {
 			storeHead(&c, (link->targetKey & ~1u) + 2 * c.width);
 		}
-		storeConst(&c, OFF(exitPc), link->targetKey);
 		aMovI(e, R0, (uint32_t) (uintptr_t) link);
-		strF(e, R0, OFF(exitLink));
-		storeConst(&c, OFF(exitReason), EXIT_LINK);
-		aB(e, C_AL, jit->exitRoutine);
+		aB(e, C_AL, jit->exitLinkRoutine);
 	}
 	if (e->p > e->end) {
 		abandon(&c);
