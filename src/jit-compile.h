@@ -122,6 +122,29 @@ static bool stackAccess(const struct Compiler* c, const struct Inst* in) {
 	return in->rn == 13 && in->size == 4 && in->rd != 15 && c->slowCount < MAX_BLOCK_INSTS;
 }
 
+// A block transfer's first address, counted from its base register.
+static int32_t transferStart(const struct Inst* in) {
+	int count = __builtin_popcount(in->list);
+	return in->up ? (in->pre ? 4 : 0) : (in->pre ? -4 * count : -4 * count + 4);
+}
+
+// Where writeback leaves the base register, counted from the first address.
+static int32_t transferWriteback(const struct Inst* in) {
+	int count = __builtin_popcount(in->list);
+	return (in->up ? 4 * count : -4 * count) - transferStart(in);
+}
+
+// The cycles of a block transfer that RAM or video memory serves inline: the same wait for every
+// word, nonsequential or not, and a load's internal cycle.
+static int transferCycles(const struct Compiler* c, const struct Inst* in, int region) {
+	return __builtin_popcount(in->list) * (1 + c->gba->waitS32[region]) + (in->load ? 1 : 0);
+}
+
+// Where palette RAM, VRAM or OAM is in struct GBA.
+static int32_t videoMemory(int region) {
+	return region == REGION_VRAM ? OFF(vram) : region == REGION_OAM ? OFF(oam) : OFF(palette);
+}
+
 // Whether a load or block load writes r15, and so is a jump.
 static bool loadsPc(const struct Inst* in) {
 	if (in->kind == I_MEM) {
