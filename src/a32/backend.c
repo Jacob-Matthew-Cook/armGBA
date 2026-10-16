@@ -981,6 +981,7 @@ struct Compiler {
 
 #include "../jit-compile.h"
 #include "../jit-layout.h"
+#include "../jit-tiny.h"
 
 // Where in struct GBA the word of RAM code at address is.
 static int32_t codeWord(const struct Compiler* c, uint32_t address) {
@@ -2533,6 +2534,7 @@ static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* 
 	if (e->p > e->end) {
 		// The body ran past its part: nothing is patched, since the sites past the end were never
 		// written.
+		forgetTiny(&c);
 		abandon(&c);
 		return false;
 	}
@@ -2661,6 +2663,7 @@ static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* 
 		aB(e, C_AL, jit->exitLinkRoutine);
 	}
 	if (e->p > e->end) {
+		forgetTiny(&c);
 		abandon(&c);
 		return false;
 	}

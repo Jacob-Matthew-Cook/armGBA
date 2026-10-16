@@ -1013,6 +1013,7 @@ struct Compiler {
 
 #include "../jit-compile.h"
 #include "../jit-layout.h"
+#include "../jit-tiny.h"
 
 // Flags.
 
@@ -2824,6 +2825,7 @@ static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* 
 	if (e->p > e->end) {
 		// The body ran past its part: nothing is patched, since the sites past the end were never
 		// written.
+		forgetTiny(&c);
 		abandon(&c);
 		return false;
 	}
@@ -2955,6 +2957,7 @@ static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* 
 		emit32(e, (uint32_t) (pointer >> 32));
 	}
 	if (e->p > e->end) {
+		forgetTiny(&c);
 		abandon(&c);
 		return false;
 	}
