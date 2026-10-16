@@ -834,39 +834,6 @@ static uint8_t* emitMemRoutine(struct Jit* jit, struct Emitter* e, int kind, boo
 	return start;
 }
 
-// Blocks' bodies are kept apart from their cold code (slow paths, exits, and whole careful copies),
-// so the code a game spends its time in is dense in the caches. On a Cortex-A55 with 32 KiB of
-// instruction cache and 512 KiB behind it, that decides most of a busy game's speed. The code
-// memory is laid out in stretches, each with a part for bodies and a part for cold code, small
-// enough for a conditional branch (1 MiB either way) to reach from anywhere in one part to anywhere
-// in the other.
-enum {
-	HOT_PART = 352 << 10,
-	COLD_PART = 640 << 10,
-	STRETCH = HOT_PART + COLD_PART,
-	// Room a block may need in each part.
-	HOT_ROOM = 32 << 10,
-	COLD_ROOM = 64 << 10,
-};
-
-// Lays out a stretch at base: block bodies fill its first part and cold code its second.
-static void startStretch(struct Jit* jit, uint8_t* base) {
-	jit->codeNext = base;
-	jit->hotEnd = base + HOT_PART;
-	jit->coldNext = jit->hotEnd;
-	jit->coldEnd = base + STRETCH;
-}
-
-// After a flush, compiling starts in a new stretch.
-void backendReset(struct Jit* jit) {
-	startStretch(jit, jit->codeNext);
-}
-
-// Whether an address is in a stretch's cold part.
-bool backendColdSide(const struct Jit* jit, const uint8_t* p) {
-	return p >= jit->codeStart && (size_t) (p - jit->codeStart) % STRETCH >= HOT_PART;
-}
-
 // Emits everything shared: the entry and exit, the dispatchers, and the memory and shift routines.
 // They are emitted once and sit before the first block.
 bool backendInit(struct Jit* jit) {
@@ -1045,6 +1012,7 @@ struct Compiler {
 };
 
 #include "../jit-compile.h"
+#include "../jit-layout.h"
 
 // Flags.
 
@@ -1081,36 +1049,6 @@ static void flagsSet(struct Compiler* c) {
 static void canonical(struct Compiler* c) {
 	c->inReg = true;
 	c->inHost = false;
-}
-
-// A timing sequence that depends only on a few small numbers is emitted once, where it is first
-// needed, and called from then on: on a core with a small cache, the code this saves is worth more
-// than the call. Returns the slot for the key, or NULL when the table is full or a number doesn't
-// fit.
-static struct TinyRoutine* tinySlot(struct Compiler* c, int kind, int n0, int n1, int n2, int n3) {
-	int numbers[4] = { n0, n1, n2, n3 };
-	uint64_t key = (uint64_t) kind << 60;
-	for (int i = 0; i < 4; ++i) {
-		int n = numbers[i];
-		if (n != NONE && (n < -0x3000 || n > 0x3000)) {
-			return NULL;
-		}
-		key |= (uint64_t) (n == NONE ? 0x7FFF : n + 0x3000) << (i * 15);
-	}
-	for (unsigned probe = 0; probe < 8; ++probe) {
-		struct TinyRoutine* slot = &c->jit->tiny[((key * 0x9E3779B97F4A7C15ull >> 54) + probe) & (TINY_ROUTINES - 1)];
-		if (slot->code && slot->key == key) {
-			return slot;
-		}
-		if (!slot->code) {
-			if (c->newTinyCount == (int) (sizeof(c->newTiny) / sizeof(*c->newTiny))) {
-				return NULL;
-			}
-			slot->key = key;
-			return slot;
-		}
-	}
-	return NULL;
 }
 
 // Starts a routine emitted inline: emits a jump over it, patched by tinyEnd.
@@ -1165,17 +1103,7 @@ static void flushPending(struct Compiler* c) {
 		return;
 	}
 	clobberFlags(c);
-	struct TinyRoutine* slot = tinySlot(c, 1, c->pending, c->pendB, c->pendC, c->pendD);
-	if (!slot) {
-		emitPendingTerms(c);
-	} else {
-		if (!slot->code) {
-			uint8_t* over = tinyBegin(c, slot);
-			emitPendingTerms(c);
-			tinyEnd(c, over);
-		}
-		aBl(e, slot->code);
-	}
+	callTiny(c, tinySlot(c, 1, c->pending, c->pendB, c->pendC, c->pendD), emitPendingTerms);
 	resetPending(c);
 }
 
@@ -1539,17 +1467,7 @@ static void emitStopTerms(struct Compiler* c) {
 static void emitStop(struct Compiler* c) {
 	clobberFlags(c);
 	flushPending(c);
-	struct TinyRoutine* slot = c->penaltyRow < 0x100000 ? tinySlot(c, 3, c->penaltyRow & 0xFFF, c->penaltyRow >> 12, 0, 0) : NULL;
-	if (!slot) {
-		emitStopTerms(c);
-		return;
-	}
-	if (!slot->code) {
-		uint8_t* over = tinyBegin(c, slot);
-		emitStopTerms(c);
-		tinyEnd(c, over);
-	}
-	aBl(&c->e, slot->code);
+	callTiny(c, c->penaltyRow < 0x100000 ? tinySlot(c, 3, c->penaltyRow & 0xFFF, c->penaltyRow >> 12, 0, 0) : NULL, emitStopTerms);
 }
 
 // Called after an access that may have stopped the buffer: the next fetch restarts it,
@@ -1573,17 +1491,7 @@ static void emitMissCheck(struct Compiler* c) {
 	}
 	clobberFlags(c);
 	flushPending(c);
-	struct TinyRoutine* slot = tinySlot(c, 2, c->Ncyc - c->D, 0, 0, 0);
-	if (!slot) {
-		emitMissTerms(c);
-		return;
-	}
-	if (!slot->code) {
-		uint8_t* over = tinyBegin(c, slot);
-		emitMissTerms(c);
-		tinyEnd(c, over);
-	}
-	aBl(&c->e, slot->code);
+	callTiny(c, tinySlot(c, 2, c->Ncyc - c->D, 0, 0, 0), emitMissTerms);
 }
 
 // The fetch after one that may have stopped the buffer restarts it.
@@ -2854,17 +2762,6 @@ static void emitIdleHead(struct Compiler* c) {
 	patchHere(e, same);
 }
 
-// Forgets what a compile whose code didn't fit left behind.
-static void abandon(struct Compiler* c) {
-	for (int i = 0; i < c->newTinyCount; ++i) {
-		c->newTiny[i]->code = NULL;
-	}
-	c->block->siteCount = 0;
-	free(c->block->out);
-	c->block->out = NULL;
-	c->block->outCount = 0;
-}
-
 // Compiles a block into the current stretch: the analysis, then each instruction, then the cold code
 // the instructions left for the end (slow paths, exits and stubs). Returns false, having written
 // nothing outside the free space there, if its code didn't fit.
@@ -3075,22 +2972,3 @@ static bool compileInStretch(struct Jit* jit, struct Block* block, struct Inst* 
 	return true;
 }
 
-// A block's code goes in the stretch being filled while there is room for a large block there,
-// otherwise in a new one; a block too large for the room left is compiled again in a new stretch.
-// Fails if the code memory is full; the caller then flushes.
-bool backendCompile(struct Jit* jit, struct Block* block, struct Inst* insts, int count, const uint32_t* nextOps) {
-	if (jit->hotEnd - jit->codeNext < HOT_ROOM || jit->coldEnd - jit->coldNext < COLD_ROOM) {
-		if (jit->codeEnd - jit->coldEnd < STRETCH) {
-			return false;
-		}
-		startStretch(jit, jit->coldEnd);
-	}
-	if (compileInStretch(jit, block, insts, count, nextOps)) {
-		return true;
-	}
-	if (jit->codeEnd - jit->coldEnd < STRETCH) {
-		return false;
-	}
-	startStretch(jit, jit->coldEnd);
-	return compileInStretch(jit, block, insts, count, nextOps);
-}
