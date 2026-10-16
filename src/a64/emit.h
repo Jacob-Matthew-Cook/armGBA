@@ -434,9 +434,10 @@ static inline void patchBranch(uint8_t* at, const void* target) {
 	memcpy(at, &insn, 4);
 }
 
-// Points a forward branch at the code about to be emitted.
+// Points a forward branch at the code about to be emitted. Past the end, where nothing is written and
+// the code is thrown away, the target may be out of the branch's reach.
 static inline void patchHere(struct Emitter* e, uint8_t* site) {
-	if (site + 4 <= e->end) {
+	if (site + 4 <= e->end && e->p <= e->end) {
 		patchBranch(site, e->p);
 	}
 }
