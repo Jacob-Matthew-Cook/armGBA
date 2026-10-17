@@ -83,5 +83,11 @@ bool libretroGbLoadState(const void* data, size_t size);
 // clocks a transfer.
 int libretroGbLinkOut(void);
 void libretroGbLinkIn(int byte);
+// Both consoles of a link here: the functions above work on the selected one (0 or 1). Turning the
+// pair on is done before either game loads; it joins their serial ports, and states then hold both.
+void libretroGbSelect(int which);
+void libretroGbSetPair(bool on);
+// Runs both consoles for a frame, with each one's buttons, returning each one's picture and sound.
+void libretroGbRunPair(const uint16_t keys[2], const uint32_t* pictures[2], const int16_t* samples[2], size_t frames[2]);
 
 #endif
