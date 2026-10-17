@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "link.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -32,6 +33,7 @@ enum { CONSOLE_NONE, CONSOLE_GB, CONSOLE_GBA };
 enum { MSG_HELLO = 1, MSG_ROSTER, MSG_REQUEST, MSG_REPLY, MSG_DONE };
 enum { MODE_MULTI = 2 };
 
+static retro_environment_t environment;
 static retro_netpacket_send_t sendPacket;
 static retro_netpacket_poll_receive_t pollPackets;
 static bool session;
@@ -113,8 +115,33 @@ static int slotOf(uint16_t id) {
 	return -1;
 }
 
+// Tells the player when the cable changes: their place on it, or why they aren't on it.
+static void announce(int slot) {
+	static int shownCount = -1, shownSlot = -1;
+	if (!session || (cableCount == shownCount && slot == shownSlot)) {
+		return;
+	}
+	char text[96];
+	if (slot >= 0 && cableCount > 1) {
+		snprintf(text, sizeof(text), "Link cable: player %d of %d", slot + 1, cableCount);
+	} else if (slot < 0 && cableCount > 0) {
+		snprintf(text, sizeof(text), "Link cable: the host is playing a different console, or the cable is full");
+	} else if (shownCount > 1) {
+		snprintf(text, sizeof(text), "Link cable: the other players left");
+	} else {
+		text[0] = 0;
+	}
+	shownCount = cableCount;
+	shownSlot = slot;
+	if (text[0] && environment) {
+		struct retro_message message = { text, 240 };
+		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &message);
+	}
+}
+
 static void cableChanged(void) {
 	int slot = slotOf(self);
+	announce(slot);
 	if (gba && sioLink.players == (slot < 0 ? 1 : cableCount) && sioLink.id == (slot < 0 ? 0 : slot) && gba->sio.link == &sioLink) {
 		return;
 	}
@@ -412,11 +439,12 @@ static void disconnected(uint16_t id) {
 	}
 }
 
-void linkSetEnvironment(retro_environment_t environment) {
+void linkSetEnvironment(retro_environment_t callback) {
+	environment = callback;
 	static const struct retro_netpacket_callback callbacks = {
 		start, receive, stop, sessionPoll, connected, disconnected, "armGBA link 1",
 	};
-	environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, (void*) &callbacks);
+	callback(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, (void*) &callbacks);
 	sioLink.begin = begin;
 	sioLink.finish = finish;
 	pollEvent.callback = pollEventRun;
