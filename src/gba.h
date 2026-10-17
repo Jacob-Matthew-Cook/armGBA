@@ -521,6 +521,8 @@ enum {
 	// The most a host sends at once, and a client.
 	RFU_HOST_BYTES = 90,
 	RFU_CLIENT_BYTES = 16,
+	// The most consoles an adapter hears.
+	RFU_ROOMS = 8,
 };
 
 // A packet over the air, and when it gets there by the receiving console's clock.
@@ -576,6 +578,14 @@ struct Rfu {
 	// host's last packet.
 	struct RfuPacket rx;
 	struct RfuPacket tx;
+	// The rooms heard while searching, by console, kept a while after they were last heard.
+	struct {
+		bool heard;
+		uint16_t id;
+		uint8_t slot;
+		int32_t at;
+		uint32_t broadcast[6];
+	} rooms[RFU_ROOMS];
 	// A wait: when it times out, when the host's exchange is done, and slots lost meanwhile.
 	bool timed;
 	int32_t deadline;
@@ -614,9 +624,9 @@ struct Jit;
 // Padding that puts struct GBA's memories on a page boundary; the assertion after the struct says
 // when to change it. Pointers make the struct smaller on 32-bit CPUs.
 #if UINTPTR_MAX > 0xFFFFFFFFu
-enum { PAD_TO_PAGE = 1407 };
+enum { PAD_TO_PAGE = 1119 };
 #else
-enum { PAD_TO_PAGE = 2191 };
+enum { PAD_TO_PAGE = 1903 };
 #endif
 
 // Hardware some cartridges have beyond a ROM and a save chip (cart.c).
