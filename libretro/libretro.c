@@ -109,10 +109,9 @@ static int screens;
 static int screensOption = -1;
 static int16_t pairSamples[2 * 4096];
 
-// Player 2's game, picked in the menu from the games beside player 1's, or loaded with it by the
-// frontend: the choices offered, the game running (empty for the same game as player 1), and its
-// save, which the core reads and writes itself unless the frontend loaded the game. In netplay the
-// save is left as it was on each device, since the session runs the host's.
+// Player 2's game, picked in the menu from the games beside player 1's, loaded with it by the
+// frontend, or named with it in a pair file: the choices offered, and the game running (empty for the
+// same game as player 1).
 enum { SECOND_CHOICES = 126 };
 static struct retro_core_options_v2* coreOptions;
 static struct retro_core_option_v2_definition* secondOption;
@@ -121,12 +120,20 @@ static size_t secondCount;
 static char firstPath[4096];
 static char secondPath[4096];
 static bool secondFromFrontend;
-static bool secondSaveKept;
-static char secondSaveFile[8192];
-static char secondRtcFile[8192];
-static uint64_t secondSaveHash;
-static unsigned secondSaveCheck;
+static bool pairFile;
+static char pairPath[4096];
 static bool netplaySeen;
+
+// Saves the core reads and writes itself, each where RetroArch keeps its game's save: player 2's
+// unless the frontend loaded its game, and with a pair file player 1's too. In netplay they are left
+// as they were on each device, since the session runs the host's.
+static struct {
+	bool kept;
+	char file[8192];
+	char rtcFile[8192];
+	uint64_t hash;
+} keptSaves[2];
+static unsigned keptCheck;
 
 // Cheat codes from the frontend, by index, and the Game Boy Advance operations they decode to. All
 // codes are decoded again, in order, whenever one changes, because a master code changes how the
@@ -347,9 +354,9 @@ void retro_get_system_info(struct retro_system_info* info) {
 	info->library_name = "armGBA";
 	info->library_version = "0.1";
 #ifdef ARMGBA_GB
-	info->valid_extensions = "gba|bin|gb|gbc";
+	info->valid_extensions = "gba|bin|gb|gbc|gb2|gba2";
 #else
-	info->valid_extensions = "gba|bin";
+	info->valid_extensions = "gba|bin|gba2";
 #endif
 	info->need_fullpath = false;
 	info->block_extract = false;
@@ -776,7 +783,7 @@ static void rememberSecondChoice(void) {
 
 // The game chosen for player 2, or NULL for the same game.
 static const char* chosenSecond(void) {
-	const char* value = option("armgba_player2_game");
+	const char* value = pairFile ? NULL : option("armgba_player2_game");
 	for (size_t i = 0; value && i < secondCount; ++i) {
 		if (!strcmp(value, secondGames[i].path)) {
 			return secondGames[i].path;
@@ -790,29 +797,29 @@ static bool linkBothWanted(void) {
 	return value && !strcmp(value, "both");
 }
 
-// Player 2's save memory and Game Boy clock.
-static void* secondSaveMemory(size_t* size) {
+// A player's save memory and Game Boy clock.
+static void* saveMemory(int player, size_t* size) {
 	*size = 0;
 #ifdef ARMGBA_GB
-	if (gbPair) {
-		libretroGbSelect(1);
+	if (gameBoy && (player == 0 || gbPair)) {
+		libretroGbSelect(player);
 		void* data = libretroGbSaveRam(size);
 		libretroGbSelect(0);
 		return data;
 	}
 #endif
-	if (gbaPair) {
-		*size = gbas[1]->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gbas[1]);
-		return gbas[1]->savedata.storage;
+	if (!gameBoy && gbas[player]) {
+		*size = gbas[player]->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gbas[player]);
+		return gbas[player]->savedata.storage;
 	}
 	return NULL;
 }
 
-static void* secondRtcMemory(size_t* size) {
+static void* rtcMemory(int player, size_t* size) {
 	*size = 0;
 #ifdef ARMGBA_GB
-	if (gbPair) {
-		libretroGbSelect(1);
+	if (gameBoy && (player == 0 || gbPair)) {
+		libretroGbSelect(player);
 		void* data = libretroGbRtc(size);
 		libretroGbSelect(0);
 		return data;
@@ -844,7 +851,7 @@ static void writeFile(const char* path, const void* data, size_t size) {
 	FILE* f = fopen(path, "wb");
 	if (!f) {
 		char message[160];
-		snprintf(message, sizeof(message), "armGBA can't write player 2's save");
+		snprintf(message, sizeof(message), "armGBA can't write %.120s", path);
 		showMessage(message);
 		return;
 	}
@@ -852,51 +859,63 @@ static void writeFile(const char* path, const void* data, size_t size) {
 	fclose(f);
 }
 
-// Finds and reads player 2's save and clock. The same game as player 1 gets its own save; until it
-// has one, it starts with a copy of player 1's.
-static void readSecondSave(void) {
+// Finds and reads a player's save and clock; returns whether there was a save.
+static bool readSave(int player, const char* game, const char* suffix) {
 	const char* saveDirectory = NULL;
 	environment(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &saveDirectory);
-	const char* game = *secondPath ? secondPath : firstPath;
-	const char* suffix = *secondPath ? "" : " (Player 2)";
-	secondSavePath(game, suffix, "srm", firstPath, saveDirectory, secondSaveFile, sizeof(secondSaveFile));
-	secondSavePath(game, suffix, "rtc", firstPath, saveDirectory, secondRtcFile, sizeof(secondRtcFile));
+	char unsorted[4096];
+	if (pairFile && saveDirectory) {
+		secondPairSaveDirectory(saveDirectory, pairPath, unsorted, sizeof(unsorted));
+		saveDirectory = unsorted;
+	}
+	secondSavePath(game, suffix, "srm", firstPath, saveDirectory, keptSaves[player].file, sizeof(keptSaves[player].file));
+	secondSavePath(game, suffix, "rtc", firstPath, saveDirectory, keptSaves[player].rtcFile, sizeof(keptSaves[player].rtcFile));
 	size_t size;
-	void* save = secondSaveMemory(&size);
-	bool found = readFileInto(secondSaveFile, save, size);
+	void* save = saveMemory(player, &size);
+	bool found = readFileInto(keptSaves[player].file, save, size);
 	size_t rtcSize;
-	readFileInto(secondRtcFile, secondRtcMemory(&rtcSize), rtcSize);
-	bool copy = !found && !*secondPath;
+	readFileInto(keptSaves[player].rtcFile, rtcMemory(player, &rtcSize), rtcSize);
+	keptSaves[player].hash = save ? hashOf(save, size) : 0;
+	keptSaves[player].kept = true;
+	keptCheck = 0;
+	return found;
+}
+
+// Player 2's save. The same game as player 1 gets its own save; until it has one, it starts with a
+// copy of player 1's.
+static void readSecondSave(void) {
+	const char* game = *secondPath ? secondPath : firstPath;
+	bool copy = !readSave(1, game, *secondPath ? "" : " (Player 2)") && !*secondPath;
 #ifdef ARMGBA_GB
 	gbPairCopySave = gameBoy && copy;
 #endif
 	gbaPairCopySave = !gameBoy && copy;
-	secondSaveHash = save ? hashOf(save, size) : 0;
-	secondSaveKept = true;
-	secondSaveCheck = 0;
 }
 
-// Writes player 2's save and clock when the save has changed, except in netplay.
-static void writeSecondSave(void) {
-	if (!secondSaveKept || netplaySeen) {
-		return;
+// Writes the kept saves and clocks that have changed, except in netplay.
+static void writeSaves(void) {
+	for (int player = 0; player < 2 && !netplaySeen; ++player) {
+		size_t size;
+		void* save = saveMemory(player, &size);
+		if (!keptSaves[player].kept || !save || !size) {
+			continue;
+		}
+		uint64_t hash = hashOf(save, size);
+		if (hash == keptSaves[player].hash) {
+			continue;
+		}
+		keptSaves[player].hash = hash;
+		writeFile(keptSaves[player].file, save, size);
+		size_t rtcSize;
+		void* rtc = rtcMemory(player, &rtcSize);
+		if (rtc && rtcSize) {
+			writeFile(keptSaves[player].rtcFile, rtc, rtcSize);
+		}
 	}
-	size_t size;
-	void* save = secondSaveMemory(&size);
-	if (!save || !size) {
-		return;
-	}
-	uint64_t hash = hashOf(save, size);
-	if (hash == secondSaveHash) {
-		return;
-	}
-	secondSaveHash = hash;
-	writeFile(secondSaveFile, save, size);
-	size_t rtcSize;
-	void* rtc = secondRtcMemory(&rtcSize);
-	if (rtc && rtcSize) {
-		writeFile(secondRtcFile, rtc, rtcSize);
-	}
+}
+
+static void forgetSaves(void) {
+	keptSaves[0].kept = keptSaves[1].kept = false;
 }
 
 static void pairBegin(void* context, int mode, uint32_t out);
@@ -1017,7 +1036,7 @@ static void stopSecondAdvance(void) {
 // Starts player 2's console: with the game the frontend loaded for it, or the one picked in the
 // menu, or player 1's game again.
 static void startSecond(const struct retro_game_info* second, const void* sameData, size_t sameSize) {
-	secondFromFrontend = second != NULL;
+	secondFromFrontend = second && !pairFile;
 	const char* choice = second ? NULL : chosenSecond();
 	snprintf(secondPath, sizeof(secondPath), "%s", second && second->path ? second->path : choice ? choice : "");
 	const void* data = second ? second->data : choice ? NULL : sameData;
@@ -1042,7 +1061,7 @@ static void startSecond(const struct retro_game_info* second, const void* sameDa
 		secondPath[0] = '\0';
 		return;
 	}
-	if (!second) {
+	if (!secondFromFrontend) {
 		readSecondSave();
 	}
 	readOptions();
@@ -1054,8 +1073,8 @@ static void startSecond(const struct retro_game_info* second, const void* sameDa
 }
 
 static void stopSecond(void) {
-	writeSecondSave();
-	secondSaveKept = false;
+	writeSaves();
+	keptSaves[1].kept = false;
 #ifdef ARMGBA_GB
 	if (gbPair) {
 		stopSecondGameBoy();
@@ -1070,7 +1089,7 @@ static void stopSecond(void) {
 
 // Restart takes in a change of the Link Cable option or of Player 2's Game.
 static void applySecondChoice(void) {
-	if (secondFromFrontend) {
+	if (secondFromFrontend || pairFile) {
 		return;
 	}
 	rememberSecondChoice();
@@ -1116,7 +1135,7 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	gameBoy = true;
 	gbStretched = false;
 	linkSetGameBoy(true);
-	if (second || linkBothWanted()) {
+	if (second || linkBothWanted() || pairFile) {
 		startSecond(second, game->data, game->size);
 	}
 	showOptions(true);
@@ -1147,7 +1166,7 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	gbaReset(gba, skipBios);
 	linkSetGba(gba);
 	attachPorts();
-	if (second || linkBothWanted()) {
+	if (second || linkBothWanted() || pairFile) {
 		startSecond(second, game->data, game->size);
 	}
 	announceMemory();
@@ -1157,10 +1176,65 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	return true;
 }
 
+static bool isPairFile(const char* path) {
+	const char* dot = path ? strrchr(path, '.') : NULL;
+	return dot && (!strcasecmp(dot, ".gb2") || !strcasecmp(dot, ".gba2"));
+}
+
+// Starts the two games a pair file names, each player with their game's own save.
+static bool loadPairFile(const struct retro_game_info* file) {
+	char games[2][4096];
+	if (!secondPairFile(file->path, file->data, file->size, games)) {
+		showMessage("armGBA: a pair file needs two lines, one game each");
+		return false;
+	}
+	struct retro_game_info info[2] = { { games[0], NULL, 0, NULL }, { games[1], NULL, 0, NULL } };
+	void* data[2] = { NULL, NULL };
+	bool gameBoys[2] = { false, false };
+	for (int i = 0; i < 2; ++i) {
+		data[i] = secondRead(games[i], &info[i].size);
+		info[i].data = data[i];
+		if (!data[i]) {
+			char message[300];
+			snprintf(message, sizeof(message), "armGBA can't read %.250s", games[i]);
+			showMessage(message);
+			free(data[0]);
+			return false;
+		}
+		// A Game Boy cartridge has the Nintendo logo at 0x104.
+		gameBoys[i] = info[i].size >= 0x150 && ((const uint8_t*) data[i])[0x104] == 0xCE && ((const uint8_t*) data[i])[0x105] == 0xED;
+	}
+	bool loaded = false;
+	pairFile = true;
+	snprintf(pairPath, sizeof(pairPath), "%s", file->path);
+	const struct retro_game_info* second = strcmp(games[0], games[1]) ? &info[1] : NULL;
+	if (gameBoys[0] != gameBoys[1]) {
+		showMessage("armGBA: a pair file's games are both Game Boy or both Game Boy Advance");
+#ifdef ARMGBA_GB
+	} else if (gameBoys[0]) {
+		gameBoy = false;
+		loaded = loadGameBoy(&info[0], second);
+#endif
+	} else if (!gameBoys[0]) {
+		loaded = loadAdvance(&info[0], second);
+	}
+	if (loaded) {
+		readSave(0, firstPath, "");
+	} else {
+		pairFile = false;
+	}
+	free(data[0]);
+	free(data[1]);
+	return loaded;
+}
+
 // Starts a game on the side it belongs to.
 bool retro_load_game(const struct retro_game_info* game) {
 	if (!game || !game->data) {
 		return false;
+	}
+	if (isPairFile(game->path)) {
+		return loadPairFile(game);
 	}
 #ifdef ARMGBA_GB
 	gameBoy = false;
@@ -1193,8 +1267,9 @@ void retro_unload_game(void) {
 	if (!secondFromFrontend) {
 		rememberSecondChoice();
 	}
-	writeSecondSave();
-	secondSaveKept = false;
+	writeSaves();
+	forgetSaves();
+	pairFile = false;
 	secondFromFrontend = false;
 	secondPath[0] = '\0';
 	netplaySeen = false;
@@ -1625,10 +1700,10 @@ void retro_run(void) {
 	}
 	inputPoll();
 	readFastForward();
-	// Player 2's save is written when it changes, checked every few seconds.
-	if (secondSaveKept && ++secondSaveCheck >= 300) {
-		secondSaveCheck = 0;
-		writeSecondSave();
+	// The kept saves are written when they change, checked every few seconds.
+	if ((keptSaves[0].kept || keptSaves[1].kept) && ++keptCheck >= 300) {
+		keptCheck = 0;
+		writeSaves();
 	}
 #ifdef ARMGBA_GB
 	if (gbPair) {
@@ -1702,15 +1777,16 @@ size_t retro_serialize_size(void) {
 	return gbaStateSize();
 }
 
-// In rollback netplay, player 2's save is the host's, so it is no longer written on this device.
+// In rollback netplay, the saves are the host's, so the kept ones are no longer written on this
+// device.
 static void checkNetplay(void) {
 	int context = RETRO_SAVESTATE_CONTEXT_NORMAL;
 	if (netplaySeen || !environment(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &context) || context != RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY) {
 		return;
 	}
 	netplaySeen = true;
-	if (secondSaveKept) {
-		struct retro_message shown = { "Netplay: player 2's save on this device is left as it was", 240 };
+	if (keptSaves[0].kept || keptSaves[1].kept) {
+		struct retro_message shown = { "Netplay: the saves on this device are left as they were", 240 };
 		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
 	}
 }
@@ -1826,6 +1902,9 @@ unsigned retro_get_region(void) {
 // Memory the frontend may read or keep: the cartridge's save memory (loaded and saved as the save
 // file), a Game Boy cartridge's clock (as the .rtc file), and work RAM for achievements and cheats.
 void* retro_get_memory_data(unsigned id) {
+	if (pairFile && id != RETRO_MEMORY_SYSTEM_RAM) {
+		return NULL;
+	}
 #ifdef ARMGBA_GB
 	if (gbPair && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
 		size_t size;
@@ -1858,6 +1937,9 @@ void* retro_get_memory_data(unsigned id) {
 // Until the game shows its save type, save memory is as large as the largest save type, as in
 // mGBA's core, so a save file from either core loads.
 size_t retro_get_memory_size(unsigned id) {
+	if (pairFile && id != RETRO_MEMORY_SYSTEM_RAM) {
+		return 0;
+	}
 #ifdef ARMGBA_GB
 	if (gbPair && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
 		size_t size;

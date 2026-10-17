@@ -38,4 +38,13 @@ void secondSavePath(const char* gamePath, const char* suffix, const char* extens
 bool secondRecall(const char* memoryFile, const char* firstPath, char* out, size_t outSize);
 void secondRemember(const char* memoryFile, const char* firstPath, const char* choice);
 
+// A pair file names the two games of a link, one per line, as Batocera's .gb2 files do: "gb:Game.zip"
+// for a game in the gb folder beside the pair file's folder (gbc: and gba: likewise), a path from the
+// pair file's folder, or a full path. Lines starting with # are left out. Returns whether there
+// were two games.
+bool secondPairFile(const char* path, const void* data, size_t size, char games[2][4096]);
+// The save directory for the games of a pair file: RetroArch's, unless it was sorted into a folder
+// named for the pair file's folder, when it is the one above.
+void secondPairSaveDirectory(const char* saveDirectory, const char* pairPath, char* out, size_t outSize);
+
 #endif

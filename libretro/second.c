@@ -349,3 +349,52 @@ void secondRemember(const char* memoryFile, const char* firstPath, const char* c
 	}
 	free(others);
 }
+
+bool secondPairFile(const char* path, const void* data, size_t size, char games[2][4096]) {
+	char folder[4096];
+	char roms[4096];
+	folderOf(path, folder, sizeof(folder));
+	folderOf(folder, roms, sizeof(roms));
+	int count = 0;
+	const char* text = data;
+	const char* end = text + size;
+	while (text < end) {
+		const char* next = memchr(text, '\n', end - text);
+		size_t length = (next ? next : end) - text;
+		char line[4096];
+		snprintf(line, sizeof(line), "%.*s", (int) length, text);
+		text = next ? next + 1 : end;
+		line[strcspn(line, "\r")] = '\0';
+		char* start = line + strspn(line, " \t");
+		if (!*start || *start == '#') {
+			continue;
+		}
+		if (count == 2) {
+			return false;
+		}
+		const char* colon = strchr(start, ':');
+		const char* slash = strchr(start, '/');
+		bool system = colon && colon > start && (!slash || slash > colon);
+		if (*start == '/') {
+			snprintf(games[count++], 4096, "%s", start);
+		} else if (system) {
+			snprintf(games[count++], 4096, "%s/%.*s/%s", roms, (int) (colon - start), start, colon + 1);
+		} else {
+			snprintf(games[count++], 4096, "%s/%s", folder, start);
+		}
+	}
+	return count == 2;
+}
+
+void secondPairSaveDirectory(const char* saveDirectory, const char* pairPath, char* out, size_t outSize) {
+	char folder[4096];
+	folderOf(pairPath, folder, sizeof(folder));
+	const char* folderName = strrchr(folder, '/');
+	folderName = folderName ? folderName + 1 : folder;
+	const char* last = strrchr(saveDirectory, '/');
+	if (last && *folderName && !strcmp(last + 1, folderName)) {
+		snprintf(out, outSize, "%.*s", (int) (last - saveDirectory), saveDirectory);
+	} else {
+		snprintf(out, outSize, "%s", saveDirectory);
+	}
+}
