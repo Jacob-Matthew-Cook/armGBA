@@ -79,5 +79,9 @@ bool libretroGbSetCheats(const char* const* codes, size_t count);
 size_t libretroGbStateSize(void);
 bool libretroGbSaveState(void* data, size_t size);
 bool libretroGbLoadState(const void* data, size_t size);
+// The link cable: the byte this Game Boy shifts out, and a byte shifted in when the other Game Boy
+// clocks a transfer.
+int libretroGbLinkOut(void);
+void libretroGbLinkIn(int byte);
 
 #endif

@@ -495,11 +495,24 @@ struct Gpio {
 	bool rumble;
 };
 
+// A link cable to other consoles, run by the frontend. Without one, nothing is attached.
+struct SioLink {
+	void* context;
+	// Consoles on the cable, this one included, and this one's place: 0 is the parent.
+	int players;
+	int id;
+	// A transfer this console clocks: begin sends this console's data as the transfer starts,
+	// finish waits for the others' and fills `in` (one value in normal mode, three in multiplayer).
+	void (*begin)(void* context, int mode, uint32_t out);
+	void (*finish)(void* context, uint32_t in[3]);
+};
+
 struct Sio {
 	uint16_t siocnt;
 	uint16_t rcnt;
 	int mode;
 	struct Event completeEvent;
+	const struct SioLink* link;
 };
 
 // The cartridge prefetcher. While the cartridge bus is free, it reads ahead of the CPU's code
@@ -520,9 +533,9 @@ struct Jit;
 // Padding that puts struct GBA's memories on a page boundary; the assertion after the struct says
 // when to change it. Pointers make the struct smaller on 32-bit CPUs.
 #if UINTPTR_MAX > 0xFFFFFFFFu
-enum { PAD_TO_PAGE = 2335 };
+enum { PAD_TO_PAGE = 2327 };
 #else
-enum { PAD_TO_PAGE = 3091 };
+enum { PAD_TO_PAGE = 3087 };
 #endif
 
 // Hardware some cartridges have beyond a ROM and a save chip (cart.c).
@@ -944,5 +957,8 @@ void sioInit(struct GBA*);
 void sioReset(struct GBA*);
 void sioWrite(struct GBA*, uint32_t address, uint16_t value);
 uint16_t sioRead(struct GBA*, uint32_t address);
+void sioAttach(struct GBA*, const struct SioLink*);
+uint32_t sioOutgoing(struct GBA*, int* mode, bool* ready);
+void sioReceive(struct GBA*, const uint32_t values[4]);
 
 #endif

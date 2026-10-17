@@ -11,6 +11,7 @@ extern "C" {
 #include "gb.h"
 #include "libretro.h"
 }
+#include "link.h"
 #include "sameboy-boot.h"
 
 #include "gambatte.h"
@@ -44,6 +45,9 @@ enum {
 };
 
 gambatte::GB* gb;
+// Whether Gambatte's serial port goes to another Game Boy over the network.
+bool linked;
+void linkClocked();
 unsigned loadFlags;
 unsigned pressed;
 gambatte::uint_least32_t pixels[LIBRETRO_GB_WIDTH * LIBRETRO_GB_HEIGHT];
@@ -468,11 +472,14 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 	}
 	if (!gb) {
 		gb = new gambatte::GB;
+		gb->setLinkCallback(linkClocked);
 	}
+	linked = false;
 	if (gb->load(reinterpret_cast<const char*>(bytes), size, loadFlags) != gambatte::LOADRES_OK) {
 		std::snprintf(error, errorSize, "armGBA can't run this Game Boy game");
 		return false;
 	}
+	gb->linkStatus(265);
 	if (!boot.empty()) {
 		if (gb->loadBios(boot) < 0) {
 			std::snprintf(error, errorSize, "armGBA can't read %s", boot.c_str());
@@ -498,6 +505,18 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 		stateSize = needed;
 	}
 	return true;
+}
+
+// The eight bits of a transfer this Game Boy clocked are out: the other one's byte comes back.
+void linkClocked() {
+	gb->linkStatus(linkGbTransfer(gb->linkStatus(258)));
+}
+
+void updateLink() {
+	if (linked != linkGbConnected()) {
+		linked = !linked;
+		gb->linkStatus(linked ? 264 : 265);
+	}
 }
 
 }
@@ -619,9 +638,15 @@ const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** out, size_t* f
 	if (rtcPending) {
 		readRtcFile();
 	}
+	updateLink();
+	// Linked, a frame runs in sixteen parts with the cable checked between them.
+	int const parts = linked ? 16 : 1;
 	bool drawn = false;
-	for (int runs = 0; !drawn && runs < 4; ++runs) {
-		std::size_t count = FRAME_SAMPLES;
+	for (int runs = 0; !drawn && runs < 4 * parts; ++runs) {
+		if (linked) {
+			linkGbPoll();
+		}
+		std::size_t count = FRAME_SAMPLES / parts;
 		drawn = gb->runFor(pixels, LIBRETRO_GB_WIDTH, native, count) >= 0;
 		// Each frontend sample is the mean of the native samples it covers.
 		for (std::size_t i = 0; i < count;) {
@@ -794,6 +819,17 @@ bool libretroGbSaveState(void* data, size_t size) {
 }
 
 // Loads a state saved by libretroGbSaveState.
+// Link cable: the byte this Game Boy shifts out, and one shifted in from the other's transfer.
+int libretroGbLinkOut(void) {
+	return gb ? gb->linkStatus(258) : 0xFF;
+}
+
+void libretroGbLinkIn(int byte) {
+	if (gb) {
+		gb->linkStatus(byte & 0xFF);
+	}
+}
+
 bool libretroGbLoadState(const void* data, size_t size) {
 	gambatte::uint_least32_t length;
 	if (!gb || size < sizeof(length)) {

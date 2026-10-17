@@ -175,6 +175,7 @@ bool gbaLoadState(struct GBA* gba, const void* state, size_t size) {
 	gba->tracing = host->tracing;
 	gba->jit = host->jit;
 	gba->renderThread = host->renderThread;
+	gba->sio.link = host->sio.link;
 	gba->earlyExit = false;
 	gba->returnRequested = false;
 	gba->biosLoaded = host->biosLoaded;
