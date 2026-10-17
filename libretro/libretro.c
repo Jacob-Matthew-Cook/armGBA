@@ -76,14 +76,11 @@ static bool gbPairCopySave;
 static uint32_t pairFrame[LIBRETRO_GB_WIDTH * 2 * LIBRETRO_GB_HEIGHT];
 #endif
 
-// Both consoles of a Game Boy Advance link can run here too, except on 32-bit ARM, where two are
-// too slow: player 2's on the second controller, the cable between them. They run in turns of a
-// few cycles each, so neither gets far ahead of the other. The second console starts half a frame
-// after the first, as two real consoles are never in step, and a second console started on a copy
-// of the first one's game gets a copy of its save before the first frame.
-#if !defined(__arm__)
-#define ARMGBA_GBA_PAIR
-#endif
+// Both consoles of a Game Boy Advance link can run here too: player 2's on the second controller,
+// the cable between them. They run in turns of a few cycles each, so neither gets far ahead of the
+// other. The second console starts half a frame after the first, as two real consoles are never in
+// step, and a second console started on a copy of the first one's game gets a copy of its save
+// before the first frame.
 enum {
 	GBA_FRAME_CYCLES = 280896,
 	// Turns while either console's serial port is set up for a link, and otherwise.
@@ -96,11 +93,9 @@ static bool gbaPairCopySave;
 static int32_t gbaAhead[2];
 static struct Event sliceEvent;
 static bool sliceOver;
-#ifdef ARMGBA_GBA_PAIR
 static struct SioLink pairLinks[2];
 static int pairMode[2];
 static uint32_t pairOut[2];
-#endif
 static uint16_t gbaShown[2][SCREEN_WIDTH * SCREEN_HEIGHT];
 static uint16_t gbaPairFrame[SCREEN_WIDTH * 2 * SCREEN_HEIGHT];
 static uint16_t gbaCorrected[2][SCREEN_WIDTH * SCREEN_HEIGHT];
@@ -195,17 +190,13 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "Player 1's Game", "gb|gbc", false, false, true, firstMemory, 2 },
 		{ "Player 2's Game", "gb|gbc", false, false, true, secondMemory, 2 },
 	};
-#ifdef ARMGBA_GBA_PAIR
 	static const struct retro_subsystem_rom_info advanceRoms[] = {
 		{ "Player 1's Game", "gba|bin", false, false, true, firstMemory, 1 },
 		{ "Player 2's Game", "gba|bin", false, false, true, secondMemory, 1 },
 	};
-#endif
 	static const struct retro_subsystem_info subsystems[] = {
 		{ "Two Game Boys (Link Cable)", "gblink", roms, 2, SUBSYSTEM_LINK },
-#ifdef ARMGBA_GBA_PAIR
 		{ "Two Game Boy Advances (Link Cable)", "gbalink", advanceRoms, 2, SUBSYSTEM_ADVANCE_LINK },
-#endif
 		{ NULL, NULL, NULL, 0, 0 },
 	};
 	callback(RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO, (void*) subsystems);
@@ -260,7 +251,7 @@ void retro_set_environment(retro_environment_t callback) {
 		  "On the Game Boy Advance model: Cropped shows only the game's picture, Shown the black around it as that console's screen has.", NULL, NULL,
 		  { { "cropped", "Cropped" }, { "shown", "Shown" }, { NULL, NULL } }, "cropped" },
 		{ "armgba_link_cable", "Link Cable", NULL,
-		  "How games link in netplay. Own Console: each player plays their own game and save, and the cable crosses the network, which stalls on a slow one. Both Consoles: every device runs both players' consoles, smooth with RetroArch's rollback, from the host's games and saves; it also plays two-player on one device, player 2 on the second controller. Two Game Boy Advances need a 64-bit device. Applies on Restart.",
+		  "How games link in netplay. Own Console: each player plays their own game and save, and the cable crosses the network, which stalls on a slow one. Both Consoles: every device runs both players' consoles, smooth with RetroArch's rollback, from the host's games and saves; it also plays two-player on one device, player 2 on the second controller. Applies on Restart.",
 		  NULL, NULL,
 		  { { "own", "Own Console" }, { "both", "Both Consoles" }, { NULL, NULL } }, "own" },
 		{ "armgba_link_screens", "Both Consoles Screens", NULL,
@@ -902,10 +893,8 @@ static void writeSecondSave(void) {
 	}
 }
 
-#ifdef ARMGBA_GBA_PAIR
 static void pairBegin(void* context, int mode, uint32_t out);
 static void pairFinish(void* context, uint32_t in[3]);
-#endif
 
 // Makes a Game Boy Advance with the game in it, or returns NULL.
 static struct GBA* startAdvance(const struct retro_game_info* game) {
@@ -960,7 +949,6 @@ static void stopSecondGameBoy(void) {
 #endif
 
 static bool startSecondAdvance(const void* data, size_t size) {
-#ifdef ARMGBA_GBA_PAIR
 	struct retro_game_info game = { NULL, data, size, NULL };
 	gbas[1] = startAdvance(&game);
 	if (!gbas[1]) {
@@ -981,12 +969,6 @@ static bool startSecondAdvance(const void* data, size_t size) {
 	gbaAhead[1] = GBA_FRAME_CYCLES / 2;
 	environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, NULL);
 	return true;
-#else
-	(void) data;
-	(void) size;
-	showMessage("armGBA: this device is too slow for two Game Boy Advances; Own Console links them over the network");
-	return false;
-#endif
 }
 
 static void stopSecondAdvance(void) {
@@ -1117,12 +1099,6 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 		logMessage(RETRO_LOG_ERROR, "armGBA: the frontend has no RGB565");
 		return false;
 	}
-#ifndef ARMGBA_GBA_PAIR
-	if (second) {
-		showMessage("armGBA: this device is too slow for two Game Boy Advances; Own Console links them over the network");
-		return false;
-	}
-#endif
 	offerSecondGames(game->path, false);
 	recallSecondChoice();
 	gbas[0] = gba = startAdvance(game);
@@ -1493,7 +1469,6 @@ static void runPair(void) {
 }
 #endif
 
-#ifdef ARMGBA_GBA_PAIR
 // The cable between the two Game Boy Advances here. The console clocking a transfer puts its data on
 // the cable when it starts; when it ends, the other console's data comes back, and the other
 // console takes the transfer if it is waiting for one.
@@ -1520,8 +1495,6 @@ static void pairFinish(void* context, uint32_t in[3]) {
 	}
 	sioReceive(other, values);
 }
-
-#endif
 
 static void sliceEnd(struct GBA* machine, void* context, uint32_t late) {
 	(void) context;
