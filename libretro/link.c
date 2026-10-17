@@ -479,6 +479,10 @@ void linkGbaFrame(struct GBA* machine) {
 	}
 }
 
+bool linkSession(void) {
+	return session;
+}
+
 bool linkGbConnected(void) {
 	return session && console == CONSOLE_GB && cableCount > 1 && slotOf(self) >= 0;
 }

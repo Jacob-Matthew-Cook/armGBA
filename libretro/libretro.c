@@ -808,7 +808,8 @@ static const uint32_t* advanceFrame(const uint32_t* picture) {
 // in gpSP's core.
 static void readFastForward(void) {
 	static bool held;
-	bool now = inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2) || inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2);
+	// Not in netplay: the other players' consoles would wait for this one's.
+	bool now = !linkSession() && (inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2) || inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2));
 	if (now == held) {
 		return;
 	}
