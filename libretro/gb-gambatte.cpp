@@ -965,6 +965,10 @@ void libretroGbLinkIn(int byte) {
 	}
 }
 
+int libretroGbLinkControl(void) {
+	return s->gb ? s->gb->linkStatus(267) : 0;
+}
+
 void libretroGbSelect(int which) {
 	s = &consoles[which];
 }

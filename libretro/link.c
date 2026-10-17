@@ -32,8 +32,9 @@ enum {
 static const int64_t TIMEOUT_NS = 3000000000LL;
 
 enum { CONSOLE_NONE, CONSOLE_GB, CONSOLE_GBA };
-enum { MSG_HELLO = 1, MSG_ROSTER, MSG_REQUEST, MSG_REPLY, MSG_DONE, MSG_RFU, MSG_GONE };
-enum { MODE_MULTI = 2 };
+enum { MSG_HELLO = 1, MSG_ROSTER, MSG_REQUEST, MSG_REPLY, MSG_DONE, MSG_RFU, MSG_GONE, MSG_OFFER };
+// A request's mode: a GBA serial mode, or a Game Boy transfer that took the other's offered byte.
+enum { MODE_MULTI = 2, MODE_TOOK_OFFER = 0x80 };
 
 static retro_environment_t environment;
 static retro_netpacket_send_t sendPacket;
@@ -56,6 +57,7 @@ static int peerCount;
 static struct {
 	uint16_t from;
 	uint16_t seq;
+	uint8_t mode;
 	uint32_t data;
 } requests[QUEUE];
 static int requestCount;
@@ -79,6 +81,17 @@ static struct {
 	uint16_t seq;
 	uint32_t values[4];
 } done;
+
+// Game Boy send-ahead: a Game Boy waiting for the other's clock offers the byte it will send, so the
+// other can finish its transfer at once instead of waiting a round trip. An offer names the last
+// transfer its sender took from the other, so one made before a later transfer isn't used.
+static struct {
+	bool sent;
+	bool ready;
+	uint16_t after;
+	uint8_t byte;
+} offer, offered;
+static uint16_t taken;
 
 static struct SioLink sioLink = { .players = 1 };
 static struct Event pollEvent;
@@ -263,14 +276,24 @@ static void receive(const void* buffer, size_t size, uint16_t from) {
 		if (size < 8 || slotOf(from) < 0) {
 			break;
 		}
+		offered.ready = false;
 		// Two consoles clocking at once swap their data, as the wires would.
 		if (own.waiting && own.mode != MODE_MULTI) {
+			taken = get16(message + 2);
 			answered(from, get32(message + 4));
 			reply(from, get16(message + 2), own.out, true);
 		} else if (requestCount < QUEUE) {
 			requests[requestCount].from = from;
 			requests[requestCount].seq = get16(message + 2);
+			requests[requestCount].mode = message[1];
 			requests[requestCount++].data = get32(message + 4);
+		}
+		break;
+	case MSG_OFFER:
+		if (size >= 5 && slotOf(from) >= 0) {
+			offered.ready = message[1];
+			offered.byte = message[2];
+			offered.after = get16(message + 3);
 		}
 		break;
 	case MSG_REPLY:
@@ -371,10 +394,16 @@ static void takeRequests(void) {
 		uint16_t from = requests[i].from, seq = requests[i].seq;
 		uint32_t data = requests[i].data;
 #ifdef ARMGBA_GB
+		// A Game Boy takes one transfer at a time, so its game can ready the next byte in between.
 		if (console == CONSOLE_GB) {
-			reply(from, seq, libretroGbLinkOut(), true);
+			if (!(requests[i].mode & MODE_TOOK_OFFER)) {
+				reply(from, seq, libretroGbLinkOut(), true);
+			}
 			libretroGbLinkIn(data & 0xFF);
-			continue;
+			taken = seq;
+			memmove(&requests[0], &requests[i + 1], (requestCount - i - 1) * sizeof(requests[0]));
+			requestCount -= i + 1;
+			return;
 		}
 #endif
 		if (console != CONSOLE_GBA || !gba) {
@@ -427,6 +456,10 @@ static void start(uint16_t id, retro_netpacket_send_t sendFunction, retro_netpac
 	session = true;
 	self = id;
 	air.self = id;
+	nextSeq = 0;
+	taken = 0;
+	offer.sent = false;
+	offered.ready = false;
 	peerCount = 0;
 	requestCount = 0;
 	own.waiting = false;
@@ -529,15 +562,44 @@ bool linkGbConnected(void) {
 }
 
 int linkGbTransfer(int out) {
+	if (offered.ready && offered.after == nextSeq) {
+		offered.ready = false;
+		uint8_t message[8] = { MSG_REQUEST, MODE_TOOK_OFFER };
+		put16(message + 2, ++nextSeq);
+		put32(message + 4, out & 0xFF);
+		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
+		return offered.byte;
+	}
 	uint32_t in[3];
 	begin(NULL, 0, out & 0xFF);
 	finish(NULL, in);
 	return in[0] & 0xFF;
 }
 
+// Offers this Game Boy's byte while it waits for the other's clock, and says when it stops waiting.
+static void offerByte(void) {
+#ifdef ARMGBA_GB
+	bool ready = (libretroGbLinkControl() & 0x81) == 0x80;
+	uint8_t byte = libretroGbLinkOut();
+	if (offer.sent && offer.ready == ready && (!ready || (offer.after == taken && offer.byte == byte))) {
+		return;
+	}
+	offer.sent = true;
+	offer.ready = ready;
+	offer.after = taken;
+	offer.byte = byte;
+	uint8_t message[5] = { MSG_OFFER, ready, byte };
+	put16(message + 3, taken);
+	send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
+#endif
+}
+
 void linkGbPoll(void) {
 	if (session) {
 		poll();
+		if (linkGbConnected()) {
+			offerByte();
+		}
 	}
 }
 
