@@ -24,13 +24,15 @@ enum {
 	QUEUE = 16,
 	// How often a console checks the cable for transfers the others clocked, in GBA cycles.
 	POLL_CYCLES = 4096,
+	// The longest Wireless Adapter message.
+	AIR_BYTES = 100,
 };
 
 // A console that doesn't answer for this long has left; the transfer gets nothing.
 static const int64_t TIMEOUT_NS = 3000000000LL;
 
 enum { CONSOLE_NONE, CONSOLE_GB, CONSOLE_GBA };
-enum { MSG_HELLO = 1, MSG_ROSTER, MSG_REQUEST, MSG_REPLY, MSG_DONE };
+enum { MSG_HELLO = 1, MSG_ROSTER, MSG_REQUEST, MSG_REPLY, MSG_DONE, MSG_RFU, MSG_GONE };
 enum { MODE_MULTI = 2 };
 
 static retro_environment_t environment;
@@ -80,6 +82,11 @@ static struct {
 
 static struct SioLink sioLink = { .players = 1 };
 static struct Event pollEvent;
+
+// The Wireless Adapter's air: its messages go to the other players, whatever console they run.
+static bool wireless;
+static void airSend(const struct RfuAir*, int to, const uint8_t* message, size_t size);
+static struct RfuAir air = { 0, true, airSend };
 
 static void put16(uint8_t* to, uint16_t value) {
 	to[0] = value;
@@ -142,13 +149,29 @@ static void announce(int slot) {
 static void cableChanged(void) {
 	int slot = slotOf(self);
 	announce(slot);
-	if (gba && sioLink.players == (slot < 0 ? 1 : cableCount) && sioLink.id == (slot < 0 ? 0 : slot) && gba->sio.link == &sioLink) {
+	if (gba && sioLink.players == (slot < 0 ? 1 : cableCount) && sioLink.id == (slot < 0 ? 0 : slot) && gba->sio.link == (wireless ? NULL : &sioLink)) {
 		return;
 	}
 	sioLink.players = slot < 0 ? 1 : cableCount;
 	sioLink.id = slot < 0 ? 0 : slot;
 	if (gba) {
-		sioAttach(gba, &sioLink);
+		sioAttach(gba, wireless ? NULL : &sioLink);
+	}
+}
+
+static void airSend(const struct RfuAir* from, int to, const uint8_t* message, size_t size) {
+	(void) from;
+	uint8_t packet[1 + AIR_BYTES] = { MSG_RFU };
+	if (size > AIR_BYTES) {
+		return;
+	}
+	memcpy(packet + 1, message, size);
+	send(packet, size + 1, to < 0 ? RETRO_NETPACKET_BROADCAST : (uint16_t) to);
+}
+
+static void peerGone(uint16_t id) {
+	if (gba) {
+		rfuPeerGone(gba, id);
 	}
 }
 
@@ -253,6 +276,16 @@ static void receive(const void* buffer, size_t size, uint16_t from) {
 	case MSG_REPLY:
 		if (size >= 10 && own.waiting && get16(message + 8) == self && get16(message + 2) == own.seq) {
 			answered(from, message[1] ? get32(message + 4) : 0xFFFFFFFF);
+		}
+		break;
+	case MSG_RFU:
+		if (gba) {
+			rfuReceive(gba, from, message + 1, size - 1);
+		}
+		break;
+	case MSG_GONE:
+		if (from == 0 && size >= 3) {
+			peerGone(get16(message + 1));
 		}
 		break;
 	case MSG_DONE:
@@ -393,6 +426,7 @@ static void start(uint16_t id, retro_netpacket_send_t sendFunction, retro_netpac
 	pollPackets = pollFunction;
 	session = true;
 	self = id;
+	air.self = id;
 	peerCount = 0;
 	requestCount = 0;
 	own.waiting = false;
@@ -406,6 +440,9 @@ static void stop(void) {
 	cableCount = 0;
 	requestCount = 0;
 	own.waiting = false;
+	if (gba) {
+		rfuPeerGone(gba, -1);
+	}
 	cableChanged();
 }
 
@@ -433,6 +470,10 @@ static void disconnected(uint16_t id) {
 		if (peers[i].id == id) {
 			memmove(&peers[i], &peers[i + 1], (peerCount - i - 1) * sizeof(peers[0]));
 			--peerCount;
+			uint8_t message[3] = { MSG_GONE };
+			put16(message + 1, id);
+			send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
+			peerGone(id);
 			hostRebuild();
 			return;
 		}
@@ -497,5 +538,16 @@ int linkGbTransfer(int out) {
 void linkGbPoll(void) {
 	if (session) {
 		poll();
+	}
+}
+
+const struct RfuAir* linkAir(void) {
+	return &air;
+}
+
+void linkSetWireless(bool on) {
+	if (wireless != on) {
+		wireless = on;
+		cableChanged();
 	}
 }

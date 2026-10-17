@@ -16,7 +16,7 @@
 #include <string.h>
 
 enum {
-	STATE_MAGIC = 0x3753424A,
+	STATE_MAGIC = 0x3853424A,
 	// The machine's events, as events() lists them.
 	EVENTS = 12 + 4 + 12 + 7 + 4,
 };

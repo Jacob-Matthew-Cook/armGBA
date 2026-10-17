@@ -20,9 +20,9 @@
 //
 // The radio side: a host broadcasts and takes up to four clients. The host's packet reaches every
 // client, and each client's packet reaches the host, in the exchanges the adapters keep up by
-// themselves; each end holds one packet per sender, which a newer one replaces. Packets take time to arrive, counted on the receiving console's clock.
-// Adapters reach each other through the air the frontend gives (struct RfuAir), and keep what they
-// receive in their own console's state, so states and rollback hold the whole conversation.
+// themselves; each end holds one packet per sender, which a newer one replaces. Adapters talk
+// through the air the frontend gives (struct RfuAir) in messages, and keep what they hear in their
+// own console's state, so states and rollback hold the whole conversation.
 
 enum {
 	WIRE_ID,
@@ -55,8 +55,10 @@ enum {
 	CONNECTING = 65536,
 	PUSH = 1024,
 	FRAME = 280896,
-	// How long a room stays listed after it was last heard: four seconds.
+	// How long a room stays listed after it was last heard: four seconds; and how often an adapter
+	// listing rooms asks again, as one may not have heard the last answers (it was reset meanwhile).
 	HEARD = 240 * FRAME,
+	ASK = 60 * FRAME,
 };
 
 static const uint16_t NINTENDO[4] = { 0x494E, 0x544E, 0x4E45, 0x4F44 };
@@ -69,18 +71,47 @@ static bool arrived(struct GBA* gba, int32_t when) {
 	return (int32_t) (now(gba) - when) >= 0;
 }
 
-// Another console on the air, or NULL.
-static struct GBA* console(struct GBA* gba, int index) {
-	const struct RfuAir* air = gba->sio.air;
-	if (!air || index < 0 || index >= air->count || index == air->self) {
-		return NULL;
-	}
-	struct GBA* other = air->console(air->context, index);
-	return other && other->sio.rfu.attached ? other : NULL;
+// Messages between adapters.
+enum {
+	AIR_ROOM = 1,
+	AIR_SEARCH,
+	AIR_JOIN,
+	AIR_ACCEPT,
+	AIR_REJECT,
+	AIR_HOST_DATA,
+	AIR_CLIENT_DATA,
+	AIR_DROP,
+	AIR_LEAVE,
+};
+
+static void put16(uint8_t* to, uint16_t value) {
+	to[0] = value;
+	to[1] = value >> 8;
+}
+
+static uint16_t get16(const uint8_t* from) {
+	return from[0] | from[1] << 8;
 }
 
 static int self(struct GBA* gba) {
 	return gba->sio.air ? gba->sio.air->self : 0;
+}
+
+static bool network(struct GBA* gba) {
+	return gba->sio.air && gba->sio.air->network;
+}
+
+static void airSend(struct GBA* gba, int to, const uint8_t* message, size_t size) {
+	const struct RfuAir* air = gba->sio.air;
+	if (air && air->send) {
+		air->send(air, to, message, size);
+	}
+}
+
+// When something sent now reaches this console: in-core after the radio's delay, over a network
+// when it arrives.
+static int32_t arrival(struct GBA* gba, int32_t delay) {
+	return now(gba) + (network(gba) ? 0 : delay);
 }
 
 // Device IDs are random on the real adapter; here they come from a generator seeded per console,
@@ -107,33 +138,60 @@ static void wake(struct GBA* gba) {
 	timingSchedule(gba, &rfu->event, 0);
 }
 
-// The client in a host's slot, if that console is still its client there.
-static struct GBA* clientAt(struct GBA* gba, int slot) {
-	struct Rfu* rfu = &gba->sio.rfu;
-	if (!rfu->clients[slot].active) {
-		return NULL;
+// The slot a host gives its next client, or 0xFF when it is closed or full. Setup's bits 16-17 limit
+// the players: 0 for five (four clients), down to 3 for two.
+static int freeSlot(struct Rfu* host) {
+	if (host->radio != RADIO_HOST || !host->open) {
+		return 0xFF;
 	}
-	struct GBA* other = console(gba, rfu->clients[slot].console);
-	if (!other) {
-		return NULL;
+	int slots = 4 - ((host->setup >> 16) & 3);
+	for (int slot = 0; slot < slots; ++slot) {
+		if (!host->clients[slot].active) {
+			return slot;
+		}
 	}
-	struct Rfu* client = &other->sio.rfu;
-	bool ours = (client->radio == RADIO_CLIENT || client->radio == RADIO_CONNECTING) && client->hostConsole == self(gba)
-	         && client->number == slot && client->id == rfu->clients[slot].id;
-	return ours ? other : NULL;
+	return 0xFF;
 }
 
-// A client's host, if it still has this client.
-static struct GBA* hostOf(struct GBA* gba) {
+// Tells the consoles around what this adapter's room is now: open, its next slot and broadcast, or
+// gone.
+static void announce(struct GBA* gba, int to) {
 	struct Rfu* rfu = &gba->sio.rfu;
-	if (rfu->radio != RADIO_CLIENT && rfu->radio != RADIO_CONNECTING) {
-		return NULL;
+	uint8_t message[5 + sizeof(rfu->broadcast)] = { AIR_ROOM, rfu->radio == RADIO_HOST && rfu->open, freeSlot(rfu) };
+	put16(message + 3, rfu->id);
+	for (unsigned i = 0; i < sizeof(rfu->broadcast); ++i) {
+		message[5 + i] = rfu->broadcast[i / 4] >> (8 * (i & 3));
 	}
-	struct GBA* other = console(gba, rfu->hostConsole);
-	if (!other || other->sio.rfu.radio != RADIO_HOST || rfu->number >= RFU_SLOTS) {
-		return NULL;
+	airSend(gba, to, message, sizeof(message));
+}
+
+// A room heard: an open one is listed, and one that closed stays listed for HEARD.
+static void heard(struct GBA* gba, int from, const uint8_t* message) {
+	struct Rfu* rfu = &gba->sio.rfu;
+	int match = -1, free = -1;
+	for (int i = 0; i < RFU_ROOMS && match < 0; ++i) {
+		if (rfu->rooms[i].heard && rfu->rooms[i].console == from) {
+			match = i;
+		} else if (free < 0 && (!rfu->rooms[i].heard || (!rfu->rooms[i].live && arrived(gba, rfu->rooms[i].at + HEARD)))) {
+			free = i;
+		}
 	}
-	return clientAt(other, rfu->number) == gba ? other : NULL;
+	int i = match >= 0 ? match : message[1] ? free : -1;
+	if (i < 0) {
+		return;
+	}
+	rfu->rooms[i].heard = true;
+	rfu->rooms[i].live = message[1];
+	rfu->rooms[i].console = from;
+	rfu->rooms[i].at = now(gba);
+	if (message[1]) {
+		rfu->rooms[i].slot = message[2];
+		rfu->rooms[i].id = get16(message + 3);
+		memset(rfu->rooms[i].broadcast, 0, sizeof(rfu->rooms[i].broadcast));
+		for (unsigned b = 0; b < sizeof(rfu->rooms[i].broadcast); ++b) {
+			rfu->rooms[i].broadcast[b / 4] |= (uint32_t) message[5 + b] << (8 * (b & 3));
+		}
+	}
 }
 
 // A client's link ends: the host dropped it (manual) or it was lost.
@@ -158,24 +216,35 @@ static void loseClient(struct GBA* gba, int slot) {
 	rfu->lost |= 1 << slot;
 	rfu->lostReason = 1;
 	wake(gba);
+	announce(gba, -1);
+}
+
+static void sendDrop(struct GBA* gba, int slot) {
+	struct Rfu* rfu = &gba->sio.rfu;
+	uint8_t message[3] = { AIR_DROP };
+	put16(message + 1, rfu->clients[slot].id);
+	airSend(gba, rfu->clients[slot].console, message, sizeof(message));
+}
+
+static void sendLeave(struct GBA* gba, int host, int slot, uint16_t id) {
+	uint8_t message[4] = { AIR_LEAVE, slot };
+	put16(message + 2, id);
+	airSend(gba, host, message, sizeof(message));
 }
 
 // Leaves whatever link the adapter is in, telling the other end.
 static void leave(struct GBA* gba) {
 	struct Rfu* rfu = &gba->sio.rfu;
-	if (rfu->radio == RADIO_HOST) {
+	bool hosting = rfu->radio == RADIO_HOST;
+	if (hosting) {
 		for (int slot = 0; slot < RFU_SLOTS; ++slot) {
-			struct GBA* client = clientAt(gba, slot);
-			if (client) {
-				dropClient(client, true);
+			if (rfu->clients[slot].active) {
+				sendDrop(gba, slot);
 			}
 			rfu->clients[slot].active = false;
 		}
-	} else {
-		struct GBA* host = hostOf(gba);
-		if (host) {
-			loseClient(host, rfu->number);
-		}
+	} else if ((rfu->radio == RADIO_CLIENT || rfu->radio == RADIO_CONNECTING) && rfu->number < RFU_SLOTS) {
+		sendLeave(gba, rfu->hostConsole, rfu->number, rfu->id);
 	}
 	rfu->radio = RADIO_IDLE;
 	rfu->open = false;
@@ -184,40 +253,28 @@ static void leave(struct GBA* gba) {
 	rfu->tx.sent = false;
 	rfu->exchange = false;
 	rfu->lost = 0;
+	if (hosting) {
+		announce(gba, -1);
+	}
 }
 
-// The slot a host gives its next client, or 0xFF when it is closed or full. Setup's bits 16-17 limit
-// the players: 0 for five (four clients), down to 3 for two.
-static int freeSlot(struct Rfu* host) {
-	if (host->radio != RADIO_HOST || !host->open) {
-		return 0xFF;
-	}
-	int slots = 4 - ((host->setup >> 16) & 3);
-	for (int slot = 0; slot < slots; ++slot) {
-		if (!host->clients[slot].active) {
-			return slot;
-		}
-	}
-	return 0xFF;
+// Asks the rooms around to make themselves heard.
+static void search(struct GBA* gba) {
+	gba->sio.rfu.asked = now(gba);
+	airSend(gba, -1, (const uint8_t[]) { AIR_SEARCH }, 1);
 }
 
-// The rooms in range: each one's ID and next slot, then its broadcast. The adapter keeps the rooms
-// it has heard while searching for a while after it last heard them, as the game switches between
-// hosting and searching and so is only heard some of the time.
+// The rooms in range: each one's ID and next slot, then its broadcast. A room stays listed for a
+// while after it was last heard open, as a game switches between hosting and searching and so is
+// only heard some of the time.
 static int listHosts(struct GBA* gba) {
 	struct Rfu* rfu = &gba->sio.rfu;
+	if ((uint32_t) (now(gba) - rfu->asked) >= ASK) {
+		search(gba);
+	}
 	int n = 0;
-	for (int i = 0; gba->sio.air && i < gba->sio.air->count && i < RFU_ROOMS; ++i) {
-		struct GBA* other = console(gba, i);
-		if (other && other->sio.rfu.radio == RADIO_HOST && other->sio.rfu.open) {
-			struct Rfu* host = &other->sio.rfu;
-			rfu->rooms[i].heard = true;
-			rfu->rooms[i].id = host->id;
-			rfu->rooms[i].slot = freeSlot(host);
-			rfu->rooms[i].at = now(gba);
-			memcpy(rfu->rooms[i].broadcast, host->broadcast, sizeof(host->broadcast));
-		}
-		if (!rfu->rooms[i].heard || arrived(gba, rfu->rooms[i].at + HEARD) || n >= 4 * 7) {
+	for (int i = 0; i < RFU_ROOMS && n < 4 * 7; ++i) {
+		if (!rfu->rooms[i].heard || (!rfu->rooms[i].live && arrived(gba, rfu->rooms[i].at + HEARD))) {
 			continue;
 		}
 		rfu->words[n++] = rfu->rooms[i].id | rfu->rooms[i].slot << 16;
@@ -238,40 +295,33 @@ static int listClients(struct Rfu* rfu) {
 	return n;
 }
 
+// Asks the room with this ID to take this console; the host's answer finishes the connection.
 static void connect(struct GBA* gba, uint16_t hostId) {
 	struct Rfu* rfu = &gba->sio.rfu;
 	rfu->radio = RADIO_CONNECTING;
 	rfu->connected = now(gba) + CONNECTING;
 	rfu->number = 0xFF;
+	rfu->hostId = hostId;
+	rfu->answered = true;
 	rfu->rx.sent = false;
 	rfu->tx.sent = false;
-	for (int i = 0; gba->sio.air && i < gba->sio.air->count; ++i) {
-		struct GBA* other = console(gba, i);
-		if (!other || other->sio.rfu.radio != RADIO_HOST || other->sio.rfu.id != hostId) {
-			continue;
-		}
-		struct Rfu* host = &other->sio.rfu;
-		int slot = freeSlot(host);
-		if (slot == 0xFF) {
+	for (int i = 0; i < RFU_ROOMS; ++i) {
+		if (rfu->rooms[i].heard && rfu->rooms[i].live && rfu->rooms[i].id == hostId) {
+			rfu->hostConsole = rfu->rooms[i].console;
+			rfu->answered = false;
+			uint8_t message[3] = { AIR_JOIN };
+			put16(message + 1, hostId);
+			airSend(gba, rfu->hostConsole, message, sizeof(message));
 			return;
 		}
-		host->clients[slot].active = true;
-		host->clients[slot].id = newId(host);
-		host->clients[slot].console = self(gba);
-		host->clients[slot].rx.sent = false;
-		rfu->hostConsole = i;
-		rfu->hostId = hostId;
-		rfu->number = slot;
-		rfu->id = host->clients[slot].id;
-		return;
 	}
 }
 
 // A connection being made: whether it has finished, and how it ended.
 static uint32_t connectStatus(struct GBA* gba) {
 	struct Rfu* rfu = &gba->sio.rfu;
-	if (rfu->radio == RADIO_CONNECTING && arrived(gba, rfu->connected)) {
-		rfu->radio = rfu->number < RFU_SLOTS && hostOf(gba) ? RADIO_CLIENT : RADIO_IDLE;
+	if (rfu->radio == RADIO_CONNECTING && rfu->answered && arrived(gba, rfu->connected)) {
+		rfu->radio = rfu->number < RFU_SLOTS ? RADIO_CLIENT : RADIO_IDLE;
 		if (rfu->radio == RADIO_IDLE) {
 			rfu->id = 0;
 		}
@@ -286,23 +336,16 @@ static uint32_t connectStatus(struct GBA* gba) {
 	}
 }
 
-// A host's packet goes to each client; each client's waiting packet comes back with it.
+// A host's packet goes to each client.
 static void hostSend(struct GBA* gba) {
 	struct Rfu* rfu = &gba->sio.rfu;
+	uint8_t message[4 + RFU_HOST_BYTES] = { AIR_HOST_DATA, rfu->tx.length };
+	memcpy(message + 4, rfu->tx.data, rfu->tx.length);
 	for (int slot = 0; slot < RFU_SLOTS; ++slot) {
-		if (!rfu->clients[slot].active) {
-			continue;
+		if (rfu->clients[slot].active) {
+			put16(message + 2, rfu->clients[slot].id);
+			airSend(gba, rfu->clients[slot].console, message, 4 + rfu->tx.length);
 		}
-		struct GBA* other = clientAt(gba, slot);
-		if (!other) {
-			loseClient(gba, slot);
-			continue;
-		}
-		struct Rfu* client = &other->sio.rfu;
-		client->rx = rfu->tx;
-		client->rx.sent = true;
-		client->rx.arrival = now(other) + HOST_TO_CLIENT;
-		wake(other);
 	}
 	rfu->exchange = true;
 	rfu->exchanged = now(gba) + EXCHANGE;
@@ -334,14 +377,10 @@ static int send(struct GBA* gba) {
 		return 0;
 	}
 	// A client's packet goes up in the adapters' next radio exchange, which they make by themselves.
-	struct GBA* other = hostOf(gba);
-	if (other) {
-		struct RfuPacket* rx = &other->sio.rfu.clients[rfu->number].rx;
-		*rx = rfu->tx;
-		rx->sent = true;
-		rx->arrival = now(other) + EXCHANGE;
-		wake(other);
-	}
+	uint8_t message[5 + RFU_CLIENT_BYTES] = { AIR_CLIENT_DATA, rfu->number, bytes };
+	put16(message + 3, rfu->id);
+	memcpy(message + 5, rfu->tx.data, bytes);
+	airSend(gba, rfu->hostConsole, message, 5 + bytes);
 	return 0;
 }
 
@@ -380,10 +419,7 @@ static void disconnect(struct GBA* gba, uint32_t slots) {
 	if (rfu->radio == RADIO_HOST) {
 		for (int slot = 0; slot < RFU_SLOTS; ++slot) {
 			if (slots & (1 << slot) && rfu->clients[slot].active) {
-				struct GBA* client = clientAt(gba, slot);
-				if (client) {
-					dropClient(client, true);
-				}
+				sendDrop(gba, slot);
 				rfu->clients[slot].active = false;
 				rfu->clients[slot].rx.sent = false;
 			}
@@ -392,6 +428,7 @@ static void disconnect(struct GBA* gba, uint32_t slots) {
 			rfu->radio = RADIO_IDLE;
 			rfu->id = 0;
 		}
+		announce(gba, -1);
 	} else if (rfu->radio == RADIO_CLIENT || rfu->radio == RADIO_CONNECTING) {
 		leave(gba);
 	}
@@ -409,9 +446,9 @@ static int execute(struct GBA* gba) {
 		uint32_t strength = 0;
 		if (rfu->radio == RADIO_HOST) {
 			for (int slot = 0; slot < RFU_SLOTS; ++slot) {
-				strength |= clientAt(gba, slot) ? 0xFFu << (slot * 8) : 0;
+				strength |= rfu->clients[slot].active ? 0xFFu << (slot * 8) : 0;
 			}
-		} else if (rfu->radio == RADIO_CLIENT && hostOf(gba)) {
+		} else if (rfu->radio == RADIO_CLIENT) {
 			strength = 0xFFu << (rfu->number * 8);
 		}
 		rfu->words[0] = strength;
@@ -458,9 +495,15 @@ static int execute(struct GBA* gba) {
 			return -ERROR_STATE;
 		}
 		memcpy(rfu->broadcast, rfu->words, sizeof(rfu->broadcast));
+		if (rfu->radio == RADIO_HOST) {
+			announce(gba, -1);
+		}
 		return 0;
 	case 0x17:
 		rfu->setup = rfu->length ? rfu->words[0] : 0;
+		if (rfu->radio == RADIO_HOST) {
+			announce(gba, -1);
+		}
 		return 0;
 	case 0x18:
 	case 0x31:
@@ -479,6 +522,7 @@ static int execute(struct GBA* gba) {
 			rfu->exchange = false;
 		}
 		rfu->open = true;
+		announce(gba, -1);
 		return 0;
 	case 0x1A:
 		if (rfu->radio != RADIO_HOST) {
@@ -496,13 +540,21 @@ static int execute(struct GBA* gba) {
 			rfu->radio = RADIO_IDLE;
 			rfu->id = 0;
 		}
+		announce(gba, -1);
 		return n;
 	}
 	case 0x1C:
 		if ((rfu->radio == RADIO_HOST && listClients(rfu)) || rfu->radio == RADIO_CLIENT) {
 			return -ERROR_STATE;
 		}
+		if (rfu->radio == RADIO_HOST) {
+			rfu->radio = RADIO_IDLE;
+			rfu->open = false;
+			rfu->id = 0;
+			announce(gba, -1);
+		}
 		rfu->radio = RADIO_SEARCHING;
+		search(gba);
 		return 0;
 	case 0x1D:
 		return listHosts(gba);
@@ -834,6 +886,7 @@ void rfuReset(struct GBA* gba) {
 	rfu->wire = WIRE_ID;
 	rfu->next = 0;
 	rfu->setup = 0x003C0420;
+	rfu->asked = now(gba) - ASK;
 }
 
 void rfuInit(struct GBA* gba) {
@@ -843,9 +896,133 @@ void rfuInit(struct GBA* gba) {
 }
 
 void rfuAttach(struct GBA* gba, bool attached, const struct RfuAir* air) {
+	bool changed = attached != gba->sio.rfu.attached || air != gba->sio.air;
 	gba->sio.air = air;
-	if (attached != gba->sio.rfu.attached) {
-		gba->sio.rfu.attached = attached;
+	gba->sio.rfu.attached = attached;
+	if (changed) {
 		rfuReset(gba);
+	}
+}
+
+void rfuReceive(struct GBA* gba, int from, const uint8_t* message, size_t size) {
+	struct Rfu* rfu = &gba->sio.rfu;
+	if (!rfu->attached || !size) {
+		return;
+	}
+	bool client = (rfu->radio == RADIO_CLIENT || rfu->radio == RADIO_CONNECTING) && rfu->hostConsole == from;
+	switch (message[0]) {
+	case AIR_ROOM:
+		if (size >= 5 + sizeof(rfu->broadcast)) {
+			heard(gba, from, message);
+		}
+		break;
+	case AIR_SEARCH:
+		if (rfu->radio == RADIO_HOST && rfu->open) {
+			announce(gba, from);
+		}
+		break;
+	case AIR_JOIN: {
+		if (size < 3 || rfu->radio != RADIO_HOST || get16(message + 1) != rfu->id) {
+			break;
+		}
+		for (int slot = 0; slot < RFU_SLOTS; ++slot) {
+			if (rfu->clients[slot].active && rfu->clients[slot].console == from) {
+				rfu->clients[slot].active = false;
+				rfu->clients[slot].rx.sent = false;
+			}
+		}
+		int slot = freeSlot(rfu);
+		uint8_t answer[6] = { AIR_REJECT, slot };
+		put16(answer + 2, rfu->id);
+		if (slot != 0xFF) {
+			rfu->clients[slot].active = true;
+			rfu->clients[slot].id = newId(rfu);
+			rfu->clients[slot].console = from;
+			rfu->clients[slot].rx.sent = false;
+			answer[0] = AIR_ACCEPT;
+			put16(answer + 4, rfu->clients[slot].id);
+		}
+		airSend(gba, from, answer, sizeof(answer));
+		announce(gba, -1);
+		break;
+	}
+	case AIR_ACCEPT:
+	case AIR_REJECT:
+		if (size < 6) {
+			break;
+		}
+		if (client && rfu->radio == RADIO_CONNECTING && !rfu->answered && get16(message + 2) == rfu->hostId) {
+			rfu->answered = true;
+			if (message[0] == AIR_ACCEPT && message[1] < RFU_SLOTS) {
+				rfu->number = message[1];
+				rfu->id = get16(message + 4);
+			}
+		} else if (message[0] == AIR_ACCEPT) {
+			// The connection was given up before the answer came.
+			sendLeave(gba, from, message[1], get16(message + 4));
+		}
+		break;
+	case AIR_HOST_DATA:
+		if (size < 4u + message[1] || message[1] > RFU_HOST_BYTES || !client || rfu->number >= RFU_SLOTS || get16(message + 2) != rfu->id) {
+			break;
+		}
+		rfu->rx.sent = true;
+		rfu->rx.length = message[1];
+		rfu->rx.arrival = arrival(gba, HOST_TO_CLIENT);
+		memcpy(rfu->rx.data, message + 4, message[1]);
+		wake(gba);
+		break;
+	case AIR_CLIENT_DATA: {
+		if (size < 5u + message[2] || message[2] > RFU_CLIENT_BYTES || rfu->radio != RADIO_HOST || message[1] >= RFU_SLOTS) {
+			break;
+		}
+		struct RfuPacket* rx = &rfu->clients[message[1]].rx;
+		if (!rfu->clients[message[1]].active || rfu->clients[message[1]].console != from || rfu->clients[message[1]].id != get16(message + 3)) {
+			break;
+		}
+		rx->sent = true;
+		rx->length = message[2];
+		rx->arrival = arrival(gba, EXCHANGE);
+		memcpy(rx->data, message + 5, message[2]);
+		wake(gba);
+		break;
+	}
+	case AIR_DROP:
+		if (size >= 3 && client && rfu->number < RFU_SLOTS && get16(message + 1) == rfu->id) {
+			dropClient(gba, true);
+		}
+		break;
+	case AIR_LEAVE:
+		if (size >= 4 && rfu->radio == RADIO_HOST && message[1] < RFU_SLOTS && rfu->clients[message[1]].active
+		    && rfu->clients[message[1]].console == from && rfu->clients[message[1]].id == get16(message + 2)) {
+			loseClient(gba, message[1]);
+		}
+		break;
+	}
+}
+
+void rfuPeerGone(struct GBA* gba, int console) {
+	struct Rfu* rfu = &gba->sio.rfu;
+	if (!rfu->attached) {
+		return;
+	}
+	for (int i = 0; i < RFU_ROOMS; ++i) {
+		if ((console < 0 || rfu->rooms[i].console == console)) {
+			rfu->rooms[i].heard = false;
+		}
+	}
+	if (rfu->radio == RADIO_HOST) {
+		for (int slot = 0; slot < RFU_SLOTS; ++slot) {
+			if (rfu->clients[slot].active && (console < 0 || rfu->clients[slot].console == console)) {
+				loseClient(gba, slot);
+			}
+		}
+	} else if ((rfu->radio == RADIO_CLIENT || rfu->radio == RADIO_CONNECTING) && (console < 0 || rfu->hostConsole == console)) {
+		if (rfu->radio == RADIO_CONNECTING) {
+			rfu->answered = true;
+			rfu->number = 0xFF;
+		} else {
+			dropClient(gba, false);
+		}
 	}
 }
