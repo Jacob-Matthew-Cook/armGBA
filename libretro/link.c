@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include "../src/gba.h"
+#include "dmg07.h"
 #include "gb.h"
 
 // The host keeps the cable: the players running the same console as it, in the order they joined,
@@ -32,7 +33,19 @@ enum {
 static const int64_t TIMEOUT_NS = 3000000000LL;
 
 enum { CONSOLE_NONE, CONSOLE_GB, CONSOLE_GBA };
-enum { MSG_HELLO = 1, MSG_ROSTER, MSG_REQUEST, MSG_REPLY, MSG_DONE, MSG_RFU, MSG_GONE, MSG_OFFER };
+enum {
+	MSG_HELLO = 1,
+	MSG_ROSTER,
+	MSG_REQUEST,
+	MSG_REPLY,
+	MSG_DONE,
+	MSG_RFU,
+	MSG_GONE,
+	MSG_OFFER,
+	MSG_ADAPTER_STATUS,
+	MSG_ADAPTER_PACKET,
+	MSG_ADAPTER_QUIT,
+};
 // A request's mode: a GBA serial mode, or a Game Boy transfer that took the other's offered byte.
 enum { MODE_MULTI = 2, MODE_TOOK_OFFER = 0x80 };
 
@@ -92,6 +105,41 @@ static struct {
 	uint8_t byte;
 } offer, offered;
 static uint16_t taken;
+
+// The Four Player Adapter over netplay. Each device runs an adapter for its own Game Boy, on the
+// port of its place on the cable. The other ports are the other players' Game Boys as they tell it:
+// whether they answer pings, player 1's rate and packet size, a game starting or ending, and each
+// packet's bytes, which an adapter hands out a packet later, so they have that long to arrive.
+struct AdapterPort {
+	bool answering;
+	bool starting;
+	bool quitting;
+	uint8_t rate;
+	uint8_t size;
+	// The last two packets' bytes, by packet number.
+	uint16_t packets[2];
+	bool has[2];
+	uint8_t bytes[2][4];
+};
+static struct {
+	bool wanted;
+	struct Dmg07 machine;
+	uint16_t packet;
+	uint8_t phase;
+	struct AdapterPort ports[DMG07_PORTS];
+	// What this Game Boy answered, and what the others were last told.
+	struct AdapterPort own;
+	struct AdapterPort told;
+	bool toldAny;
+	bool toldQuit;
+} adapter;
+
+static void resetAdapter(void) {
+	bool const wanted = adapter.wanted;
+	memset(&adapter, 0, sizeof(adapter));
+	adapter.wanted = wanted;
+	dmg07Reset(&adapter.machine);
+}
 
 static struct SioLink sioLink = { .players = 1 };
 static struct Event pollEvent;
@@ -189,7 +237,7 @@ static void peerGone(uint16_t id) {
 }
 
 static int maxPlayers(void) {
-	return console == CONSOLE_GBA ? MAX_PLAYERS : 2;
+	return console == CONSOLE_GBA || adapter.wanted ? MAX_PLAYERS : 2;
 }
 
 // The host's view: everyone who joined with the same console, in order, up to what the cable takes.
@@ -238,6 +286,37 @@ static void answered(uint16_t from, uint32_t data) {
 		own.in[slot - 1] = data & 0xFFFF;
 	} else {
 		own.in[0] = data;
+	}
+}
+
+static void adapterReceive(const uint8_t* message, size_t size, int port) {
+	if (port < 0 || port >= DMG07_PORTS) {
+		return;
+	}
+	struct AdapterPort* const p = &adapter.ports[port];
+	switch (message[0]) {
+	case MSG_ADAPTER_STATUS:
+		if (size >= 5) {
+			p->answering = message[1];
+			// Kept until this adapter starts the game too, however briefly the other was starting.
+			p->starting |= message[2];
+			p->rate = message[3];
+			p->size = message[4];
+		}
+		break;
+	case MSG_ADAPTER_PACKET: {
+		unsigned const bytes = size >= 4 ? message[3] : 0;
+		if (bytes <= 4 && size >= 4 + bytes) {
+			uint16_t const packet = get16(message + 1);
+			p->packets[packet & 1] = packet;
+			p->has[packet & 1] = true;
+			memcpy(p->bytes[packet & 1], message + 4, bytes);
+		}
+		break;
+	}
+	case MSG_ADAPTER_QUIT:
+		p->quitting = true;
+		break;
 	}
 }
 
@@ -310,6 +389,11 @@ static void receive(const void* buffer, size_t size, uint16_t from) {
 		if (from == 0 && size >= 3) {
 			peerGone(get16(message + 1));
 		}
+		break;
+	case MSG_ADAPTER_STATUS:
+	case MSG_ADAPTER_PACKET:
+	case MSG_ADAPTER_QUIT:
+		adapterReceive(message, size, slotOf(from));
 		break;
 	case MSG_DONE:
 		if (size >= 12 && done.waiting && get16(message + 2) == done.seq) {
@@ -460,6 +544,7 @@ static void start(uint16_t id, retro_netpacket_send_t sendFunction, retro_netpac
 	taken = 0;
 	offer.sent = false;
 	offered.ready = false;
+	resetAdapter();
 	peerCount = 0;
 	requestCount = 0;
 	own.waiting = false;
@@ -611,5 +696,144 @@ void linkSetWireless(bool on) {
 	if (wireless != on) {
 		wireless = on;
 		cableChanged();
+	}
+}
+
+void linkSetGbAdapter(bool on) {
+	if (adapter.wanted != on) {
+		adapter.wanted = on;
+		resetAdapter();
+		if (session) {
+			hello();
+		}
+	}
+}
+
+bool linkAdapterOn(void) {
+	return session && console == CONSOLE_GB && adapter.wanted && slotOf(self) >= 0;
+}
+
+// What another player's port gives in this transfer: the answers to a ping its Game Boy gave, $AA
+// while it starts a game, $FF while it ends one; its bytes of a packet come in their own message.
+static uint8_t remoteIn(struct AdapterPort* p) {
+	struct Dmg07 const* const m = &adapter.machine;
+	switch (m->phase) {
+	case DMG07_PING:
+		if (p->starting) {
+			return 0xAA;
+		}
+		if (!p->answering) {
+			return 0xFF;
+		}
+		return m->index < 2 ? 0x88 : m->index == 2 ? p->rate : p->size;
+	case DMG07_DATA:
+		if (p->quitting && m->index < 3) {
+			p->quitting = m->index < 2;
+			return 0xFF;
+		}
+		return 0;
+	default:
+		return 0xFF;
+	}
+}
+
+static uint8_t waitingPort;
+
+static bool packetArrived(void) {
+	struct AdapterPort const* const p = &adapter.ports[waitingPort];
+	return p->has[adapter.packet & 1] && p->packets[adapter.packet & 1] == adapter.packet;
+}
+
+// Before a packet ends, the other players' bytes of it go in, waited for if they haven't come.
+static void fillPacket(int me) {
+	struct Dmg07* const m = &adapter.machine;
+	for (int port = 0; port < cableCount && port < DMG07_PORTS; ++port) {
+		if (port == me || !(m->answering & (0x10 << port))) {
+			continue;
+		}
+		waitingPort = port;
+		waitFor(packetArrived);
+		struct AdapterPort const* const p = &adapter.ports[port];
+		bool const arrived = packetArrived();
+		for (int k = 0; k < m->size; ++k) {
+			m->next[port * m->size + k] = arrived ? p->bytes[adapter.packet & 1][k] : 0;
+		}
+	}
+}
+
+// Tells the others what this Game Boy answered, when that changes; its bytes of each packet once
+// it has given them; and the end of a game it asked for.
+static void tellOthers(int me) {
+	struct Dmg07 const* const m = &adapter.machine;
+	struct AdapterPort* const own = &adapter.own;
+	own->answering = m->answering & (0x10 << me);
+	own->starting = m->phase == DMG07_START || (m->phase == DMG07_PING && m->aa[me]);
+	struct AdapterPort* const told = &adapter.told;
+	if (!adapter.toldAny || own->answering != told->answering || own->starting != told->starting || own->rate != told->rate || own->size != told->size) {
+		*told = *own;
+		adapter.toldAny = true;
+		uint8_t const message[5] = { MSG_ADAPTER_STATUS, own->answering, own->starting, own->rate, own->size };
+		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
+	}
+	if (m->phase == DMG07_DATA && m->index == m->size) {
+		uint8_t message[8] = { MSG_ADAPTER_PACKET, 0, 0, m->size };
+		put16(message + 1, adapter.packet);
+		memcpy(message + 4, &m->next[me * m->size], m->size);
+		send(message, 4 + m->size, RETRO_NETPACKET_BROADCAST);
+	}
+	if (m->stop && !adapter.toldQuit) {
+		adapter.toldQuit = true;
+		uint8_t const message[1] = { MSG_ADAPTER_QUIT };
+		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
+	}
+}
+
+// One transfer: this Game Boy, if waiting on the external clock, takes the adapter's byte and gives
+// its own; the other players' ports give what they told.
+static void adapterTransfer(void) {
+#ifdef ARMGBA_GB
+	struct Dmg07* const m = &adapter.machine;
+	int const me = slotOf(self);
+	uint8_t in[DMG07_PORTS] = { 0xFF, 0xFF, 0xFF, 0xFF };
+	if ((libretroGbLinkControl() & 0x81) == 0x80) {
+		in[me] = libretroGbLinkOut();
+		libretroGbLinkIn(dmg07Out(m, me));
+	}
+	if (m->phase == DMG07_PING && (m->index == 2 || m->index == 3) && in[me] != 0xAA) {
+		*(m->index == 2 ? &adapter.own.rate : &adapter.own.size) = in[me];
+	}
+	for (int port = 0; port < cableCount && port < DMG07_PORTS; ++port) {
+		if (port != me) {
+			in[port] = remoteIn(&adapter.ports[port]);
+		}
+	}
+	if (m->phase == DMG07_DATA && m->index == 4 * m->size - 1) {
+		fillPacket(me);
+	}
+	uint8_t const phase = m->phase;
+	dmg07Transfer(m, in);
+	// Packets are numbered from the start of each game.
+	if (m->phase == DMG07_DATA && phase != DMG07_DATA) {
+		adapter.packet = 0;
+		for (int port = 0; port < DMG07_PORTS; ++port) {
+			adapter.ports[port].starting = false;
+		}
+	} else if (phase == DMG07_DATA && m->index == 0) {
+		++adapter.packet;
+	}
+	if (m->phase == DMG07_PING) {
+		adapter.toldQuit = false;
+	}
+	tellOthers(me);
+#endif
+}
+
+void linkAdapterRun(unsigned samples) {
+	if (!linkAdapterOn()) {
+		return;
+	}
+	dmg07EndFrame(&adapter.machine, (int32_t) samples);
+	while (adapter.machine.at <= 0) {
+		adapterTransfer();
 	}
 }

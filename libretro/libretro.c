@@ -541,6 +541,8 @@ static void readOptions(void) {
 	int const shades = !value ? 0 : !strcmp(value, "pocket") ? 1 : !strcmp(value, "original") ? 2 : !strcmp(value, "light") ? 3 : 0;
 	value = option("armgba_gb_color_correction");
 	gbColorCorrection = value && !strcmp(value, "enabled");
+	value = option("armgba_gb_link_port");
+	linkSetGbAdapter(value && !strcmp(value, "adapter"));
 	value = option("armgba_gb_screen_off");
 	bool const offBackground = value && !strcmp(value, "background");
 	for (int i = gameBoy ? playersHere - 1 : 0; i >= 0; --i) {

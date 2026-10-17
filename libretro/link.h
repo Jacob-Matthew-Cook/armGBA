@@ -35,6 +35,12 @@ void linkSetWireless(bool);
 bool linkSession(void);
 // Called before each Game Boy Advance frame: keeps the cable checked during it.
 void linkGbaFrame(struct GBA*);
+// Game Boy Four Player Adapter: whether it is plugged in (the Link Port option), whether this Game
+// Boy is on one in a netplay session, and the adapter run alongside for the sound samples the Game
+// Boy just ran.
+void linkSetGbAdapter(bool);
+bool linkAdapterOn(void);
+void linkAdapterRun(unsigned samples);
 // Game Boy: whether another Game Boy is on the cable, a transfer this one clocked (returns the byte
 // received), and a check for transfers the other one clocked.
 bool linkGbConnected(void);
