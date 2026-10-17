@@ -55,6 +55,8 @@ enum {
 	CONNECTING = 65536,
 	PUSH = 1024,
 	FRAME = 280896,
+	// How long a room stays listed after it was last heard: four seconds.
+	HEARD = 240 * FRAME,
 };
 
 static const uint16_t NINTENDO[4] = { 0x494E, 0x544E, 0x4E45, 0x4F44 };
@@ -199,18 +201,27 @@ static int freeSlot(struct Rfu* host) {
 	return 0xFF;
 }
 
-// The hosts in range: each one's ID and next slot, then its broadcast.
+// The rooms in range: each one's ID and next slot, then its broadcast. The adapter keeps the rooms
+// it has heard while searching for a while after it last heard them, as the game switches between
+// hosting and searching and so is only heard some of the time.
 static int listHosts(struct GBA* gba) {
 	struct Rfu* rfu = &gba->sio.rfu;
 	int n = 0;
-	for (int i = 0; gba->sio.air && i < gba->sio.air->count && n < 4 * 7; ++i) {
+	for (int i = 0; gba->sio.air && i < gba->sio.air->count && i < RFU_ROOMS; ++i) {
 		struct GBA* other = console(gba, i);
-		if (!other || other->sio.rfu.radio != RADIO_HOST || !other->sio.rfu.open) {
+		if (other && other->sio.rfu.radio == RADIO_HOST && other->sio.rfu.open) {
+			struct Rfu* host = &other->sio.rfu;
+			rfu->rooms[i].heard = true;
+			rfu->rooms[i].id = host->id;
+			rfu->rooms[i].slot = freeSlot(host);
+			rfu->rooms[i].at = now(gba);
+			memcpy(rfu->rooms[i].broadcast, host->broadcast, sizeof(host->broadcast));
+		}
+		if (!rfu->rooms[i].heard || arrived(gba, rfu->rooms[i].at + HEARD) || n >= 4 * 7) {
 			continue;
 		}
-		struct Rfu* host = &other->sio.rfu;
-		rfu->words[n++] = host->id | freeSlot(host) << 16;
-		memcpy(&rfu->words[n], host->broadcast, sizeof(host->broadcast));
+		rfu->words[n++] = rfu->rooms[i].id | rfu->rooms[i].slot << 16;
+		memcpy(&rfu->words[n], rfu->rooms[i].broadcast, sizeof(rfu->rooms[i].broadcast));
 		n += 6;
 	}
 	return n;
