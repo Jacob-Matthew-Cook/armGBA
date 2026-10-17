@@ -726,10 +726,10 @@ static uint8_t remoteIn(struct AdapterPort* p) {
 		if (!p->answering) {
 			return 0xFF;
 		}
-		return m->index < 2 ? 0x88 : m->index == 2 ? p->rate : p->size;
+		return m->index == 0 ? p->size : m->index == 3 ? p->rate : 0x88;
 	case DMG07_DATA:
-		if (p->quitting && m->index < 3) {
-			p->quitting = m->index < 2;
+		if (p->quitting && m->index >= 1 && m->index <= 3) {
+			p->quitting = m->index < 3;
 			return 0xFF;
 		}
 		return 0;
@@ -776,7 +776,7 @@ static void tellOthers(int me) {
 		uint8_t const message[5] = { MSG_ADAPTER_STATUS, own->answering, own->starting, own->rate, own->size };
 		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
 	}
-	if (m->phase == DMG07_DATA && m->index == m->size) {
+	if (m->phase == DMG07_DATA && m->index == m->size + 1) {
 		uint8_t message[8] = { MSG_ADAPTER_PACKET, 0, 0, m->size };
 		put16(message + 1, adapter.packet);
 		memcpy(message + 4, &m->next[me * m->size], m->size);
@@ -800,8 +800,8 @@ static void adapterTransfer(void) {
 		in[me] = libretroGbLinkOut();
 		libretroGbLinkIn(dmg07Out(m, me));
 	}
-	if (m->phase == DMG07_PING && (m->index == 2 || m->index == 3) && in[me] != 0xAA) {
-		*(m->index == 2 ? &adapter.own.rate : &adapter.own.size) = in[me];
+	if (m->phase == DMG07_PING && (m->index == 3 || m->index == 0) && in[me] != 0xAA) {
+		*(m->index == 3 ? &adapter.own.rate : &adapter.own.size) = in[me];
 	}
 	for (int port = 0; port < cableCount && port < DMG07_PORTS; ++port) {
 		if (port != me) {
