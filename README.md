@@ -21,34 +21,35 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | L, R | L, R | Stretch the picture (Game Boy Advance model) |
 | Tilt stick | Tilt and turn (motion sensor games) | Tilt (motion sensor games) |
 | Right stick up, down | Sunlight up, down (solar sensor games) | — |
+| A, B, Select, Start (held 2 s) | Restart that player's console | Same |
 
-The tilt stick is the left stick by default. The Tilt Sensor option moves it to the right stick or
+With the consoles of a link on one device, L2 and R2 change how the screens are shown instead of
+fast-forwarding. The tilt stick is the left stick by default. The Tilt Sensor option moves it to the right stick or
 the D-pad; with the D-pad, L is the flick.
 
 ## Options
 
-A game sees only its own console's options, in this order.
+The options are in four categories, and a game sees only its own console's options.
 
-| Console | Option | Values (default first) |
-| --- | --- | --- |
-| Game Boy Advance | Turbo Button Period | 4 to 120 frames, 4 by default |
-| | Skip BIOS Intro | Disabled, Enabled |
-| | Threaded Video | Disabled, Enabled, One Frame Late |
-| | Color Correction | Disabled, Enabled |
-| | Tilt Sensor | Left Stick, Right Stick, D-Pad |
-| | Solar Sensor | 0 (Dark) to 10 (Full Sun), 5 by default |
-| Game Boy, Game Boy Color | Turbo Button Period | 4 to 120 frames, 4 by default |
-| | Game Boy Model (applies on restart) | Auto, Game Boy, Game Boy Pocket / Light, Game Boy Color, Game Boy Advance |
-| | Boot ROM (applies on restart) | On (Nintendo's, from the system directory), Off, Open-Source (SameBoy's, built in) |
-| | Color Correction | Disabled, Enabled |
-| | Game Boy Screen | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
-| | Game Boy Advance Border | Cropped, Shown |
-| | Screen Off Behavior | As Hardware, Background Color |
-| | Tilt Sensor | Left Stick, Right Stick, D-Pad |
-| Both | Link Cable (applies on restart) | Own Console, Both Consoles |
-| | Both Consoles Screens | Side by Side, Top and Bottom, Player 1 Only, Player 2 Only |
-| | Player 2's Game (applies on restart) | Same Game, then the games beside player 1's |
-| Game Boy Advance | Link Port (applies on restart) | Link Cable, Wireless Adapter |
+| Category | Option | Console | Values (default first) |
+| --- | --- | --- | --- |
+| System | Skip BIOS Intro | Game Boy Advance | Disabled, Enabled |
+| | Game Boy Model (applies on restart) | Game Boy | Auto, Game Boy, Game Boy Pocket / Light, Game Boy Color, Game Boy Advance |
+| | Boot ROM (applies on restart) | Game Boy | On (Nintendo's, from the system directory), Off, Open-Source (SameBoy's, built in) |
+| Video | Threaded Video | Game Boy Advance | Disabled, Enabled, One Frame Late |
+| | Color Correction | Both | Disabled, Enabled |
+| | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
+| | Game Boy Advance Border | Game Boy | Cropped, Shown |
+| | Screen Off Behavior | Game Boy | As Hardware, Background Color |
+| Input | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
+| | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
+| | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
+| Link | Link Cable (applies on restart) | Both | Own Console, All Consoles |
+| | Players (applies on restart) | Both | 2, 3, 4 |
+| | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
+| | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter |
+| | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only |
+| | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's |
 
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
 set to Shown, the black around it shows too, as on that console's screen.
@@ -117,20 +118,23 @@ Game Boy Color and Game Boy Advance color correction and the free boot ROMs buil
 
 - Own Console: each player runs their own game and save on their own device, and the link crosses
   RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and Crystal.
-  Game Boy Advance links take up to four players in multiplayer mode. A slow network stalls the
-  link, since each transfer waits for the other end; a waiting Game Boy sends its next byte ahead to
-  spare the clocking one most of that wait.
-- Both Consoles: one device runs both consoles side by side, for two players on one device (player 2
-  on the second controller), or with RetroArch's rollback netplay, where every device runs both and
-  the link never waits on the network. Every device needs both games. Player 2's game is picked with
-  Player 2's Game; the same game twice gives player 2 a save of its own, which starts as a copy of
+  Game Boy Advances link up to four in multiplayer mode, and Game Boys up to four on the Four Player
+  Adapter. A slow network stalls the cable, since each transfer waits for the other end; a waiting
+  Game Boy sends its next byte ahead to spare the clocking one most of that wait.
+- All Consoles: one device runs every player's console, two to four with the Players option, for
+  multiplayer on one device (a controller each) or with RetroArch's rollback netplay, where every
+  device runs them all and the link never waits on the network. Every device needs every game.
+  Three or four are shown in a grid. Player 2's game is picked with Player 2's Game; players 3 and 4
+  play player 1's. A player on player 1's game gets a save of their own, which starts as a copy of
   player 1's.
 
 The Game Boy Advance Wireless Adapter (Link Port) works in both: the Union Room and trades of Pokemon
-FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library.
+FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. So does the Game
+Boy Four Player Adapter, which three or four Game Boys on one device always use: Wario Blast, F-1
+Race, Yoshi's Cookie and other four-player games.
 
-**Pair files.** A `.gb2` file, as Batocera writes them, or a `.gba2` file names the two games of a
-Both Consoles link, one per line, and opens like a game from RetroArch's Load Content:
+**Pair files.** A `.gb2` file, as Batocera writes them, or a `.gba2` file names the games of an All
+Consoles link, two to four, one per line, and opens like a game from RetroArch's Load Content:
 
     gb:Pokemon - Yellow Version.zip
     gbc:Pokemon - Crystal Version.zip
@@ -250,8 +254,7 @@ The test tools also need an mGBA source tree with `tests/mgba-oracle.patch` appl
 ## Known gaps
 
 - A few unlicensed Game Boy Color cartridges with undocumented protection chips do not boot.
-- Game Boy games for four players need Nintendo's Four Player Adapter, which isn't there; Game Boy
-  links are for two. Both Consoles is for two players.
+- Four Game Boy Advances on one device need a fast one: all four run on one CPU core.
 - Cheat codes mGBA can't run either (Action Replay's slowdown and disabling codes) are left out. A
   code that hooks a routine of the game runs as the frame ends instead.
 
