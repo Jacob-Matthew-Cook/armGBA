@@ -18,7 +18,7 @@
 enum {
 	STATE_MAGIC = 0x3553424A,
 	// The machine's events, as events() lists them.
-	EVENTS = 12 + 4 + 12 + 7 + 3,
+	EVENTS = 12 + 4 + 12 + 7 + 4,
 };
 
 struct StateHeader {
@@ -55,6 +55,7 @@ static void events(struct GBA* gba, struct Event* all[EVENTS]) {
 	all[n++] = &gba->audio.psg.frameEvent;
 	all[n++] = &gba->savedata.dust;
 	all[n++] = &gba->sio.completeEvent;
+	all[n++] = &gba->sio.rfu.event;
 }
 
 // A state is a header and the whole struct GBA.
@@ -176,6 +177,8 @@ bool gbaLoadState(struct GBA* gba, const void* state, size_t size) {
 	gba->jit = host->jit;
 	gba->renderThread = host->renderThread;
 	gba->sio.link = host->sio.link;
+	gba->sio.air = host->sio.air;
+	gba->sio.rfu.attached = host->sio.rfu.attached;
 	gba->earlyExit = false;
 	gba->returnRequested = false;
 	gba->biosLoaded = host->biosLoaded;
