@@ -115,7 +115,10 @@ static void sioFinish(struct GBA* gba, void* context, uint32_t late) {
 	}
 	if (linked(sio)) {
 		uint32_t in[3] = { 0xFFFFFFFF, 0xFFFF, 0xFFFF };
-		sio->link->finish(sio->link->context, in);
+		if (!sio->link->finish(sio->link->context, in)) {
+			timingSchedule(gba, &sio->completeEvent, 1);
+			return;
+		}
 		if (sio->mode == SIO_MULTI) {
 			values[0] = outgoing(gba);
 			for (int i = 0; i < 3; ++i) {

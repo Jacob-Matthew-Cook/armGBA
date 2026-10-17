@@ -507,8 +507,10 @@ struct SioLink {
 	int id;
 	// A transfer this console clocks: begin sends this console's data as the transfer starts,
 	// finish waits for the others' and fills `in` (one value in normal mode, three in multiplayer).
+	// Finish can instead return false, having asked the console to stop running, and is called
+	// again a cycle later until it has the others' data.
 	void (*begin)(void* context, int mode, uint32_t out);
-	void (*finish)(void* context, uint32_t in[3]);
+	bool (*finish)(void* context, uint32_t in[3]);
 };
 
 // The air between Wireless Adapters: the frontend carries the messages one adapter sends to the
