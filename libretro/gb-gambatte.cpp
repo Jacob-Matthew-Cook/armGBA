@@ -906,6 +906,8 @@ bool saveOne(void* data, size_t size) {
 	}
 	std::memcpy(data, &length, sizeof(length));
 	s->gb->saveState(0, 0, static_cast<char*>(data) + sizeof(length));
+	// The room left for the state to grow is zero, so the same machine always makes the same state.
+	std::memset(static_cast<char*>(data) + sizeof(length) + length, 0, s->stateSize - sizeof(length) - length);
 	return true;
 }
 
