@@ -96,8 +96,16 @@ target_compile_options(gambatte PRIVATE -w -O2 -fno-exceptions -fno-rtti)
 set_target_properties(gambatte PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_STANDARD 11)
 
 # The libretro core
+# RetroArch's archive reading (libretro/deps), for player 2's game in a .zip or .7z.
+file(GLOB_RECURSE ARCHIVE_SOURCES libretro/deps/libretro-common/*.c libretro/deps/7zip/*.c)
+add_library(retro-archive STATIC ${ARCHIVE_SOURCES})
+target_include_directories(retro-archive PUBLIC libretro/deps/libretro-common/include PRIVATE libretro/deps)
+target_compile_definitions(retro-archive PRIVATE HAVE_ZLIB HAVE_7ZIP)
+target_compile_options(retro-archive PRIVATE -w -O2)
+set_target_properties(retro-archive PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(armgba_libretro SHARED libretro/libretro.c libretro/link.c libretro/second.c libretro/gb-gambatte.cpp)
-target_link_libraries(armgba_libretro armgba gambatte m z)
+target_link_libraries(armgba_libretro armgba gambatte retro-archive m z)
 target_compile_definitions(armgba_libretro PRIVATE ARMGBA_GB)
 # A toolchain file may leave C++ without an optimisation level
 target_compile_options(armgba_libretro PRIVATE -O2)

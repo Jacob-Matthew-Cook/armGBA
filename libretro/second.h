@@ -24,7 +24,7 @@ struct SecondGame {
 // loaded game itself is left out. Returns how many, at most max; free with secondFree.
 size_t secondList(const char* loadedPath, bool gameBoy, struct SecondGame* out, size_t max);
 void secondFree(struct SecondGame* games, size_t count);
-// Reads a game file, taking the game out of a .zip. Returns NULL if it can't.
+// Reads a game file, taking the game out of a .zip or .7z. Returns NULL if it can't.
 void* secondRead(const char* path, size_t* size);
 // The file where a game's save (extension "srm" or "rtc") is kept: where RetroArch keeps it, by
 // looking for it beside the game, in the save directory, and in the save directory's per-core and
