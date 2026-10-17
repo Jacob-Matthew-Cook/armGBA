@@ -49,57 +49,62 @@ uint8_t dmg07Out(const struct Dmg07* a, int port) {
 	}
 }
 
-// A port answers a ping with $88 $88, or $AA from a Game Boy starting the game. Player 1's answer
-// carries the rate and packet size.
+// A Game Boy answers each byte in the transfer after it, as GBE+ has it: $88 and $88 with the first
+// two status bytes, its rate with the third, and its packet size with the next ping's $FE. Player 1's
+// rate and size are used. Four $AA in a row start the game.
 static void ping(struct Dmg07* a, const uint8_t in[DMG07_PORTS]) {
 	for (int i = 0; i < DMG07_PORTS; ++i) {
 		uint8_t const bit = 1 << i;
 		bool const answered = in[i] == 0x88 || in[i] == 0xAA;
-		a->aa[i] = in[i] == 0xAA ? (a->index ? a->aa[i] : 0) + 1 : 0;
-		if (a->index == 0) {
+		a->aa[i] = in[i] == 0xAA ? a->aa[i] + 1 : 0;
+		if (a->index == 1) {
 			a->acked = (a->acked & ~bit) | (answered ? bit : 0);
-		} else if (a->index == 1) {
+		} else if (a->index == 2) {
 			a->acked &= answered ? 0xFF : ~bit;
 			a->answering = (a->answering & ~(0x10 << i)) | (a->acked & bit ? 0x10 << i : 0);
 		}
 	}
 	if (a->acked & 1 && in[0] != 0xAA) {
-		if (a->index == 2) {
+		if (a->index == 3) {
 			a->rate = in[0];
-		} else if (a->index == 3) {
+		} else if (a->index == 0) {
 			a->size = in[0] < 1 ? 1 : in[0] > 4 ? 4 : in[0];
 		}
 	}
 }
 
-// Collects each answering port's first bytes of the packet, and watches for three $FF at its start.
+static bool starting(const struct Dmg07* a) {
+	for (int i = 0; i < DMG07_PORTS; ++i) {
+		if (a->aa[i] >= 4) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Collects each answering port's bytes of the packet, given in the transfers after its first, and
+// watches for $FF in the three after the first, which end the game.
 static void collect(struct Dmg07* a, const uint8_t in[DMG07_PORTS]) {
 	uint8_t quitting = 0;
 	for (int i = 0; i < DMG07_PORTS; ++i) {
 		bool const there = a->answering & (0x10 << i);
-		if (a->index < a->size) {
-			a->next[i * a->size + a->index] = there ? in[i] : 0;
+		if (a->index >= 1 && a->index <= a->size) {
+			a->next[i * a->size + a->index - 1] = there ? in[i] : 0;
 		}
 		quitting |= there && in[i] == 0xFF ? 1 << i : 0;
 	}
-	a->stopping = a->index == 0 ? quitting : a->stopping & quitting;
-	if (a->index == 2 && a->stopping) {
-		a->stop = true;
+	if (a->index >= 1 && a->index <= 3) {
+		a->stopping = a->index == 1 ? quitting : a->stopping & quitting;
+		a->stop |= a->index == 3 && a->stopping;
 	}
 }
 
 // After a packet: the next one, and when it starts.
 static void endPacket(struct Dmg07* a) {
 	int const bytes = packetBytes(a);
-	bool started = false;
 	switch (a->phase) {
 	case DMG07_PING:
-		for (int i = 0; i < DMG07_PORTS; ++i) {
-			started |= a->aa[i] >= 4;
-		}
-		a->packetAt += started ? 4 * pingStep() : ms(4.71) + (a->rate ? ms(12.2 + (a->rate & 0x0F)) : ms(12.29));
-		a->phase = started ? DMG07_START : DMG07_PING;
-		a->size = a->size ? a->size : 1;
+		a->packetAt += ms(4.71) + (a->rate ? ms(12.2 + (a->rate & 0x0F)) : ms(12.29));
 		break;
 	case DMG07_START:
 		a->packetAt += 4 * pingStep();
@@ -127,9 +132,23 @@ static void endPacket(struct Dmg07* a) {
 	a->at = a->packetAt + shift();
 }
 
+// The fourth $AA starts the game at once: four $CC, a ping's time apart.
+static void startGame(struct Dmg07* a) {
+	memset(a->aa, 0, sizeof(a->aa));
+	a->size = a->size ? a->size : 1;
+	a->phase = DMG07_START;
+	a->index = 0;
+	a->packetAt = a->at - shift() + pingStep();
+	a->at = a->packetAt + shift();
+}
+
 void dmg07Transfer(struct Dmg07* a, const uint8_t in[DMG07_PORTS]) {
 	if (a->phase == DMG07_PING) {
 		ping(a, in);
+		if (starting(a)) {
+			startGame(a);
+			return;
+		}
 	} else if (a->phase == DMG07_DATA) {
 		collect(a, in);
 	}
