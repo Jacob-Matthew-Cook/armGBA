@@ -83,6 +83,8 @@ bool libretroGbLoadState(const void* data, size_t size);
 // clocks a transfer.
 int libretroGbLinkOut(void);
 void libretroGbLinkIn(int byte);
+// The serial control register, SC.
+int libretroGbLinkControl(void);
 // Both consoles of a link here: the functions above work on the selected one (0 or 1). Turning the
 // pair on joins their serial ports and restarts their timing, and states then hold both.
 void libretroGbSelect(int which);
