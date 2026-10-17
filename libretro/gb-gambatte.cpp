@@ -546,13 +546,14 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 	return true;
 }
 
-// The eight bits of a transfer this Game Boy clocked are out: the other one's byte comes back.
+// The eight bits of a transfer this Game Boy clocked are out: the other one's byte comes back. On the
+// Four Player Adapter, a Game Boy's own clock reaches nothing.
 void linkClocked() {
-	s->gb->linkStatus(linkGbTransfer(s->gb->linkStatus(258)));
+	s->gb->linkStatus(linkAdapterOn() ? 0xFF : linkGbTransfer(s->gb->linkStatus(258)));
 }
 
 void updateLink() {
-	if (s->linked != linkGbConnected()) {
+	if (s->linked != (linkGbConnected() || linkAdapterOn())) {
 		s->linked = !s->linked;
 		s->gb->linkStatus(s->linked ? 264 : 265);
 	}
@@ -736,16 +737,22 @@ extern "C" {
 const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** out, size_t* frames) {
 	beginFrame(keys);
 	updateLink();
-	// Linked, a frame runs in sixteen parts with the cable checked between them.
-	int const parts = s->linked ? 16 : 1;
+	// Linked, a frame runs in sixteen parts with the cable checked between them; on the Four Player
+	// Adapter, in slices with the adapter run after each, and the cable checked as often as before.
+	bool const adapter = linkAdapterOn();
+	int const parts = adapter ? FRAME_SAMPLES / PAIR_SLICE : s->linked ? 16 : 1;
+	int const pollEvery = parts / 16 ? parts / 16 : 1;
 	bool drawn = false;
 	for (int runs = 0; !drawn && runs < 4 * parts; ++runs) {
-		if (s->linked) {
+		if (s->linked && runs % pollEvery == 0) {
 			linkGbPoll();
 		}
 		std::size_t count = FRAME_SAMPLES / parts;
 		drawn = s->gb->runFor(s->pixels, LIBRETRO_GB_WIDTH, s->native, count) >= 0;
 		mixDown(count);
+		if (adapter) {
+			linkAdapterRun(count);
+		}
 	}
 	endFrame();
 	*out = s->samples;

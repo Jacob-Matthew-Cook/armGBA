@@ -8,8 +8,6 @@
 #include <math.h>
 #include <string.h>
 
-enum { PING, START, DATA, STOP };
-
 static int32_t ms(double milliseconds) {
 	return (int32_t) lround(milliseconds * 2097152 / 1000);
 }
@@ -30,7 +28,7 @@ static int32_t dataStep(const struct Dmg07* a) {
 }
 
 static int packetBytes(const struct Dmg07* a) {
-	return a->phase == PING || a->phase == START ? 4 : 4 * a->size;
+	return a->phase == DMG07_PING || a->phase == DMG07_START ? 4 : 4 * a->size;
 }
 
 void dmg07Reset(struct Dmg07* a) {
@@ -40,11 +38,11 @@ void dmg07Reset(struct Dmg07* a) {
 
 uint8_t dmg07Out(const struct Dmg07* a, int port) {
 	switch (a->phase) {
-	case PING:
+	case DMG07_PING:
 		return a->index ? a->answering | (port + 1) : 0xFE;
-	case START:
+	case DMG07_START:
 		return 0xCC;
-	case DATA:
+	case DMG07_DATA:
 		return a->data[a->index];
 	default:
 		return 0xFF;
@@ -95,33 +93,33 @@ static void endPacket(struct Dmg07* a) {
 	int const bytes = packetBytes(a);
 	bool started = false;
 	switch (a->phase) {
-	case PING:
+	case DMG07_PING:
 		for (int i = 0; i < DMG07_PORTS; ++i) {
 			started |= a->aa[i] >= 4;
 		}
 		a->packetAt += started ? 4 * pingStep() : ms(4.71) + (a->rate ? ms(12.2 + (a->rate & 0x0F)) : ms(12.29));
-		a->phase = started ? START : PING;
+		a->phase = started ? DMG07_START : DMG07_PING;
 		a->size = a->size ? a->size : 1;
 		break;
-	case START:
+	case DMG07_START:
 		a->packetAt += 4 * pingStep();
-		a->phase = DATA;
+		a->phase = DMG07_DATA;
 		memset(a->data, 0, sizeof(a->data));
 		memset(a->next, 0, sizeof(a->next));
 		a->stop = false;
 		break;
-	case DATA: {
+	case DMG07_DATA: {
 		int32_t const least = ms(17 + (a->rate & 0x0F));
 		int32_t const needed = bytes * dataStep(a) + ms(1);
 		a->packetAt += least > needed ? least : needed;
 		memcpy(a->data, a->next, sizeof(a->data));
 		memset(a->next, 0, sizeof(a->next));
-		a->phase = a->stop ? STOP : DATA;
+		a->phase = a->stop ? DMG07_STOP : DMG07_DATA;
 		break;
 	}
-	case STOP:
+	case DMG07_STOP:
 		a->packetAt += bytes * dataStep(a);
-		a->phase = PING;
+		a->phase = DMG07_PING;
 		a->answering = 0;
 		break;
 	}
@@ -130,13 +128,13 @@ static void endPacket(struct Dmg07* a) {
 }
 
 void dmg07Transfer(struct Dmg07* a, const uint8_t in[DMG07_PORTS]) {
-	if (a->phase == PING) {
+	if (a->phase == DMG07_PING) {
 		ping(a, in);
-	} else if (a->phase == DATA) {
+	} else if (a->phase == DMG07_DATA) {
 		collect(a, in);
 	}
 	if (++a->index < packetBytes(a)) {
-		a->at = a->packetAt + shift() + a->index * (a->phase == DATA || a->phase == STOP ? dataStep(a) : pingStep());
+		a->at = a->packetAt + shift() + a->index * (a->phase == DMG07_DATA || a->phase == DMG07_STOP ? dataStep(a) : pingStep());
 	} else {
 		endPacket(a);
 	}

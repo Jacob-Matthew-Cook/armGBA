@@ -24,6 +24,9 @@ extern "C" {
 #endif
 
 enum { DMG07_PORTS = 4 };
+// What it is doing: pinging, sending the $CC that start a game, passing the game's packets, or
+// sending the $FF packet that ends it.
+enum { DMG07_PING, DMG07_START, DMG07_DATA, DMG07_STOP };
 
 struct Dmg07 {
 	// The next transfer, and the start of the packet under way.
