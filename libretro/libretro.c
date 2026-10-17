@@ -13,6 +13,7 @@
 #include "gba.h"
 #ifdef ARMGBA_GB
 #include "gb.h"
+#include "link.h"
 #endif
 
 #include <stdio.h>
@@ -281,6 +282,7 @@ void retro_get_system_av_info(struct retro_system_av_info* info) {
 // Nothing needs setting up before a game is loaded.
 void retro_init(void) {
 	cheatsInit(&cheats);
+	linkSetEnvironment(environment);
 }
 
 // Frees what the core allocated once the frontend is done with it.
@@ -558,6 +560,7 @@ static bool loadGameBoy(const struct retro_game_info* game) {
 	}
 	gameBoy = true;
 	gbStretched = false;
+	linkSetGameBoy(true);
 	showOptions(true);
 	announceMemory();
 	return true;
@@ -596,6 +599,7 @@ bool retro_load_game(const struct retro_game_info* game) {
 	threadedVideo = 0;
 	readOptions();
 	gbaReset(gba, skipBios);
+	linkSetGba(gba);
 	announceMemory();
 	struct retro_rumble_interface rumble = { NULL };
 	setRumble = gba->gpio.devices & HW_RUMBLE && environment(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &rumble) ? rumble.set_rumble_state : NULL;
@@ -624,6 +628,7 @@ void retro_unload_game(void) {
 		gameBoy = false;
 	}
 #endif
+	linkSetGba(NULL);
 	if (gba) {
 		gbaDestroy(gba);
 		gba = NULL;
@@ -851,6 +856,7 @@ void retro_run(void) {
 	uint16_t keys = readKeys() | readTurboShoulders();
 	gbaSetKeys(gba, keys);
 	readSensors(keys);
+	linkGbaFrame(gba);
 	gbaRunFrame(gba);
 	updateRumble(gba->gpio.rumble);
 	if (cheats.count || cheats.patchCount) {
