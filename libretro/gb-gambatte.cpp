@@ -599,6 +599,16 @@ void libretroGbReset(enum LibretroGbModel model) {
 	restartAs(model);
 }
 
+// Restarts the selected console as its power switch would, keeping it on the link.
+void libretroGbRestart(void) {
+	libretroGbReset(s->wanted);
+	if (players > 1) {
+		s->gb->setLinkCallback(0);
+		s->gb->linkStatus(264);
+	}
+	s->linked = false;
+}
+
 }
 
 namespace {

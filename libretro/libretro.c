@@ -1577,7 +1577,7 @@ static uint16_t readKeys(unsigned port) {
 		}
 	}
 	// Turbo A and B: X and Y held press A and B.
-	static unsigned turboA[2], turboB[2];
+	static unsigned turboA[MAX_PLAYERS], turboB[MAX_PLAYERS];
 	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_X, &turboA[port]) ? 0x1 : 0;
 	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_Y, &turboB[port]) ? 0x2 : 0;
 	// As in mGBA's core by default, pressing opposite directions together presses neither.
@@ -1639,6 +1639,38 @@ static void readFastForward(void) {
 	held = now;
 	struct retro_fastforwarding_override override = { .ratio = -1.0f, .fastforward = now, .notification = true, .inhibit_toggle = now };
 	environment(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &override);
+}
+
+// Holding A, B, Select and Start for two seconds restarts that player's console, as its power switch
+// would. Games that reset on those buttons do so at once by themselves.
+enum { RESTART_KEYS = 0x0F, RESTART_FRAMES = 120 };
+static uint8_t restartHeld[MAX_PLAYERS];
+
+static void restartConsole(int player) {
+#ifdef ARMGBA_GB
+	if (gameBoy) {
+		libretroGbSelect(player);
+		libretroGbRestart();
+		libretroGbSelect(0);
+	} else
+#endif
+	{
+		gbaReset(gbas[player], skipBios);
+	}
+	char message[48];
+	snprintf(message, sizeof(message), playersHere > 1 ? "Player %d's console restarted" : "Restarted", player + 1);
+	struct retro_message shown = { message, 120 };
+	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+}
+
+static void readRestarts(const uint16_t keys[]) {
+	for (int i = 0; i < playersHere; ++i) {
+		if ((keys[i] & RESTART_KEYS) != RESTART_KEYS) {
+			restartHeld[i] = 0;
+		} else if (restartHeld[i] < RESTART_FRAMES && ++restartHeld[i] == RESTART_FRAMES) {
+			restartConsole(i);
+		}
+	}
 }
 
 // With the consoles here, R2 on any controller moves to the next way of showing the screens and L2
@@ -1749,6 +1781,7 @@ static void runGameBoys(void) {
 	}
 	readTilt(keys[0]);
 	readScreensKeys();
+	readRestarts(keys);
 	if (copySaves) {
 		copyFirstSave();
 	}
@@ -1854,15 +1887,17 @@ static void runAdvances(void) {
 }
 
 static void runAdvancesFrame(void) {
-	uint16_t const firstKeys = readKeys(0) | readTurboShoulders();
+	uint16_t keys[MAX_PLAYERS];
 	for (int i = 0; i < playersHere; ++i) {
-		gbaSetKeys(gbas[i], i ? readKeys(i) : firstKeys);
+		keys[i] = readKeys(i) | (i ? 0 : readTurboShoulders());
+		gbaSetKeys(gbas[i], keys[i]);
 	}
 	readScreensKeys();
+	readRestarts(keys);
 	if (copySaves) {
 		copyFirstSave();
 	}
-	readSensors(firstKeys);
+	readSensors(keys[0]);
 	runAdvances();
 	updateRumble(gba->gpio.rumble);
 	if (cheats.count || cheats.patchCount) {
@@ -1912,6 +1947,7 @@ void retro_run(void) {
 		size_t frames;
 		uint16_t keys = readKeys(0);
 		readTilt(keys);
+		readRestarts(&keys);
 		const uint32_t* picture = libretroGbRunFrame(keys, &samples, &frames);
 		// A restart or a loaded state can change the model.
 		if (gbOnAdvance != libretroGbOnAdvance()) {
@@ -1939,6 +1975,7 @@ void retro_run(void) {
 		return;
 	}
 	uint16_t keys = readKeys(0) | readTurboShoulders();
+	readRestarts(&keys);
 	gbaSetKeys(gba, keys);
 	readSensors(keys);
 	linkGbaFrame(gba);
@@ -1962,7 +1999,7 @@ void retro_run(void) {
 
 // Save states: the size, then saving and loading. A Game Boy Advance state is the machine's whole
 // state; a Game Boy state is Gambatte's.
-size_t retro_serialize_size(void) {
+static size_t consolesStateSize(void) {
 #ifdef ARMGBA_GB
 	if (gameBoy) {
 		return libretroGbStateSize();
@@ -1988,14 +2025,13 @@ static void checkNetplay(void) {
 	}
 }
 
-bool retro_serialize(void* data, size_t size) {
-	checkNetplay();
+static bool saveConsoles(void* data, size_t size) {
 #ifdef ARMGBA_GB
 	if (gameBoy) {
 		return libretroGbSaveState(data, size);
 	}
 #endif
-	if (!gba || size < retro_serialize_size()) {
+	if (!gba || size < consolesStateSize()) {
 		return false;
 	}
 	if (!gbaPair) {
@@ -2014,8 +2050,7 @@ bool retro_serialize(void* data, size_t size) {
 	return true;
 }
 
-bool retro_unserialize(const void* data, size_t size) {
-	checkNetplay();
+static bool loadConsoles(const void* data, size_t size) {
 #ifdef ARMGBA_GB
 	if (gameBoy) {
 		bool loaded = libretroGbLoadState(data, size);
@@ -2026,7 +2061,7 @@ bool retro_unserialize(const void* data, size_t size) {
 	if (!gbaPair) {
 		return gba && gbaLoadState(gba, data, size);
 	}
-	if (size < retro_serialize_size()) {
+	if (size < consolesStateSize()) {
 		return false;
 	}
 	const uint8_t* at = data;
@@ -2041,6 +2076,34 @@ bool retro_unserialize(const void* data, size_t size) {
 	}
 	memcpy(gbaAhead, ahead, playersHere * sizeof(gbaAhead[0]));
 	memcpy(gbaShown, at, playersHere * sizeof(gbaShown[0]));
+	return true;
+}
+
+// A state: the consoles', then with the consoles of a link here, how long each player has held the
+// restart buttons, so a rollback restarts a console on the same frame.
+size_t retro_serialize_size(void) {
+	return consolesStateSize() + (bothConsoles() ? sizeof(restartHeld) : 0);
+}
+
+bool retro_serialize(void* data, size_t size) {
+	checkNetplay();
+	if (size < retro_serialize_size() || !saveConsoles(data, consolesStateSize())) {
+		return false;
+	}
+	if (bothConsoles()) {
+		memcpy((uint8_t*) data + consolesStateSize(), restartHeld, sizeof(restartHeld));
+	}
+	return true;
+}
+
+bool retro_unserialize(const void* data, size_t size) {
+	checkNetplay();
+	if (size < retro_serialize_size() || !loadConsoles(data, consolesStateSize())) {
+		return false;
+	}
+	if (bothConsoles()) {
+		memcpy(restartHeld, (const uint8_t*) data + consolesStateSize(), sizeof(restartHeld));
+	}
 	return true;
 }
 
