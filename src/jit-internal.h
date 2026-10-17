@@ -275,8 +275,17 @@ struct IdleLoop {
 	struct IdleRead write[IDLE_READS];
 };
 
+// An instruction the exact CPU runs over and over for compiled code, kept decoded.
+struct DecodedInst {
+	uint32_t opcode;
+	uint32_t address;
+	bool valid;
+	struct Inst in;
+};
+
 struct Jit {
 	struct GBA* gba;
+	struct DecodedInst decoded[64];
 	struct IdleLoop idleLoops[IDLE_LOOPS];
 	int idleNext;
 	// Loops compiled code may go round: from a block ending in a branch back to an earlier block
