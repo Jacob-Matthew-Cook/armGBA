@@ -16,7 +16,10 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
-#include <zlib.h>
+
+#include <file/archive_file.h>
+#include <file/file_path.h>
+#include <lists/string_list.h>
 
 // The file a frontend names for content in an archive is the archive: "game.zip#game.gb".
 static void filePart(const char* path, char* out, size_t outSize) {
@@ -159,8 +162,8 @@ static void addFolder(const char* folder, const char* skip, const char* const* e
 }
 
 size_t secondList(const char* loadedPath, bool gameBoy, struct SecondGame* out, size_t max) {
-	static const char* const gameBoyFiles[] = { "gb", "gbc", "zip", NULL };
-	static const char* const advanceFiles[] = { "gba", "zip", NULL };
+	static const char* const gameBoyFiles[] = { "gb", "gbc", "zip", "7z", NULL };
+	static const char* const advanceFiles[] = { "gba", "zip", "7z", NULL };
 	char loadedFile[4096];
 	char folder[4096];
 	filePart(loadedPath, loadedFile, sizeof(loadedFile));
@@ -205,74 +208,28 @@ void secondFree(struct SecondGame* games, size_t count) {
 	}
 }
 
-static uint32_t get32(const uint8_t* p) {
-	return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t) p[3] << 24;
-}
-
-static uint16_t get16(const uint8_t* p) {
-	return p[0] | p[1] << 8;
-}
-
-// The first game in a .zip: stored or deflated, found through the central directory.
-static void* unzipGame(const uint8_t* zip, size_t zipSize, size_t* size) {
-	static const char* const games[] = { "gb", "gbc", "gba", "bin", NULL };
-	if (zipSize < 22) {
-		return NULL;
-	}
-	size_t end = zipSize - 22;
-	while (end > 0 && get32(zip + end) != 0x06054B50) {
-		--end;
-	}
-	if (get32(zip + end) != 0x06054B50) {
-		return NULL;
-	}
-	size_t at = get32(zip + end + 16);
-	unsigned entries = get16(zip + end + 10);
-	for (unsigned i = 0; i < entries && at + 46 <= zipSize && get32(zip + at) == 0x02014B50; ++i) {
-		unsigned method = get16(zip + at + 10);
-		size_t packed = get32(zip + at + 20);
-		size_t unpacked = get32(zip + at + 24);
-		unsigned nameLength = get16(zip + at + 28);
-		size_t next = at + 46 + nameLength + get16(zip + at + 30) + get16(zip + at + 32);
-		size_t local = get32(zip + at + 42);
-		char name[512];
-		snprintf(name, sizeof(name), "%.*s", (int) (nameLength < 511 ? nameLength : 511), (const char*) zip + at + 46);
-		at = next;
-		if (!hasExtension(name, games) || local + 30 > zipSize || get32(zip + local) != 0x04034B50) {
-			continue;
-		}
-		size_t data = local + 30 + get16(zip + local + 26) + get16(zip + local + 28);
-		if (data + packed > zipSize || (method != 0 && method != 8)) {
-			continue;
-		}
-		uint8_t* out = malloc(unpacked ? unpacked : 1);
-		if (!out) {
-			return NULL;
-		}
-		if (method == 0) {
-			memcpy(out, zip + data, unpacked);
-		} else {
-			z_stream stream = { 0 };
-			stream.next_in = (Bytef*) (zip + data);
-			stream.avail_in = (uInt) packed;
-			stream.next_out = out;
-			stream.avail_out = (uInt) unpacked;
-			bool ok = inflateInit2(&stream, -MAX_WBITS) == Z_OK && inflate(&stream, Z_FINISH) == Z_STREAM_END;
-			inflateEnd(&stream);
-			if (!ok) {
-				free(out);
-				continue;
-			}
-		}
-		*size = unpacked;
-		return out;
-	}
-	return NULL;
-}
-
 void* secondRead(const char* path, size_t* size) {
 	char file[4096];
 	filePart(path, file, sizeof(file));
+	if (path_is_compressed_file(file)) {
+		// The first game in the archive, read by RetroArch's own archive code.
+		struct string_list* entries = file_archive_get_file_list(file, "gb|gbc|gba|bin");
+		if (!entries || !entries->size) {
+			string_list_free(entries);
+			return NULL;
+		}
+		char inner[8192];
+		snprintf(inner, sizeof(inner), "%s#%s", file, entries->elems[0].data);
+		string_list_free(entries);
+		void* data = NULL;
+		int64_t length = 0;
+		if (!file_archive_compressed_read(inner, &data, NULL, &length) || length <= 0) {
+			free(data);
+			return NULL;
+		}
+		*size = (size_t) length;
+		return data;
+	}
 	FILE* f = fopen(file, "rb");
 	if (!f) {
 		return NULL;
@@ -286,12 +243,6 @@ void* secondRead(const char* path, size_t* size) {
 	if (!read) {
 		free(data);
 		return NULL;
-	}
-	const char* dot = strrchr(file, '.');
-	if (dot && !strcasecmp(dot, ".zip")) {
-		void* game = unzipGame(data, length, size);
-		free(data);
-		return game;
 	}
 	*size = length;
 	return data;
