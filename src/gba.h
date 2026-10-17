@@ -511,13 +511,15 @@ struct SioLink {
 	void (*finish)(void* context, uint32_t in[3]);
 };
 
-// The air between Wireless Adapters: the consoles whose adapters can hear each other, this one
-// among them. The frontend keeps it; a state doesn't hold it.
+// The air between Wireless Adapters: the frontend carries the messages one adapter sends to the
+// others, to one console or to all (to = -1), and hands them in with rfuReceive. In-core, a message
+// arrives as it is sent and the adapters add the radio's delays; over a network the network's time
+// stands in for them. The frontend keeps it; a state doesn't hold it.
 struct RfuAir {
-	void* context;
+	// This console's number on the air.
 	int self;
-	int count;
-	struct GBA* (*console)(void* context, int index);
+	bool network;
+	void (*send)(const struct RfuAir* air, int to, const uint8_t* message, size_t size);
 };
 
 enum {
@@ -577,14 +579,17 @@ struct Rfu {
 	uint8_t hostConsole;
 	uint16_t hostId;
 	uint8_t number;
+	bool answered;
 	int32_t connected;
 	// A client's packet from its host; a client's packet waiting for the host's next one, or the
 	// host's last packet.
 	struct RfuPacket rx;
 	struct RfuPacket tx;
-	// The rooms heard while searching, by console, kept a while after they were last heard.
+	// The rooms heard: each host's console, whether it is open now, and when it was last heard.
 	struct {
 		bool heard;
+		bool live;
+		uint8_t console;
 		uint16_t id;
 		uint8_t slot;
 		int32_t at;
@@ -597,6 +602,8 @@ struct Rfu {
 	int32_t exchanged;
 	uint8_t lost;
 	uint8_t lostReason;
+	// When it last asked the rooms around to make themselves heard.
+	int32_t asked;
 	struct Event event;
 };
 
@@ -1064,5 +1071,9 @@ uint32_t rfuTransfer(struct GBA*, uint32_t out);
 uint16_t rfuSiocnt(struct GBA*, uint16_t before, uint16_t after);
 void rfuRcnt(struct GBA*, uint16_t before, uint16_t after);
 void rfuSiocntWritten(struct GBA*);
+// A message from another console's adapter.
+void rfuReceive(struct GBA*, int from, const uint8_t* message, size_t size);
+// Another console left the air, or all did (-1).
+void rfuPeerGone(struct GBA*, int console);
 
 #endif

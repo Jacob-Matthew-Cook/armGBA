@@ -20,12 +20,17 @@ extern "C" {
 #endif
 
 struct GBA;
+struct RfuAir;
 
 // Offers the frontend the netpacket interface.
 void linkSetEnvironment(retro_environment_t);
 // The loaded console: a Game Boy Advance, a Game Boy (gba NULL), or none.
 void linkSetGba(struct GBA*);
 void linkSetGameBoy(bool loaded);
+// The Wireless Adapter's air to the other players, and whether the adapter is on the link port
+// instead of the cable.
+const struct RfuAir* linkAir(void);
+void linkSetWireless(bool);
 // Whether a netplay session is on, during which time runs at the same speed for every player.
 bool linkSession(void);
 // Called before each Game Boy Advance frame: keeps the cable checked during it.

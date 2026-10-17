@@ -954,9 +954,13 @@ static void stopSecondGameBoy(void) {
 }
 #endif
 
-static struct GBA* airConsole(void* context, int index) {
-	(void) context;
-	return gbas[index];
+// The air between the two consoles here.
+static void airSend(const struct RfuAir* air, int to, const uint8_t* message, size_t size) {
+	for (int i = 0; i < 2; ++i) {
+		if (i != air->self && gbas[i] && (to < 0 || to == i)) {
+			rfuReceive(gbas[i], air->self, message, size);
+		}
+	}
 }
 
 // Plugs the Link Port option's choice into each console: the Wireless Adapter, or the cable between
@@ -964,12 +968,13 @@ static struct GBA* airConsole(void* context, int index) {
 static void attachPorts(void) {
 	const char* value = option("armgba_link_port");
 	bool wireless = value && !strcmp(value, "wireless");
+	linkSetWireless(wireless && !gbaPair);
 	for (int i = 0; i < 2; ++i) {
 		if (!gbas[i]) {
 			continue;
 		}
-		airs[i] = (struct RfuAir) { NULL, i, gbaPair ? 2 : 1, airConsole };
-		rfuAttach(gbas[i], wireless, &airs[i]);
+		airs[i] = (struct RfuAir) { i, false, airSend };
+		rfuAttach(gbas[i], wireless, gbaPair ? &airs[i] : linkAir());
 		if (gbaPair) {
 			sioAttach(gbas[i], wireless ? NULL : &pairLinks[i]);
 		}
