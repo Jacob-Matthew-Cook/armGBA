@@ -15,6 +15,7 @@
 #include "gb.h"
 #include "link.h"
 #endif
+#include "second.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,9 +96,11 @@ static bool gbaPairCopySave;
 static int32_t gbaAhead[2];
 static struct Event sliceEvent;
 static bool sliceOver;
+#ifdef ARMGBA_GBA_PAIR
 static struct SioLink pairLinks[2];
 static int pairMode[2];
 static uint32_t pairOut[2];
+#endif
 static uint16_t gbaShown[2][SCREEN_WIDTH * SCREEN_HEIGHT];
 static uint16_t gbaPairFrame[SCREEN_WIDTH * 2 * SCREEN_HEIGHT];
 static uint16_t gbaCorrected[2][SCREEN_WIDTH * SCREEN_HEIGHT];
@@ -108,6 +111,25 @@ enum { SCREENS_SIDE, SCREENS_STACKED, SCREENS_FIRST, SCREENS_SECOND, SCREENS_COU
 static int screens;
 static int screensOption = -1;
 static int16_t pairSamples[2 * 4096];
+
+// Player 2's game, picked in the menu from the games beside player 1's, or loaded with it by the
+// frontend: the choices offered, the game running (empty for the same game as player 1), and its
+// save, which the core reads and writes itself unless the frontend loaded the game. In netplay the
+// save is left as it was on each device, since the session runs the host's.
+enum { SECOND_CHOICES = 126 };
+static struct retro_core_options_v2* coreOptions;
+static struct retro_core_option_v2_definition* secondOption;
+static struct SecondGame secondGames[SECOND_CHOICES];
+static size_t secondCount;
+static char firstPath[4096];
+static char secondPath[4096];
+static bool secondFromFrontend;
+static bool secondSaveKept;
+static char secondSaveFile[8192];
+static char secondRtcFile[8192];
+static uint64_t secondSaveHash;
+static unsigned secondSaveCheck;
+static bool netplaySeen;
 
 // Cheat codes from the frontend, by index, and the Game Boy Advance operations they decode to. All
 // codes are decoded again, in order, whenever one changes, because a master code changes how the
@@ -238,13 +260,16 @@ void retro_set_environment(retro_environment_t callback) {
 		  "On the Game Boy Advance model: Cropped shows only the game's picture, Shown the black around it as that console's screen has.", NULL, NULL,
 		  { { "cropped", "Cropped" }, { "shown", "Shown" }, { NULL, NULL } }, "cropped" },
 		{ "armgba_link_cable", "Link Cable", NULL,
-		  "How games link in netplay. Own Console: each player plays their own game and save, and the cable crosses the network, which stalls on a slow one. Both Consoles: every device runs both players' consoles, smooth with RetroArch's rollback, from the host's games and saves; it also plays two-player on one device, player 2 on the second controller. Two Game Boy Advances need a 64-bit device. Applies when a game starts.",
+		  "How games link in netplay. Own Console: each player plays their own game and save, and the cable crosses the network, which stalls on a slow one. Both Consoles: every device runs both players' consoles, smooth with RetroArch's rollback, from the host's games and saves; it also plays two-player on one device, player 2 on the second controller. Two Game Boy Advances need a 64-bit device. Applies on Restart.",
 		  NULL, NULL,
 		  { { "own", "Own Console" }, { "both", "Both Consoles" }, { NULL, NULL } }, "own" },
 		{ "armgba_link_screens", "Both Consoles Screens", NULL,
 		  "With Both Consoles: where the two screens go. L2 and R2 change it while playing.", NULL, NULL,
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { NULL, NULL } },
 		  "side by side" },
+		{ "armgba_player2_game", "Player 2's Game", NULL,
+		  "With Both Consoles: the game on player 2's console, from the games beside player 1's, the likeliest partners first. Each game keeps its own save; the same game twice gives player 2 a save of its own, which starts as a copy of player 1's. Applies on Restart.",
+		  NULL, NULL, { { "same", "Same Game" }, { NULL, NULL } }, "same" },
 		{ "armgba_gb_screen_off", "Screen Off Behavior", NULL,
 		  "What shows while a game has its screen off, as between menus: what the console showed (white on the Game Boy Color and Advance), or the game's background color, which spares OLED screens a bright flash.", NULL, NULL,
 		  { { "hardware", "As Hardware" }, { "background", "Background Color" }, { NULL, NULL } }, "hardware" },
@@ -262,6 +287,12 @@ void retro_set_environment(retro_environment_t callback) {
 	unsigned version = 0;
 	if (callback(RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION, &version) && version >= 2) {
 		callback(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &options);
+		coreOptions = &options;
+		for (struct retro_core_option_v2_definition* definition = definitions; definition->key; ++definition) {
+			if (!strcmp(definition->key, "armgba_player2_game")) {
+				secondOption = definition;
+			}
+		}
 		return;
 	}
 	static const struct retro_variable variables[] = {
@@ -279,6 +310,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_gb_advance_border", "Game Boy Advance Border; cropped|shown" },
 		{ "armgba_link_cable", "Link Cable; own|both" },
 		{ "armgba_link_screens", "Both Consoles Screens; side by side|top and bottom|player 1|player 2" },
+		{ "armgba_player2_game", "Player 2's Game; same" },
 		{ "armgba_gb_screen_off", "Screen Off Behavior; hardware|background" },
 #endif
 		{ "armgba_gb_tilt", "Tilt Sensor; left stick|right stick|d-pad" },
@@ -332,8 +364,9 @@ void retro_get_system_info(struct retro_system_info* info) {
 static void geometry(struct retro_game_geometry* geometry) {
 	geometry->base_width = SCREEN_WIDTH;
 	geometry->base_height = SCREEN_HEIGHT;
-	geometry->max_width = SCREEN_WIDTH;
-	geometry->max_height = SCREEN_HEIGHT;
+	// Room for both consoles' screens, which a Restart can bring in.
+	geometry->max_width = SCREEN_WIDTH * 2;
+	geometry->max_height = SCREEN_HEIGHT * 2;
 	geometry->aspect_ratio = 3.0f / 2.0f;
 #ifdef ARMGBA_GB
 	if (gameBoy && !gbOnAdvance) {
@@ -347,16 +380,12 @@ static void geometry(struct retro_game_geometry* geometry) {
 		geometry->aspect_ratio = gbStretched ? 5.0f / 3.0f : 10.0f / 9.0f;
 	}
 	if (gameBoy && gbPair) {
-		geometry->max_width = LIBRETRO_GB_WIDTH * 2;
-		geometry->max_height = LIBRETRO_GB_HEIGHT * 2;
 		geometry->base_width = screens == SCREENS_SIDE ? LIBRETRO_GB_WIDTH * 2 : LIBRETRO_GB_WIDTH;
 		geometry->base_height = screens == SCREENS_STACKED ? LIBRETRO_GB_HEIGHT * 2 : LIBRETRO_GB_HEIGHT;
 		geometry->aspect_ratio = (float) geometry->base_width / geometry->base_height;
 	}
 #endif
 	if (gbaPair) {
-		geometry->max_width = SCREEN_WIDTH * 2;
-		geometry->max_height = SCREEN_HEIGHT * 2;
 		geometry->base_width = screens == SCREENS_SIDE ? SCREEN_WIDTH * 2 : SCREEN_WIDTH;
 		geometry->base_height = screens == SCREENS_STACKED ? SCREEN_HEIGHT * 2 : SCREEN_HEIGHT;
 		geometry->aspect_ratio = (float) geometry->base_width / geometry->base_height;
@@ -685,46 +714,197 @@ static bool isGameBoy(const char* path) {
 	return dot && (!strcasecmp(dot, ".gb") || !strcasecmp(dot, ".gbc"));
 }
 
-// Starts a Game Boy or Game Boy Color game on the Gambatte side. With a second game, or with the
-// Link Cable option on Both Consoles, both consoles of a link run here, and the network cable is
-// left out so RetroArch's own netplay runs them.
-static bool loadGameBoy(const struct retro_game_info* game, const struct retro_game_info* second) {
-	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_XRGB8888;
-	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
-		logMessage(RETRO_LOG_ERROR, "armGBA: the frontend has no XRGB8888");
-		return false;
+#endif
+
+// Offers the games beside the loaded one as Player 2's Game. The option's values are its list, so
+// the options are set again with it.
+static void offerSecondGames(const char* path, bool forGameBoy) {
+	secondFree(secondGames, secondCount);
+	secondCount = path ? secondList(path, forGameBoy, secondGames, SECOND_CHOICES) : 0;
+	// A game in an archive comes as "game.zip#game.gb"; the file is the archive.
+	snprintf(firstPath, sizeof(firstPath), "%s", path ? path : "");
+	firstPath[strcspn(firstPath, "#")] = '\0';
+	if (!coreOptions || !secondOption) {
+		return;
 	}
-	const char* directory = NULL;
-	environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory);
-	const char* value = option("armgba_link_cable");
-	gbPair = second || (value && !strcmp(value, "both"));
-	gbPairCopySave = gbPair && !second;
-	libretroGbSetPair(gbPair);
-	readOptions();
-	char error[256];
-	for (int i = gbPair; i >= 0; --i) {
-		const struct retro_game_info* const loaded = i && second ? second : game;
-		libretroGbSelect(i);
-		if (!libretroGbLoad(loaded->data, loaded->size, directory, gbModel, gbColorCorrection, AUDIO_RATE, error, sizeof(error))) {
-			showMessage(error);
-			libretroGbUnload();
-			libretroGbSelect(0);
-			libretroGbUnload();
-			gbPair = false;
-			libretroGbSetPair(false);
-			return false;
+	secondOption->values[0] = (struct retro_core_option_value) { "same", "Same Game" };
+	for (size_t i = 0; i < secondCount; ++i) {
+		secondOption->values[i + 1] = (struct retro_core_option_value) { secondGames[i].path, secondGames[i].label };
+	}
+	secondOption->values[secondCount + 1] = (struct retro_core_option_value) { NULL, NULL };
+	environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, coreOptions);
+}
+
+// The file in the save directory (or beside player 1's game) where each game's choice is kept.
+static void secondMemoryFile(char* out, size_t outSize) {
+	const char* saveDirectory = NULL;
+	environment(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &saveDirectory);
+	if (saveDirectory && *saveDirectory) {
+		snprintf(out, outSize, "%s/armGBA player 2 games.txt", saveDirectory);
+		return;
+	}
+	snprintf(out, outSize, "%s", firstPath);
+	char* slash = strrchr(out, '/');
+	snprintf(slash ? slash + 1 : out, outSize - (slash ? (size_t) (slash + 1 - out) : 0), "armGBA player 2 games.txt");
+}
+
+static bool offered(const char* value) {
+	for (size_t i = 0; value && i < secondCount; ++i) {
+		if (!strcmp(value, secondGames[i].path)) {
+			return true;
 		}
 	}
-	gameBoy = true;
-	gbStretched = false;
-	if (gbPair) {
-		environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, NULL);
-	}
-	linkSetGameBoy(!gbPair);
-	showOptions(true);
-	announceMemory();
-	return true;
+	return value && !strcmp(value, "same");
 }
+
+// Sets Player 2's Game to the one this game had last time.
+static void recallSecondChoice(void) {
+	char memory[4096];
+	char choice[4096];
+	secondMemoryFile(memory, sizeof(memory));
+	if (secondRecall(memory, firstPath, choice, sizeof(choice)) && offered(choice)) {
+		struct retro_variable variable = { "armgba_player2_game", choice };
+		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &variable);
+	}
+}
+
+static void rememberSecondChoice(void) {
+	const char* value = option("armgba_player2_game");
+	if (*firstPath && offered(value)) {
+		char memory[4096];
+		secondMemoryFile(memory, sizeof(memory));
+		secondRemember(memory, firstPath, value);
+	}
+}
+
+// The game chosen for player 2, or NULL for the same game.
+static const char* chosenSecond(void) {
+	const char* value = option("armgba_player2_game");
+	for (size_t i = 0; value && i < secondCount; ++i) {
+		if (!strcmp(value, secondGames[i].path)) {
+			return secondGames[i].path;
+		}
+	}
+	return NULL;
+}
+
+static bool linkBothWanted(void) {
+	const char* value = option("armgba_link_cable");
+	return value && !strcmp(value, "both");
+}
+
+// Player 2's save memory and Game Boy clock.
+static void* secondSaveMemory(size_t* size) {
+	*size = 0;
+#ifdef ARMGBA_GB
+	if (gbPair) {
+		libretroGbSelect(1);
+		void* data = libretroGbSaveRam(size);
+		libretroGbSelect(0);
+		return data;
+	}
+#endif
+	if (gbaPair) {
+		*size = gbas[1]->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gbas[1]);
+		return gbas[1]->savedata.storage;
+	}
+	return NULL;
+}
+
+static void* secondRtcMemory(size_t* size) {
+	*size = 0;
+#ifdef ARMGBA_GB
+	if (gbPair) {
+		libretroGbSelect(1);
+		void* data = libretroGbRtc(size);
+		libretroGbSelect(0);
+		return data;
+	}
+#endif
+	return NULL;
+}
+
+static uint64_t hashOf(const void* data, size_t size) {
+	uint64_t hash = 0xCBF29CE484222325ull;
+	for (size_t i = 0; i < size; ++i) {
+		hash = (hash ^ ((const uint8_t*) data)[i]) * 0x100000001B3ull;
+	}
+	return hash;
+}
+
+// Reads a file into memory, as much as fits; returns whether there was a file.
+static bool readFileInto(const char* path, void* data, size_t size) {
+	FILE* f = data && size ? fopen(path, "rb") : NULL;
+	if (!f) {
+		return false;
+	}
+	size_t read = fread(data, 1, size, f);
+	fclose(f);
+	return read > 0;
+}
+
+static void writeFile(const char* path, const void* data, size_t size) {
+	FILE* f = fopen(path, "wb");
+	if (!f) {
+		char message[160];
+		snprintf(message, sizeof(message), "armGBA can't write player 2's save");
+		showMessage(message);
+		return;
+	}
+	fwrite(data, 1, size, f);
+	fclose(f);
+}
+
+// Finds and reads player 2's save and clock. The same game as player 1 gets its own save; until it
+// has one, it starts with a copy of player 1's.
+static void readSecondSave(void) {
+	const char* saveDirectory = NULL;
+	environment(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &saveDirectory);
+	const char* game = *secondPath ? secondPath : firstPath;
+	const char* suffix = *secondPath ? "" : " (Player 2)";
+	secondSavePath(game, suffix, "srm", firstPath, saveDirectory, secondSaveFile, sizeof(secondSaveFile));
+	secondSavePath(game, suffix, "rtc", firstPath, saveDirectory, secondRtcFile, sizeof(secondRtcFile));
+	size_t size;
+	void* save = secondSaveMemory(&size);
+	bool found = readFileInto(secondSaveFile, save, size);
+	size_t rtcSize;
+	readFileInto(secondRtcFile, secondRtcMemory(&rtcSize), rtcSize);
+	bool copy = !found && !*secondPath;
+#ifdef ARMGBA_GB
+	gbPairCopySave = gameBoy && copy;
+#endif
+	gbaPairCopySave = !gameBoy && copy;
+	secondSaveHash = save ? hashOf(save, size) : 0;
+	secondSaveKept = true;
+	secondSaveCheck = 0;
+}
+
+// Writes player 2's save and clock when the save has changed, except in netplay.
+static void writeSecondSave(void) {
+	if (!secondSaveKept || netplaySeen) {
+		return;
+	}
+	size_t size;
+	void* save = secondSaveMemory(&size);
+	if (!save || !size) {
+		return;
+	}
+	uint64_t hash = hashOf(save, size);
+	if (hash == secondSaveHash) {
+		return;
+	}
+	secondSaveHash = hash;
+	writeFile(secondSaveFile, save, size);
+	size_t rtcSize;
+	void* rtc = secondRtcMemory(&rtcSize);
+	if (rtc && rtcSize) {
+		writeFile(secondRtcFile, rtc, rtcSize);
+	}
+}
+
+#ifdef ARMGBA_GBA_PAIR
+static void pairBegin(void* context, int mode, uint32_t out);
+static void pairFinish(void* context, uint32_t in[3]);
 #endif
 
 // Makes a Game Boy Advance with the game in it, or returns NULL.
@@ -743,59 +923,221 @@ static struct GBA* startAdvance(const struct retro_game_info* game) {
 	return machine;
 }
 
-static void pairBegin(void* context, int mode, uint32_t out);
-static void pairFinish(void* context, uint32_t in[3]);
+#ifdef ARMGBA_GB
+// Starts player 2's Game Boy beside player 1's, and leaves the network cable out so RetroArch's own
+// netplay runs both.
+static bool startSecondGameBoy(const void* data, size_t size) {
+	const char* directory = NULL;
+	environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory);
+	char error[256];
+	libretroGbSetPair(true);
+	libretroGbSelect(1);
+	bool started = libretroGbLoad(data, size, directory, gbModel, gbColorCorrection, AUDIO_RATE, error, sizeof(error));
+	if (!started) {
+		libretroGbUnload();
+	}
+	libretroGbSelect(0);
+	if (!started) {
+		libretroGbSetPair(false);
+		showMessage(error);
+		return false;
+	}
+	gbPair = true;
+	environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, NULL);
+	linkSetGameBoy(false);
+	return true;
+}
 
-// Starts a Game Boy Advance game. With a second game, or with the Link Cable option on Both
-// Consoles, both consoles of a link run here, and the network cable is left out so RetroArch's own
-// netplay runs them.
+static void stopSecondGameBoy(void) {
+	libretroGbSelect(1);
+	libretroGbUnload();
+	libretroGbSelect(0);
+	libretroGbSetPair(false);
+	gbPair = false;
+	linkSetEnvironment(environment);
+	linkSetGameBoy(true);
+}
+#endif
+
+static bool startSecondAdvance(const void* data, size_t size) {
+#ifdef ARMGBA_GBA_PAIR
+	struct retro_game_info game = { NULL, data, size, NULL };
+	gbas[1] = startAdvance(&game);
+	if (!gbas[1]) {
+		return false;
+	}
+	if (threadedVideo) {
+		renderThreadStop(gba);
+		threadedVideo = 0;
+	}
+	gbaPair = true;
+	gbaReset(gbas[1], skipBios);
+	linkSetGba(NULL);
+	for (int i = 0; i < 2; ++i) {
+		pairLinks[i] = (struct SioLink) { (void*) (intptr_t) i, 2, i, pairBegin, pairFinish };
+		sioAttach(gbas[i], &pairLinks[i]);
+	}
+	gbaAhead[0] = 0;
+	gbaAhead[1] = GBA_FRAME_CYCLES / 2;
+	environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, NULL);
+	return true;
+#else
+	(void) data;
+	(void) size;
+	showMessage("armGBA: this device is too slow for two Game Boy Advances; Own Console links them over the network");
+	return false;
+#endif
+}
+
+static void stopSecondAdvance(void) {
+	gbaDestroy(gbas[1]);
+	gbas[1] = NULL;
+	gbaPair = false;
+	sioAttach(gba, NULL);
+	linkSetEnvironment(environment);
+	linkSetGba(gba);
+}
+
+// Starts player 2's console: with the game the frontend loaded for it, or the one picked in the
+// menu, or player 1's game again.
+static void startSecond(const struct retro_game_info* second, const void* sameData, size_t sameSize) {
+	secondFromFrontend = second != NULL;
+	const char* choice = second ? NULL : chosenSecond();
+	snprintf(secondPath, sizeof(secondPath), "%s", second && second->path ? second->path : choice ? choice : "");
+	const void* data = second ? second->data : choice ? NULL : sameData;
+	size_t size = second ? second->size : sameSize;
+	void* read = NULL;
+	if (!data) {
+		read = secondRead(choice ? choice : firstPath, &size);
+		data = read;
+	}
+	bool started = false;
+	if (data) {
+#ifdef ARMGBA_GB
+		started = gameBoy ? startSecondGameBoy(data, size) : startSecondAdvance(data, size);
+#else
+		started = startSecondAdvance(data, size);
+#endif
+	} else {
+		showMessage("armGBA can't read player 2's game");
+	}
+	free(read);
+	if (!started) {
+		secondPath[0] = '\0';
+		return;
+	}
+	if (!second) {
+		readSecondSave();
+	}
+	readOptions();
+	char message[300];
+	const char* name = strrchr(secondPath, '/');
+	snprintf(message, sizeof(message), "Player 2: %.240s", *secondPath ? (name ? name + 1 : secondPath) : "the same game, with its own save");
+	struct retro_message shown = { message, 240 };
+	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+}
+
+static void stopSecond(void) {
+	writeSecondSave();
+	secondSaveKept = false;
+#ifdef ARMGBA_GB
+	if (gbPair) {
+		stopSecondGameBoy();
+	}
+#endif
+	if (gbaPair) {
+		stopSecondAdvance();
+	}
+	secondPath[0] = '\0';
+	secondFromFrontend = false;
+}
+
+// Restart takes in a change of the Link Cable option or of Player 2's Game.
+static void applySecondChoice(void) {
+	if (secondFromFrontend) {
+		return;
+	}
+	rememberSecondChoice();
+	bool want = linkBothWanted();
+	const char* choice = chosenSecond();
+	bool running = bothConsoles();
+	if (running == want && (!want || !strcmp(choice ? choice : "", secondPath))) {
+		return;
+	}
+	if (running) {
+		stopSecond();
+	}
+	if (want) {
+		startSecond(NULL, NULL, 0);
+	}
+	announceGeometry();
+	showOptions(gameBoyLoaded());
+}
+
+#ifdef ARMGBA_GB
+// Starts a Game Boy or Game Boy Color game on the Gambatte side, and player 2's beside it with a
+// second game or with the Link Cable option on Both Consoles.
+static bool loadGameBoy(const struct retro_game_info* game, const struct retro_game_info* second) {
+	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_XRGB8888;
+	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
+		logMessage(RETRO_LOG_ERROR, "armGBA: the frontend has no XRGB8888");
+		return false;
+	}
+	const char* directory = NULL;
+	environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory);
+	offerSecondGames(game->path, true);
+	recallSecondChoice();
+	gbPair = false;
+	libretroGbSetPair(false);
+	readOptions();
+	char error[256];
+	libretroGbSelect(0);
+	if (!libretroGbLoad(game->data, game->size, directory, gbModel, gbColorCorrection, AUDIO_RATE, error, sizeof(error))) {
+		showMessage(error);
+		libretroGbUnload();
+		return false;
+	}
+	gameBoy = true;
+	gbStretched = false;
+	linkSetGameBoy(true);
+	if (second || linkBothWanted()) {
+		startSecond(second, game->data, game->size);
+	}
+	showOptions(true);
+	announceMemory();
+	return true;
+}
+#endif
+
+// Starts a Game Boy Advance game, and player 2's beside it with a second game or with the Link
+// Cable option on Both Consoles.
 static bool loadAdvance(const struct retro_game_info* game, const struct retro_game_info* second) {
 	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_RGB565;
 	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
 		logMessage(RETRO_LOG_ERROR, "armGBA: the frontend has no RGB565");
 		return false;
 	}
-	const char* value = option("armgba_link_cable");
-	bool pair = second || (value && !strcmp(value, "both"));
 #ifndef ARMGBA_GBA_PAIR
-	if (pair) {
+	if (second) {
 		showMessage("armGBA: this device is too slow for two Game Boy Advances; Own Console links them over the network");
-		if (second) {
-			return false;
-		}
-		pair = false;
-	}
-#endif
-	gbas[0] = gba = startAdvance(game);
-	gbas[1] = pair && gba ? startAdvance(second ? second : game) : NULL;
-	if (!gba || (pair && !gbas[1])) {
-		for (int i = 0; i < 2; ++i) {
-			if (gbas[i]) {
-				gbaDestroy(gbas[i]);
-			}
-			gbas[i] = NULL;
-		}
-		gba = NULL;
 		return false;
 	}
-	gbaPair = pair;
-	gbaPairCopySave = pair && !second;
+#endif
+	offerSecondGames(game->path, false);
+	recallSecondChoice();
+	gbas[0] = gba = startAdvance(game);
+	gbas[1] = NULL;
+	gbaPair = false;
+	if (!gba) {
+		return false;
+	}
 	showOptions(false);
 	threadedVideo = 0;
 	readOptions();
-	for (int i = 0; i <= gbaPair; ++i) {
-		gbaReset(gbas[i], skipBios);
-	}
-	if (gbaPair) {
-		for (int i = 0; i < 2; ++i) {
-			pairLinks[i] = (struct SioLink) { (void*) (intptr_t) i, 2, i, pairBegin, pairFinish };
-			sioAttach(gbas[i], &pairLinks[i]);
-		}
-		gbaAhead[0] = 0;
-		gbaAhead[1] = GBA_FRAME_CYCLES / 2;
-		environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, NULL);
-	} else {
-		linkSetGba(gba);
+	gbaReset(gba, skipBios);
+	linkSetGba(gba);
+	if (second || linkBothWanted()) {
+		startSecond(second, game->data, game->size);
 	}
 	announceMemory();
 	struct retro_rumble_interface rumble = { NULL };
@@ -837,6 +1179,14 @@ bool retro_load_game_special(unsigned type, const struct retro_game_info* info, 
 
 // Frees whichever machine was running, and its cheat codes.
 void retro_unload_game(void) {
+	if (!secondFromFrontend) {
+		rememberSecondChoice();
+	}
+	writeSecondSave();
+	secondSaveKept = false;
+	secondFromFrontend = false;
+	secondPath[0] = '\0';
+	netplaySeen = false;
 	updateRumble(false);
 	cheatsClear(&cheats, NULL);
 	for (size_t i = 0; i < cheatCodeCount; ++i) {
@@ -872,6 +1222,7 @@ void retro_reset(void) {
 	// Restart can come straight after an option change, before a frame has read it, so read the
 	// options first.
 	readOptions();
+	applySecondChoice();
 #ifdef ARMGBA_GB
 	if (gameBoy) {
 		for (int i = gbPair; i >= 0; --i) {
@@ -1142,6 +1493,7 @@ static void runPair(void) {
 }
 #endif
 
+#ifdef ARMGBA_GBA_PAIR
 // The cable between the two Game Boy Advances here. The console clocking a transfer puts its data on
 // the cable when it starts; when it ends, the other console's data comes back, and the other
 // console takes the transfer if it is waiting for one.
@@ -1168,6 +1520,8 @@ static void pairFinish(void* context, uint32_t in[3]) {
 	}
 	sioReceive(other, values);
 }
+
+#endif
 
 static void sliceEnd(struct GBA* machine, void* context, uint32_t late) {
 	(void) context;
@@ -1262,6 +1616,11 @@ void retro_run(void) {
 	}
 	inputPoll();
 	readFastForward();
+	// Player 2's save is written when it changes, checked every few seconds.
+	if (secondSaveKept && ++secondSaveCheck >= 300) {
+		secondSaveCheck = 0;
+		writeSecondSave();
+	}
 #ifdef ARMGBA_GB
 	if (gbPair) {
 		runPair();
@@ -1334,7 +1693,21 @@ size_t retro_serialize_size(void) {
 	return gbaStateSize();
 }
 
+// In rollback netplay, player 2's save is the host's, so it is no longer written on this device.
+static void checkNetplay(void) {
+	int context = RETRO_SAVESTATE_CONTEXT_NORMAL;
+	if (netplaySeen || !environment(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &context) || context != RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY) {
+		return;
+	}
+	netplaySeen = true;
+	if (secondSaveKept) {
+		struct retro_message shown = { "Netplay: player 2's save on this device is left as it was", 240 };
+		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+	}
+}
+
 bool retro_serialize(void* data, size_t size) {
+	checkNetplay();
 #ifdef ARMGBA_GB
 	if (gameBoy) {
 		return libretroGbSaveState(data, size);
@@ -1360,6 +1733,7 @@ bool retro_serialize(void* data, size_t size) {
 }
 
 bool retro_unserialize(const void* data, size_t size) {
+	checkNetplay();
 #ifdef ARMGBA_GB
 	if (gameBoy) {
 		bool loaded = libretroGbLoadState(data, size);

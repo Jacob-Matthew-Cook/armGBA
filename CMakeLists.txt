@@ -96,8 +96,8 @@ target_compile_options(gambatte PRIVATE -w -O2 -fno-exceptions -fno-rtti)
 set_target_properties(gambatte PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_STANDARD 11)
 
 # The libretro core
-add_library(armgba_libretro SHARED libretro/libretro.c libretro/link.c libretro/gb-gambatte.cpp)
-target_link_libraries(armgba_libretro armgba gambatte m)
+add_library(armgba_libretro SHARED libretro/libretro.c libretro/link.c libretro/second.c libretro/gb-gambatte.cpp)
+target_link_libraries(armgba_libretro armgba gambatte m z)
 target_compile_definitions(armgba_libretro PRIVATE ARMGBA_GB)
 # A toolchain file may leave C++ without an optimisation level
 target_compile_options(armgba_libretro PRIVATE -O2)
