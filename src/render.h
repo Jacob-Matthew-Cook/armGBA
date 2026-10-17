@@ -104,7 +104,7 @@ struct Renderer {
 #if defined(__ARM_NEON)
 	// The line being built: each pixel's color, and separately its flags (the top half of
 	// render.c's 32-bit pixel), for NEON's 16-bit lanes.
-	uint16_t rowColor[SCREEN_WIDTH];
+	_Alignas(4) uint16_t rowColor[SCREEN_WIDTH];
 	uint16_t rowFlags[SCREEN_WIDTH];
 #else
 	// The line being built, one 32-bit pixel each (see render.c), for AVX2's 32-bit lanes.

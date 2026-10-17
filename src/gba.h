@@ -183,19 +183,23 @@ struct Event;
 struct GBA;
 typedef void (*EventCallback)(struct GBA*, void* context, uint32_t late);
 
+// A host pointer in the machine's state takes eight bytes whatever the CPU, so a state is laid out
+// the same in 32-bit and 64-bit builds and loads in either.
+#define HOST_POINTER(declaration, name) union { declaration; uint64_t name##Slot; }
+
 struct Event {
-	EventCallback callback;
-	void* context;
+	HOST_POINTER(EventCallback callback, callback);
+	HOST_POINTER(void* context, context);
 	uint32_t when;
 	unsigned priority;
 	// When set, the run loop returns at the instruction boundary after this event.
 	bool endsRun;
-	struct Event* next;
+	HOST_POINTER(struct Event* next, next);
 };
 
 struct Timing {
-	struct Event* root;
-	struct Event* reroot;
+	HOST_POINTER(struct Event* root, root);
+	HOST_POINTER(struct Event* reroot, reroot);
 	uint32_t masterCycles;
 	uint64_t globalCycles;
 };
@@ -418,7 +422,7 @@ struct Audio {
 	int32_t nextSample;
 	// Output for the frontend.
 	struct StereoSample out[4096];
-	size_t outCount;
+	uint32_t outCount;
 };
 
 enum SavedataType {
@@ -434,10 +438,10 @@ enum SavedataType {
 
 struct Savedata {
 	enum SavedataType type;
-	uint8_t* data;
+	HOST_POINTER(uint8_t* data, data);
 	int command;
 	int flashState;
-	uint8_t* currentBank;
+	HOST_POINTER(uint8_t* currentBank, currentBank);
 	uint32_t readBitsRemaining;
 	uint32_t readAddress;
 	uint32_t writeAddress;
@@ -472,8 +476,8 @@ struct Gpio {
 		int64_t offset;
 	} rtc;
 	// Returns seconds since the epoch; the system clock when not set.
-	int64_t (*clock)(void* context);
-	void* clockContext;
+	HOST_POINTER(int64_t (*clock)(void* context), clock);
+	HOST_POINTER(void* clockContext, clockContext);
 	// The frontend's sensor controls, set before each frame in mGBA's units: the turn for the gyro,
 	// the tilt on each axis for the tilt sensor, and the light sensor's reading (lower is
 	// brighter).
@@ -601,9 +605,9 @@ struct Sio {
 	uint16_t rcnt;
 	int mode;
 	struct Event completeEvent;
-	const struct SioLink* link;
+	HOST_POINTER(const struct SioLink* link, link);
 	struct Rfu rfu;
-	const struct RfuAir* air;
+	HOST_POINTER(const struct RfuAir* air, air);
 };
 
 // The cartridge prefetcher. While the cartridge bus is free, it reads ahead of the CPU's code
@@ -622,12 +626,8 @@ struct Prefetcher {
 struct Jit;
 
 // Padding that puts struct GBA's memories on a page boundary; the assertion after the struct says
-// when to change it. Pointers make the struct smaller on 32-bit CPUs.
-#if UINTPTR_MAX > 0xFFFFFFFFu
+// when to change it. The struct is laid out the same on every CPU, so one value serves all.
 enum { PAD_TO_PAGE = 1119 };
-#else
-enum { PAD_TO_PAGE = 1903 };
-#endif
 
 // Hardware some cartridges have beyond a ROM and a save chip (cart.c).
 enum {
@@ -637,8 +637,8 @@ enum {
 struct Cart {
 	// The whole image of a cartridge with the Matrix mapper, which is larger than the address
 	// space.
-	uint8_t* file;
-	size_t fileSize;
+	HOST_POINTER(uint8_t* file, file);
+	uint64_t fileSize;
 	bool matrix;
 	uint32_t matrixCmd;
 	uint32_t matrixPaddr;
@@ -680,9 +680,9 @@ struct GBA {
 	bool prefetchEnabled;
 	uint32_t romSize;
 	uint32_t romMask;
-	uint8_t* rom;
+	HOST_POINTER(uint8_t* rom, rom);
 	// A multiboot image loaded instead of a cartridge; reset copies it into EWRAM.
-	uint8_t* multiboot;
+	HOST_POINTER(uint8_t* multiboot, multiboot);
 	uint32_t multibootSize;
 	uint8_t waitN16[256];
 	uint8_t waitS16[256];
@@ -697,12 +697,12 @@ struct GBA {
 	uint32_t exitOps[2];
 	uint32_t exitReason;
 	uint32_t exitFlags;
-	void* exitLink;
-	void* siteReturn;
+	HOST_POINTER(void* exitLink, exitLink);
+	HOST_POINTER(void* siteReturn, siteReturn);
 	bool siteValid;
 	uint32_t biosPrefetchNext;
-	void* lookup;
-	void* hostStack;
+	HOST_POINTER(void* lookup, lookup);
+	HOST_POINTER(void* hostStack, hostStack);
 	bool jitRunning;
 	// Operands compiled code passes to a helper.
 	uint32_t jitScratch[4];
@@ -730,19 +730,19 @@ struct GBA {
 	// leaves for the run loop to look again once events have run since.
 	uint32_t idleHeadRuns;
 	// stepTraceOpen's log of instructions and their start times.
-	void* traceFile;
+	HOST_POINTER(void* traceFile, traceFile);
 	uint32_t traceFromPc;
 	int32_t traceFromTime;
-	long traceLeft;
+	int64_t traceLeft;
 	bool tracing;
 	// Set while the exact CPU goes round a loop to see whether it is idle; its reads and writes go
 	// to jit.c.
 	bool idleProbing;
 
 	struct Timing timing;
-	struct Jit* jit;
+	HOST_POINTER(struct Jit* jit, jit);
 	// The renderer's second thread, if it has one.
-	struct RenderThread* renderThread;
+	HOST_POINTER(struct RenderThread* renderThread, renderThread);
 	struct Irq irq;
 	struct Timer timers[4];
 	struct Dma dma[4];
@@ -803,6 +803,8 @@ struct GBA {
 };
 
 _Static_assert(offsetof(struct GBA, iwramCode) % 4096 == 0, "change PAD_TO_PAGE so that iwramCode starts on a page");
+// States are the struct as it lies in memory; this size is the same in every build.
+_Static_assert(sizeof(struct GBA) == 784408, "struct GBA changed: check it is laid out the same on 32-bit and 64-bit CPUs (tests/state-layout.sh), then update this size and STATE_MAGIC");
 
 #define CPU_FREQUENCY 0x1000000
 

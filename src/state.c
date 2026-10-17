@@ -16,7 +16,7 @@
 #include <string.h>
 
 enum {
-	STATE_MAGIC = 0x3653424A,
+	STATE_MAGIC = 0x3753424A,
 	// The machine's events, as events() lists them.
 	EVENTS = 12 + 4 + 12 + 7 + 4,
 };
@@ -24,7 +24,7 @@ enum {
 struct StateHeader {
 	uint32_t magic;
 	uint32_t size;
-	// Where the saved struct GBA was, to fix up pointers into it.
+	// Zero: pointers into the machine are kept as offsets from its start.
 	uint64_t base;
 	// The queue, soonest first, as indices into events(); queued is how many.
 	uint8_t queue[EVENTS];
@@ -80,8 +80,70 @@ static void takeRenderer(struct GBA* gba, struct Renderer* out) {
 
 // Copies the machine as it is. The header records where the struct was, so pointers into it can be
 // moved when it is loaded, and which events were queued, by number.
+// A state holds the machine alone, so the same machine makes the same state in any process and on
+// any CPU: what loading takes from the host (the game, the BIOS, the recompiler's bookkeeping,
+// pointers, the frontend's settings) is left as zero, the line the renderer builds is scratch, and
+// pointers into the machine are kept as offsets from its start.
+static void leaveOutHost(const struct GBA* gba, struct GBA* saved) {
+	saved->romSlot = 0;
+	saved->multibootSlot = 0;
+	saved->cart.fileSlot = 0;
+	saved->cart.fileSize = 0;
+	saved->exitLinkSlot = 0;
+	saved->siteReturnSlot = 0;
+	saved->siteValid = false;
+	saved->lookupSlot = 0;
+	saved->hostStackSlot = 0;
+	saved->jitRunning = false;
+	memset(saved->jitScratch, 0, sizeof(saved->jitScratch));
+	saved->jitDeferred = false;
+	saved->jitLeave = false;
+	saved->idleMark = 0;
+	memset(saved->jitStopPenalty, 0, sizeof(saved->jitStopPenalty));
+	saved->traceFileSlot = 0;
+	saved->traceFromPc = 0;
+	saved->traceFromTime = 0;
+	saved->traceLeft = 0;
+	saved->tracing = false;
+	saved->jitSlot = 0;
+	saved->renderThreadSlot = 0;
+	saved->sio.linkSlot = 0;
+	saved->sio.airSlot = 0;
+	saved->sio.rfu.attached = false;
+	saved->earlyExit = false;
+	saved->returnRequested = false;
+	saved->biosLoaded = false;
+	memset(saved->bios, 0, sizeof(saved->bios));
+	saved->gpio.clockSlot = 0;
+	saved->gpio.clockContextSlot = 0;
+	saved->savedata.backed = false;
+	saved->renderer.rgb565 = false;
+	saved->renderer.copy = false;
+	memset(saved->iwramCode, 0, sizeof(saved->iwramCode));
+	memset(saved->ewramCode, 0, sizeof(saved->ewramCode));
+	saved->videoCode = false;
+	saved->timing.rootSlot = 0;
+	saved->timing.rerootSlot = 0;
+	struct Event* all[EVENTS];
+	events(saved, all);
+	for (int i = 0; i < EVENTS; ++i) {
+		all[i]->callbackSlot = 0;
+		all[i]->contextSlot = 0;
+		all[i]->nextSlot = 0;
+	}
+#if defined(__ARM_NEON)
+	memset(saved->renderer.rowColor, 0, sizeof(saved->renderer.rowColor));
+	memset(saved->renderer.rowFlags, 0, sizeof(saved->renderer.rowFlags));
+#else
+	memset(saved->renderer.row, 0, sizeof(saved->renderer.row));
+#endif
+	const uint8_t* base = (const uint8_t*) gba;
+	saved->savedata.dataSlot = gba->savedata.data ? (uint64_t) (gba->savedata.data - base) : 0;
+	saved->savedata.currentBankSlot = gba->savedata.currentBank ? (uint64_t) (gba->savedata.currentBank - base) : 0;
+}
+
 void gbaSaveState(struct GBA* gba, void* state) {
-	struct StateHeader header = { .magic = STATE_MAGIC, .size = sizeof(struct GBA), .base = (uintptr_t) gba };
+	struct StateHeader header = { .magic = STATE_MAGIC, .size = sizeof(struct GBA), .base = 0 };
 	struct Event* all[EVENTS];
 	events(gba, all);
 	// Events from outside the machine, such as a frontend's, aren't part of it.
@@ -98,11 +160,13 @@ void gbaSaveState(struct GBA* gba, void* state) {
 	memcpy(state, &header, sizeof(header));
 	memcpy(saved, gba, sizeof(*gba));
 	takeRenderer(gba, &saved->renderer);
+	leaveOutHost(gba, saved);
 }
 
-// Converts a pointer into the saved struct GBA into one for this struct.
-static uint8_t* moved(struct GBA* gba, const struct StateHeader* header, const uint8_t* pointer) {
-	return pointer ? (uint8_t*) gba + ((uintptr_t) pointer - header->base) : NULL;
+// Converts a pointer into the saved struct GBA, kept as an offset from its start, into one for this
+// struct.
+static uint8_t* moved(struct GBA* gba, uint64_t offset) {
+	return offset ? (uint8_t*) gba + offset : NULL;
 }
 
 // Whether compiled code covers a word that the state holds differently, or was compiled for other
@@ -186,8 +250,8 @@ bool gbaLoadState(struct GBA* gba, const void* state, size_t size) {
 	gba->gpio.clock = host->gpio.clock;
 	gba->gpio.clockContext = host->gpio.clockContext;
 	gba->savedata.backed = host->savedata.backed;
-	gba->savedata.data = moved(gba, &header, saved->savedata.data);
-	gba->savedata.currentBank = moved(gba, &header, saved->savedata.currentBank);
+	gba->savedata.data = moved(gba, saved->savedata.dataSlot);
+	gba->savedata.currentBank = moved(gba, saved->savedata.currentBankSlot);
 	gba->renderer.rgb565 = host->renderer.rgb565;
 	gba->renderer.copy = false;
 	memcpy(gba->iwramCode, host->iwramCode, sizeof(gba->iwramCode));

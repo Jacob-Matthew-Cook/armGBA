@@ -420,7 +420,8 @@ bool GB::loadState() {
 bool GB::saveState(gambatte::uint_least32_t const *videoBuf, std::ptrdiff_t pitch,
                    std::string const &filepath) {
 	if (p_->cpu.loaded()) {
-		SaveState state;
+		// Zeroed first: fields a cartridge doesn't use are saved too, and stay the same every time.
+		SaveState state = SaveState();
 		p_->cpu.setStatePtrs(state);
 		p_->cpu.saveState(state);
 		return StateSaver::saveState(state, videoBuf, pitch, filepath, p_->savedLoadflags());
@@ -432,7 +433,8 @@ bool GB::saveState(gambatte::uint_least32_t const *videoBuf, std::ptrdiff_t pitc
 std::size_t GB::saveState(gambatte::uint_least32_t const *videoBuf, std::ptrdiff_t pitch,
                           char *stateBuf) {
 	if (p_->cpu.loaded()) {
-		SaveState state;
+		// Zeroed first: fields a cartridge doesn't use are saved too, and stay the same every time.
+		SaveState state = SaveState();
 		p_->cpu.setStatePtrs(state);
 		p_->cpu.saveState(state);
 		return StateSaver::saveState(state, videoBuf, pitch, stateBuf, p_->savedLoadflags());
