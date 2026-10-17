@@ -168,7 +168,11 @@ static void frameEvent(struct GBA* gba, void* context, uint32_t late) {
 	psgUpdateFrame(gba, now);
 }
 
+static const struct NoiseSteps* noise7Steps(void);
+
 void psgInit(struct GBA* gba) {
+	// The noise table is built here, before any console runs on a thread of its own.
+	noise7Steps();
 	gba->audio.psg.frameEvent.callback = frameEvent;
 	gba->audio.psg.frameEvent.context = NULL;
 	gba->audio.psg.frameEvent.priority = 0x10;

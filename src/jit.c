@@ -11,6 +11,34 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
+// Settings from the environment for finding faults, read as the first console starts, before any
+// runs on a thread of its own: ARMGBA_SMCLOG logs writes to compiled code, ARMGBA_DUMP=<directory>
+// writes each block's host code there for disassembly, ARMGBA_PERFMAP writes a perf map, and
+// ARMGBA_STEP=<hex mask of InstKind bits> leaves those kinds to the exact CPU too, to find which
+// one compiled code gets wrong.
+static struct {
+	bool read;
+	bool smcLog;
+	const char* dumpDir;
+	FILE* perfMap;
+	int stepMask;
+} debug;
+
+static void readDebugSettings(void) {
+	if (debug.read) {
+		return;
+	}
+	debug.read = true;
+	debug.smcLog = getenv("ARMGBA_SMCLOG") != NULL;
+	debug.dumpDir = getenv("ARMGBA_DUMP");
+	debug.stepMask = getenv("ARMGBA_STEP") ? (int) strtol(getenv("ARMGBA_STEP"), NULL, 16) : 0;
+	if (getenv("ARMGBA_PERFMAP")) {
+		char path[64];
+		snprintf(path, sizeof(path), "/tmp/perf-%d.map", (int) getpid());
+		debug.perfMap = fopen(path, "w");
+	}
+}
+
 // The recompiler's machine-independent side: blocks and how they are found and linked,
 // self-modifying code, the run loop that switches between compiled code and the exact CPU, idle
 // loops, and the helpers compiled code calls. The backends in a64/ and x64/ emit the code.
@@ -737,11 +765,7 @@ static void wordWritten(struct GBA* gba, int kind, uint32_t address) {
 		return;
 	}
 	++jit->invalidations;
-	static int smcLog = -1;
-	if (smcLog < 0) {
-		smcLog = getenv("ARMGBA_SMCLOG") != NULL;
-	}
-	if (smcLog) {
+	if (debug.smcLog) {
 		static int logged;
 		if (logged++ < 30) {
 			fprintf(stderr, "write %08X: %08X -> %08X mark %d\n", address, old, now, mark);
@@ -1157,16 +1181,9 @@ static struct Block* compileBlock(struct GBA* gba, uint32_t pc, bool thumb, cons
 		registerBlock(jit, block);
 	}
 	++jit->compiled;
-	// ARMGBA_DUMP=<directory> writes each block's host code there for disassembly.
-	static const char* dumpDir;
-	static bool dumpChecked;
-	if (!dumpChecked) {
-		dumpDir = getenv("ARMGBA_DUMP");
-		dumpChecked = true;
-	}
-	if (dumpDir) {
+	if (debug.dumpDir) {
 		char path[512];
-		snprintf(path, sizeof(path), "%s/%08X%s%s.bin", dumpDir, pc, thumb ? "t" : "a", careful ? "c" : "");
+		snprintf(path, sizeof(path), "%s/%08X%s%s.bin", debug.dumpDir, pc, thumb ? "t" : "a", careful ? "c" : "");
 		FILE* f = fopen(path, "wb");
 		if (f) {
 			const uint8_t* end = block->cold && backendColdSide(jit, block->entry) ? jit->coldNext : jit->codeNext;
@@ -1180,16 +1197,7 @@ static struct Block* compileBlock(struct GBA* gba, uint32_t pc, bool thumb, cons
 // With ARMGBA_PERFMAP set, writes each piece of compiled code's address and name to a perf map
 // file, so a profile shows guest blocks by address.
 void jitNameCode(const void* start, const void* end, const char* name) {
-	static FILE* map;
-	static bool checked;
-	if (!checked) {
-		checked = true;
-		if (getenv("ARMGBA_PERFMAP")) {
-			char path[64];
-			snprintf(path, sizeof(path), "/tmp/perf-%d.map", (int) getpid());
-			map = fopen(path, "w");
-		}
-	}
+	FILE* const map = debug.perfMap;
 	if (map && end > start) {
 		fprintf(map, "%lx %lx %s\n", (unsigned long) (uintptr_t) start, (unsigned long) ((const uint8_t*) end - (const uint8_t*) start), name);
 		fflush(map);
@@ -1940,13 +1948,7 @@ bool jitStepOnly(const struct Inst* in) {
 	if (in->cond == 0xF) {
 		return false;
 	}
-	// ARMGBA_STEP=<hex mask of InstKind bits> leaves those kinds to the exact CPU too, to find
-	// which one compiled code gets wrong.
-	static int mask = -1;
-	if (mask < 0) {
-		mask = getenv("ARMGBA_STEP") ? (int) strtol(getenv("ARMGBA_STEP"), NULL, 16) : 0;
-	}
-	if (mask & (1 << in->kind)) {
+	if (debug.stepMask & (1 << in->kind)) {
 		return true;
 	}
 	return in->kind == I_UNDEFINED || in->kind == I_STUB;
@@ -1981,31 +1983,25 @@ static uint32_t currentKey(struct GBA* gba) {
 // counted. Returns the next block key after a PC write, or ~0 to go on. The helpers that run one
 // instruction on the exact CPU decode it each time; the few a game runs over and over, such as the
 // BIOS's around its calls, are kept decoded.
-static const struct Inst* decodeCached(uint32_t opcode, uint32_t address) {
-	static struct {
-		uint32_t opcode;
-		uint32_t address;
-		bool valid;
-		struct Inst in;
-	} cache[64];
-	unsigned slot = ((address >> 1) ^ (address >> 7)) & 63;
-	if (!cache[slot].valid || cache[slot].address != address || cache[slot].opcode != opcode) {
+static const struct Inst* decodeCached(struct Jit* jit, uint32_t opcode, uint32_t address) {
+	struct DecodedInst* const slot = &jit->decoded[((address >> 1) ^ (address >> 7)) & 63];
+	if (!slot->valid || slot->address != address || slot->opcode != opcode) {
 		if (address & 1) {
-			decodeThumb(&cache[slot].in, address & ~1u, opcode);
+			decodeThumb(&slot->in, address & ~1u, opcode);
 		} else {
-			decodeArm(&cache[slot].in, address, opcode);
+			decodeArm(&slot->in, address, opcode);
 		}
-		cache[slot].opcode = opcode;
-		cache[slot].address = address;
-		cache[slot].valid = true;
+		slot->opcode = opcode;
+		slot->address = address;
+		slot->valid = true;
 	}
-	return &cache[slot].in;
+	return &slot->in;
 }
 
 uint32_t jitHelperExecute(struct GBA* gba, uint32_t opcode, uint32_t address) {
 	struct CPU* cpu = &gba->cpu;
 	uint32_t runs = gba->eventRuns;
-	const struct Inst* in = decodeCached(opcode, address);
+	const struct Inst* in = decodeCached(gba->jit, opcode, address);
 	stepExecute(gba, in);
 	// Compiled code counts the nonsequential fetch after it.
 	cpu->fetchSeq = true;
@@ -2039,7 +2035,7 @@ uint32_t jitHelperSystem(struct GBA* gba, uint32_t opcode, uint32_t address) {
 	struct CPU* cpu = &gba->cpu;
 	uint32_t runs = gba->eventRuns;
 	uint32_t before = cpu->cpsr;
-	const struct Inst* in = decodeCached(opcode, address);
+	const struct Inst* in = decodeCached(gba->jit, opcode, address);
 	stepExecute(gba, in);
 	cpu->fetchSeq = true;
 	if (runs != gba->eventRuns) {
@@ -2303,6 +2299,7 @@ static void printStats(const struct Jit* jit) {
 
 // Maps the code memory, writable and executable, and has the backend emit its shared routines.
 bool jitInit(struct GBA* gba) {
+	readDebugSettings();
 	struct Jit* jit = calloc(1, sizeof(*jit));
 	if (!jit) {
 		return false;
