@@ -1522,6 +1522,9 @@ int Memory::linkStatus(int which) {
 	case 265: // disable link connection
 		linked_ = false;
 		return 0;
+	case 266: // the other Game Boy's clock ended this one's transfer, so its own clock stops
+		intreq_.setEventTime<intevent_serial>(disabled_time);
+		return 0;
 	default: // ShiftIn
 		if (!(ioamhram_[0x102] & 0x01) || (ioamhram_[0x102] & 0x80)) { // was enabled
 			ioamhram_[0x101] = which;
