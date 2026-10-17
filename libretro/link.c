@@ -456,7 +456,7 @@ static void begin(void* context, int mode, uint32_t out) {
 	send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
 }
 
-static void finish(void* context, uint32_t in[3]) {
+static bool finish(void* context, uint32_t in[3]) {
 	(void) context;
 	waitFor(allAnswered);
 	memcpy(in, own.in, sizeof(own.in));
@@ -470,6 +470,7 @@ static void finish(void* context, uint32_t in[3]) {
 		}
 		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
 	}
+	return true;
 }
 
 // Takes the transfers other consoles clocked: answers each with this console's data, then receives.
