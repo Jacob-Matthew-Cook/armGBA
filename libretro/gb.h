@@ -85,11 +85,12 @@ int libretroGbLinkOut(void);
 void libretroGbLinkIn(int byte);
 // The serial control register, SC.
 int libretroGbLinkControl(void);
-// Both consoles of a link here: the functions above work on the selected one (0 or 1). Turning the
-// pair on joins their serial ports and restarts their timing, and states then hold both.
+// The consoles of a link here, two to four: the functions above work on the selected one (0 to 3).
+// Setting how many joins their serial ports, by the cable (two) or the Four Player Adapter, and
+// restarts their timing; states then hold them all.
 void libretroGbSelect(int which);
-void libretroGbSetPair(bool on);
-// Runs both consoles for a frame, with each one's buttons, returning each one's picture and sound.
-void libretroGbRunPair(const uint16_t keys[2], const uint32_t* pictures[2], const int16_t* samples[2], size_t frames[2]);
+void libretroGbSetPlayers(int count, bool adapter);
+// Runs the consoles for a frame, with each one's buttons, returning each one's picture and sound.
+void libretroGbRunPlayers(const uint16_t keys[], const uint32_t* pictures[], const int16_t* samples[], size_t frames[]);
 
 #endif

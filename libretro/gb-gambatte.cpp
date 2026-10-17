@@ -11,6 +11,7 @@ extern "C" {
 #include "gb.h"
 #include "libretro.h"
 }
+#include "dmg07.h"
 #include "link.h"
 #include "sameboy-boot.h"
 
@@ -42,8 +43,9 @@ enum {
 	// Extra room in the state size reported to the frontend: for the state to grow, and for the
 	// extra work RAM a Game Boy Color has if the game restarts as one.
 	STATE_SLACK = 4096 + 6 * 4096,
-	// With both consoles of a link here, each runs this many native samples (256 cycles) at a time.
+	// With the consoles of a link here, each runs this many native samples (256 cycles) at a time.
 	PAIR_SLICE = 128,
+	MAX_PLAYERS = 4,
 };
 
 void linkClocked();
@@ -80,7 +82,8 @@ enum {
 enum { RTC_DH, RTC_DL, RTC_H, RTC_M, RTC_S, RTC_C, RTC_LATCHED };
 unsigned long const RTC_SECOND = 0x400000;
 
-// One Game Boy. There are two when both consoles of a link run here; s is the one being worked on.
+// One Game Boy. There are two to four when the consoles of a link run here; s is the one being worked
+// on.
 struct Console {
 	gambatte::GB* gb;
 	// Whether Gambatte's serial port goes to another Game Boy.
@@ -115,13 +118,32 @@ struct Console {
 	// The frontend fills rtcFile after the game is loaded, so the file is read just before the
 	// first frame.
 	bool rtcPending;
-	// Native samples run past the end of the last frame, when both consoles run here.
+	// Native samples run past the end of the last frame, when the consoles of a link run here.
 	long ahead;
 };
-Console consoles[2];
+Console consoles[MAX_PLAYERS];
 Console* s = &consoles[0];
-// Whether both consoles of a link run here, with the cable between them.
-bool pair;
+// How many consoles of a link run here (1 without one), and whether the Four Player Adapter joins
+// them; two without it share the cable.
+int players = 1;
+bool adapterOn;
+
+Dmg07 adapter;
+
+// One transfer on the Four Player Adapter: each Game Boy waiting on the external clock takes the
+// adapter's byte and gives its own.
+void adapterTransfer() {
+	uint8_t in[DMG07_PORTS];
+	for (int i = 0; i < DMG07_PORTS; ++i) {
+		in[i] = 0xFF;
+		gambatte::GB* const gb = i < players ? consoles[i].gb : 0;
+		if (gb && (gb->linkStatus(267) & 0x81) == 0x80) {
+			in[i] = gb->linkStatus(258);
+			gb->linkStatus(dmg07Out(&adapter, i));
+		}
+	}
+	dmg07Transfer(&adapter, in);
+}
 
 void put64(unsigned char* to, unsigned long long value) {
 	for (int i = 0; i < 8; ++i) {
@@ -490,13 +512,13 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 	if (!s->gb) {
 		s->gb = new gambatte::GB;
 	}
-	s->gb->setLinkCallback(pair ? 0 : linkClocked);
+	s->gb->setLinkCallback(players > 1 ? 0 : linkClocked);
 	s->linked = false;
 	if (s->gb->load(reinterpret_cast<const char*>(bytes), size, s->loadFlags) != gambatte::LOADRES_OK) {
 		std::snprintf(error, errorSize, "armGBA can't run this Game Boy game");
 		return false;
 	}
-	s->gb->linkStatus(pair ? 264 : 265);
+	s->gb->linkStatus(players > 1 ? 264 : 265);
 	if (!boot.empty()) {
 		if (s->gb->loadBios(boot) < 0) {
 			std::snprintf(error, errorSize, "armGBA can't read %s", boot.c_str());
@@ -731,17 +753,20 @@ const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** out, size_t* f
 	return reinterpret_cast<const uint32_t*>(s->pixels);
 }
 
-void libretroGbRunPair(const uint16_t keys[2], const uint32_t* pictures[2], const int16_t* out[2], size_t frames[2]) {
+void libretroGbRunPlayers(const uint16_t keys[], const uint32_t* pictures[], const int16_t* out[], size_t frames[]) {
 	Console* const selected = s;
-	long done[2];
-	for (int i = 0; i < 2; ++i) {
+	long done[MAX_PLAYERS];
+	for (int i = 0; i < players; ++i) {
 		s = &consoles[i];
 		beginFrame(keys[i]);
 		done[i] = s->ahead;
 	}
-	// The console further behind runs next, so neither gets more than a slice ahead of the other.
+	// The console furthest behind runs next, so none gets more than a slice ahead of the others.
 	for (;;) {
-		int const i = done[0] <= done[1] ? 0 : 1;
+		int i = 0;
+		for (int j = 1; j < players; ++j) {
+			i = done[j] < done[i] ? j : i;
+		}
 		if (done[i] >= FRAME_SAMPLES) {
 			break;
 		}
@@ -753,9 +778,25 @@ void libretroGbRunPair(const uint16_t keys[2], const uint32_t* pictures[2], cons
 		}
 		mixDown(count);
 		done[i] += count;
-		exchange(consoles[i], consoles[1 - i]);
+		if (!adapterOn) {
+			exchange(consoles[i], consoles[1 - i]);
+			continue;
+		}
+		// On the adapter, a Game Boy's own clock reaches nothing.
+		if (s->gb->linkStatus(256)) {
+			s->gb->linkStatus(257);
+			s->gb->linkStatus(0xFF);
+		}
+		long behind = done[0];
+		for (int j = 1; j < players; ++j) {
+			behind = std::min(behind, done[j]);
+		}
+		while (adapter.at <= behind) {
+			adapterTransfer();
+		}
 	}
-	for (int i = 0; i < 2; ++i) {
+	dmg07EndFrame(&adapter, FRAME_SAMPLES);
+	for (int i = 0; i < players; ++i) {
 		s = &consoles[i];
 		endFrame();
 		s->ahead = done[i] - FRAME_SAMPLES;
@@ -973,53 +1014,64 @@ void libretroGbSelect(int which) {
 	s = &consoles[which];
 }
 
-// Two real consoles are never in step, and games rely on it: when both try to lead the link at
-// the same moment, Pokemon's handshake never settles. So the second console runs half a frame behind
-// the first.
-void libretroGbSetPair(bool on) {
-	pair = on;
-	consoles[0].ahead = 0;
-	consoles[1].ahead = FRAME_SAMPLES / 2;
-	for (int i = 0; i < 2; ++i) {
+// Real consoles are never in step, and games rely on it: when two try to lead the link at the same
+// moment, Pokemon's handshake never settles. So each console runs a part of a frame behind the one
+// before.
+void libretroGbSetPlayers(int count, bool withAdapter) {
+	players = count;
+	adapterOn = count > 1 && withAdapter;
+	dmg07Reset(&adapter);
+	for (int i = 0; i < MAX_PLAYERS; ++i) {
+		static long const behind[MAX_PLAYERS] = { 0, FRAME_SAMPLES / 2, FRAME_SAMPLES / 4, FRAME_SAMPLES * 3 / 4 };
+		consoles[i].ahead = behind[i];
 		if (consoles[i].gb) {
-			consoles[i].gb->setLinkCallback(on ? 0 : linkClocked);
-			consoles[i].gb->linkStatus(on ? 264 : 265);
+			consoles[i].gb->setLinkCallback(count > 1 ? 0 : linkClocked);
+			consoles[i].gb->linkStatus(count > 1 ? 264 : 265);
 			consoles[i].linked = false;
 		}
 	}
 }
 
-// With both consoles here, a state holds how far each ran past the last frame, each one's state in
-// its own fixed-size part, then their pictures: a frame ends partway through drawing one, which a
-// state loaded for a rollback has to carry on with.
+// With the consoles of a link here, a state holds how far each ran past the last frame, the adapter,
+// each console's state in its own fixed-size part, then their pictures: a frame ends partway through
+// drawing one, which a state loaded for a rollback has to carry on with.
 size_t libretroGbStateSize(void) {
-	if (!pair) {
+	if (players < 2) {
 		return stateSizeOne();
 	}
-	return 2 * sizeof(int32_t) + consoles[0].stateSize + consoles[1].stateSize + 2 * (sizeof(consoles[0].pixels) + sizeof(consoles[0].shown));
+	size_t size = players * sizeof(int32_t) + sizeof(adapter);
+	for (int i = 0; i < players; ++i) {
+		size += consoles[i].stateSize + sizeof(consoles[i].pixels) + sizeof(consoles[i].shown);
+	}
+	return size;
 }
 
 bool libretroGbSaveState(void* data, size_t size) {
-	if (!pair) {
+	if (players < 2) {
 		return saveOne(data, size);
 	}
-	if (size < libretroGbStateSize() || !consoles[0].gb || !consoles[1].gb) {
+	if (size < libretroGbStateSize()) {
 		return false;
 	}
 	char* at = static_cast<char*>(data);
-	for (int i = 0; i < 2; ++i) {
+	for (int i = 0; i < players; ++i) {
+		if (!consoles[i].gb) {
+			return false;
+		}
 		int32_t const ahead = consoles[i].ahead;
-		std::memcpy(at + i * sizeof(ahead), &ahead, sizeof(ahead));
+		std::memcpy(at, &ahead, sizeof(ahead));
+		at += sizeof(ahead);
 	}
-	at += 2 * sizeof(int32_t);
+	std::memcpy(at, &adapter, sizeof(adapter));
+	at += sizeof(adapter);
 	Console* const selected = s;
 	bool saved = true;
-	for (int i = 0; i < 2 && saved; ++i) {
+	for (int i = 0; i < players && saved; ++i) {
 		s = &consoles[i];
 		saved = saveOne(at, s->stateSize);
 		at += s->stateSize;
 	}
-	for (int i = 0; i < 2 && saved; ++i) {
+	for (int i = 0; i < players && saved; ++i) {
 		std::memcpy(at, consoles[i].pixels, sizeof(consoles[i].pixels));
 		at += sizeof(consoles[i].pixels);
 		std::memcpy(at, consoles[i].shown, sizeof(consoles[i].shown));
@@ -1030,25 +1082,32 @@ bool libretroGbSaveState(void* data, size_t size) {
 }
 
 bool libretroGbLoadState(const void* data, size_t size) {
-	if (!pair) {
+	if (players < 2) {
 		return loadOne(data, size);
 	}
-	if (size < libretroGbStateSize() || !consoles[0].gb || !consoles[1].gb) {
+	if (size < libretroGbStateSize()) {
 		return false;
 	}
 	const char* at = static_cast<const char*>(data);
-	int32_t ahead[2];
-	std::memcpy(ahead, at, sizeof(ahead));
-	at += sizeof(ahead);
+	int32_t ahead[MAX_PLAYERS];
+	for (int i = 0; i < players; ++i) {
+		if (!consoles[i].gb) {
+			return false;
+		}
+		std::memcpy(&ahead[i], at, sizeof(ahead[i]));
+		at += sizeof(ahead[i]);
+	}
+	std::memcpy(&adapter, at, sizeof(adapter));
+	at += sizeof(adapter);
 	Console* const selected = s;
 	bool loaded = true;
-	for (int i = 0; i < 2 && loaded; ++i) {
+	for (int i = 0; i < players && loaded; ++i) {
 		s = &consoles[i];
 		loaded = loadOne(at, s->stateSize);
 		s->ahead = ahead[i];
 		at += s->stateSize;
 	}
-	for (int i = 0; i < 2 && loaded; ++i) {
+	for (int i = 0; i < players && loaded; ++i) {
 		std::memcpy(consoles[i].pixels, at, sizeof(consoles[i].pixels));
 		at += sizeof(consoles[i].pixels);
 		std::memcpy(consoles[i].shown, at, sizeof(consoles[i].shown));

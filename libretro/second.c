@@ -350,7 +350,7 @@ void secondRemember(const char* memoryFile, const char* firstPath, const char* c
 	free(others);
 }
 
-bool secondPairFile(const char* path, const void* data, size_t size, char games[2][4096]) {
+int secondPairFile(const char* path, const void* data, size_t size, char games[4][4096]) {
 	char folder[4096];
 	char roms[4096];
 	folderOf(path, folder, sizeof(folder));
@@ -369,8 +369,8 @@ bool secondPairFile(const char* path, const void* data, size_t size, char games[
 		if (!*start || *start == '#') {
 			continue;
 		}
-		if (count == 2) {
-			return false;
+		if (count == 4) {
+			return 0;
 		}
 		const char* colon = strchr(start, ':');
 		const char* slash = strchr(start, '/');
@@ -383,7 +383,7 @@ bool secondPairFile(const char* path, const void* data, size_t size, char games[
 			snprintf(games[count++], 4096, "%s/%s", folder, start);
 		}
 	}
-	return count == 2;
+	return count >= 2 ? count : 0;
 }
 
 void secondPairSaveDirectory(const char* saveDirectory, const char* pairPath, char* out, size_t outSize) {
