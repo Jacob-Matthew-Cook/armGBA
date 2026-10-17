@@ -21,7 +21,7 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | L, R | L, R | Stretch the picture (Game Boy Advance model) |
 | Tilt stick | Tilt and turn (motion sensor games) | Tilt (motion sensor games) |
 | Right stick up, down | Sunlight up, down (solar sensor games) | — |
-| A, B, Select, Start (held 2 s) | Restart that player's console | Same |
+| L, R, Start (held 2 s) | Restart that player's console (the Restart Buttons option) | Same |
 
 With the consoles of a link on one device, L2 and R2 change how the screens are shown instead of
 fast-forwarding. The tilt stick is the left stick by default. The Tilt Sensor option moves it to the right stick or
@@ -44,6 +44,7 @@ The options are in four categories, and a game sees only its own console's optio
 | Input | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
+| | Restart Buttons | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
 | Link | Link Cable (applies on restart) | Both | Own Console, All Consoles |
 | | Players (applies on restart) | Both | 2, 3, 4 |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
@@ -254,7 +255,8 @@ The test tools also need an mGBA source tree with `tests/mgba-oracle.patch` appl
 ## Known gaps
 
 - A few unlicensed Game Boy Color cartridges with undocumented protection chips do not boot.
-- Four Game Boy Advances on one device need a fast one: all four run on one CPU core.
+- Four Game Boy Advances on one device need a fast one with four cores: each runs on a core of its
+  own, and while they link they wait for each other often.
 - Cheat codes mGBA can't run either (Action Replay's slowdown and disabling codes) are left out. A
   code that hooks a routine of the game runs as the frame ends instead.
 

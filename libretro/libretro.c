@@ -42,6 +42,9 @@ static bool skipBios;
 // What moves a cartridge's tilt sensor or gyro: 0 is the left stick, 1 the right stick, 2 the
 // D-pad.
 static int tiltControl;
+// The buttons that, held, restart a player's console (the Restart Buttons option).
+enum { RESTART_L_R_START, RESTART_L_R_A_B, RESTART_STICKS, RESTART_SELECT_START_A_B, RESTART_OFF };
+static int restartButtons;
 // Turbo timing: each press-and-release cycle lasts turboPeriod frames, and the button is held for
 // the first turboPulse of them.
 static unsigned turboPeriod = 4;
@@ -290,6 +293,11 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_solar_sensor", "Solar Sensor", NULL,
 		  "The sunlight Boktai's sensor sees, from none to full sun. The right stick, pushed up or down, changes it while playing.", NULL, "input",
 		  { { "0", "0 (Dark)" }, { "1", NULL }, { "2", NULL }, { "3", NULL }, { "4", NULL }, { "5", NULL }, { "6", NULL }, { "7", NULL }, { "8", NULL }, { "9", NULL }, { "10", "10 (Full Sun)" }, { NULL, NULL } }, "5" },
+		{ "armgba_restart_buttons", "Restart Buttons", NULL,
+		  "Held for two seconds, restart that player's console, as its power switch would. On many handhelds Select is RetroArch's hotkey button and Select + Start quits, so the buttons with Select come last.",
+		  NULL, "input",
+		  { { "l r start", "L + R + Start" }, { "l r a b", "L + R + A + B" }, { "l3 r3", "L3 + R3" }, { "select start a b", "Select + Start + A + B" }, { "off", "Off" }, { NULL, NULL } },
+		  "l r start" },
 		{ "armgba_link_cable", "Link Cable", NULL,
 		  "How games link in netplay. Own Console: each player plays their own game and save, and the cable crosses the network, which stalls on a slow one. All Consoles: every device runs every player's console, smooth with RetroArch's rollback, from the host's games and saves; it also plays multiplayer on one device, a controller for each player. Applies on Restart.",
 		  NULL, "link",
@@ -350,6 +358,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_turbo_period", "Turbo Button Period; 4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83|84|85|86|87|88|89|90|91|92|93|94|95|96|97|98|99|100|101|102|103|104|105|106|107|108|109|110|111|112|113|114|115|116|117|118|119|120" },
 		{ "armgba_gb_tilt", "Tilt Sensor; left stick|right stick|d-pad" },
 		{ "armgba_solar_sensor", "Solar Sensor; 5|6|7|8|9|10|0|1|2|3|4" },
+		{ "armgba_restart_buttons", "Restart Buttons; l r start|l r a b|l3 r3|select start a b|off" },
 		{ "armgba_link_cable", "Link Cable; own|both" },
 		{ "armgba_link_players", "Players; 2|3|4" },
 		{ "armgba_link_port", "Link Port; cable|wireless" },
@@ -592,6 +601,9 @@ static void readOptions(void) {
 	turboPeriod = value ? atoi(value) : 4;
 	turboPeriod = turboPeriod < 4 ? 4 : turboPeriod > 120 ? 120 : turboPeriod;
 	turboPulse = turboPeriod / 2 < 2 ? 2 : turboPeriod / 2 > 15 ? 15 : turboPeriod / 2;
+	value = option("armgba_restart_buttons");
+	restartButtons = !value ? RESTART_L_R_START : !strcmp(value, "l r a b") ? RESTART_L_R_A_B : !strcmp(value, "l3 r3") ? RESTART_STICKS
+	               : !strcmp(value, "select start a b") ? RESTART_SELECT_START_A_B : !strcmp(value, "off") ? RESTART_OFF : RESTART_L_R_START;
 	value = option("armgba_gb_tilt");
 	int const tilt = !value ? 0 : !strcmp(value, "right stick") ? 1 : !strcmp(value, "d-pad") ? 2 : 0;
 	if (tilt != tiltControl) {
@@ -1683,9 +1695,9 @@ static void readFastForward(void) {
 	environment(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &override);
 }
 
-// Holding A, B, Select and Start for two seconds restarts that player's console, as its power switch
-// would. Games that reset on those buttons do so at once by themselves.
-enum { RESTART_KEYS = 0x0F, RESTART_FRAMES = 120 };
+// Holding the Restart Buttons for two seconds restarts that player's console, as its power switch
+// would. Games that reset on A, B, Select and Start do so at once by themselves.
+enum { RESTART_FRAMES = 120 };
 static uint8_t restartHeld[MAX_PLAYERS];
 
 static void restartConsole(int player) {
@@ -1705,9 +1717,26 @@ static void restartConsole(int player) {
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
 }
 
+// Whether a player holds the Restart Buttons. Keys are the console's: A 0x1, B 0x2, Select 0x4,
+// Start 0x8, R 0x100, L 0x200.
+static bool restartHeldDown(int port, uint16_t keys) {
+	switch (restartButtons) {
+	case RESTART_L_R_START:
+		return (keys & 0x308) == 0x308;
+	case RESTART_L_R_A_B:
+		return (keys & 0x303) == 0x303;
+	case RESTART_STICKS:
+		return inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3) && inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3);
+	case RESTART_SELECT_START_A_B:
+		return (keys & 0x0F) == 0x0F;
+	default:
+		return false;
+	}
+}
+
 static void readRestarts(const uint16_t keys[]) {
 	for (int i = 0; i < playersHere; ++i) {
-		if ((keys[i] & RESTART_KEYS) != RESTART_KEYS) {
+		if (!restartHeldDown(i, keys[i])) {
 			restartHeld[i] = 0;
 		} else if (restartHeld[i] < RESTART_FRAMES && ++restartHeld[i] == RESTART_FRAMES) {
 			restartConsole(i);
