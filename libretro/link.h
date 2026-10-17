@@ -26,6 +26,8 @@ void linkSetEnvironment(retro_environment_t);
 // The loaded console: a Game Boy Advance, a Game Boy (gba NULL), or none.
 void linkSetGba(struct GBA*);
 void linkSetGameBoy(bool loaded);
+// Whether a netplay session is on, during which time runs at the same speed for every player.
+bool linkSession(void);
 // Called before each Game Boy Advance frame: keeps the cable checked during it.
 void linkGbaFrame(struct GBA*);
 // Game Boy: whether another Game Boy is on the cable, a transfer this one clocked (returns the byte
