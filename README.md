@@ -45,6 +45,10 @@ A game sees only its own console's options, in this order.
 | | Game Boy Advance Border | Cropped, Shown |
 | | Screen Off Behavior | As Hardware, Background Color |
 | | Tilt Sensor | Left Stick, Right Stick, D-Pad |
+| Both | Link Cable (applies on restart) | Own Console, Both Consoles |
+| | Both Consoles Screens | Side by Side, Top and Bottom, Player 1 Only, Player 2 Only |
+| | Player 2's Game (applies on restart) | Same Game, then the games beside player 1's |
+| Game Boy Advance | Link Port (applies on restart) | Link Cable, Wireless Adapter |
 
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
 set to Shown, the black around it shows too, as on that console's screen.
@@ -108,6 +112,32 @@ mGBA's SDL frontend scales a stick.
 cartridges: Sachen, TAMA5, MBC6, MBC7, Vast Fame, and the BBD, Hitek, Sintax, Li Cheng, NT and Makon
 families. The screen palettes, apart from Grayscale (gambatte-libretro's), are SameBoy's. So are the
 Game Boy Color and Game Boy Advance color correction and the free boot ROMs built in.
+
+**Link play.** Two ways to link, picked with the Link Cable option:
+
+- Own Console: each player runs their own game and save on their own device, and the link crosses
+  RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and Crystal.
+  Game Boy Advance links take up to four players in multiplayer mode. A slow network stalls the
+  link, since each transfer waits for the other end; a waiting Game Boy sends its next byte ahead to
+  spare the clocking one most of that wait.
+- Both Consoles: one device runs both consoles side by side, for two players on one device (player 2
+  on the second controller), or with RetroArch's rollback netplay, where every device runs both and
+  the link never waits on the network. Every device needs both games. Player 2's game is picked with
+  Player 2's Game; the same game twice gives player 2 a save of its own, which starts as a copy of
+  player 1's.
+
+The Game Boy Advance Wireless Adapter (Link Port) works in both: the Union Room and trades of Pokemon
+FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library.
+
+**Pair files.** A `.gb2` file, as Batocera writes them, or a `.gba2` file names the two games of a
+Both Consoles link, one per line, and opens like a game from RetroArch's Load Content:
+
+    gb:Pokemon - Yellow Version.zip
+    gbc:Pokemon - Crystal Version.zip
+
+`gb:`, `gbc:` and `gba:` mean that folder beside the pair file's folder; a line can also be a path
+from the pair file's folder, or a full path. Each player keeps their game's own save, where RetroArch
+keeps that game's save.
 
 ## Accuracy
 
@@ -220,6 +250,8 @@ The test tools also need an mGBA source tree with `tests/mgba-oracle.patch` appl
 ## Known gaps
 
 - A few unlicensed Game Boy Color cartridges with undocumented protection chips do not boot.
+- Game Boy games for four players need Nintendo's Four Player Adapter, which isn't there; Game Boy
+  links are for two. Both Consoles is for two players.
 - Cheat codes mGBA can't run either (Action Replay's slowdown and disabling codes) are left out. A
   code that hooks a routine of the game runs as the frame ends instead.
 
