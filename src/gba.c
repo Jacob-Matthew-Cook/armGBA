@@ -297,6 +297,11 @@ void gbaRunFrame(struct GBA* gba) {
 	}
 }
 
+// Runs until the frame ends or an event asks for control back with returnRequested.
+void gbaRunPart(struct GBA* gba) {
+	jitRunLoop(gba);
+}
+
 // Sets the buttons held, one bit each, as 1; the register has them the other way up.
 void gbaSetKeys(struct GBA* gba, uint16_t keys) {
 	gba->keysActive = keys & 0x3FF;
