@@ -96,6 +96,8 @@ static bool sliceOver;
 static struct SioLink pairLinks[2];
 static int pairMode[2];
 static uint32_t pairOut[2];
+// The Wireless Adapters' air: both consoles here hear each other.
+static struct RfuAir airs[2];
 static uint16_t gbaShown[2][SCREEN_WIDTH * SCREEN_HEIGHT];
 static uint16_t gbaPairFrame[SCREEN_WIDTH * 2 * SCREEN_HEIGHT];
 static uint16_t gbaCorrected[2][SCREEN_WIDTH * SCREEN_HEIGHT];
@@ -254,6 +256,9 @@ void retro_set_environment(retro_environment_t callback) {
 		  "How games link in netplay. Own Console: each player plays their own game and save, and the cable crosses the network, which stalls on a slow one. Both Consoles: every device runs both players' consoles, smooth with RetroArch's rollback, from the host's games and saves; it also plays two-player on one device, player 2 on the second controller. Applies on Restart.",
 		  NULL, NULL,
 		  { { "own", "Own Console" }, { "both", "Both Consoles" }, { NULL, NULL } }, "own" },
+		{ "armgba_link_port", "Link Port", NULL,
+		  "What is plugged into a Game Boy Advance's link port: the Link Cable, or the Wireless Adapter that Pokemon FireRed, LeafGreen and Emerald, Mario Golf: Advance Tour and others use. Applies on Restart.",
+		  NULL, NULL, { { "cable", "Link Cable" }, { "wireless", "Wireless Adapter" }, { NULL, NULL } }, "cable" },
 		{ "armgba_link_screens", "Both Consoles Screens", NULL,
 		  "With Both Consoles: where the two screens go. L2 and R2 change it while playing.", NULL, NULL,
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { NULL, NULL } },
@@ -300,6 +305,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_gb_screen", "Game Boy Screen; grayscale|original|pocket|light" },
 		{ "armgba_gb_advance_border", "Game Boy Advance Border; cropped|shown" },
 		{ "armgba_link_cable", "Link Cable; own|both" },
+		{ "armgba_link_port", "Link Port; cable|wireless" },
 		{ "armgba_link_screens", "Both Consoles Screens; side by side|top and bottom|player 1|player 2" },
 		{ "armgba_player2_game", "Player 2's Game; same" },
 		{ "armgba_gb_screen_off", "Screen Off Behavior; hardware|background" },
@@ -640,7 +646,7 @@ static void showButtons(bool forGameBoy) {
 
 // Shows only the options of the loaded game's console, and names its buttons.
 static void showOptions(bool forGameBoy) {
-	static const char* const advance[] = { "armgba_skip_bios", "armgba_threaded_video", "armgba_color_correction", "armgba_solar_sensor" };
+	static const char* const advance[] = { "armgba_skip_bios", "armgba_threaded_video", "armgba_color_correction", "armgba_solar_sensor", "armgba_link_port" };
 	static const char* const gameBoyKeys[] = { "armgba_gb_model", "armgba_gb_boot_rom", "armgba_gb_color_correction", "armgba_gb_screen", "armgba_gb_advance_border", "armgba_gb_screen_off" };
 	for (unsigned i = 0; i < sizeof(advance) / sizeof(advance[0]); ++i) {
 		struct retro_core_option_display display = { advance[i], !forGameBoy };
@@ -948,6 +954,28 @@ static void stopSecondGameBoy(void) {
 }
 #endif
 
+static struct GBA* airConsole(void* context, int index) {
+	(void) context;
+	return gbas[index];
+}
+
+// Plugs the Link Port option's choice into each console: the Wireless Adapter, or the cable between
+// the two consoles here.
+static void attachPorts(void) {
+	const char* value = option("armgba_link_port");
+	bool wireless = value && !strcmp(value, "wireless");
+	for (int i = 0; i < 2; ++i) {
+		if (!gbas[i]) {
+			continue;
+		}
+		airs[i] = (struct RfuAir) { NULL, i, gbaPair ? 2 : 1, airConsole };
+		rfuAttach(gbas[i], wireless, &airs[i]);
+		if (gbaPair) {
+			sioAttach(gbas[i], wireless ? NULL : &pairLinks[i]);
+		}
+	}
+}
+
 static bool startSecondAdvance(const void* data, size_t size) {
 	struct retro_game_info game = { NULL, data, size, NULL };
 	gbas[1] = startAdvance(&game);
@@ -963,8 +991,8 @@ static bool startSecondAdvance(const void* data, size_t size) {
 	linkSetGba(NULL);
 	for (int i = 0; i < 2; ++i) {
 		pairLinks[i] = (struct SioLink) { (void*) (intptr_t) i, 2, i, pairBegin, pairFinish };
-		sioAttach(gbas[i], &pairLinks[i]);
 	}
+	attachPorts();
 	gbaAhead[0] = 0;
 	gbaAhead[1] = GBA_FRAME_CYCLES / 2;
 	environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, NULL);
@@ -978,6 +1006,7 @@ static void stopSecondAdvance(void) {
 	sioAttach(gba, NULL);
 	linkSetEnvironment(environment);
 	linkSetGba(gba);
+	attachPorts();
 }
 
 // Starts player 2's console: with the game the frontend loaded for it, or the one picked in the
@@ -1112,6 +1141,7 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	readOptions();
 	gbaReset(gba, skipBios);
 	linkSetGba(gba);
+	attachPorts();
 	if (second || linkBothWanted()) {
 		startSecond(second, game->data, game->size);
 	}
@@ -1210,6 +1240,7 @@ void retro_reset(void) {
 		return;
 	}
 #endif
+	attachPorts();
 	for (int i = 0; i <= gbaPair; ++i) {
 		gbaReset(gbas[i], skipBios);
 	}

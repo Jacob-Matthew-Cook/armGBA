@@ -27,6 +27,7 @@ set(CORE_SOURCES
 	src/render-thread.c
 	src/savedata.c
 	src/step.c
+	src/rfu.c
 	src/sio.c
 	src/state.c
 	src/timer.c

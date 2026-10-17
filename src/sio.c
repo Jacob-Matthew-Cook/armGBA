@@ -100,11 +100,19 @@ static uint32_t outgoing(struct GBA* gba) {
 	}
 }
 
-// The end of a transfer this console clocked. With nothing attached, zeros were received.
+// The end of a transfer this console clocked. With nothing attached, zeros were received. The
+// Wireless Adapter answers a 32-bit transfer, then raises SI until the game is ready again.
 static void sioFinish(struct GBA* gba, void* context, uint32_t late) {
 	(void) context;
 	struct Sio* sio = &gba->sio;
 	uint32_t values[4] = { 0, 0xFFFF, 0xFFFF, 0xFFFF };
+	if (sio->rfu.attached && sio->mode == SIO_NORMAL_32) {
+		values[0] = rfuTransfer(gba, sio->rfu.out);
+		finishWith(gba, values, late);
+		sio->siocnt |= 0x0004;
+		gba->io[IO(REG_SIOCNT)] = sio->siocnt;
+		return;
+	}
 	if (linked(sio)) {
 		uint32_t in[3] = { 0xFFFFFFFF, 0xFFFF, 0xFFFF };
 		sio->link->finish(sio->link->context, in);
@@ -124,6 +132,7 @@ void sioInit(struct GBA* gba) {
 	gba->sio.completeEvent.callback = sioFinish;
 	gba->sio.completeEvent.context = NULL;
 	gba->sio.completeEvent.priority = 0x80;
+	rfuInit(gba);
 }
 
 // General-purpose mode, as at power-on.
@@ -132,6 +141,8 @@ void sioReset(struct GBA* gba) {
 	gba->sio.siocnt = 0;
 	gba->io[IO(REG_RCNT)] = gba->sio.rcnt;
 	switchMode(gba);
+	// The adapter is powered by the console, so it starts over with it.
+	rfuReset(gba);
 }
 
 // Attaches a link cable, or with NULL takes it away.
@@ -177,7 +188,14 @@ void sioReceive(struct GBA* gba, const uint32_t values[4]) {
 // SIOCNT: setting the start bit with the internal clock begins a transfer.
 static void writeSiocnt(struct GBA* gba, uint16_t value) {
 	struct Sio* sio = &gba->sio;
+	uint16_t before = sio->siocnt;
+	// Busy while a transfer is being clocked. In normal mode, a start bit left set while waiting on
+	// the external clock starts a transfer as soon as the internal clock is chosen, which is how
+	// Nintendo's wireless library starts finding the Wireless Adapter.
 	bool busy = sio->siocnt & 0x0080;
+	if (sio->mode == SIO_NORMAL_8 || sio->mode == SIO_NORMAL_32) {
+		busy = timingIsScheduled(gba, &sio->completeEvent);
+	}
 	sio->siocnt = value & 0x3000;
 	switchMode(gba);
 	value &= sio->mode == SIO_UART ? 0x7FAF : 0x7F8F;
@@ -196,23 +214,30 @@ static void writeSiocnt(struct GBA* gba, uint16_t value) {
 		start = false;
 		break;
 	}
+	if (sio->rfu.attached && sio->mode == SIO_NORMAL_32) {
+		value = rfuSiocnt(gba, before, value);
+	}
 	sio->siocnt = value;
 	multiStatus(gba);
 	// Also kept in the register file, for byte writes to merge with.
 	gba->io[IO(REG_SIOCNT)] = sio->siocnt;
 	gba->io[IO(REG_RCNT)] = sio->rcnt;
 	if (start) {
-		if (linked(sio)) {
+		if (sio->rfu.attached) {
+			sio->rfu.out = outgoing(gba);
+		} else if (linked(sio)) {
 			sio->link->begin(sio->link->context, sio->mode, outgoing(gba));
 		}
 		timingDeschedule(gba, &sio->completeEvent);
 		timingSchedule(gba, &sio->completeEvent, TRANSFER_DELAY + transferCycles(sio));
 	}
+	rfuSiocntWritten(gba);
 }
 
 // RCNT: the mode's top bits, and the pins in general-purpose mode.
 static void writeRcnt(struct GBA* gba, uint16_t value) {
 	struct Sio* sio = &gba->sio;
+	uint16_t before = sio->rcnt;
 	sio->rcnt = value & 0xC1FF;
 	switchMode(gba);
 	switch (sio->mode) {
@@ -226,6 +251,9 @@ static void writeRcnt(struct GBA* gba, uint16_t value) {
 	}
 	multiStatus(gba);
 	gba->io[IO(REG_RCNT)] = sio->rcnt;
+	if (sio->rfu.attached) {
+		rfuRcnt(gba, before, sio->rcnt);
+	}
 }
 
 // Handles writes to the serial registers.

@@ -507,12 +507,93 @@ struct SioLink {
 	void (*finish)(void* context, uint32_t in[3]);
 };
 
+// The air between Wireless Adapters: the consoles whose adapters can hear each other, this one
+// among them. The frontend keeps it; a state doesn't hold it.
+struct RfuAir {
+	void* context;
+	int self;
+	int count;
+	struct GBA* (*console)(void* context, int index);
+};
+
+enum {
+	RFU_SLOTS = 4,
+	// The most a host sends at once, and a client.
+	RFU_HOST_BYTES = 90,
+	RFU_CLIENT_BYTES = 16,
+};
+
+// A packet over the air, and when it gets there by the receiving console's clock.
+struct RfuPacket {
+	bool sent;
+	uint8_t length;
+	int32_t arrival;
+	uint8_t data[RFU_HOST_BYTES];
+};
+
+// The Game Boy Advance Wireless Adapter on the link port (rfu.c): the serial side the game talks to,
+// and the radio side, a host with up to four clients.
+struct Rfu {
+	bool attached;
+	// The serial side: what it is doing, and the word it puts on the wire at the next transfer.
+	uint8_t wire;
+	uint32_t next;
+	uint32_t out;
+	// The "NINTENDO" exchange that finds the adapter.
+	uint8_t idCount;
+	uint16_t idSend;
+	uint16_t idRecv;
+	uint16_t idLast;
+	// The command under way: its data, then its reply.
+	uint8_t command;
+	uint8_t length;
+	uint8_t count;
+	uint32_t words[32];
+	// What the adapter sends as clock master, ending a wait.
+	uint32_t push[3];
+	uint8_t pushLength;
+	uint8_t pushCount;
+	bool pushing;
+	// The radio side.
+	uint8_t radio;
+	bool open;
+	uint16_t id;
+	uint32_t broadcast[6];
+	uint32_t setup;
+	uint32_t seed;
+	struct {
+		bool active;
+		uint16_t id;
+		uint8_t console;
+		struct RfuPacket rx;
+	} clients[RFU_SLOTS];
+	// A client's host and slot, and a connection under way.
+	uint8_t hostConsole;
+	uint16_t hostId;
+	uint8_t number;
+	int32_t connected;
+	// A client's packet from its host; a client's packet waiting for the host's next one, or the
+	// host's last packet.
+	struct RfuPacket rx;
+	struct RfuPacket tx;
+	// A wait: when it times out, when the host's exchange is done, and slots lost meanwhile.
+	bool timed;
+	int32_t deadline;
+	bool exchange;
+	int32_t exchanged;
+	uint8_t lost;
+	uint8_t lostReason;
+	struct Event event;
+};
+
 struct Sio {
 	uint16_t siocnt;
 	uint16_t rcnt;
 	int mode;
 	struct Event completeEvent;
 	const struct SioLink* link;
+	struct Rfu rfu;
+	const struct RfuAir* air;
 };
 
 // The cartridge prefetcher. While the cartridge bus is free, it reads ahead of the CPU's code
@@ -533,9 +614,9 @@ struct Jit;
 // Padding that puts struct GBA's memories on a page boundary; the assertion after the struct says
 // when to change it. Pointers make the struct smaller on 32-bit CPUs.
 #if UINTPTR_MAX > 0xFFFFFFFFu
-enum { PAD_TO_PAGE = 2327 };
+enum { PAD_TO_PAGE = 1407 };
 #else
-enum { PAD_TO_PAGE = 3087 };
+enum { PAD_TO_PAGE = 2191 };
 #endif
 
 // Hardware some cartridges have beyond a ROM and a save chip (cart.c).
@@ -961,5 +1042,15 @@ uint16_t sioRead(struct GBA*, uint32_t address);
 void sioAttach(struct GBA*, const struct SioLink*);
 uint32_t sioOutgoing(struct GBA*, int* mode, bool* ready);
 void sioReceive(struct GBA*, const uint32_t values[4]);
+
+// rfu.c: the Wireless Adapter. sio.c hands it each transfer the game clocks, and tells it of writes
+// to SIOCNT and RCNT.
+void rfuInit(struct GBA*);
+void rfuAttach(struct GBA*, bool attached, const struct RfuAir*);
+void rfuReset(struct GBA*);
+uint32_t rfuTransfer(struct GBA*, uint32_t out);
+uint16_t rfuSiocnt(struct GBA*, uint16_t before, uint16_t after);
+void rfuRcnt(struct GBA*, uint16_t before, uint16_t after);
+void rfuSiocntWritten(struct GBA*);
 
 #endif
