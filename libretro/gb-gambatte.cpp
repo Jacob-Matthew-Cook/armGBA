@@ -974,6 +974,13 @@ void libretroGbSetPair(bool on) {
 	pair = on;
 	consoles[0].ahead = 0;
 	consoles[1].ahead = FRAME_SAMPLES / 2;
+	for (int i = 0; i < 2; ++i) {
+		if (consoles[i].gb) {
+			consoles[i].gb->setLinkCallback(on ? 0 : linkClocked);
+			consoles[i].gb->linkStatus(on ? 264 : 265);
+			consoles[i].linked = false;
+		}
+	}
 }
 
 // With both consoles here, a state holds how far each ran past the last frame, each one's state in
