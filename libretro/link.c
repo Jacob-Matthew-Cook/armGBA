@@ -219,20 +219,30 @@ static bool isPartner(uint16_t id) {
 	return onCable() && id != self && (cable[0] == id || cable[1] == id);
 }
 
-// Tells the player when the cable changes.
+// Tells the player when the cable changes, and how it is timed when it connects.
 static void announce(void) {
 	static int shown = -1;
 	int const state = !session ? -1 : onCable() ? 2 : cableCount;
 	if (state == shown) {
 		return;
 	}
-	char const* text = state == 2 ? (cable[0] == self ? "Link cable: player 1 of 2" : "Link cable: player 2 of 2")
-	                 : shown == 2 ? "Link cable: the other player left"
-	                 : state == 1 && self != cable[0] ? "Link cable: the host is playing a different console, or the cable is taken"
-	                              : NULL;
+	char const* port = wireless ? "Wireless Adapter" : "Link cable";
+	char const* timing = wireless                                ? ""
+	                   : console == CONSOLE_GBA || exact.wanted ? ", exact timing: linking may slow on Wi-Fi"
+	                                                            : ". If the game errors, try Game Boy Link Timing: Exact";
+	char text[160];
+	if (state == 2) {
+		snprintf(text, sizeof(text), "%s: player %d of 2%s", port, cable[0] == self ? 1 : 2, timing);
+	} else if (shown == 2) {
+		snprintf(text, sizeof(text), "%s: the other player left", port);
+	} else if (state == 1 && self != cable[0]) {
+		snprintf(text, sizeof(text), "%s: the host is playing a different console, or the link is taken", port);
+	} else {
+		text[0] = '\0';
+	}
 	shown = state;
-	if (text && environment) {
-		struct retro_message message = { text, 240 };
+	if (*text && environment) {
+		struct retro_message message = { text, 300 };
 		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &message);
 	}
 }
