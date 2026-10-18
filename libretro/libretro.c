@@ -347,6 +347,9 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_player2_game", "Player 2's Game", NULL,
 		  "With Together: the game on player 2's console, from the games beside player 1's, the likeliest partners first; players 3 and 4 play player 1's. Each game keeps its own save; a player on player 1's game gets a save of their own, which starts as a copy of player 1's. Applies on Restart.",
 		  NULL, "link", { { "same", "Same Game" }, { NULL, NULL } }, "same" },
+		{ "armgba_new_save", "New Players' Saves", NULL,
+		  "With Together: the save a player on player 1's game starts with when they have none of their own: a copy of player 1's, or a new one. Each player's save is kept under the game's own file name, in the save folder's armGBA/Player 2 to Player 4 folders. Applies on Restart.",
+		  NULL, "link", { { "copy", "Copy of Player 1's" }, { "new", "New Save" }, { NULL, NULL } }, "copy" },
 		{ NULL, NULL, NULL, NULL, NULL, NULL, { { NULL, NULL } }, NULL },
 	};
 	static struct retro_core_option_v2_category categories[] = {
@@ -394,6 +397,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_link_timing", "Link Timing; standard|exact" },
 		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
 		{ "armgba_player2_game", "Player 2's Game; same" },
+		{ "armgba_new_save", "New Players' Saves; copy|new" },
 		{ NULL, NULL },
 	};
 	callback(RETRO_ENVIRONMENT_SET_VARIABLES, (void*) variables);
@@ -952,36 +956,81 @@ static void writeFile(const char* path, const void* data, size_t size) {
 	fclose(f);
 }
 
-// Finds and reads a player's save and clock; returns whether there was a save.
-static bool readSave(int player, const char* game, const char* suffix) {
+// RetroArch's save directory, or with a pair file the one its games' saves go in.
+static const char* saveDirectoryFor(char unsorted[4096]) {
 	const char* saveDirectory = NULL;
 	environment(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &saveDirectory);
-	char unsorted[4096];
 	if (pairFile && saveDirectory) {
-		secondPairSaveDirectory(saveDirectory, pairPath, unsorted, sizeof(unsorted));
+		secondPairSaveDirectory(saveDirectory, pairPath, unsorted, 4096);
 		saveDirectory = unsorted;
 	}
-	secondSavePath(game, suffix, "srm", firstPath, saveDirectory, keptSaves[player].file, sizeof(keptSaves[player].file));
-	secondSavePath(game, suffix, "rtc", firstPath, saveDirectory, keptSaves[player].rtcFile, sizeof(keptSaves[player].rtcFile));
+	return saveDirectory;
+}
+
+// Reads a player's save and clock from the files given, and keeps the save to be written to file
+// and rtcFile; returns whether there was a save.
+static bool keepSave(int player, const char* readFrom, const char* rtcFrom, const char* file, const char* rtcFile) {
+	snprintf(keptSaves[player].file, sizeof(keptSaves[player].file), "%s", file);
+	snprintf(keptSaves[player].rtcFile, sizeof(keptSaves[player].rtcFile), "%s", rtcFile);
 	size_t size;
 	void* save = saveMemory(player, &size);
-	bool found = readFileInto(keptSaves[player].file, save, size);
+	bool found = readFileInto(readFrom, save, size);
 	size_t rtcSize;
-	readFileInto(keptSaves[player].rtcFile, rtcMemory(player, &rtcSize), rtcSize);
+	readFileInto(rtcFrom, rtcMemory(player, &rtcSize), rtcSize);
 	keptSaves[player].hash = save ? hashOf(save, size) : 0;
 	keptSaves[player].kept = true;
 	keptCheck = 0;
 	return found;
 }
 
+// A player's save of a game of their own, such as player 2's from Player 2's Game or a pair file:
+// where RetroArch keeps that game's save.
+static bool readSave(int player, const char* game) {
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	char file[4096];
+	char rtcFile[4096];
+	secondSavePath(game, "", "srm", firstPath, saveDirectory, file, sizeof(file));
+	secondSavePath(game, "", "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
+	return keepSave(player, file, rtcFile, file, rtcFile);
+}
+
+// A player's own save of player 1's game, in their own folder. One kept beside player 1's under the
+// older " (Player N)" name is read until the folder has one.
+static bool readPlayerSave(int player) {
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	char file[4096];
+	char rtcFile[4096];
+	secondPlayerSavePath(firstPath, player, "srm", saveDirectory, file, sizeof(file));
+	secondPlayerSavePath(firstPath, player, "rtc", saveDirectory, rtcFile, sizeof(rtcFile));
+	FILE* f = fopen(file, "rb");
+	if (f) {
+		fclose(f);
+		return keepSave(player, file, rtcFile, file, rtcFile);
+	}
+	char suffix[24];
+	snprintf(suffix, sizeof(suffix), " (Player %d)", player + 1);
+	char older[4096];
+	char olderRtc[4096];
+	secondSavePath(firstPath, suffix, "srm", firstPath, saveDirectory, older, sizeof(older));
+	secondSavePath(firstPath, suffix, "rtc", firstPath, saveDirectory, olderRtc, sizeof(olderRtc));
+	bool const found = keepSave(player, older, olderRtc, file, rtcFile);
+	// Written to the folder next time saves are written, though unchanged.
+	keptSaves[player].hash ^= found;
+	return found;
+}
+
 // The other players' saves. A player on player 1's game gets a save of their own; until they have
-// one, it starts as a copy of player 1's.
+// one, it starts as a copy of player 1's, or new, as the New Players' Saves option says.
 static void readOtherSaves(void) {
+	const char* value = option("armgba_new_save");
+	bool const copy = !value || strcmp(value, "new");
 	for (int player = 1; player < playersHere; ++player) {
 		const char* chosen = player == 1 ? secondPath : otherPaths[player];
-		char suffix[24];
-		snprintf(suffix, sizeof(suffix), " (Player %d)", player + 1);
-		if (!readSave(player, *chosen ? chosen : firstPath, *chosen ? "" : suffix) && !*chosen) {
+		if (*chosen) {
+			readSave(player, chosen);
+		} else if (!readPlayerSave(player) && copy) {
 			copySaves |= 1 << player;
 		}
 	}
@@ -1004,6 +1053,7 @@ static void writeSaves(bool closing) {
 			continue;
 		}
 		keptSaves[player].hash = hash;
+		secondMakeFolders(keptSaves[player].file);
 		writeFile(keptSaves[player].file, save, size);
 		size_t rtcSize;
 		void* rtc = rtcMemory(player, &rtcSize);
@@ -1440,7 +1490,7 @@ static bool loadPairFile(const struct retro_game_info* file) {
 		loaded = loadAdvance(&first, NULL);
 	}
 	if (loaded) {
-		readSave(0, firstPath, "");
+		readSave(0, firstPath);
 	} else {
 		pairFile = false;
 	}

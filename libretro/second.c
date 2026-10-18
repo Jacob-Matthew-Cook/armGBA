@@ -297,6 +297,31 @@ void secondSavePath(const char* gamePath, const char* suffix, const char* extens
 	snprintf(out, outSize, "%s/%s%s.%s", folders[found], name, suffix, extension);
 }
 
+void secondPlayerSavePath(const char* gamePath, int player, const char* extension, const char* saveDirectory, char* out,
+                          size_t outSize) {
+	char folder[4096];
+	if (saveDirectory && *saveDirectory) {
+		snprintf(folder, sizeof(folder), "%s", saveDirectory);
+	} else {
+		folderOf(gamePath, folder, sizeof(folder));
+	}
+	char name[1024];
+	baseName(gamePath, name, sizeof(name));
+	snprintf(out, outSize, "%s/armGBA/Player %d/%s.%s", folder, player + 1, name, extension);
+}
+
+void secondMakeFolders(const char* filePath) {
+	char path[4096];
+	snprintf(path, sizeof(path), "%s", filePath);
+	for (char* slash = strchr(path + 1, '/'); slash; slash = strchr(slash + 1, '/')) {
+		*slash = '\0';
+		if (!isFolder(path)) {
+			mkdir(path, 0755);
+		}
+		*slash = '/';
+	}
+}
+
 bool secondRecall(const char* memoryFile, const char* firstPath, char* out, size_t outSize) {
 	FILE* f = fopen(memoryFile, "r");
 	if (!f) {
