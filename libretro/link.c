@@ -20,15 +20,16 @@
 // The host keeps the cable: itself and the first player who joined with the same console. A
 // transfer's data leaves the console clocking it as the transfer starts and is answered by the
 // other's; the clocking console waits for the answer as the transfer ends, so emulated time stays
-// exact on its side. How the other console's side is timed depends on the console:
+// exact on its side. How the other console's side is timed:
 //
-// - Game Boy (standard): the other console runs at its own pace and takes the transfer when it next
-//   looks.
-// - Game Boy Advance (exact), whose games link every frame: the console that clocked last leads, and
-//   the other stays just behind it, as far as the leader says it has got. A transfer names the
-//   cycles it starts and ends on: the follower answers with its data as of the start in normal
-//   mode, or of the end in multiplayer mode, and takes the leader's data at the end, as on a cable.
-//   When the lead passes to the console behind, the other moves its link clock back to meet it.
+// - Standard, for a Game Boy unless Game Boy Link Timing says Exact: the other console runs at its
+//   own pace and takes the transfer when it next looks.
+// - Exact, always for a Game Boy Advance, whose games link every frame: the console that clocked
+//   last leads, and the other stays just behind it, as far as the leader says it has got. A
+//   transfer names the cycles it starts and ends on: the follower answers with its data as of the
+//   start in normal mode, or of the end in multiplayer mode, and takes the leader's data at the
+//   end, as on a cable. When the lead passes to the console behind, the other moves its link clock
+//   back to meet it.
 
 enum {
 	MAX_PEERS = 8,
@@ -787,11 +788,13 @@ void linkSetEnvironment(retro_environment_t callback) {
 }
 
 static void setExact(bool on);
+// Whether a Game Boy's cable is exact, as the Game Boy Link Timing option says.
+static bool gbExact;
 
-// Exact timing for the Game Boy Advance, whose games link every frame; a Game Boy's cable waits.
+// Exact timing for the Game Boy Advance, whose games link every frame; for a Game Boy as chosen.
 static void consoleChanged(int kind) {
 	console = kind;
-	setExact(kind == CONSOLE_GBA);
+	setExact(kind == CONSOLE_GBA || (kind == CONSOLE_GB && gbExact));
 	if (session) {
 		hello();
 	}
@@ -822,6 +825,11 @@ void linkSetNetplay(bool on) {
 		start, receive, stop, sessionPoll, connected, disconnected, "armGBA link 3",
 	};
 	environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, on ? (void*) &callbacks : NULL);
+}
+
+void linkSetGbExact(bool on) {
+	gbExact = on;
+	setExact(console == CONSOLE_GBA || (console == CONSOLE_GB && gbExact));
 }
 
 static void setExact(bool on) {

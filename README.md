@@ -50,6 +50,7 @@ only with Link Mode on.
 | | Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
 | | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
+| | Game Boy Link Timing | Game Boy | Standard, Exact (Separate) |
 | | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | Saves | Back Up Save | Both | Off, then each player |
@@ -129,9 +130,11 @@ usual netplay. The other two:
 - Separate: each device runs its own player's console, with their own game and save, and the cable
   crosses RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and
   Crystal. It links two players; three or four play Together. Each transfer waits for the other
-  end, so a slow network stalls the cable. Game Boys run at their own pace, the one waiting sending
-  its next byte ahead; Game Boy Advances keep to the same cycles, as on a real cable, which games
-  that link every frame, such as Kirby & The Amazing Mirror, need, and want a short ping for.
+  end, so a slow network stalls the cable. Game Boy Advances keep to the same cycles, as on a real
+  cable, which games that link every frame, such as Kirby & The Amazing Mirror, need; it wants a
+  short ping. Game Boys run at their own pace, the one waiting sending its next byte ahead, which
+  suits Wi-Fi and games that link in turns; Game Boy Link Timing set to Exact times them as Game
+  Boy Advances are. The Wireless Adapter needs neither: each device runs freely.
 - Together: every device runs every player's console, two to four with the Players option, for
   multiplayer on one device (a controller each) or with RetroArch's rollback netplay, where the
   link never waits on the network. Every device needs every game. Three or four are shown in a
