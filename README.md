@@ -51,7 +51,8 @@ The options are in four categories, and a game sees only its own console's optio
 | | Link Timing | Both | Standard, Exact |
 | | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's |
-| | New Players' Saves (applies on restart) | Both | Copy of Player 1's, New Save |
+| | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save |
+| | Copy Save | Both | Off, Player 1 to Player 2, and every other copy onto players 2 to 4 |
 
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
 set to Shown, the black around it shows too, as on that console's screen.
@@ -130,8 +131,10 @@ Game Boy Color and Game Boy Advance color correction and the free boot ROMs buil
   link never waits on the network. Every device needs every game. Three or four are shown in a
   grid. Player 2's game is picked with Player 2's Game; players 3 and 4 play player 1's. A player on
   player 1's game gets a save of their own, under the game's file name in the save folder's
-  armGBA/Player 2 to Player 4 folders; it starts as a copy of player 1's, or new, as New Players'
-  Saves says. In netplay the session runs the host's games and saves: the host writes the players'
+  armGBA/Player 2 to Player 4 folders; it starts new, or as a copy of player 1's, as New Players'
+  Saves says. Copy Save copies one player's save over another's (never player 1's) outside netplay,
+  and restarts that player's console; the save it replaces is kept beside it ending in .old1, .old2
+  and on, and removing that ending brings it back. In netplay the session runs the host's games and saves: the host writes the players'
   saves as the game closes, and a device that joined leaves its own as they were.
 
 The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of

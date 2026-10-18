@@ -348,8 +348,15 @@ void retro_set_environment(retro_environment_t callback) {
 		  "With Together: the game on player 2's console, from the games beside player 1's, the likeliest partners first; players 3 and 4 play player 1's. Each game keeps its own save; a player on player 1's game gets a save of their own, which starts as a copy of player 1's. Applies on Restart.",
 		  NULL, "link", { { "same", "Same Game" }, { NULL, NULL } }, "same" },
 		{ "armgba_new_save", "New Players' Saves", NULL,
-		  "With Together: the save a player on player 1's game starts with when they have none of their own: a copy of player 1's, or a new one. Each player's save is kept under the game's own file name, in the save folder's armGBA/Player 2 to Player 4 folders. Applies on Restart.",
-		  NULL, "link", { { "copy", "Copy of Player 1's" }, { "new", "New Save" }, { NULL, NULL } }, "copy" },
+		  "With Together: the save a player on player 1's game starts with when they have none of their own: a new one, or a copy of player 1's. Each player's save is kept under the game's own file name, in the save folder's armGBA/Player 2 to Player 4 folders. Applies on Restart.",
+		  NULL, "link", { { "new", "Create New Save" }, { "copy", "Copy Player 1's Save" }, { NULL, NULL } }, "new" },
+		{ "armgba_copy_save", "Copy Save", NULL,
+		  "With Together, outside netplay: copies one player's save over another's, never player 1's, and restarts that player's console. The save it replaces is kept beside it, ending in .old1 (then .old2 and on); remove that ending to bring it back.",
+		  NULL, "link",
+		  { { "off", "Off" }, { "1 2", "Player 1 to Player 2" }, { "1 3", "Player 1 to Player 3" }, { "1 4", "Player 1 to Player 4" },
+		    { "2 3", "Player 2 to Player 3" }, { "2 4", "Player 2 to Player 4" }, { "3 2", "Player 3 to Player 2" },
+		    { "3 4", "Player 3 to Player 4" }, { "4 2", "Player 4 to Player 2" }, { "4 3", "Player 4 to Player 3" }, { NULL, NULL } },
+		  "off" },
 		{ NULL, NULL, NULL, NULL, NULL, NULL, { { NULL, NULL } }, NULL },
 	};
 	static struct retro_core_option_v2_category categories[] = {
@@ -397,7 +404,8 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_link_timing", "Link Timing; standard|exact" },
 		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
 		{ "armgba_player2_game", "Player 2's Game; same" },
-		{ "armgba_new_save", "New Players' Saves; copy|new" },
+		{ "armgba_new_save", "New Players' Saves; new|copy" },
+		{ "armgba_copy_save", "Copy Save; off|1 2|1 3|1 4|2 3|2 4|3 2|3 4|4 2|4 3" },
 		{ NULL, NULL },
 	};
 	callback(RETRO_ENVIRONMENT_SET_VARIABLES, (void*) variables);
@@ -1022,10 +1030,10 @@ static bool readPlayerSave(int player) {
 }
 
 // The other players' saves. A player on player 1's game gets a save of their own; until they have
-// one, it starts as a copy of player 1's, or new, as the New Players' Saves option says.
+// one, it starts new, or as a copy of player 1's, as the New Players' Saves option says.
 static void readOtherSaves(void) {
 	const char* value = option("armgba_new_save");
-	bool const copy = !value || strcmp(value, "new");
+	bool const copy = value && !strcmp(value, "copy");
 	for (int player = 1; player < playersHere; ++player) {
 		const char* chosen = player == 1 ? secondPath : otherPaths[player];
 		if (*chosen) {
@@ -1498,8 +1506,11 @@ static bool loadPairFile(const struct retro_game_info* file) {
 	return loaded;
 }
 
+static void readCopySave(bool act);
+
 // Starts a game on the side it belongs to.
 bool retro_load_game(const struct retro_game_info* game) {
+	readCopySave(false);
 	if (!game || !game->data) {
 		return false;
 	}
@@ -1517,6 +1528,7 @@ bool retro_load_game(const struct retro_game_info* game) {
 
 // Two games, one for each console of a link.
 bool retro_load_game_special(unsigned type, const struct retro_game_info* info, size_t count) {
+	readCopySave(false);
 	if (type == SUBSYSTEM_ADVANCE_LINK && count == 2 && info[0].data && info[1].data) {
 #ifdef ARMGBA_GB
 		gameBoy = false;
@@ -1796,6 +1808,83 @@ static void restartConsole(int player) {
 	snprintf(message, sizeof(message), playersHere > 1 ? "Player %d's console restarted" : "Restarted", player + 1);
 	struct retro_message shown = { message, 120 };
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+}
+
+// The game on a player's console.
+static const char* gameOf(int player) {
+	const char* chosen = player == 1 ? secondPath : player > 1 ? otherPaths[player] : "";
+	return *chosen ? chosen : firstPath;
+}
+
+// Renames a file to the first free name.oldN, keeping it. Returns N, or 0 if there was no file.
+static int keepOld(const char* file) {
+	FILE* f = fopen(file, "rb");
+	if (!f) {
+		return 0;
+	}
+	fclose(f);
+	for (int n = 1; n < 1000; ++n) {
+		char old[8200];
+		snprintf(old, sizeof(old), "%s.old%d", file, n);
+		f = fopen(old, "rb");
+		if (f) {
+			fclose(f);
+		} else if (!rename(file, old)) {
+			return n;
+		}
+	}
+	return 0;
+}
+
+// The Copy Save option: copies one player's save, and clock, over another's, keeps the one it
+// replaces as .oldN, and restarts that player's console so its game reads the copy.
+static void copySave(int from, int to) {
+	char message[160];
+	if (!bothConsoles() || from >= playersHere || to >= playersHere) {
+		snprintf(message, sizeof(message), "Copy Save: player %d isn't playing", (from >= playersHere ? from : to) + 1);
+	} else if (netplaySeen) {
+		snprintf(message, sizeof(message), "Copy Save: not in netplay");
+	} else if (strcmp(gameOf(from), gameOf(to)) || !keptSaves[to].kept) {
+		snprintf(message, sizeof(message), "Copy Save: players %d and %d play different games", from + 1, to + 1);
+	} else {
+		size_t size, toSize, rtcSize, toRtcSize;
+		void* save = saveMemory(from, &size);
+		void* toSave = saveMemory(to, &toSize);
+		void* rtc = rtcMemory(from, &rtcSize);
+		void* toRtc = rtcMemory(to, &toRtcSize);
+		if (save && toSave && size == toSize) {
+			int const old = keepOld(keptSaves[to].file);
+			keepOld(keptSaves[to].rtcFile);
+			memcpy(toSave, save, size);
+			if (rtc && toRtc && rtcSize == toRtcSize) {
+				memcpy(toRtc, rtc, rtcSize);
+				writeFile(keptSaves[to].rtcFile, toRtc, toRtcSize);
+			}
+			secondMakeFolders(keptSaves[to].file);
+			writeFile(keptSaves[to].file, toSave, toSize);
+			keptSaves[to].hash = hashOf(toSave, toSize);
+			restartConsole(to);
+			snprintf(message, sizeof(message), old ? "Copied player %d's save to player %d; the old one ends in .old%d" : "Copied player %d's save to player %d", from + 1, to + 1, old);
+		} else {
+			snprintf(message, sizeof(message), "Copy Save: players %d and %d's saves differ in size", from + 1, to + 1);
+		}
+	}
+	struct retro_message shown = { message, 240 };
+	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+}
+
+// The Copy Save option acts once when chosen, then goes back to Off. Chosen when a game starts, as
+// RetroArch may have kept it, it only goes back to Off.
+static void readCopySave(bool act) {
+	const char* value = option("armgba_copy_save");
+	if (!value || !strcmp(value, "off")) {
+		return;
+	}
+	if (act && value[0] >= '1' && value[0] <= '4' && value[2] >= '2' && value[2] <= '4') {
+		copySave(value[0] - '1', value[2] - '1');
+	}
+	struct retro_variable off = { "armgba_copy_save", "off" };
+	environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
 }
 
 // Whether a player holds the Restart Buttons. Keys are the console's: A 0x1, B 0x2, Select 0x4,
@@ -2208,6 +2297,7 @@ void retro_run(void) {
 	bool updated = false;
 	if (environment(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated) {
 		readOptions();
+		readCopySave(true);
 	}
 	inputPoll();
 	readFastForward();
