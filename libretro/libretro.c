@@ -171,8 +171,9 @@ static uint32_t sessionTag;
 static bool netplayJoined;
 
 // Saves the core reads and writes itself: the other players', where RetroArch keeps their game's
-// save or in armGBA/Player N, and player 1's with a pair file or Player 1's Saves. In rollback netplay
-// the host writes them as the game closes; a device that joined keeps the session's in armGBA/Remote.
+// save or in armGBA/Player N, and player 1's with a pair file or Player 1's Save Folder. In rollback
+// netplay the host writes them as the game closes; a device that joined keeps the session's in
+// armGBA/Remote.
 static struct {
 	bool kept;
 	char file[8192];
@@ -349,6 +350,9 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_link_players", "Players", NULL,
 		  "How many consoles run. Four Game Boy Advances need a fast device. Applies on Restart.",
 		  NULL, "link", { { "2", NULL }, { "3", NULL }, { "4", NULL }, { NULL, NULL } }, "2" },
+		{ "armgba_player2_game", "Player 2's Game", NULL,
+		  "The game on player 2's console, from the games beside player 1's, likeliest partners first. Players 3 and 4 play player 1's. Applies on Restart.",
+		  NULL, "link", { { "same", "Same Game" }, { NULL, NULL } }, "same" },
 		{ "armgba_link_port", "Link Port", NULL,
 		  "What is plugged in: the Link Cable, or the Wireless Adapter that Pokemon FireRed, LeafGreen and Emerald and other games use. Applies on Restart.",
 		  NULL, "link", { { "cable", "Link Cable" }, { "wireless", "Wireless Adapter (smoothest over Wi-Fi)" }, { NULL, NULL } }, "cable" },
@@ -362,25 +366,22 @@ void retro_set_environment(retro_environment_t callback) {
 		  "Where the screens go. L2 and R2 change it while playing.", NULL, "link",
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
 		  "side by side" },
-		{ "armgba_player2_game", "Player 2's Game", NULL,
-		  "The game on player 2's console, from the games beside player 1's, likeliest partners first. Players 3 and 4 play player 1's. Applies on Restart.",
-		  NULL, "link", { { "same", "Same Game" }, { NULL, NULL } }, "same" },
 		{ "armgba_back_up_save", "Back Up Save", NULL,
 		  "Copies a player's save, as it is now, to a file beside it named for the time: Game.20261018-153012.srm. The game carries on.",
 		  NULL, "saves", { { "off", "Off" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "off" },
-		{ "armgba_send_save", "Send Save", NULL,
-		  "With Separate, while linked: sends the save chosen, the current one or a backup, to the other player, whose Load Save lists it as Received. Linked devices also swap their current saves as they connect; a save already received isn't kept again.",
-		  NULL, "saves", { { "off", "Off" }, { "1 now", "Player 1: Now" }, { NULL, NULL } }, "off" },
-		{ "armgba_load_into", "Load Into", NULL,
-		  "The player Load Save gives a save to: the one it belongs to, or the player named here.",
-		  NULL, "saves", { { "same", "Same Player" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "same" },
 		{ "armgba_load_save", "Load Save", NULL,
 		  "Makes a backed-up save, or another player's current one, a player's save, and restarts their console. The save it replaces is backed up first. Not during netplay.",
 		  NULL, "saves", { { "off", "Off" }, { NULL, NULL } }, "off" },
+		{ "armgba_load_into", "Load Into", NULL,
+		  "The player Load Save gives a save to: the one it belongs to, or the player named here.",
+		  NULL, "saves", { { "same", "Same Player" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "same" },
+		{ "armgba_send_save", "Send Save", NULL,
+		  "With Separate, while linked: sends the save chosen, the current one or a backup, to the other player, whose Load Save lists it as Received. Linked devices also swap their current saves as they connect; a save already received isn't kept again.",
+		  NULL, "saves", { { "off", "Off" }, { "1 now", "Player 1: Now" }, { NULL, NULL } }, "off" },
 		{ "armgba_new_save", "New Players' Saves", NULL,
 		  "What a player on player 1's game starts with when they have no save yet: a new save, or a copy of player 1's. Their saves are kept in the save folder's armGBA/Player 2 to 4 folders. Applies on Restart.",
 		  NULL, "saves", { { "new", "Create New Save" }, { "copy", "Copy Player 1's Save" }, { NULL, NULL } }, "new" },
-		{ "armgba_player1_saves", "Player 1's Saves", NULL,
+		{ "armgba_player1_saves", "Player 1's Save Folder", NULL,
 		  "Where player 1's save is kept: where RetroArch keeps saves, or in the save folder's armGBA/Player 1 folder, beside the other players' saves and player 1's backups. When it changes, the newer of the two is used. Applies when a game starts.",
 		  NULL, "saves", { { "retroarch", "RetroArch's Save Folder" }, { "armgba", "armGBA/Player 1 Folder" }, { NULL, NULL } }, "retroarch" },
 		{ "armgba_keep_saves", "Backups Kept", NULL,
@@ -436,17 +437,17 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_restart_buttons", "Restart Buttons; l r start|l r a b|l3 r3|select start a b|off" },
 		{ "armgba_link_mode", "Link Mode; off|together|separate" },
 		{ "armgba_link_players", "Players; 2|3|4" },
+		{ "armgba_player2_game", "Player 2's Game; same" },
 		{ "armgba_link_port", "Link Port; cable|wireless" },
 		{ "armgba_gb_link_port", "Link Port; cable|adapter" },
 		{ "armgba_gb_link_timing", "Game Boy Link Timing; standard|exact" },
 		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
-		{ "armgba_player2_game", "Player 2's Game; same" },
 		{ "armgba_back_up_save", "Back Up Save; off|1|2|3|4" },
-		{ "armgba_send_save", "Send Save; off|1 now" },
-		{ "armgba_load_into", "Load Into; same|1|2|3|4" },
 		{ "armgba_load_save", "Load Save; off" },
+		{ "armgba_load_into", "Load Into; same|1|2|3|4" },
+		{ "armgba_send_save", "Send Save; off|1 now" },
 		{ "armgba_new_save", "New Players' Saves; new|copy" },
-		{ "armgba_player1_saves", "Player 1's Saves; retroarch|armgba" },
+		{ "armgba_player1_saves", "Player 1's Save Folder; retroarch|armgba" },
 		{ "armgba_keep_saves", "Backups Kept; 10|20|all|5" },
 		{ "armgba_list_saves", "Backups Listed; 10|20|40|80|126" },
 		{ NULL, NULL },
@@ -1353,7 +1354,7 @@ static bool playerOneNewer;
 static char playerOneFile[8192];
 static char playerOneRtc[8192];
 
-// Player 1's save: kept by the core in armGBA/Player 1 when Player 1's Saves says so, or left to
+// Player 1's save: kept by the core in armGBA/Player 1 when Player 1's Save Folder says so, or left to
 // RetroArch. The newer of the two files is read, so changing the option keeps the latest save.
 static void readPlayerOneSave(void) {
 	playerOneNewer = false;
