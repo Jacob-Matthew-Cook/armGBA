@@ -120,7 +120,7 @@ static void sioFinish(struct GBA* gba, void* context, uint32_t late) {
 	if (linked(sio)) {
 		uint32_t in[3] = { 0xFFFFFFFF, 0xFFFF, 0xFFFF };
 		if (!sio->link->finish(sio->link->context, in)) {
-			timingSchedule(gba, &sio->completeEvent, 1);
+			timingSchedule(gba, &sio->completeEvent, 0);
 			return;
 		}
 		if (sio->mode == SIO_MULTI) {
@@ -164,6 +164,23 @@ void sioLinkChanged(struct GBA* gba) {
 
 bool sioMultiplayer(const struct GBA* gba) {
 	return gba->sio.mode == SIO_MULTI;
+}
+
+int32_t sioTransferLeft(struct GBA* gba) {
+	return timingIsScheduled(gba, &gba->sio.completeEvent) ? timingUntil(gba, &gba->sio.completeEvent) : -1;
+}
+
+int32_t sioShortestTransfer(const struct GBA* gba) {
+	const struct Sio* sio = &gba->sio;
+	switch (sio->mode) {
+	case SIO_NORMAL_8:
+	case SIO_NORMAL_32:
+		return TRANSFER_DELAY + 8 * CPU_FREQUENCY / (((sio->siocnt & 2) ? 2048 : 256) * 1024);
+	case SIO_MULTI:
+		return TRANSFER_DELAY + MULTI_CYCLES[sio->siocnt & 3][linked(sio) ? sio->link->players - 1 : 0];
+	default:
+		return INT32_MAX;
+	}
 }
 
 // Returns how long a transfer takes in each mode at the chosen baud rate or clock.

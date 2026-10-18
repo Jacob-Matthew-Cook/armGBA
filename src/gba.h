@@ -510,8 +510,8 @@ struct SioLink {
 	bool ready;
 	// A transfer this console clocks: begin sends this console's data as the transfer starts,
 	// finish waits for the others' and fills `in` (one value in normal mode, three in multiplayer).
-	// Finish can instead return false, having asked the console to stop running, and is called
-	// again a cycle later until it has the others' data.
+	// Finish can instead return false, having stopped the console (returnRequested and
+	// timingInterrupt), and is called again on the same cycle when the console runs on.
 	void (*begin)(void* context, int mode, uint32_t out);
 	bool (*finish)(void* context, uint32_t in[3]);
 };
@@ -1066,6 +1066,11 @@ uint16_t sioRead(struct GBA*, uint32_t address);
 void sioAttach(struct GBA*, const struct SioLink*);
 void sioLinkChanged(struct GBA*);
 bool sioMultiplayer(const struct GBA*);
+// For linked consoles run together exactly: cycles until the transfer under way ends (-1 for none),
+// and the fewest cycles a transfer started now would take at the port's settings (INT32_MAX while it
+// isn't set up for a link).
+int32_t sioTransferLeft(struct GBA*);
+int32_t sioShortestTransfer(const struct GBA*);
 uint32_t sioOutgoing(struct GBA*, int* mode, bool* ready);
 void sioReceive(struct GBA*, const uint32_t values[4]);
 

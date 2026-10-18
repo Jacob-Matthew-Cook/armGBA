@@ -85,15 +85,15 @@ static int playersHere = 1;
 static uint8_t copySaves;
 
 // The consoles of a Game Boy Advance link can run here too, up to four on one cable, each on a thread
-// of its own. They run in rounds of a few cycles each; between rounds, with every console stopped,
-// what passes between them does, always in the same order, so the threads' timing never shows. Each
-// starts part of a frame after the one before, as real consoles are never in step.
+// of its own. They run in rounds, all to the same moment; between rounds, with every console stopped,
+// what passes between them does, always in the same order, so the threads' timing never shows. A
+// round ends where a transfer does, so the consoles swap data on its last cycle as the wires would,
+// and no round is longer than the shortest transfer a console could start, so none is missed. Each
+// console starts part of a frame after the one before, as real consoles are never in step.
 enum {
 	GBA_FRAME_CYCLES = 280896,
-	// Rounds while a console's serial port is set up for a link; otherwise nothing passes between
-	// them, and a round is a whole frame, so each console's thread does a whole frame's work.
-	SLICE_LINKING = 512,
-	SLICE_IDLE = GBA_FRAME_CYCLES,
+	// A round ends no later than the end of a frame.
+	ROUND_LONGEST = GBA_FRAME_CYCLES,
 };
 static struct GBA* gbas[MAX_PLAYERS];
 static bool gbaPair;
@@ -1883,6 +1883,7 @@ static bool pairFinish(void* context, uint32_t in[3]) {
 	if (!pairAnswered[i]) {
 		pairWaiting[i] = true;
 		gbas[i]->returnRequested = true;
+		timingInterrupt(gbas[i]);
 		return false;
 	}
 	pairAnswered[i] = false;
@@ -1904,63 +1905,67 @@ static void carryReady(void) {
 	}
 }
 
-// Between rounds: a console's finished transfer takes the others' data, and they take its.
-static void carryCable(void) {
+// A console's transfer ending: it takes the others' data, and they take its.
+static void exchange(int i) {
 	enum { MULTI = 2 };
-	for (int i = 0; i < playersHere; ++i) {
-		if (!pairWaiting[i]) {
-			continue;
+	pairAnswered[i] = true;
+	uint32_t* const in = pairIn[i];
+	in[0] = 0xFFFFFFFF;
+	in[1] = in[2] = 0xFFFF;
+	int mode;
+	bool ready;
+	if (pairMode[i] == MULTI) {
+		uint32_t values[4] = { pairOut[i] & 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+		for (int k = 1; k < playersHere; ++k) {
+			uint32_t const theirs = sioOutgoing(gbas[k], &mode, &ready);
+			values[k] = in[k - 1] = mode == MULTI ? theirs & 0xFFFF : 0xFFFF;
 		}
-		pairWaiting[i] = false;
-		pairAnswered[i] = true;
-		uint32_t* const in = pairIn[i];
-		in[0] = 0xFFFFFFFF;
-		in[1] = in[2] = 0xFFFF;
-		int mode;
-		bool ready;
-		if (pairMode[i] == MULTI) {
-			uint32_t values[4] = { pairOut[i] & 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
-			for (int k = 1; k < playersHere; ++k) {
-				uint32_t const theirs = sioOutgoing(gbas[k], &mode, &ready);
-				values[k] = in[k - 1] = mode == MULTI ? theirs & 0xFFFF : 0xFFFF;
-			}
-			for (int k = 1; k < playersHere; ++k) {
-				sioReceive(gbas[k], values);
-			}
-		} else if (i < 2) {
-			struct GBA* const other = gbas[1 - i];
-			uint32_t const theirs = sioOutgoing(other, &mode, &ready);
-			in[0] = ready ? theirs : 0xFFFFFFFF;
-			uint32_t const values[4] = { pairOut[i], 0xFFFF, 0xFFFF, 0xFFFF };
-			sioReceive(other, values);
+		for (int k = 1; k < playersHere; ++k) {
+			sioReceive(gbas[k], values);
+		}
+	} else if (i < 2) {
+		struct GBA* const other = gbas[1 - i];
+		uint32_t const theirs = sioOutgoing(other, &mode, &ready);
+		in[0] = ready ? theirs : 0xFFFFFFFF;
+		uint32_t const values[4] = { pairOut[i], 0xFFFF, 0xFFFF, 0xFFFF };
+		sioReceive(other, values);
+	}
+}
+
+// Between rounds: the transfers ending on this cycle, answered before they end; and any that ended
+// inside a round, which waited for it to end.
+static void carryCable(void) {
+	for (int i = 0; i < playersHere; ++i) {
+		if (pairWaiting[i] || (!pairAnswered[i] && sioTransferLeft(gbas[i]) == 0)) {
+			pairWaiting[i] = false;
+			exchange(i);
 		}
 	}
 }
 
+// The end of a console's part of a round, before anything else due on that cycle, such as a
+// transfer ending.
 static void sliceEnd(struct GBA* machine, void* context, uint32_t late) {
 	(void) late;
 	sliceOver[(intptr_t) context] = true;
 	machine->returnRequested = true;
+	timingInterrupt(machine);
 }
 
-// Whether a console's serial port is set up for a link: normal or multiplayer mode.
-static bool linking(const struct GBA* machine) {
-	return (machine->sio.rcnt & 0x8000) == 0;
-}
 
-// One console's part of a round: it runs until it has run the round's cycles or a transfer it
-// clocked waits for the others' data. A frame it finishes on the way is kept as its picture.
-static int32_t roundCycles;
+// One console's part of a round: it runs to the round's end, or until a transfer it clocked waits for
+// the others' data. A frame it finishes on the way is kept as its picture.
+static int32_t roundEnd;
 
 static void runRound(int i) {
 	struct GBA* const machine = gbas[i];
-	int32_t const left = GBA_FRAME_CYCLES - roundDone[i];
+	int32_t const left = roundEnd - roundDone[i];
 	if (left <= 0 || pairWaiting[i]) {
 		return;
 	}
 	uint32_t const start = timingCurrentTime(machine);
 	sliceOver[i] = false;
-	timingSchedule(machine, &sliceEvents[i], left < roundCycles ? left : roundCycles);
+	timingSchedule(machine, &sliceEvents[i], left);
 	while (!sliceOver[i] && !pairWaiting[i]) {
 		uint32_t const frame = machine->video.frameCounter;
 		gbaRunPart(machine);
@@ -1972,24 +1977,40 @@ static void runRound(int i) {
 	roundDone[i] += (int32_t) ((uint32_t) timingCurrentTime(machine) - start);
 }
 
-// Runs the Game Boy Advances for a frame's worth of cycles each, in rounds: short ones while a
-// console's serial port is set up for a link, long ones otherwise.
+// Where the next round ends: at the frame's end, at the next transfer's end, and no later than the
+// shortest transfer any console could start from now.
+static int32_t nextRoundEnd(void) {
+	int32_t now = ROUND_LONGEST;
+	for (int i = 0; i < playersHere; ++i) {
+		now = roundDone[i] < now ? roundDone[i] : now;
+	}
+	int64_t end = ROUND_LONGEST;
+	for (int i = 0; i < playersHere; ++i) {
+		int64_t const shortest = (int64_t) now + sioShortestTransfer(gbas[i]);
+		int32_t const left = sioTransferLeft(gbas[i]);
+		end = shortest < end ? shortest : end;
+		if (left > 0 && roundDone[i] + left < end) {
+			end = roundDone[i] + left;
+		}
+	}
+	return (int32_t) end;
+}
+
+// Runs the Game Boy Advances for a frame's worth of cycles each, in rounds.
 static void runAdvances(void) {
 	for (int i = 0; i < playersHere; ++i) {
 		roundDone[i] = gbaAhead[i];
-		sliceEvents[i] = (struct Event) { .callback = sliceEnd, .context = (void*) (intptr_t) i, .priority = 0xFF, .endsRun = true };
+		sliceEvents[i] = (struct Event) { .callback = sliceEnd, .context = (void*) (intptr_t) i, .priority = 0x7F, .endsRun = true };
 	}
 	for (;;) {
 		bool unfinished = false;
-		bool anyLinking = false;
 		for (int i = 0; i < playersHere; ++i) {
 			unfinished |= roundDone[i] < GBA_FRAME_CYCLES;
-			anyLinking |= linking(gbas[i]);
 		}
 		if (!unfinished) {
 			break;
 		}
-		roundCycles = anyLinking ? SLICE_LINKING : SLICE_IDLE;
+		roundEnd = nextRoundEnd();
 		workersRun(runRound, playersHere);
 		carryCable();
 		carryAir();
