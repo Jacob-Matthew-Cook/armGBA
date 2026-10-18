@@ -341,26 +341,47 @@ void secondPlayerSavePath(const char* gamePath, int player, const char* extensio
 	armgbaSavePath(gamePath, within, extension, saveDirectory, out, outSize);
 }
 
-// Whether saves are kept beside the games: the save directory is player 1's game's folder. Each
-// game's saves from other devices then go beside that game.
-static bool besideGames(const char* firstPath, const char* saveDirectory) {
+// The folder a game's saves go in, by where player 1's game keeps its own: beside the game when
+// saves are kept with the games (the save directory is player 1's game's folder); in the folder
+// named for the game's folder when RetroArch sorts saves by content folder (the save directory is
+// named for player 1's game's folder); or else the save directory.
+static void gameSaveFolder(const char* gamePath, const char* firstPath, const char* saveDirectory, char* out, size_t outSize) {
 	char firstFolder[4096];
+	char gameFolder[4096];
 	folderOf(firstPath, firstFolder, sizeof(firstFolder));
-	size_t length = saveDirectory ? strlen(saveDirectory) : 0;
-	length -= length > 1 && saveDirectory[length - 1] == '/';
-	return !length || (length == strlen(firstFolder) && !strncmp(saveDirectory, firstFolder, length));
+	folderOf(gamePath, gameFolder, sizeof(gameFolder));
+	char directory[4096];
+	snprintf(directory, sizeof(directory), "%s", saveDirectory ? saveDirectory : "");
+	size_t length = strlen(directory);
+	while (length > 1 && directory[length - 1] == '/') {
+		directory[--length] = '\0';
+	}
+	const char* firstName = strrchr(firstFolder, '/');
+	const char* directoryName = strrchr(directory, '/');
+	const char* gameName = strrchr(gameFolder, '/');
+	if (!length || !strcmp(directory, firstFolder)) {
+		snprintf(out, outSize, "%s", gameFolder);
+	} else if (firstName && directoryName && gameName && !strcmp(firstName, directoryName)) {
+		snprintf(out, outSize, "%.*s%s", (int) (directoryName - directory), directory, gameName);
+	} else {
+		snprintf(out, outSize, "%s", directory);
+	}
 }
 
 void secondRemoteSavePath(const char* gamePath, int player, const char* extension, const char* firstPath, const char* saveDirectory,
                           char* out, size_t outSize) {
 	char within[32];
 	snprintf(within, sizeof(within), "Remote/Player %d/", player + 1);
-	armgbaSavePath(gamePath, within, extension, besideGames(firstPath, saveDirectory) ? NULL : saveDirectory, out, outSize);
+	char folder[4096];
+	gameSaveFolder(gamePath, firstPath, saveDirectory, folder, sizeof(folder));
+	armgbaSavePath(gamePath, within, extension, folder, out, outSize);
 }
 
 void secondReceivedSavePath(const char* gamePath, const char* extension, const char* firstPath, const char* saveDirectory, char* out,
                             size_t outSize) {
-	armgbaSavePath(gamePath, "Received/", extension, besideGames(firstPath, saveDirectory) ? NULL : saveDirectory, out, outSize);
+	char folder[4096];
+	gameSaveFolder(gamePath, firstPath, saveDirectory, folder, sizeof(folder));
+	armgbaSavePath(gamePath, "Received/", extension, folder, out, outSize);
 }
 
 void secondMakeFolders(const char* filePath) {
