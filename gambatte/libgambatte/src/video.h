@@ -58,7 +58,6 @@ public:
 	void saveState(SaveState &state) const;
 	void loadState(SaveState const &state, unsigned char const *oamram);
 	void setDmgPaletteColor(unsigned palNum, unsigned colorNum, unsigned long rgb32);
-	void setScreenOffBackground(bool enabled) { offBackground_ = enabled; }
 	void setCgbPalette(unsigned *lut);
 	void setVideoBuffer(uint_least32_t *videoBuf, std::ptrdiff_t pitch);
 	void setLayers(unsigned mask) { ppu_.setLayers(mask); }
@@ -233,7 +232,6 @@ private:
 	unsigned short dmgColorsBgr15_[3 * 4];
 	// armGBA: a Game Boy's screen while the game has it off, and whether it shows the background color instead
 	unsigned long offColor_;
-	bool offBackground_;
 	unsigned long  cgbColorsRgb32_[32768];
 	unsigned char  bgpData_[2 * max_num_palettes * num_palette_entries];
 	unsigned char objpData_[2 * max_num_palettes * num_palette_entries];

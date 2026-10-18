@@ -332,7 +332,6 @@ public:
 			lcd_.setDmgPaletteColor(palNum, colorNum, rgb32);
 	}
 
-	void setScreenOffBackground(bool enabled) { lcd_.setScreenOffBackground(enabled); }
     
 	void blackScreen() {
 		lcd_.blackScreen();
