@@ -1887,10 +1887,10 @@ static void runGameBoys(void) {
 }
 #endif
 
-// The cable between the Game Boy Advances here. The console clocking a transfer puts its data on the
-// cable when it starts. When it ends, in normal mode player 1 and 2's consoles swap data, and the
-// other takes the transfer if it is waiting for one; in multiplayer mode the parent's word and each
-// child's go to every child.
+// The cable between the Game Boy Advances here. When a transfer ends, in normal mode player 1 and 2's
+// consoles swap the data each had as it started, the other taking it if it is waiting for a
+// transfer; in multiplayer mode the parent's word and each child's go to every child.
+
 // Where a console is in the frame while it runs in a round.
 static int32_t roundNow(int i) {
 	return roundDone[i] + (int32_t) ((uint32_t) timingCurrentTime(gbas[i]) - roundStartTime[i]);
@@ -2020,7 +2020,6 @@ static void sliceEnd(struct GBA* machine, void* context, uint32_t late) {
 	machine->returnRequested = true;
 	timingInterrupt(machine);
 }
-
 
 // One console's part of a round: it runs to the round's end, or until a transfer it clocked waits for
 // the others' data. A frame it finishes on the way is kept as its picture.
