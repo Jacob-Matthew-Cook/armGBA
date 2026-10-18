@@ -37,8 +37,10 @@ void secondSavePath(const char* gamePath, const char* suffix, const char* extens
 void secondPlayerSavePath(const char* gamePath, int player, const char* extension, const char* saveDirectory, char* out,
                           size_t outSize);
 // Where a device that joined another's netplay session keeps that session's saves, by the session's
-// players: armGBA/Remote/Player N in the save directory, or beside the game when saves are kept beside
-// the games, so a Game Boy Color game's are in the gbc folder though player 1 played from gb.
+// players: armGBA/Remote/Player N in the folder that game's saves go in, which can differ from player
+// 1's game's: beside the game when saves are kept with the games, or in the folder for the game's
+// folder when RetroArch sorts saves by content folder, so a Game Boy Color game's are with gbc's though
+// player 1 played from gb.
 void secondRemoteSavePath(const char* gamePath, int player, const char* extension, const char* firstPath, const char* saveDirectory,
                           char* out, size_t outSize);
 // Where saves sent by the other player of a Separate link are kept: armGBA/Received, in the same
