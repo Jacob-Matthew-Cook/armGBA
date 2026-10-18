@@ -101,16 +101,25 @@ static int32_t gbaAhead[MAX_PLAYERS];
 static struct Event sliceEvents[MAX_PLAYERS];
 static bool sliceOver[MAX_PLAYERS];
 static int32_t roundDone[MAX_PLAYERS];
-// The cable: each console's transfer, and the others' data for it, handed over between rounds.
+// The cable: each console's transfer, and the others' data for it, handed over between rounds. A
+// transfer can end in the frame after it starts, so the transfers are part of a state.
+enum { MULTIPLAYER = 2 };
 static struct SioLink pairLinks[MAX_PLAYERS];
-static int pairMode[MAX_PLAYERS];
-static uint32_t pairOut[MAX_PLAYERS];
-static bool pairWaiting[MAX_PLAYERS];
-static bool pairAnswered[MAX_PLAYERS];
-static uint32_t pairIn[MAX_PLAYERS][3];
-// The data a transfer carries is each console's as the transfer starts, as the wires shift it out
-// from then on. Each console's writes to it in a round are kept, by when, with its data as the
-// round began, so the others' data at a start inside the round can be told after it.
+static struct Transfer {
+	int32_t mode;
+	uint32_t out;
+	bool waiting;
+	bool answered;
+	uint32_t in[3];
+	// The others' data: as the transfer starts in normal mode, where both ends shift theirs out from
+	// the first bit; as it ends in multiplayer mode, as Kirby & The Amazing Mirror needs with four
+	// players. Consoles whose data is still to be taken, by bit.
+	uint32_t data[MAX_PLAYERS];
+	int32_t takeAt[MAX_PLAYERS];
+	uint8_t pending;
+} transfers[MAX_PLAYERS];
+// Each console's writes to the data it sends in a round are kept, by when, with its data as the
+// round began, so its data at a moment inside the round can be told after it.
 enum { DATA_WRITES = 8 };
 static struct {
 	uint32_t before;
@@ -119,9 +128,6 @@ static struct {
 	uint32_t value[DATA_WRITES];
 } dataWrites[MAX_PLAYERS];
 static uint32_t roundStartTime[MAX_PLAYERS];
-static bool pairStarted[MAX_PLAYERS];
-static int32_t pairStart[MAX_PLAYERS];
-static uint32_t pairData[MAX_PLAYERS][MAX_PLAYERS];
 // The Wireless Adapters' air: the consoles here hear each other, the messages each sends carried
 // between rounds.
 enum { AIR_QUEUE = 16, AIR_BYTES = 100 };
@@ -1903,12 +1909,18 @@ static uint32_t dataOf(int i) {
 }
 
 static void pairBegin(void* context, int mode, uint32_t out, int32_t cycles) {
-	(void) cycles;
 	int const i = (int) (intptr_t) context;
-	pairMode[i] = mode;
-	pairOut[i] = out;
-	pairStarted[i] = true;
-	pairStart[i] = roundNow(i);
+	struct Transfer* const t = &transfers[i];
+	memset(t, 0, sizeof(*t));
+	t->mode = mode;
+	t->out = out;
+	int32_t const start = roundNow(i);
+	for (int k = 0; k < playersHere; ++k) {
+		if (k != i) {
+			t->takeAt[k] = start + (mode == MULTIPLAYER ? cycles : 0);
+			t->pending |= 1 << k;
+		}
+	}
 }
 
 static void pairWrote(void* context) {
@@ -1930,14 +1942,15 @@ static uint32_t dataAt(int i, int32_t when) {
 	return value;
 }
 
-// Between rounds: the others' data for each transfer that started in the round; then the writes
-// are forgotten, and each console's data is noted as the next round begins.
-static void noteStarts(void) {
+// Between rounds: the data due in the round, for each transfer under way; then the writes are
+// forgotten, and each console's data is noted as the next round begins.
+static void takeData(void) {
 	for (int i = 0; i < playersHere; ++i) {
-		if (pairStarted[i]) {
-			pairStarted[i] = false;
-			for (int k = 0; k < playersHere; ++k) {
-				pairData[i][k] = dataAt(k, pairStart[i]);
+		struct Transfer* const t = &transfers[i];
+		for (int k = 0; t->pending && k < playersHere; ++k) {
+			if ((t->pending & 1 << k) && t->takeAt[k] <= roundDone[k]) {
+				t->data[k] = dataAt(k, t->takeAt[k]);
+				t->pending &= ~(1 << k);
 			}
 		}
 	}
@@ -1949,14 +1962,15 @@ static void noteStarts(void) {
 
 static bool pairFinish(void* context, uint32_t in[3]) {
 	int const i = (int) (intptr_t) context;
-	if (!pairAnswered[i]) {
-		pairWaiting[i] = true;
+	struct Transfer* const t = &transfers[i];
+	if (!t->answered) {
+		t->waiting = true;
 		gbas[i]->returnRequested = true;
 		timingInterrupt(gbas[i]);
 		return false;
 	}
-	pairAnswered[i] = false;
-	memcpy(in, pairIn[i], sizeof(pairIn[i]));
+	t->answered = false;
+	memcpy(in, t->in, sizeof(t->in));
 	return true;
 }
 
@@ -1976,18 +1990,17 @@ static void carryReady(void) {
 
 // A console's transfer ending: it takes the others' data, and they take its.
 static void exchange(int i) {
-	enum { MULTI = 2 };
-	pairAnswered[i] = true;
-	uint32_t* const in = pairIn[i];
-	in[0] = 0xFFFFFFFF;
-	in[1] = in[2] = 0xFFFF;
+	struct Transfer* const t = &transfers[i];
+	t->answered = true;
+	t->in[0] = 0xFFFFFFFF;
+	t->in[1] = t->in[2] = 0xFFFF;
 	int mode;
 	bool ready;
-	if (pairMode[i] == MULTI) {
-		uint32_t values[4] = { pairOut[i] & 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+	if (t->mode == MULTIPLAYER) {
+		uint32_t values[4] = { t->out & 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
 		for (int k = 1; k < playersHere; ++k) {
 			sioOutgoing(gbas[k], &mode, &ready);
-			values[k] = in[k - 1] = mode == MULTI ? pairData[i][k] & 0xFFFF : 0xFFFF;
+			values[k] = t->in[k - 1] = mode == MULTIPLAYER ? t->data[k] & 0xFFFF : 0xFFFF;
 		}
 		for (int k = 1; k < playersHere; ++k) {
 			sioReceive(gbas[k], values);
@@ -1995,8 +2008,8 @@ static void exchange(int i) {
 	} else if (i < 2) {
 		struct GBA* const other = gbas[1 - i];
 		sioOutgoing(other, &mode, &ready);
-		in[0] = ready ? pairData[i][1 - i] : 0xFFFFFFFF;
-		uint32_t const values[4] = { pairOut[i], 0xFFFF, 0xFFFF, 0xFFFF };
+		t->in[0] = ready ? t->data[1 - i] : 0xFFFFFFFF;
+		uint32_t const values[4] = { t->out, 0xFFFF, 0xFFFF, 0xFFFF };
 		sioReceive(other, values);
 	}
 }
@@ -2005,8 +2018,8 @@ static void exchange(int i) {
 // inside a round, which waited for it to end.
 static void carryCable(void) {
 	for (int i = 0; i < playersHere; ++i) {
-		if (pairWaiting[i] || (!pairAnswered[i] && sioTransferLeft(gbas[i]) == 0)) {
-			pairWaiting[i] = false;
+		if (transfers[i].waiting || (!transfers[i].answered && sioTransferLeft(gbas[i]) == 0)) {
+			transfers[i].waiting = false;
 			exchange(i);
 		}
 	}
@@ -2028,14 +2041,14 @@ static int32_t roundEnd;
 static void runRound(int i) {
 	struct GBA* const machine = gbas[i];
 	int32_t const left = roundEnd - roundDone[i];
-	if (left <= 0 || pairWaiting[i]) {
+	if (left <= 0 || transfers[i].waiting) {
 		return;
 	}
 	uint32_t const start = timingCurrentTime(machine);
 	roundStartTime[i] = start;
 	sliceOver[i] = false;
 	timingSchedule(machine, &sliceEvents[i], left);
-	while (!sliceOver[i] && !pairWaiting[i]) {
+	while (!sliceOver[i] && !transfers[i].waiting) {
 		uint32_t const frame = machine->video.frameCounter;
 		gbaRunPart(machine);
 		if (machine->video.frameCounter != frame) {
@@ -2083,13 +2096,16 @@ static void runAdvances(void) {
 		}
 		roundEnd = nextRoundEnd();
 		workersRun(runRound, playersHere);
-		noteStarts();
+		takeData();
 		carryCable();
 		carryAir();
 		carryReady();
 	}
 	for (int i = 0; i < playersHere; ++i) {
 		gbaAhead[i] = roundDone[i] - GBA_FRAME_CYCLES;
+		for (int k = 0; k < playersHere; ++k) {
+			transfers[i].takeAt[k] -= GBA_FRAME_CYCLES;
+		}
 	}
 }
 
@@ -2223,7 +2239,7 @@ static size_t consolesStateSize(void) {
 	}
 #endif
 	if (gbaPair) {
-		return playersHere * (sizeof(gbaAhead[0]) + gbaStateSize() + sizeof(gbaShown[0]));
+		return playersHere * (sizeof(gbaAhead[0]) + gbaStateSize() + sizeof(transfers[0]) + sizeof(pairLinks[0].ready) + sizeof(gbaShown[0]));
 	}
 	return gbaStateSize();
 }
@@ -2255,13 +2271,19 @@ static bool saveConsoles(void* data, size_t size) {
 		gbaSaveState(gba, data);
 		return true;
 	}
-	// The consoles here: how far each ran past the last frame, their states, then their last pictures.
+	// The consoles here: how far each ran past the last frame, their states, the cable between them,
+	// then their last pictures.
 	uint8_t* at = data;
 	memcpy(at, gbaAhead, playersHere * sizeof(gbaAhead[0]));
 	at += playersHere * sizeof(gbaAhead[0]);
 	for (int i = 0; i < playersHere; ++i) {
 		gbaSaveState(gbas[i], at);
 		at += gbaStateSize();
+	}
+	memcpy(at, transfers, playersHere * sizeof(transfers[0]));
+	at += playersHere * sizeof(transfers[0]);
+	for (int i = 0; i < playersHere; ++i) {
+		*at++ = pairLinks[i].ready;
 	}
 	memcpy(at, gbaShown, playersHere * sizeof(gbaShown[0]));
 	return true;
@@ -2292,6 +2314,11 @@ static bool loadConsoles(const void* data, size_t size) {
 		at += gbaStateSize();
 	}
 	memcpy(gbaAhead, ahead, playersHere * sizeof(gbaAhead[0]));
+	memcpy(transfers, at, playersHere * sizeof(transfers[0]));
+	at += playersHere * sizeof(transfers[0]);
+	for (int i = 0; i < playersHere; ++i) {
+		pairLinks[i].ready = *at++;
+	}
 	memcpy(gbaShown, at, playersHere * sizeof(gbaShown[0]));
 	return true;
 }
@@ -2318,6 +2345,8 @@ bool retro_unserialize(const void* data, size_t size) {
 	if (size < retro_serialize_size() || !loadConsoles(data, consolesStateSize())) {
 		return false;
 	}
+	// A loaded state has every console's save as it was; player 1's isn't copied over them after.
+	copySaves = 0;
 	if (bothConsoles()) {
 		memcpy(restartHeld, (const uint8_t*) data + consolesStateSize(), sizeof(restartHeld));
 	}
