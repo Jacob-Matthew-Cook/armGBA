@@ -135,8 +135,8 @@ Game Boy Color and Game Boy Advance color correction and the free boot ROMs buil
   Saves says. Copy Save copies one player's save over another's (never player 1's) outside netplay,
   and restarts that player's console; the save it replaces is kept beside it, named for when, such
   as Game.20261018-153012.srm. Load Save makes one of those earlier saves the player's save again,
-  keeping the one it replaces the same way, and Earlier Saves Kept limits how many each player
-  keeps. In netplay the session runs the host's games and saves: the host writes the players' saves
+  or with Load Into another player's, keeping the one it replaces the same way, and Earlier Saves
+  Kept limits how many each player keeps. In netplay the session runs the host's games and saves: the host writes the players' saves
   as the game closes, and a device that joined leaves its own as they were.
 
 The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of
