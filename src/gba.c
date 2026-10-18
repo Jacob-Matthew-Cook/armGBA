@@ -30,6 +30,10 @@ static void scheduleChange(struct GBA* gba, struct IrqChange* slots, bool value,
 	while (change->busy && change < &slots[3]) {
 		++change;
 	}
+	// With every slot in flight, the newest change takes the last one's place.
+	if (change->busy) {
+		timingDeschedule(gba, &change->event);
+	}
 	change->value = value;
 	change->busy = true;
 	timingSchedule(gba, &change->event, when);
