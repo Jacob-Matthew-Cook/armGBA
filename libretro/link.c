@@ -35,6 +35,9 @@ enum {
 	// How often the leader tells how far it has got: Game Boy Advance cycles, Game Boy samples.
 	GRANT_CYCLES = 16384,
 	GRANT_SAMPLES = 2048,
+	// The furthest ahead a Game Boy Advance follower's stop is scheduled, well inside the event
+	// timing's 32 bits; a later grant moves it.
+	STOP_HORIZON = 0x10000000,
 	// The longest Wireless Adapter message.
 	AIR_BYTES = 100,
 };
@@ -84,7 +87,7 @@ static struct Event pollEvent;
 
 // Transfers the other console clocked: taken when this one next looks, or with exact timing,
 // answered at their start and taken at their end.
-static struct {
+static struct Request {
 	uint16_t seq;
 	uint8_t mode;
 	uint32_t data;
@@ -349,18 +352,21 @@ static bool mayRunOn(void) {
 	return !following() || stopAt() > linkTime();
 }
 
+static uint64_t untilStop(void) {
+	uint64_t const at = stopAt();
+	uint64_t const time = linkTime();
+	return at > time ? at - time : 0;
+}
+
 static void scheduleStop(void) {
 	if (console != CONSOLE_GBA || !gba) {
 		return;
 	}
 	timingDeschedule(gba, &exact.stop);
-	if (!following()) {
-		return;
+	if (following()) {
+		uint64_t const wait = untilStop();
+		timingSchedule(gba, &exact.stop, wait < STOP_HORIZON ? (int32_t) wait : STOP_HORIZON);
 	}
-	uint64_t const at = stopAt();
-	uint64_t const time = linkTime();
-	uint64_t const wait = at > time ? at - time : 0;
-	timingSchedule(gba, &exact.stop, wait < 0x10000000 ? (int32_t) wait : 0x10000000);
 }
 
 static void heardGrant(uint64_t at) {
@@ -545,22 +551,16 @@ static void heardRequest(uint16_t from, const uint8_t* message, size_t size) {
 	if (requestCount == QUEUE) {
 		return;
 	}
-	requests[requestCount].seq = get16(message + 2);
-	requests[requestCount].mode = message[1];
-	requests[requestCount].data = get32(message + 4);
-	requests[requestCount].answered = false;
-	requests[requestCount].timed = false;
+	struct Request* const request = &requests[requestCount++];
+	*request = (struct Request) { .seq = get16(message + 2), .mode = message[1], .data = get32(message + 4) };
 	if (size >= 24 && exactOn()) {
-		uint64_t const start = get64(message + 8);
-		uint64_t const end = get64(message + 16);
+		request->start = get64(message + 8);
+		request->end = get64(message + 16);
 		exact.leader = from;
-		align(start);
-		requests[requestCount].timed = start >= linkTime();
-		requests[requestCount].start = start;
-		requests[requestCount].end = end;
-		exact.granted = end > exact.granted ? end : exact.granted;
+		align(request->start);
+		request->timed = request->start >= linkTime();
+		exact.granted = request->end > exact.granted ? request->end : exact.granted;
 	}
-	++requestCount;
 	scheduleStop();
 }
 
@@ -571,12 +571,20 @@ static void poll(void) {
 	takeRequests();
 }
 
+// A Game Boy Advance's regular look at the cable.
+static void gbaLook(void) {
+	takeRequests();
+	tellMode(false);
+	grant();
+}
+
 static void pollEventRun(struct GBA* machine, void* context, uint32_t late) {
 	(void) context;
 	(void) late;
-	poll();
-	tellMode(false);
-	grant();
+	if (pollPackets) {
+		pollPackets();
+	}
+	gbaLook();
 	if (onCable()) {
 		timingSchedule(machine, &pollEvent, POLL_CYCLES);
 	}
@@ -772,8 +780,8 @@ void linkSetEnvironment(retro_environment_t callback) {
 	exact.stop.priority = 0x7E;
 }
 
-static void consoleChanged(int now) {
-	console = now;
+static void consoleChanged(int kind) {
+	console = kind;
 	if (session) {
 		hello();
 	}
@@ -821,9 +829,7 @@ bool linkExactOn(void) {
 void linkGbaFrame(struct GBA* machine) {
 	timingDeschedule(machine, &pollEvent);
 	if (onCable()) {
-		takeRequests();
-		tellMode(false);
-		grant();
+		gbaLook();
 		scheduleStop();
 		timingSchedule(machine, &pollEvent, POLL_CYCLES);
 	}
@@ -871,9 +877,8 @@ long linkGbAllowance(void) {
 	if (!following()) {
 		return LONG_MAX;
 	}
-	uint64_t const at = stopAt();
-	uint64_t const time = linkTime();
-	return at > time ? (long) (at - time < LONG_MAX ? at - time : LONG_MAX) : 0;
+	uint64_t const wait = untilStop();
+	return wait < LONG_MAX ? (long) wait : LONG_MAX;
 }
 
 void linkGbRan(unsigned samples) {

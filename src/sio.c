@@ -170,30 +170,36 @@ int32_t sioTransferLeft(struct GBA* gba) {
 	return timingIsScheduled(gba, &gba->sio.completeEvent) ? timingUntil(gba, &gba->sio.completeEvent) : -1;
 }
 
-int32_t sioShortestTransfer(const struct GBA* gba) {
-	const struct Sio* sio = &gba->sio;
-	switch (sio->mode) {
-	case SIO_NORMAL_8:
-	case SIO_NORMAL_32:
-		return TRANSFER_DELAY + 8 * CPU_FREQUENCY / (((sio->siocnt & 2) ? 2048 : 256) * 1024);
-	case SIO_MULTI:
-		return TRANSFER_DELAY + MULTI_CYCLES[sio->siocnt & 3][linked(sio) ? sio->link->players - 1 : 0];
-	default:
-		return INT32_MAX;
-	}
+// Cycles per bit in normal mode, at 256 or 2048 KHz.
+static int32_t bitCycles(const struct Sio* sio) {
+	return CPU_FREQUENCY / (((sio->siocnt & 2) ? 2048 : 256) * 1024);
 }
 
 // Returns how long a transfer takes in each mode at the chosen baud rate or clock.
 static int32_t transferCycles(const struct Sio* sio) {
 	switch (sio->mode) {
 	case SIO_NORMAL_8:
-		return 8 * CPU_FREQUENCY / (((sio->siocnt & 2) ? 2048 : 256) * 1024);
+		return 8 * bitCycles(sio);
 	case SIO_NORMAL_32:
-		return 32 * CPU_FREQUENCY / (((sio->siocnt & 2) ? 2048 : 256) * 1024);
+		return 32 * bitCycles(sio);
 	case SIO_MULTI:
 		return MULTI_CYCLES[sio->siocnt & 3][linked(sio) ? sio->link->players - 1 : 0];
 	default:
 		return 0;
+	}
+}
+
+// A normal-mode game can switch between 8 and 32 bits with its next write, so the shorter counts.
+int32_t sioShortestTransfer(const struct GBA* gba) {
+	const struct Sio* sio = &gba->sio;
+	switch (sio->mode) {
+	case SIO_NORMAL_8:
+	case SIO_NORMAL_32:
+		return TRANSFER_DELAY + 8 * bitCycles(sio);
+	case SIO_MULTI:
+		return TRANSFER_DELAY + transferCycles(sio);
+	default:
+		return INT32_MAX;
 	}
 }
 
@@ -259,13 +265,14 @@ static void writeSiocnt(struct GBA* gba, uint16_t value) {
 	gba->io[IO(REG_SIOCNT)] = sio->siocnt;
 	gba->io[IO(REG_RCNT)] = sio->rcnt;
 	if (start) {
+		int32_t const length = TRANSFER_DELAY + transferCycles(sio);
 		if (sio->rfu.attached) {
 			sio->rfu.out = outgoing(gba);
 		} else if (linked(sio)) {
-			sio->link->begin(sio->link->context, sio->mode, outgoing(gba), TRANSFER_DELAY + transferCycles(sio));
+			sio->link->begin(sio->link->context, sio->mode, outgoing(gba), length);
 		}
 		timingDeschedule(gba, &sio->completeEvent);
-		timingSchedule(gba, &sio->completeEvent, TRANSFER_DELAY + transferCycles(sio));
+		timingSchedule(gba, &sio->completeEvent, length);
 	}
 	rfuSiocntWritten(gba);
 }

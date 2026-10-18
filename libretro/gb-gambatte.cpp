@@ -43,9 +43,21 @@ enum {
 	// Extra room in the state size reported to the frontend: for the state to grow, and for the
 	// extra work RAM a Game Boy Color has if the game restarts as one.
 	STATE_SLACK = 4096 + 6 * 4096,
-	// With the consoles of a link here, each runs this many native samples (256 cycles) at a time.
-	PAIR_SLICE = 128,
 	MAX_PLAYERS = 4,
+	// With exact link timing, the most samples run between looks at the network.
+	EXACT_PART = 2048,
+};
+
+// Gambatte's linkStatus calls; a value below 256 shifts that byte in.
+enum {
+	LINK_CLOCKED = 256, // whether this Game Boy's own clock finished a transfer
+	LINK_ACK = 257,     // clears that
+	LINK_OUT = 258,     // the byte being sent (SB)
+	LINK_ON = 264,
+	LINK_OFF = 265,
+	LINK_STOP = 266,    // ends the transfer under way, stopping the console's own clock
+	LINK_CONTROL = 267, // SC
+	LINK_LEFT = 268,    // cycles until the transfer under way ends, or -1
 };
 
 void linkClocked();
@@ -137,8 +149,8 @@ void adapterTransfer() {
 	for (int i = 0; i < DMG07_PORTS; ++i) {
 		in[i] = 0xFF;
 		gambatte::GB* const gb = i < players ? consoles[i].gb : 0;
-		if (gb && (gb->linkStatus(267) & 0x81) == 0x80) {
-			in[i] = gb->linkStatus(258);
+		if (gb && (gb->linkStatus(LINK_CONTROL) & 0x81) == 0x80) {
+			in[i] = gb->linkStatus(LINK_OUT);
 			gb->linkStatus(dmg07Out(&adapter, i));
 		}
 	}
@@ -518,7 +530,7 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 		std::snprintf(error, errorSize, "armGBA can't run this Game Boy game");
 		return false;
 	}
-	s->gb->linkStatus(players > 1 ? 264 : 265);
+	s->gb->linkStatus(players > 1 ? LINK_ON : LINK_OFF);
 	if (!boot.empty()) {
 		if (s->gb->loadBios(boot) < 0) {
 			std::snprintf(error, errorSize, "armGBA can't read %s", boot.c_str());
@@ -548,14 +560,14 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 
 // The eight bits of a transfer this Game Boy clocked are out: the other one's byte comes back.
 void linkClocked() {
-	s->gb->linkStatus(257);
-	s->gb->linkStatus(linkGbTransfer(s->gb->linkStatus(258)));
+	s->gb->linkStatus(LINK_ACK);
+	s->gb->linkStatus(linkGbTransfer(s->gb->linkStatus(LINK_OUT)));
 }
 
 void updateLink() {
 	if (s->linked != linkGbConnected()) {
 		s->linked = !s->linked;
-		s->gb->linkStatus(s->linked ? 264 : 265);
+		s->gb->linkStatus(s->linked ? LINK_ON : LINK_OFF);
 	}
 }
 
@@ -604,7 +616,7 @@ void libretroGbRestart(void) {
 	libretroGbReset(s->wanted);
 	if (players > 1) {
 		s->gb->setLinkCallback(0);
-		s->gb->linkStatus(264);
+		s->gb->linkStatus(LINK_ON);
 	}
 	s->linked = false;
 }
@@ -726,27 +738,27 @@ void endFrame() {
 // other's byte. The other takes it only if its serial port is waiting for a clock or clocking too.
 // Both stop their own clocks, as the transfer is done.
 void exchange(Console& clocked, Console& other) {
-	clocked.gb->linkStatus(257);
-	int const out = clocked.gb->linkStatus(258);
-	clocked.gb->linkStatus(other.gb->linkStatus(258));
-	clocked.gb->linkStatus(266);
+	clocked.gb->linkStatus(LINK_ACK);
+	int const out = clocked.gb->linkStatus(LINK_OUT);
+	clocked.gb->linkStatus(other.gb->linkStatus(LINK_OUT));
+	clocked.gb->linkStatus(LINK_STOP);
 	other.gb->linkStatus(out);
-	other.gb->linkStatus(266);
+	other.gb->linkStatus(LINK_STOP);
 }
 
 // Sound samples until a Game Boy's transfer on its own clock ends: -1 for none, 0 when due.
 long serialLeft(Console& c) {
-	if (c.gb->linkStatus(256)) {
+	if (c.gb->linkStatus(LINK_CLOCKED)) {
 		return 0;
 	}
-	int const cycles = c.gb->linkStatus(268);
+	int const cycles = c.gb->linkStatus(LINK_LEFT);
 	return cycles < 0 ? -1 : cycles / 2;
 }
 
 // The fewest samples a transfer a Game Boy could start now takes: eight bits at 8192 Hz, or on a
 // Game Boy Color with SC's fast bit, at 262144 Hz.
 long shortestTransfer(Console& c) {
-	return c.gb->isCgb() && c.gb->linkStatus(267) & 0x02 ? 64 : 2048;
+	return c.gb->isCgb() && c.gb->linkStatus(LINK_CONTROL) & 0x02 ? 64 : 2048;
 }
 
 // Where the consoles next meet: at the frame's end, at the next transfer's end on the cable or the
@@ -778,9 +790,9 @@ void meet(long now) {
 		// On the adapter, a Game Boy's own clock reaches nothing.
 		for (int i = 0; i < players; ++i) {
 			if (serialLeft(consoles[i]) == 0) {
-				consoles[i].gb->linkStatus(257);
+				consoles[i].gb->linkStatus(LINK_ACK);
 				consoles[i].gb->linkStatus(0xFF);
-				consoles[i].gb->linkStatus(266);
+				consoles[i].gb->linkStatus(LINK_STOP);
 			}
 		}
 		while (adapter.at <= now) {
@@ -797,23 +809,21 @@ void meet(long now) {
 
 // With exact link timing: this Game Boy's transfer ends, and the other's byte comes back.
 void clockedExactly() {
-	s->gb->linkStatus(257);
-	int const in = linkGbTransfer(s->gb->linkStatus(258));
+	s->gb->linkStatus(LINK_ACK);
+	int const in = linkGbTransfer(s->gb->linkStatus(LINK_OUT));
 	s->gb->linkStatus(in & 0xFF);
-	s->gb->linkStatus(266);
+	s->gb->linkStatus(LINK_STOP);
 }
 
-// With exact link timing: a frame's samples in parts that stop where the link needs them to: at this
-// Game Boy's own transfer's end, and where the console leading has got to. A transfer of its own is
-// told to the other as soon as it is under way, so the other answers at its start. Waiting for long
-// at a stop, the frame ends early. A transfer that ends inside a part, on the last instruction's
-// cycles, is taken as the part ends.
+// With exact link timing: a frame in parts that end at this Game Boy's own transfer's end and where
+// the leading console has got to. Its own transfer is told to the other as soon as it starts. A long
+// wait at a stop ends the frame early.
 void runExactlyParts() {
 	long done = 0;
 	while (done < FRAME_SAMPLES) {
 		long const own = serialLeft(*s);
 		if (own > 0) {
-			linkGbClocking(s->gb->linkStatus(258), own, shortestTransfer(*s));
+			linkGbClocking(s->gb->linkStatus(LINK_OUT), own, shortestTransfer(*s));
 		}
 		linkGbPoll();
 		if (own == 0) {
@@ -827,7 +837,7 @@ void runExactlyParts() {
 			}
 			continue;
 		}
-		long count = std::min<long>(FRAME_SAMPLES - done, 2048);
+		long count = std::min<long>(FRAME_SAMPLES - done, EXACT_PART);
 		count = std::min(count, allowed);
 		count = own > 0 ? std::min(count, own) : count;
 		std::size_t samples = count;
@@ -837,6 +847,20 @@ void runExactlyParts() {
 		mixDown(samples);
 		done += samples;
 		linkGbRan(samples);
+	}
+}
+
+// Runs until a picture is drawn; linked, in sixteen parts with the cable checked between them.
+void runUntilDrawn() {
+	int const parts = s->linked ? 16 : 1;
+	bool drawn = false;
+	for (int runs = 0; !drawn && runs < 4 * parts; ++runs) {
+		if (s->linked) {
+			linkGbPoll();
+		}
+		std::size_t count = FRAME_SAMPLES / parts;
+		drawn = s->gb->runFor(s->pixels, LIBRETRO_GB_WIDTH, s->native, count) >= 0;
+		mixDown(count);
 	}
 }
 
@@ -857,28 +881,16 @@ extern "C" {
 const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** out, size_t* frames) {
 	beginFrame(keys);
 	updateLink();
-	if (s->linked && linkExactOn()) {
+	bool const exactly = s->linked && linkExactOn();
+	if (exactly) {
 		runExactly();
-		endFrame();
-		*out = s->samples;
-		*frames = s->sampleCount / 2;
-		return reinterpret_cast<const uint32_t*>(s->shown);
-	}
-	// Linked, a frame runs in sixteen parts with the cable checked between them.
-	int const parts = s->linked ? 16 : 1;
-	bool drawn = false;
-	for (int runs = 0; !drawn && runs < 4 * parts; ++runs) {
-		if (s->linked) {
-			linkGbPoll();
-		}
-		std::size_t count = FRAME_SAMPLES / parts;
-		drawn = s->gb->runFor(s->pixels, LIBRETRO_GB_WIDTH, s->native, count) >= 0;
-		mixDown(count);
+	} else {
+		runUntilDrawn();
 	}
 	endFrame();
 	*out = s->samples;
 	*frames = s->sampleCount / 2;
-	return reinterpret_cast<const uint32_t*>(s->pixels);
+	return reinterpret_cast<const uint32_t*>(exactly ? s->shown : s->pixels);
 }
 
 void libretroGbRunPlayers(const uint16_t keys[], const uint32_t* pictures[], const int16_t* out[], size_t frames[]) {
@@ -1122,7 +1134,7 @@ extern "C" {
 
 // Link cable: the byte this Game Boy shifts out, and one shifted in from the other's transfer.
 int libretroGbLinkOut(void) {
-	return s->gb ? s->gb->linkStatus(258) : 0xFF;
+	return s->gb ? s->gb->linkStatus(LINK_OUT) : 0xFF;
 }
 
 void libretroGbLinkIn(int byte) {
@@ -1132,7 +1144,7 @@ void libretroGbLinkIn(int byte) {
 }
 
 int libretroGbLinkControl(void) {
-	return s->gb ? s->gb->linkStatus(267) : 0;
+	return s->gb ? s->gb->linkStatus(LINK_CONTROL) : 0;
 }
 
 void libretroGbSelect(int which) {
@@ -1151,7 +1163,7 @@ void libretroGbSetPlayers(int count, bool withAdapter) {
 		consoles[i].ahead = behind[i];
 		if (consoles[i].gb) {
 			consoles[i].gb->setLinkCallback(count > 1 ? 0 : linkClocked);
-			consoles[i].gb->linkStatus(count > 1 ? 264 : 265);
+			consoles[i].gb->linkStatus(count > 1 ? LINK_ON : LINK_OFF);
 			consoles[i].linked = false;
 		}
 	}

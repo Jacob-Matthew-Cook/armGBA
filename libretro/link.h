@@ -6,8 +6,8 @@
 #ifndef ARMGBA_LIBRETRO_LINK_H
 #define ARMGBA_LIBRETRO_LINK_H
 
-// The link cable between players' consoles in a netplay session, carried over RetroArch's netpacket
-// interface. Each player runs their own game and save; the host is player 1. A transfer waits for
+// The link cable between two players' consoles in a netplay session, carried over RetroArch's
+// netpacket interface. Each player runs their own game and save; the host is player 1. A transfer waits for
 // the other end's data, so a link is smooth on a local network and slow over a long one.
 
 #include <stdbool.h>
@@ -43,13 +43,14 @@ bool linkExactOn(void);
 bool linkGbConnected(void);
 int linkGbTransfer(int out);
 void linkGbPoll(void);
-// Game Boy with exact timing: a transfer it clocks, told as soon as it is under way (sound samples
-// until it ends, and its length); the samples it may run before it must stop; the samples it ran;
-// and its stop, which takes the transfer due there or waits for the console leading, returning
-// false if it is still to wait, for the frame to end early.
+// Game Boy with exact timing.
+// A transfer it clocks is under way: samples left until it ends, and its length.
 void linkGbClocking(int out, long left, long length);
+// The samples it may run before its next stop.
 long linkGbAllowance(void);
 void linkGbRan(unsigned samples);
+// At its stop: takes the transfer due there, or waits for the leading console. False if it must
+// still wait, which ends the frame early.
 bool linkGbArrived(void);
 
 #ifdef __cplusplus
