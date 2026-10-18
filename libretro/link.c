@@ -24,8 +24,9 @@
 //
 // - Standard: the other console runs at its own pace and takes the transfer when it next looks.
 // - Exact: the console that clocked last leads, and the other stays just behind it, as far as the
-//   leader says it has got. A transfer names the cycles it starts and ends on: the follower runs to
-//   the start, answers with its data then, and takes the leader's data at the end, as on a cable.
+//   leader says it has got. A transfer names the cycles it starts and ends on: the follower answers
+//   with its data as of the start in normal mode, or of the end in multiplayer mode, and takes the
+//   leader's data at the end, as on a cable.
 //   When the lead passes to the console behind, the other moves its link clock back to meet it.
 
 enum {
@@ -96,7 +97,9 @@ static struct Request {
 	bool answered;
 	// This console's data, as it answered.
 	uint32_t mine;
-	uint64_t start;
+	// With exact timing: when this console answers (as the transfer starts in normal mode, as it ends
+	// in multiplayer mode, as the consoles here take the data) and when the transfer ends.
+	uint64_t answerAt;
 	uint64_t end;
 } requests[QUEUE];
 static int requestCount;
@@ -333,9 +336,9 @@ static void align(uint64_t leaderTime) {
 	}
 }
 
-// Where a request is next due: its start, to answer it, then its end, to take it.
+// Where a request is next due: when this console answers it, then its end, to take it.
 static uint64_t dueAt(int i) {
-	return requests[i].answered ? requests[i].end : requests[i].start;
+	return requests[i].answered ? requests[i].end : requests[i].answerAt;
 }
 
 // Where a follower stops next: where the leader has got to, or a transfer's start or end before.
@@ -560,13 +563,14 @@ static void heardRequest(uint16_t from, const uint8_t* message, size_t size) {
 	struct Request* const request = &requests[requestCount++];
 	*request = (struct Request) { .seq = get16(message + 2), .mode = message[1], .data = get32(message + 4) };
 	if (size >= 24 && exactOn()) {
-		request->start = get64(message + 8);
+		uint64_t const start = get64(message + 8);
 		request->end = get64(message + 16);
+		request->answerAt = request->mode == MODE_MULTI ? request->end : start;
 		exact.leader = from;
-		align(request->start);
+		align(start);
 		uint64_t const time = linkTime();
-		if (request->start < time) {
-			exact.origin += time - request->start;
+		if (start < time) {
+			exact.origin += time - start;
 		}
 		request->timed = true;
 		exact.granted = request->end > exact.granted ? request->end : exact.granted;
