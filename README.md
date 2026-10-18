@@ -125,7 +125,18 @@ families. The screen palettes, apart from Grayscale (gambatte-libretro's), are S
 Game Boy Color and Game Boy Advance color correction and the free boot ROMs built in.
 
 **Link play.** Link Mode picks how consoles link. Off, the default, is one console, with RetroArch's
-usual netplay. The other two:
+usual netplay.
+
+| You want to… | Use |
+| --- | --- |
+| Play alone | Link Mode Off |
+| Play together on one device, or smooth netplay | Together |
+| Link with someone who has only their own game, or whose device is too slow for two consoles | Separate |
+| Trade or battle in Pokemon FireRed, LeafGreen or Emerald over Wi-Fi | Separate with the Wireless Adapter |
+| Play Kirby & The Amazing Mirror or another fast-linking game online | Together |
+| Fix a Game Boy game that errors in Separate | Game Boy Link Timing: Exact |
+
+The two ways to link:
 
 - Separate: each device runs its own player's console, with their own game and save, and the cable
   crosses RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and
