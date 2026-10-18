@@ -1149,7 +1149,7 @@ static bool startOtherAdvances(int count, const void* const data[], const size_t
 		if (i) {
 			gbaReset(gbas[i], skipBios);
 		}
-		pairLinks[i] = (struct SioLink) { (void*) (intptr_t) i, count, i, pairBegin, pairFinish };
+		pairLinks[i] = (struct SioLink) { .context = (void*) (intptr_t) i, .players = count, .id = i, .begin = pairBegin, .finish = pairFinish };
 	}
 	attachPorts();
 	setAdvanceOffsets();
@@ -1890,6 +1890,20 @@ static bool pairFinish(void* context, uint32_t in[3]) {
 	return true;
 }
 
+// Between rounds: each console's SD line is high while every other console is in multiplayer mode.
+static void carryReady(void) {
+	for (int i = 0; i < playersHere; ++i) {
+		bool ready = true;
+		for (int k = 0; k < playersHere; ++k) {
+			ready &= k == i || sioMultiplayer(gbas[k]);
+		}
+		if (ready != pairLinks[i].ready) {
+			pairLinks[i].ready = ready;
+			sioLinkChanged(gbas[i]);
+		}
+	}
+}
+
 // Between rounds: a console's finished transfer takes the others' data, and they take its.
 static void carryCable(void) {
 	enum { MULTI = 2 };
@@ -1979,6 +1993,7 @@ static void runAdvances(void) {
 		workersRun(runRound, playersHere);
 		carryCable();
 		carryAir();
+		carryReady();
 	}
 	for (int i = 0; i < playersHere; ++i) {
 		gbaAhead[i] = roundDone[i] - GBA_FRAME_CYCLES;

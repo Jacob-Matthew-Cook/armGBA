@@ -45,6 +45,7 @@ enum {
 	MSG_ADAPTER_STATUS,
 	MSG_ADAPTER_PACKET,
 	MSG_ADAPTER_QUIT,
+	MSG_MODE,
 };
 // A request's mode: a GBA serial mode, or a Game Boy transfer that took the other's offered byte.
 enum { MODE_MULTI = 2, MODE_TOOK_OFFER = 0x80 };
@@ -207,7 +208,66 @@ static void announce(int slot) {
 	}
 }
 
+// The SD line: high while every other console on the cable is in multiplayer mode, as each tells
+// when it goes in or out of it.
+static struct {
+	uint16_t id;
+	bool multi;
+} modes[MAX_PEERS + 1];
+static int modeCount;
+static bool ownMulti;
+static bool ownMultiTold;
+
+static bool multiOf(uint16_t id) {
+	for (int i = 0; i < modeCount; ++i) {
+		if (modes[i].id == id) {
+			return modes[i].multi;
+		}
+	}
+	return false;
+}
+
+static void heardMode(uint16_t id, bool multi) {
+	int i = 0;
+	while (i < modeCount && modes[i].id != id) {
+		++i;
+	}
+	if (i == modeCount && modeCount < MAX_PEERS + 1) {
+		++modeCount;
+	}
+	if (i < modeCount) {
+		modes[i].id = id;
+		modes[i].multi = multi;
+	}
+}
+
+static void updateReady(void) {
+	bool ready = slotOf(self) >= 0;
+	for (int i = 0; i < cableCount; ++i) {
+		ready &= cable[i] == self || multiOf(cable[i]);
+	}
+	if (ready != sioLink.ready) {
+		sioLink.ready = ready;
+		if (gba && gba->sio.link == &sioLink) {
+			sioLinkChanged(gba);
+		}
+	}
+}
+
+// Tells the others when this console goes in or out of multiplayer mode, and again every so often
+// for a player who joined since.
+static void tellMode(bool again) {
+	bool const multi = gba && sioMultiplayer(gba);
+	if (session && (multi != ownMulti || !ownMultiTold || again)) {
+		ownMulti = multi;
+		ownMultiTold = true;
+		uint8_t const message[2] = { MSG_MODE, multi };
+		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
+	}
+}
+
 static void cableChanged(void) {
+	updateReady();
 	int slot = slotOf(self);
 	announce(slot);
 	if (gba && sioLink.players == (slot < 0 ? 1 : cableCount) && sioLink.id == (slot < 0 ? 0 : slot) && gba->sio.link == (wireless ? NULL : &sioLink)) {
@@ -395,6 +455,10 @@ static void receive(const void* buffer, size_t size, uint16_t from) {
 	case MSG_ADAPTER_QUIT:
 		adapterReceive(message, size, slotOf(from));
 		break;
+	case MSG_MODE:
+		heardMode(from, message[1]);
+		updateReady();
+		break;
 	case MSG_DONE:
 		if (size >= 12 && done.waiting && get16(message + 2) == done.seq) {
 			for (int i = 0; i < 4; ++i) {
@@ -530,6 +594,7 @@ static void pollEventRun(struct GBA* machine, void* context, uint32_t late) {
 	(void) context;
 	(void) late;
 	poll();
+	tellMode(false);
 	if (cableCount > 1) {
 		timingSchedule(machine, &pollEvent, POLL_CYCLES);
 	}
@@ -546,6 +611,8 @@ static void start(uint16_t id, retro_netpacket_send_t sendFunction, retro_netpac
 	offer.sent = false;
 	offered.ready = false;
 	resetAdapter();
+	modeCount = 0;
+	ownMultiTold = false;
 	peerCount = 0;
 	requestCount = 0;
 	own.waiting = false;
@@ -577,6 +644,7 @@ static void sessionPoll(void) {
 	} else if (slotOf(self) < 0) {
 		hello();
 	}
+	tellMode(true);
 }
 
 static bool connected(uint16_t id) {
@@ -602,7 +670,7 @@ static void disconnected(uint16_t id) {
 void linkSetEnvironment(retro_environment_t callback) {
 	environment = callback;
 	static const struct retro_netpacket_callback callbacks = {
-		start, receive, stop, sessionPoll, connected, disconnected, "armGBA link 1",
+		start, receive, stop, sessionPoll, connected, disconnected, "armGBA link 2",
 	};
 	callback(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, (void*) &callbacks);
 	sioLink.begin = begin;
@@ -635,6 +703,7 @@ void linkGbaFrame(struct GBA* machine) {
 	timingDeschedule(machine, &pollEvent);
 	if (session && cableCount > 1) {
 		takeRequests();
+		tellMode(false);
 		timingSchedule(machine, &pollEvent, POLL_CYCLES);
 	}
 }

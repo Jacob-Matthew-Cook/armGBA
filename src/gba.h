@@ -505,6 +505,9 @@ struct SioLink {
 	// Consoles on the cable, this one included, and this one's place: 0 is the parent.
 	int players;
 	int id;
+	// Whether every other console on the cable is in multiplayer mode, which with this one's own
+	// makes the SD line high. The frontend keeps it, and calls sioLinkChanged when it changes.
+	bool ready;
 	// A transfer this console clocks: begin sends this console's data as the transfer starts,
 	// finish waits for the others' and fills `in` (one value in normal mode, three in multiplayer).
 	// Finish can instead return false, having asked the console to stop running, and is called
@@ -1061,6 +1064,8 @@ void sioReset(struct GBA*);
 void sioWrite(struct GBA*, uint32_t address, uint16_t value);
 uint16_t sioRead(struct GBA*, uint32_t address);
 void sioAttach(struct GBA*, const struct SioLink*);
+void sioLinkChanged(struct GBA*);
+bool sioMultiplayer(const struct GBA*);
 uint32_t sioOutgoing(struct GBA*, int* mode, bool* ready);
 void sioReceive(struct GBA*, const uint32_t values[4]);
 
