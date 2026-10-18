@@ -5,32 +5,44 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "link.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
 #include "../src/gba.h"
-#include "dmg07.h"
 #include "gb.h"
 
-// The host keeps the cable: the players running the same console as it, in the order they joined,
-// the host first. The console that clocks a transfer broadcasts a request with its data; each other
-// console on the cable answers with its own and takes the transfer; in multiplayer mode with more
-// than two consoles the parent then sends everyone all four words. The clocking console waits for
-// the answers inside the transfer, so emulated time stays exact on its side.
+// The link between two players' consoles in a netplay session, each running their own game: the
+// cable, or the Game Boy Advance Wireless Adapter. Three or four players link only with all their
+// consoles on one device (libretro.c), as waiting on several devices costs too much.
+//
+// The host keeps the cable: itself and the first player who joined with the same console. A
+// transfer's data leaves the console clocking it as the transfer starts and is answered by the
+// other's; the clocking console waits for the answer as the transfer ends, so emulated time stays
+// exact on its side. How the other console's side is timed is the Link Timing option:
+//
+// - Standard: the other console runs at its own pace and takes the transfer when it next looks.
+// - Exact: the console that clocked last leads, and the other stays just behind it, as far as the
+//   leader says it has got. A transfer names the cycles it starts and ends on: the follower runs to
+//   the start, answers with its data then, and takes the leader's data at the end, as on a cable.
 
 enum {
-	MAX_PLAYERS = 4,
 	MAX_PEERS = 8,
 	QUEUE = 16,
-	// How often a console checks the cable for transfers the others clocked, in GBA cycles.
+	// How often a Game Boy Advance looks for transfers the other clocked, in cycles.
 	POLL_CYCLES = 4096,
+	// How often the leader tells how far it has got: Game Boy Advance cycles, Game Boy samples.
+	GRANT_CYCLES = 16384,
+	GRANT_SAMPLES = 2048,
 	// The longest Wireless Adapter message.
 	AIR_BYTES = 100,
 };
 
 // A console that doesn't answer for this long has left; the transfer gets nothing.
 static const int64_t TIMEOUT_NS = 3000000000LL;
+// A follower waits this long for the leader before handing the frontend its frame.
+static const int64_t FOLLOW_WAIT_NS = 50000000LL;
 
 enum { CONSOLE_NONE, CONSOLE_GB, CONSOLE_GBA };
 enum {
@@ -38,16 +50,14 @@ enum {
 	MSG_ROSTER,
 	MSG_REQUEST,
 	MSG_REPLY,
-	MSG_DONE,
+	MSG_OFFER,
+	MSG_MODE,
+	MSG_GRANT,
 	MSG_RFU,
 	MSG_GONE,
-	MSG_OFFER,
-	MSG_ADAPTER_STATUS,
-	MSG_ADAPTER_PACKET,
-	MSG_ADAPTER_QUIT,
-	MSG_MODE,
 };
-// A request's mode: a GBA serial mode, or a Game Boy transfer that took the other's offered byte.
+// A request's mode: a Game Boy Advance serial mode, or a Game Boy transfer that took the other's
+// offered byte.
 enum { MODE_MULTI = 2, MODE_TOOK_OFFER = 0x80 };
 
 static retro_environment_t environment;
@@ -57,8 +67,10 @@ static bool session;
 static uint16_t self;
 static int console;
 static struct GBA* gba;
+static bool wireless;
 
-static uint16_t cable[MAX_PLAYERS];
+// The cable: this console and the other's, in the host's order, the host first.
+static uint16_t cable[2];
 static int cableCount;
 // The players the host knows, and the console each runs.
 static struct {
@@ -67,38 +79,38 @@ static struct {
 } peers[MAX_PEERS];
 static int peerCount;
 
-// Transfers other consoles clocked, waiting to be taken.
+static struct SioLink sioLink = { .players = 1 };
+static struct Event pollEvent;
+
+// Transfers the other console clocked: taken when this one next looks, or with exact timing,
+// answered at their start and taken at their end.
 static struct {
-	uint16_t from;
 	uint16_t seq;
 	uint8_t mode;
 	uint32_t data;
+	bool timed;
+	bool answered;
+	// This console's data, as it answered.
+	uint32_t mine;
+	uint64_t start;
+	uint64_t end;
 } requests[QUEUE];
 static int requestCount;
 
-// A transfer this console clocked, waiting for the others' data.
+// A transfer this console clocked, waiting for the other's data.
 static struct {
 	bool waiting;
+	bool answered;
 	uint16_t seq;
 	uint8_t mode;
 	uint32_t out;
-	uint32_t in[3];
-	unsigned answered;
-	unsigned expected;
+	uint32_t in;
 } own;
 static uint16_t nextSeq;
 
-// A multiplayer child's wait for the parent's four words.
-static struct {
-	bool waiting;
-	bool arrived;
-	uint16_t seq;
-	uint32_t values[4];
-} done;
-
-// Game Boy send-ahead: a Game Boy waiting for the other's clock offers the byte it will send, so the
-// other can finish its transfer at once instead of waiting a round trip. An offer names the last
-// transfer its sender took from the other, so one made before a later transfer isn't used.
+// Game Boy send-ahead, with standard timing: a Game Boy waiting for the other's clock offers the byte
+// it will send, so the other can end its transfer at once instead of waiting a round trip. An offer
+// names the last transfer its sender took from the other, so one made before a later one isn't used.
 static struct {
 	bool sent;
 	bool ready;
@@ -107,46 +119,26 @@ static struct {
 } offer, offered;
 static uint16_t taken;
 
-// The Four Player Adapter over netplay. Each device runs an adapter for its own Game Boy, on the
-// port of its place on the cable. The other ports are the other players' Game Boys as they tell it:
-// whether they answer pings, player 1's rate and packet size, a game starting or ending, and each
-// packet's bytes, which an adapter hands out a packet later, so they have that long to arrive.
-struct AdapterPort {
-	bool answering;
-	bool starting;
-	bool quitting;
-	uint8_t rate;
-	uint8_t size;
-	// The last two packets' bytes, by packet number.
-	uint16_t packets[2];
-	bool has[2];
-	uint8_t bytes[2][4];
-};
+// Exact timing. Times are on a clock each console keeps for the link, Game Boy Advance cycles or
+// Game Boy samples, which a follower sets from the leader's when it first hears it.
 static struct {
 	bool wanted;
-	struct Dmg07 machine;
-	uint16_t packet;
-	uint8_t phase;
-	struct AdapterPort ports[DMG07_PORTS];
-	// What this Game Boy answered, and what the others were last told.
-	struct AdapterPort own;
-	struct AdapterPort told;
-	bool toldAny;
-	bool toldQuit;
-} adapter;
+	uint16_t leader;
+	bool aligned;
+	uint64_t origin;
+	uint64_t granted;
+	uint64_t told;
+	// A Game Boy's samples run so far.
+	uint64_t samples;
+	struct Event stop;
+} exact;
 
-static void resetAdapter(void) {
-	bool const wanted = adapter.wanted;
-	memset(&adapter, 0, sizeof(adapter));
-	adapter.wanted = wanted;
-	dmg07Reset(&adapter.machine);
-}
+// The SD line, high while the other console is in multiplayer mode.
+static bool otherMulti;
+static bool ownMulti;
+static bool ownMultiTold;
 
-static struct SioLink sioLink = { .players = 1 };
-static struct Event pollEvent;
-
-// The Wireless Adapter's air: its messages go to the other players, whatever console they run.
-static bool wireless;
+// The Wireless Adapter's air: messages to and from the other player.
 static void airSend(const struct RfuAir*, int to, const uint8_t* message, size_t size);
 static struct RfuAir air = { 0, true, airSend };
 
@@ -160,6 +152,11 @@ static void put32(uint8_t* to, uint32_t value) {
 	put16(to + 2, value >> 16);
 }
 
+static void put64(uint8_t* to, uint64_t value) {
+	put32(to, value);
+	put32(to + 4, value >> 32);
+}
+
 static uint16_t get16(const uint8_t* from) {
 	return from[0] | from[1] << 8;
 }
@@ -168,305 +165,13 @@ static uint32_t get32(const uint8_t* from) {
 	return get16(from) | (uint32_t) get16(from + 2) << 16;
 }
 
-static void send(const uint8_t* message, size_t size, uint16_t to) {
+static uint64_t get64(const uint8_t* from) {
+	return get32(from) | (uint64_t) get32(from + 4) << 32;
+}
+
+static void send(const uint8_t* message, size_t size) {
 	if (session && sendPacket) {
-		sendPacket(RETRO_NETPACKET_RELIABLE | RETRO_NETPACKET_FLUSH_HINT, message, size, to);
-	}
-}
-
-// A player's place on the cable, or -1.
-static int slotOf(uint16_t id) {
-	for (int i = 0; i < cableCount; ++i) {
-		if (cable[i] == id) {
-			return i;
-		}
-	}
-	return -1;
-}
-
-// Tells the player when the cable changes: their place on it, or why they aren't on it.
-static void announce(int slot) {
-	static int shownCount = -1, shownSlot = -1;
-	if (!session || (cableCount == shownCount && slot == shownSlot)) {
-		return;
-	}
-	char text[96];
-	if (slot >= 0 && cableCount > 1) {
-		snprintf(text, sizeof(text), "Link cable: player %d of %d", slot + 1, cableCount);
-	} else if (slot < 0 && cableCount > 0) {
-		snprintf(text, sizeof(text), "Link cable: the host is playing a different console, or the cable is full");
-	} else if (shownCount > 1) {
-		snprintf(text, sizeof(text), "Link cable: the other players left");
-	} else {
-		text[0] = 0;
-	}
-	shownCount = cableCount;
-	shownSlot = slot;
-	if (text[0] && environment) {
-		struct retro_message message = { text, 240 };
-		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &message);
-	}
-}
-
-// The SD line: high while every other console on the cable is in multiplayer mode, as each tells
-// when it goes in or out of it.
-static struct {
-	uint16_t id;
-	bool multi;
-} modes[MAX_PEERS + 1];
-static int modeCount;
-static bool ownMulti;
-static bool ownMultiTold;
-
-static bool multiOf(uint16_t id) {
-	for (int i = 0; i < modeCount; ++i) {
-		if (modes[i].id == id) {
-			return modes[i].multi;
-		}
-	}
-	return false;
-}
-
-static void heardMode(uint16_t id, bool multi) {
-	int i = 0;
-	while (i < modeCount && modes[i].id != id) {
-		++i;
-	}
-	if (i == modeCount && modeCount < MAX_PEERS + 1) {
-		++modeCount;
-	}
-	if (i < modeCount) {
-		modes[i].id = id;
-		modes[i].multi = multi;
-	}
-}
-
-static void updateReady(void) {
-	bool ready = slotOf(self) >= 0;
-	for (int i = 0; i < cableCount; ++i) {
-		ready &= cable[i] == self || multiOf(cable[i]);
-	}
-	if (ready != sioLink.ready) {
-		sioLink.ready = ready;
-		if (gba && gba->sio.link == &sioLink) {
-			sioLinkChanged(gba);
-		}
-	}
-}
-
-// Tells the others when this console goes in or out of multiplayer mode, and again every so often
-// for a player who joined since.
-static void tellMode(bool again) {
-	bool const multi = gba && sioMultiplayer(gba);
-	if (session && (multi != ownMulti || !ownMultiTold || again)) {
-		ownMulti = multi;
-		ownMultiTold = true;
-		uint8_t const message[2] = { MSG_MODE, multi };
-		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
-	}
-}
-
-static void cableChanged(void) {
-	updateReady();
-	int slot = slotOf(self);
-	announce(slot);
-	if (gba && sioLink.players == (slot < 0 ? 1 : cableCount) && sioLink.id == (slot < 0 ? 0 : slot) && gba->sio.link == (wireless ? NULL : &sioLink)) {
-		return;
-	}
-	sioLink.players = slot < 0 ? 1 : cableCount;
-	sioLink.id = slot < 0 ? 0 : slot;
-	if (gba) {
-		sioAttach(gba, wireless ? NULL : &sioLink);
-	}
-}
-
-static void airSend(const struct RfuAir* from, int to, const uint8_t* message, size_t size) {
-	(void) from;
-	uint8_t packet[1 + AIR_BYTES] = { MSG_RFU };
-	if (size > AIR_BYTES) {
-		return;
-	}
-	memcpy(packet + 1, message, size);
-	send(packet, size + 1, to < 0 ? RETRO_NETPACKET_BROADCAST : (uint16_t) to);
-}
-
-static void peerGone(uint16_t id) {
-	if (gba) {
-		rfuPeerGone(gba, id);
-	}
-}
-
-static int maxPlayers(void) {
-	return console == CONSOLE_GBA || adapter.wanted ? MAX_PLAYERS : 2;
-}
-
-// The host's view: everyone who joined with the same console, in order, up to what the cable takes.
-static void hostRebuild(void) {
-	cableCount = 0;
-	if (console != CONSOLE_NONE) {
-		cable[cableCount++] = self;
-		for (int i = 0; i < peerCount && cableCount < maxPlayers(); ++i) {
-			if (peers[i].console == console) {
-				cable[cableCount++] = peers[i].id;
-			}
-		}
-	}
-	uint8_t message[2 + 2 * MAX_PLAYERS] = { MSG_ROSTER, (uint8_t) cableCount };
-	for (int i = 0; i < cableCount; ++i) {
-		put16(message + 2 + 2 * i, cable[i]);
-	}
-	send(message, 2 + 2 * cableCount, RETRO_NETPACKET_BROADCAST);
-	cableChanged();
-}
-
-static void hello(void) {
-	if (self == 0) {
-		hostRebuild();
-	} else {
-		uint8_t message[2] = { MSG_HELLO, (uint8_t) console };
-		send(message, sizeof(message), 0);
-	}
-}
-
-static void reply(uint16_t to, uint16_t seq, uint32_t data, bool ready) {
-	uint8_t message[10] = { MSG_REPLY, ready };
-	put16(message + 2, seq);
-	put32(message + 4, data);
-	put16(message + 8, to);
-	send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
-}
-
-static void answered(uint16_t from, uint32_t data) {
-	int slot = slotOf(from);
-	if (slot < 0 || !(own.expected & (1u << slot))) {
-		return;
-	}
-	own.answered |= 1u << slot;
-	if (own.mode == MODE_MULTI && console == CONSOLE_GBA) {
-		own.in[slot - 1] = data & 0xFFFF;
-	} else {
-		own.in[0] = data;
-	}
-}
-
-static void adapterReceive(const uint8_t* message, size_t size, int port) {
-	if (port < 0 || port >= DMG07_PORTS) {
-		return;
-	}
-	struct AdapterPort* const p = &adapter.ports[port];
-	switch (message[0]) {
-	case MSG_ADAPTER_STATUS:
-		if (size >= 5) {
-			p->answering = message[1];
-			// Kept until this adapter starts the game too, however briefly the other was starting.
-			p->starting |= message[2];
-			p->rate = message[3];
-			p->size = message[4];
-		}
-		break;
-	case MSG_ADAPTER_PACKET: {
-		unsigned const bytes = size >= 4 ? message[3] : 0;
-		if (bytes <= 4 && size >= 4 + bytes) {
-			uint16_t const packet = get16(message + 1);
-			p->packets[packet & 1] = packet;
-			p->has[packet & 1] = true;
-			memcpy(p->bytes[packet & 1], message + 4, bytes);
-		}
-		break;
-	}
-	case MSG_ADAPTER_QUIT:
-		p->quitting = true;
-		break;
-	}
-}
-
-static void receive(const void* buffer, size_t size, uint16_t from) {
-	const uint8_t* message = buffer;
-	if (size < 2) {
-		return;
-	}
-	switch (message[0]) {
-	case MSG_HELLO:
-		if (self == 0) {
-			for (int i = 0; i < peerCount; ++i) {
-				if (peers[i].id == from) {
-					peers[i].console = message[1];
-					hostRebuild();
-					return;
-				}
-			}
-			if (peerCount < MAX_PEERS) {
-				peers[peerCount].id = from;
-				peers[peerCount++].console = message[1];
-				hostRebuild();
-			}
-		}
-		break;
-	case MSG_ROSTER:
-		if (from == 0 && size >= 2u + 2u * message[1] && message[1] <= MAX_PLAYERS) {
-			cableCount = message[1];
-			for (int i = 0; i < cableCount; ++i) {
-				cable[i] = get16(message + 2 + 2 * i);
-			}
-			cableChanged();
-		}
-		break;
-	case MSG_REQUEST:
-		if (size < 8 || slotOf(from) < 0) {
-			break;
-		}
-		offered.ready = false;
-		// Two consoles clocking at once swap their data, as the wires would.
-		if (own.waiting && own.mode != MODE_MULTI) {
-			taken = get16(message + 2);
-			answered(from, get32(message + 4));
-			reply(from, get16(message + 2), own.out, true);
-		} else if (requestCount < QUEUE) {
-			requests[requestCount].from = from;
-			requests[requestCount].seq = get16(message + 2);
-			requests[requestCount].mode = message[1];
-			requests[requestCount++].data = get32(message + 4);
-		}
-		break;
-	case MSG_OFFER:
-		if (size >= 5 && slotOf(from) >= 0) {
-			offered.ready = message[1];
-			offered.byte = message[2];
-			offered.after = get16(message + 3);
-		}
-		break;
-	case MSG_REPLY:
-		if (size >= 10 && own.waiting && get16(message + 8) == self && get16(message + 2) == own.seq) {
-			answered(from, message[1] ? get32(message + 4) : 0xFFFFFFFF);
-		}
-		break;
-	case MSG_RFU:
-		if (gba) {
-			rfuReceive(gba, from, message + 1, size - 1);
-		}
-		break;
-	case MSG_GONE:
-		if (from == 0 && size >= 3) {
-			peerGone(get16(message + 1));
-		}
-		break;
-	case MSG_ADAPTER_STATUS:
-	case MSG_ADAPTER_PACKET:
-	case MSG_ADAPTER_QUIT:
-		adapterReceive(message, size, slotOf(from));
-		break;
-	case MSG_MODE:
-		heardMode(from, message[1]);
-		updateReady();
-		break;
-	case MSG_DONE:
-		if (size >= 12 && done.waiting && get16(message + 2) == done.seq) {
-			for (int i = 0; i < 4; ++i) {
-				done.values[i] = get16(message + 4 + 2 * i);
-			}
-			done.arrived = true;
-		}
-		break;
+		sendPacket(RETRO_NETPACKET_RELIABLE | RETRO_NETPACKET_FLUSH_HINT, message, size, RETRO_NETPACKET_BROADCAST);
 	}
 }
 
@@ -476,10 +181,11 @@ static int64_t now(void) {
 	return time.tv_sec * 1000000000LL + time.tv_nsec;
 }
 
-// Reads the network until the condition holds, the session ends or the other end is gone.
-static void waitFor(bool (*ready)(void)) {
-	int64_t start = now();
-	while (session && !ready() && now() - start < TIMEOUT_NS) {
+// Reads the network until the condition holds, the session ends, or the time runs out. Returns
+// whether the condition holds.
+static bool waitUntil(bool (*ready)(void), int64_t limit) {
+	int64_t const start = now();
+	while (session && !ready() && now() - start < limit) {
 		if (pollPackets) {
 			pollPackets();
 		}
@@ -489,98 +195,373 @@ static void waitFor(bool (*ready)(void)) {
 		struct timespec pause = { 0, 100000 };
 		nanosleep(&pause, NULL);
 	}
+	return ready();
 }
 
-static bool allAnswered(void) {
-	return (own.answered & own.expected) == own.expected;
+// The cable.
+
+static bool onCable(void) {
+	return session && cableCount == 2 && (cable[0] == self || cable[1] == self);
 }
 
-static bool doneArrived(void) {
-	return done.arrived;
+static bool isPartner(uint16_t id) {
+	return onCable() && id != self && (cable[0] == id || cable[1] == id);
 }
 
-static void begin(void* context, int mode, uint32_t out) {
+// Tells the player when the cable changes.
+static void announce(void) {
+	static int shown = -1;
+	int const state = !session ? -1 : onCable() ? 2 : cableCount;
+	if (state == shown) {
+		return;
+	}
+	char const* text = state == 2 ? (cable[0] == self ? "Link cable: player 1 of 2" : "Link cable: player 2 of 2")
+	                 : shown == 2 ? "Link cable: the other player left"
+	                 : state == 1 && self != cable[0] ? "Link cable: the host is playing a different console, or the cable is taken"
+	                              : NULL;
+	shown = state;
+	if (text && environment) {
+		struct retro_message message = { text, 240 };
+		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &message);
+	}
+}
+
+static void setReady(bool ready) {
+	if (ready != sioLink.ready) {
+		sioLink.ready = ready;
+		if (gba && gba->sio.link == &sioLink) {
+			sioLinkChanged(gba);
+		}
+	}
+}
+
+static void cableChanged(void) {
+	announce();
+	setReady(onCable() && otherMulti);
+	int const players = onCable() ? 2 : 1;
+	int const id = onCable() && cable[1] == self ? 1 : 0;
+	if (!gba || (sioLink.players == players && sioLink.id == id && gba->sio.link == (wireless ? NULL : &sioLink))) {
+		return;
+	}
+	sioLink.players = players;
+	sioLink.id = id;
+	sioAttach(gba, wireless ? NULL : &sioLink);
+}
+
+// The host's cable: itself and the first player who joined with the same console.
+static void hostRebuild(void) {
+	cableCount = 0;
+	if (console != CONSOLE_NONE) {
+		cable[cableCount++] = self;
+		for (int i = 0; i < peerCount && cableCount < 2; ++i) {
+			if (peers[i].console == console) {
+				cable[cableCount++] = peers[i].id;
+			}
+		}
+	}
+	uint8_t message[6] = { MSG_ROSTER, (uint8_t) cableCount };
+	for (int i = 0; i < cableCount; ++i) {
+		put16(message + 2 + 2 * i, cable[i]);
+	}
+	send(message, 2 + 2 * cableCount);
+	cableChanged();
+}
+
+static void hello(void) {
+	if (self == 0) {
+		hostRebuild();
+	} else {
+		uint8_t message[2] = { MSG_HELLO, (uint8_t) console };
+		send(message, sizeof(message));
+	}
+}
+
+// The SD line: each console tells the other when it goes in or out of multiplayer mode, and again
+// every so often for a player who joined since.
+static void tellMode(bool again) {
+	bool const multi = gba && sioMultiplayer(gba);
+	if (session && (multi != ownMulti || !ownMultiTold || again)) {
+		ownMulti = multi;
+		ownMultiTold = true;
+		uint8_t const message[2] = { MSG_MODE, multi };
+		send(message, sizeof(message));
+	}
+}
+
+// The Wireless Adapter's air.
+
+static void airSend(const struct RfuAir* from, int to, const uint8_t* message, size_t size) {
+	(void) from;
+	(void) to;
+	uint8_t packet[1 + AIR_BYTES] = { MSG_RFU };
+	if (size <= AIR_BYTES) {
+		memcpy(packet + 1, message, size);
+		send(packet, size + 1);
+	}
+}
+
+// Exact timing.
+
+static bool exactOn(void) {
+	return exact.wanted && onCable() && !wireless && (console == CONSOLE_GB || (console == CONSOLE_GBA && gba));
+}
+
+static bool leading(void) {
+	return exact.leader == self;
+}
+
+// The console's own clock: a Game Boy Advance's cycles, or a Game Boy's samples.
+static uint64_t consoleTime(void) {
+	return console == CONSOLE_GBA && gba ? gba->timing.globalCycles + (uint32_t) gba->cpu.cycles : exact.samples;
+}
+
+static uint64_t linkTime(void) {
+	return consoleTime() - exact.origin;
+}
+
+// A console sets its link clock the first time it leads, or hears the leader.
+static void align(uint64_t leaderTime) {
+	if (!exact.aligned) {
+		exact.origin = consoleTime() - leaderTime;
+		exact.aligned = true;
+	}
+}
+
+// Where a request is next due: its start, to answer it, then its end, to take it.
+static uint64_t dueAt(int i) {
+	return requests[i].answered ? requests[i].end : requests[i].start;
+}
+
+// Where a follower stops next: where the leader has got to, or a transfer's start or end before.
+static uint64_t stopAt(void) {
+	uint64_t at = exact.granted;
+	if (requestCount && requests[0].timed && dueAt(0) < at) {
+		at = dueAt(0);
+	}
+	return at;
+}
+
+static bool following(void) {
+	return exactOn() && !leading() && exact.aligned;
+}
+
+static bool mayRunOn(void) {
+	return !following() || stopAt() > linkTime();
+}
+
+static void scheduleStop(void) {
+	if (console != CONSOLE_GBA || !gba) {
+		return;
+	}
+	timingDeschedule(gba, &exact.stop);
+	if (!following()) {
+		return;
+	}
+	uint64_t const at = stopAt();
+	uint64_t const time = linkTime();
+	uint64_t const wait = at > time ? at - time : 0;
+	timingSchedule(gba, &exact.stop, wait < 0x10000000 ? (int32_t) wait : 0x10000000);
+}
+
+static void heardGrant(uint64_t at) {
+	align(at);
+	exact.granted = at > exact.granted ? at : exact.granted;
+	scheduleStop();
+}
+
+// The leader tells how far it has got, every so often.
+static void grant(void) {
+	if (!exactOn() || !leading()) {
+		return;
+	}
+	align(0);
+	uint64_t const at = linkTime();
+	if (at - exact.told >= (uint64_t) (console == CONSOLE_GBA ? GRANT_CYCLES : GRANT_SAMPLES)) {
+		exact.told = at;
+		uint8_t message[9] = { MSG_GRANT };
+		put64(message + 1, at);
+		send(message, sizeof(message));
+	}
+}
+
+// Transfers.
+
+static void reply(uint16_t seq, uint32_t data, bool ready) {
+	uint8_t message[8] = { MSG_REPLY, ready };
+	put16(message + 2, seq);
+	put32(message + 4, data);
+	send(message, sizeof(message));
+}
+
+// This console's data for the other's transfer, and whether it takes part (waiting on the external
+// clock, or a multiplayer child).
+static uint32_t ownData(bool* ready) {
+#ifdef ARMGBA_GB
+	if (console == CONSOLE_GB) {
+		*ready = true;
+		return libretroGbLinkOut();
+	}
+#endif
+	int mode;
+	*ready = false;
+	return gba ? sioOutgoing(gba, &mode, ready) : 0xFFFFFFFF;
+}
+
+// The other console's transfer ends here with its data, and this console's own as sent.
+static void receiveData(uint8_t mode, uint32_t data, uint32_t mine) {
+#ifdef ARMGBA_GB
+	if (console == CONSOLE_GB) {
+		libretroGbLinkIn(data & 0xFF);
+		return;
+	}
+#endif
+	if (!gba) {
+		return;
+	}
+	uint32_t values[4] = { data, 0xFFFF, 0xFFFF, 0xFFFF };
+	if (mode == MODE_MULTI) {
+		values[0] = data & 0xFFFF;
+		values[1] = mine & 0xFFFF;
+	}
+	sioReceive(gba, values);
+}
+
+static void dropRequest(void) {
+	memmove(&requests[0], &requests[1], (requestCount - 1) * sizeof(requests[0]));
+	--requestCount;
+}
+
+// Takes the transfers the other console clocked: with standard timing all of them; with exact
+// timing those due, answering each at its start and taking it at its end. A Game Boy takes one
+// transfer at a time, so its game can ready the next byte in between.
+static void takeRequests(void) {
+	while (requestCount) {
+		if (requests[0].timed && dueAt(0) > linkTime()) {
+			return;
+		}
+		if (!requests[0].answered) {
+			bool ready;
+			requests[0].mine = ownData(&ready);
+			if (!(requests[0].mode & MODE_TOOK_OFFER)) {
+				reply(requests[0].seq, requests[0].mine, ready);
+			}
+			requests[0].answered = true;
+			if (requests[0].timed && requests[0].end > linkTime()) {
+				continue;
+			}
+		}
+		receiveData(requests[0].mode, requests[0].data, requests[0].mine);
+		taken = requests[0].seq;
+		dropRequest();
+		if (console == CONSOLE_GB) {
+			return;
+		}
+	}
+}
+
+// A follower at its stop: takes the transfers due there, and waits a little for the leader to get
+// further. Returns whether it may run on; if not, the frame ends early and it stops again next frame.
+static bool arrive(void) {
+	takeRequests();
+	if (!mayRunOn()) {
+		waitUntil(mayRunOn, FOLLOW_WAIT_NS);
+		takeRequests();
+	}
+	return mayRunOn();
+}
+
+static void stopReached(struct GBA* machine, void* context, uint32_t late) {
 	(void) context;
+	(void) late;
+	if (!arrive()) {
+		machine->returnRequested = true;
+		timingInterrupt(machine);
+		timingSchedule(machine, &exact.stop, 0);
+		return;
+	}
+	scheduleStop();
+}
+
+// A transfer this console clocks starts: its data goes out, with exact timing naming the cycles the
+// transfer starts and ends on, which makes this console the leader.
+static void requestStart(int mode, uint32_t out, uint64_t start, uint64_t end) {
 	own.waiting = true;
+	own.answered = false;
 	own.seq = ++nextSeq;
 	own.mode = mode;
 	own.out = out;
-	own.answered = 0;
-	own.expected = 0;
-	for (int i = 0; i < cableCount; ++i) {
-		if (cable[i] != self && (mode == MODE_MULTI || !own.expected)) {
-			own.expected |= 1u << i;
-		}
-	}
-	own.in[0] = 0xFFFFFFFF;
-	own.in[1] = own.in[2] = 0xFFFF;
-	uint8_t message[8] = { MSG_REQUEST, (uint8_t) mode };
+	own.in = 0xFFFFFFFF;
+	uint8_t message[24] = { MSG_REQUEST, (uint8_t) mode };
 	put16(message + 2, own.seq);
 	put32(message + 4, out);
-	send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
+	if (!exactOn()) {
+		send(message, 8);
+		return;
+	}
+	exact.leader = self;
+	align(0);
+	put64(message + 8, start);
+	put64(message + 16, end);
+	send(message, sizeof(message));
+	scheduleStop();
+}
+
+static bool ownAnswered(void) {
+	return own.answered;
+}
+
+// The transfer this console clocked ends: the other's answer, waited for if it hasn't come.
+static uint32_t requestEnd(void) {
+	waitUntil(ownAnswered, TIMEOUT_NS);
+	own.waiting = false;
+	return own.in;
+}
+
+static void begin(void* context, int mode, uint32_t out, int32_t cycles) {
+	(void) context;
+	uint64_t const start = exactOn() ? linkTime() : 0;
+	requestStart(mode, out, start, start + cycles);
 }
 
 static bool finish(void* context, uint32_t in[3]) {
 	(void) context;
-	waitFor(allAnswered);
-	memcpy(in, own.in, sizeof(own.in));
-	own.waiting = false;
-	if (own.mode == MODE_MULTI && cableCount > 2) {
-		uint8_t message[12] = { MSG_DONE, 0 };
-		put16(message + 2, own.seq);
-		put16(message + 4, own.out);
-		for (int i = 0; i < 3; ++i) {
-			put16(message + 6 + 2 * i, own.in[i]);
-		}
-		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
-	}
+	uint32_t const data = requestEnd();
+	in[0] = own.mode == MODE_MULTI ? data & 0xFFFF : data;
 	return true;
 }
 
-// Takes the transfers other consoles clocked: answers each with this console's data, then receives.
-static void takeRequests(void) {
-	for (int i = 0; i < requestCount; ++i) {
-		uint16_t from = requests[i].from, seq = requests[i].seq;
-		uint32_t data = requests[i].data;
-#ifdef ARMGBA_GB
-		// A Game Boy takes one transfer at a time, so its game can ready the next byte in between.
-		if (console == CONSOLE_GB) {
-			if (!(requests[i].mode & MODE_TOOK_OFFER)) {
-				reply(from, seq, libretroGbLinkOut(), true);
-			}
-			libretroGbLinkIn(data & 0xFF);
-			taken = seq;
-			memmove(&requests[0], &requests[i + 1], (requestCount - i - 1) * sizeof(requests[0]));
-			requestCount -= i + 1;
-			return;
-		}
-#endif
-		if (console != CONSOLE_GBA || !gba) {
-			continue;
-		}
-		int mode;
-		bool ready;
-		uint32_t mine = sioOutgoing(gba, &mode, &ready);
-		reply(from, seq, mine, ready);
-		uint32_t values[4] = { data, 0xFFFF, 0xFFFF, 0xFFFF };
-		if (mode == MODE_MULTI) {
-			values[0] = data & 0xFFFF;
-			if (cableCount > 2) {
-				done.waiting = true;
-				done.arrived = false;
-				done.seq = seq;
-				waitFor(doneArrived);
-				done.waiting = false;
-				if (done.arrived) {
-					memcpy(values, done.values, sizeof(values));
-				}
-			} else {
-				values[1] = mine & 0xFFFF;
-			}
-		}
-		sioReceive(gba, values);
+// The other console's request arrives. Two consoles clocking at once swap their data, as the wires
+// would. A request naming its cycles makes its sender the leader; one starting before where this
+// console has got, as the lead passes to a console behind it, is taken at once.
+static void heardRequest(uint16_t from, const uint8_t* message, size_t size) {
+	offered.ready = false;
+	if (own.waiting && own.mode != MODE_MULTI) {
+		taken = get16(message + 2);
+		own.in = get32(message + 4);
+		own.answered = true;
+		reply(get16(message + 2), own.out, true);
+		return;
 	}
-	requestCount = 0;
+	if (requestCount == QUEUE) {
+		return;
+	}
+	requests[requestCount].seq = get16(message + 2);
+	requests[requestCount].mode = message[1];
+	requests[requestCount].data = get32(message + 4);
+	requests[requestCount].answered = false;
+	requests[requestCount].timed = false;
+	if (size >= 24 && exactOn()) {
+		uint64_t const start = get64(message + 8);
+		uint64_t const end = get64(message + 16);
+		exact.leader = from;
+		align(start);
+		requests[requestCount].timed = start >= linkTime();
+		requests[requestCount].start = start;
+		requests[requestCount].end = end;
+		exact.granted = end > exact.granted ? end : exact.granted;
+	}
+	++requestCount;
+	scheduleStop();
 }
 
 static void poll(void) {
@@ -595,9 +576,114 @@ static void pollEventRun(struct GBA* machine, void* context, uint32_t late) {
 	(void) late;
 	poll();
 	tellMode(false);
-	if (cableCount > 1) {
+	grant();
+	if (onCable()) {
 		timingSchedule(machine, &pollEvent, POLL_CYCLES);
 	}
+}
+
+// Game Boy send-ahead: offers this Game Boy's byte while it waits for the other's clock, and says when
+// it stops waiting.
+static void offerByte(void) {
+#ifdef ARMGBA_GB
+	bool const ready = (libretroGbLinkControl() & 0x81) == 0x80;
+	uint8_t const byte = libretroGbLinkOut();
+	if (offer.sent && offer.ready == ready && (!ready || (offer.after == taken && offer.byte == byte))) {
+		return;
+	}
+	offer.sent = true;
+	offer.ready = ready;
+	offer.after = taken;
+	offer.byte = byte;
+	uint8_t message[5] = { MSG_OFFER, ready, byte };
+	put16(message + 3, taken);
+	send(message, sizeof(message));
+#endif
+}
+
+// The netplay session.
+
+static void receive(const void* buffer, size_t size, uint16_t from) {
+	const uint8_t* message = buffer;
+	if (size < 2) {
+		return;
+	}
+	switch (message[0]) {
+	case MSG_HELLO:
+		if (self == 0) {
+			int i = 0;
+			while (i < peerCount && peers[i].id != from) {
+				++i;
+			}
+			if (i == peerCount && peerCount < MAX_PEERS) {
+				peers[peerCount++].id = from;
+			}
+			if (i < peerCount) {
+				peers[i].console = message[1];
+				hostRebuild();
+			}
+		}
+		break;
+	case MSG_ROSTER:
+		if (from == 0 && message[1] <= 2 && size >= 2u + 2u * message[1]) {
+			cableCount = message[1];
+			for (int i = 0; i < cableCount; ++i) {
+				cable[i] = get16(message + 2 + 2 * i);
+			}
+			cableChanged();
+		}
+		break;
+	case MSG_REQUEST:
+		if (size >= 8 && isPartner(from)) {
+			heardRequest(from, message, size);
+		}
+		break;
+	case MSG_REPLY:
+		if (size >= 8 && isPartner(from) && own.waiting && get16(message + 2) == own.seq) {
+			own.in = message[1] ? get32(message + 4) : 0xFFFFFFFF;
+			own.answered = true;
+		}
+		break;
+	case MSG_OFFER:
+		if (size >= 5 && isPartner(from)) {
+			offered.ready = message[1];
+			offered.byte = message[2];
+			offered.after = get16(message + 3);
+		}
+		break;
+	case MSG_MODE:
+		if (isPartner(from)) {
+			otherMulti = message[1];
+			setReady(otherMulti);
+		}
+		break;
+	case MSG_GRANT:
+		if (size >= 9 && isPartner(from) && from == exact.leader) {
+			heardGrant(get64(message + 1));
+		}
+		break;
+	case MSG_RFU:
+		if (gba && isPartner(from)) {
+			rfuReceive(gba, from, message + 1, size - 1);
+		}
+		break;
+	case MSG_GONE:
+		if (from == 0 && size >= 3 && gba) {
+			rfuPeerGone(gba, get16(message + 1));
+		}
+		break;
+	}
+}
+
+static void resetExact(void) {
+	struct Event const stop = exact.stop;
+	bool const wanted = exact.wanted;
+	if (gba) {
+		timingDeschedule(gba, &exact.stop);
+	}
+	memset(&exact, 0, sizeof(exact));
+	exact.stop = stop;
+	exact.wanted = wanted;
 }
 
 static void start(uint16_t id, retro_netpacket_send_t sendFunction, retro_netpacket_poll_receive_t pollFunction) {
@@ -610,8 +696,8 @@ static void start(uint16_t id, retro_netpacket_send_t sendFunction, retro_netpac
 	taken = 0;
 	offer.sent = false;
 	offered.ready = false;
-	resetAdapter();
-	modeCount = 0;
+	resetExact();
+	otherMulti = false;
 	ownMultiTold = false;
 	peerCount = 0;
 	requestCount = 0;
@@ -626,6 +712,7 @@ static void stop(void) {
 	cableCount = 0;
 	requestCount = 0;
 	own.waiting = false;
+	resetExact();
 	if (gba) {
 		rfuPeerGone(gba, -1);
 	}
@@ -641,7 +728,7 @@ static void sessionPoll(void) {
 	}
 	if (self == 0) {
 		hostRebuild();
-	} else if (slotOf(self) < 0) {
+	} else if (!onCable()) {
 		hello();
 	}
 	tellMode(true);
@@ -659,24 +746,30 @@ static void disconnected(uint16_t id) {
 			--peerCount;
 			uint8_t message[3] = { MSG_GONE };
 			put16(message + 1, id);
-			send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
-			peerGone(id);
+			send(message, sizeof(message));
+			if (gba) {
+				rfuPeerGone(gba, id);
+			}
 			hostRebuild();
 			return;
 		}
 	}
 }
 
+// What the libretro core asks of the link.
+
 void linkSetEnvironment(retro_environment_t callback) {
 	environment = callback;
 	static const struct retro_netpacket_callback callbacks = {
-		start, receive, stop, sessionPoll, connected, disconnected, "armGBA link 2",
+		start, receive, stop, sessionPoll, connected, disconnected, "armGBA link 3",
 	};
 	callback(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, (void*) &callbacks);
 	sioLink.begin = begin;
 	sioLink.finish = finish;
 	pollEvent.callback = pollEventRun;
 	pollEvent.priority = 0x90;
+	exact.stop.callback = stopReached;
+	exact.stop.priority = 0x7E;
 }
 
 static void consoleChanged(int now) {
@@ -699,69 +792,6 @@ void linkSetGameBoy(bool loaded) {
 	consoleChanged(loaded ? CONSOLE_GB : CONSOLE_NONE);
 }
 
-void linkGbaFrame(struct GBA* machine) {
-	timingDeschedule(machine, &pollEvent);
-	if (session && cableCount > 1) {
-		takeRequests();
-		tellMode(false);
-		timingSchedule(machine, &pollEvent, POLL_CYCLES);
-	}
-}
-
-bool linkSession(void) {
-	return session;
-}
-
-bool linkGbConnected(void) {
-	return session && console == CONSOLE_GB && cableCount > 1 && slotOf(self) >= 0;
-}
-
-int linkGbTransfer(int out) {
-	if (offered.ready && offered.after == nextSeq) {
-		offered.ready = false;
-		uint8_t message[8] = { MSG_REQUEST, MODE_TOOK_OFFER };
-		put16(message + 2, ++nextSeq);
-		put32(message + 4, out & 0xFF);
-		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
-		return offered.byte;
-	}
-	uint32_t in[3];
-	begin(NULL, 0, out & 0xFF);
-	finish(NULL, in);
-	return in[0] & 0xFF;
-}
-
-// Offers this Game Boy's byte while it waits for the other's clock, and says when it stops waiting.
-static void offerByte(void) {
-#ifdef ARMGBA_GB
-	bool ready = (libretroGbLinkControl() & 0x81) == 0x80;
-	uint8_t byte = libretroGbLinkOut();
-	if (offer.sent && offer.ready == ready && (!ready || (offer.after == taken && offer.byte == byte))) {
-		return;
-	}
-	offer.sent = true;
-	offer.ready = ready;
-	offer.after = taken;
-	offer.byte = byte;
-	uint8_t message[5] = { MSG_OFFER, ready, byte };
-	put16(message + 3, taken);
-	send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
-#endif
-}
-
-void linkGbPoll(void) {
-	if (session) {
-		poll();
-		if (linkGbConnected()) {
-			offerByte();
-		}
-	}
-}
-
-const struct RfuAir* linkAir(void) {
-	return &air;
-}
-
 void linkSetWireless(bool on) {
 	if (wireless != on) {
 		wireless = on;
@@ -769,141 +799,87 @@ void linkSetWireless(bool on) {
 	}
 }
 
-void linkSetGbAdapter(bool on) {
-	if (adapter.wanted != on) {
-		adapter.wanted = on;
-		resetAdapter();
-		if (session) {
-			hello();
+void linkSetExact(bool on) {
+	if (exact.wanted != on) {
+		exact.wanted = on;
+		resetExact();
+	}
+}
+
+const struct RfuAir* linkAir(void) {
+	return &air;
+}
+
+bool linkSession(void) {
+	return session;
+}
+
+bool linkExactOn(void) {
+	return exactOn();
+}
+
+void linkGbaFrame(struct GBA* machine) {
+	timingDeschedule(machine, &pollEvent);
+	if (onCable()) {
+		takeRequests();
+		tellMode(false);
+		grant();
+		scheduleStop();
+		timingSchedule(machine, &pollEvent, POLL_CYCLES);
+	}
+}
+
+bool linkGbConnected(void) {
+	return console == CONSOLE_GB && onCable();
+}
+
+int linkGbTransfer(int out) {
+	if (exactOn() && own.waiting) {
+		return requestEnd() & 0xFF;
+	}
+	if (offered.ready && offered.after == nextSeq && !exactOn()) {
+		offered.ready = false;
+		uint8_t message[8] = { MSG_REQUEST, MODE_TOOK_OFFER };
+		put16(message + 2, ++nextSeq);
+		put32(message + 4, out & 0xFF);
+		send(message, sizeof(message));
+		return offered.byte;
+	}
+	uint64_t const time = exactOn() ? linkTime() : 0;
+	requestStart(0, out & 0xFF, time, time);
+	return requestEnd() & 0xFF;
+}
+
+void linkGbClocking(int out, long left, long length) {
+	if (exactOn() && !own.waiting) {
+		uint64_t const end = linkTime() + left;
+		requestStart(0, out & 0xFF, end - length, end);
+	}
+}
+
+void linkGbPoll(void) {
+	if (session) {
+		poll();
+		grant();
+		if (linkGbConnected() && !exactOn()) {
+			offerByte();
 		}
 	}
 }
 
-bool linkAdapterOn(void) {
-	return session && console == CONSOLE_GB && adapter.wanted && slotOf(self) >= 0;
+long linkGbAllowance(void) {
+	if (!following()) {
+		return LONG_MAX;
+	}
+	uint64_t const at = stopAt();
+	uint64_t const time = linkTime();
+	return at > time ? (long) (at - time < LONG_MAX ? at - time : LONG_MAX) : 0;
 }
 
-// What another player's port gives in this transfer: the answers to a ping its Game Boy gave, $AA
-// while it starts a game, $FF while it ends one; its bytes of a packet come in their own message.
-static uint8_t remoteIn(struct AdapterPort* p) {
-	struct Dmg07 const* const m = &adapter.machine;
-	switch (m->phase) {
-	case DMG07_PING:
-		if (p->starting) {
-			return 0xAA;
-		}
-		if (!p->answering) {
-			return 0xFF;
-		}
-		return m->index == 0 ? p->size : m->index == 3 ? p->rate : 0x88;
-	case DMG07_DATA:
-		if (p->quitting && m->index >= 1 && m->index <= 3) {
-			p->quitting = m->index < 3;
-			return 0xFF;
-		}
-		return 0;
-	default:
-		return 0xFF;
-	}
+void linkGbRan(unsigned samples) {
+	exact.samples += samples;
 }
 
-static uint8_t waitingPort;
-
-static bool packetArrived(void) {
-	struct AdapterPort const* const p = &adapter.ports[waitingPort];
-	return p->has[adapter.packet & 1] && p->packets[adapter.packet & 1] == adapter.packet;
-}
-
-// Before a packet ends, the other players' bytes of it go in, waited for if they haven't come.
-static void fillPacket(int me) {
-	struct Dmg07* const m = &adapter.machine;
-	for (int port = 0; port < cableCount && port < DMG07_PORTS; ++port) {
-		if (port == me || !(m->answering & (0x10 << port))) {
-			continue;
-		}
-		waitingPort = port;
-		waitFor(packetArrived);
-		struct AdapterPort const* const p = &adapter.ports[port];
-		bool const arrived = packetArrived();
-		for (int k = 0; k < m->size; ++k) {
-			m->next[port * m->size + k] = arrived ? p->bytes[adapter.packet & 1][k] : 0;
-		}
-	}
-}
-
-// Tells the others what this Game Boy answered, when that changes; its bytes of each packet once
-// it has given them; and the end of a game it asked for.
-static void tellOthers(int me) {
-	struct Dmg07 const* const m = &adapter.machine;
-	struct AdapterPort* const own = &adapter.own;
-	own->answering = m->answering & (0x10 << me);
-	own->starting = m->phase == DMG07_START || (m->phase == DMG07_PING && m->aa[me]);
-	struct AdapterPort* const told = &adapter.told;
-	if (!adapter.toldAny || own->answering != told->answering || own->starting != told->starting || own->rate != told->rate || own->size != told->size) {
-		*told = *own;
-		adapter.toldAny = true;
-		uint8_t const message[5] = { MSG_ADAPTER_STATUS, own->answering, own->starting, own->rate, own->size };
-		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
-	}
-	if (m->phase == DMG07_DATA && m->index == m->size + 1) {
-		uint8_t message[8] = { MSG_ADAPTER_PACKET, 0, 0, m->size };
-		put16(message + 1, adapter.packet);
-		memcpy(message + 4, &m->next[me * m->size], m->size);
-		send(message, 4 + m->size, RETRO_NETPACKET_BROADCAST);
-	}
-	if (m->stop && !adapter.toldQuit) {
-		adapter.toldQuit = true;
-		uint8_t const message[1] = { MSG_ADAPTER_QUIT };
-		send(message, sizeof(message), RETRO_NETPACKET_BROADCAST);
-	}
-}
-
-// One transfer: this Game Boy, if waiting on the external clock, takes the adapter's byte and gives
-// its own; the other players' ports give what they told.
-static void adapterTransfer(void) {
-#ifdef ARMGBA_GB
-	struct Dmg07* const m = &adapter.machine;
-	int const me = slotOf(self);
-	uint8_t in[DMG07_PORTS] = { 0xFF, 0xFF, 0xFF, 0xFF };
-	if ((libretroGbLinkControl() & 0x81) == 0x80) {
-		in[me] = libretroGbLinkOut();
-		libretroGbLinkIn(dmg07Out(m, me));
-	}
-	if (m->phase == DMG07_PING && (m->index == 3 || m->index == 0) && in[me] != 0xAA) {
-		*(m->index == 3 ? &adapter.own.rate : &adapter.own.size) = in[me];
-	}
-	for (int port = 0; port < cableCount && port < DMG07_PORTS; ++port) {
-		if (port != me) {
-			in[port] = remoteIn(&adapter.ports[port]);
-		}
-	}
-	if (m->phase == DMG07_DATA && m->index == 4 * m->size - 1) {
-		fillPacket(me);
-	}
-	uint8_t const phase = m->phase;
-	dmg07Transfer(m, in);
-	// Packets are numbered from the start of each game.
-	if (m->phase == DMG07_DATA && phase != DMG07_DATA) {
-		adapter.packet = 0;
-		for (int port = 0; port < DMG07_PORTS; ++port) {
-			adapter.ports[port].starting = false;
-		}
-	} else if (phase == DMG07_DATA && m->index == 0) {
-		++adapter.packet;
-	}
-	if (m->phase == DMG07_PING) {
-		adapter.toldQuit = false;
-	}
-	tellOthers(me);
-#endif
-}
-
-void linkAdapterRun(unsigned samples) {
-	if (!linkAdapterOn()) {
-		return;
-	}
-	dmg07EndFrame(&adapter.machine, (int32_t) samples);
-	while (adapter.machine.at <= 0) {
-		adapterTransfer();
-	}
+bool linkGbArrived(void) {
+	return arrive();
 }

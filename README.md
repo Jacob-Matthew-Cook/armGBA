@@ -46,9 +46,10 @@ The options are in four categories, and a game sees only its own console's optio
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
 | | Restart Buttons | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
 | Link | Link Cable (applies on restart) | Both | Own Console, All Consoles |
-| | Players (applies on restart) | Both | 2, 3, 4 |
+| | Players (applies on restart) | Both | 2, 3, 4 (All Consoles) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
 | | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter |
+| | Link Timing | Both | Standard, Exact |
 | | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's |
 
@@ -119,9 +120,10 @@ Game Boy Color and Game Boy Advance color correction and the free boot ROMs buil
 
 - Own Console: each player runs their own game and save on their own device, and the link crosses
   RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and Crystal.
-  Game Boy Advances link up to four in multiplayer mode, and Game Boys up to four on the Four Player
-  Adapter. A slow network stalls the cable, since each transfer waits for the other end; a waiting
-  Game Boy sends its next byte ahead to spare the clocking one most of that wait.
+  It links two players; three or four play on All Consoles. A slow network stalls the cable, since
+  each transfer waits for the other end; a waiting Game Boy sends its next byte ahead to spare the
+  clocking one most of that wait. Link Timing set to Exact keeps the two consoles on the same cycle,
+  as on a real cable, and suits a local network.
 - All Consoles: one device runs every player's console, two to four with the Players option, for
   multiplayer on one device (a controller each) or with RetroArch's rollback netplay, where every
   device runs them all and the link never waits on the network. Every device needs every game.
@@ -130,8 +132,8 @@ Game Boy Color and Game Boy Advance color correction and the free boot ROMs buil
   player 1's.
 
 The Game Boy Advance Wireless Adapter (Link Port) works in both: the Union Room and trades of Pokemon
-FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. So does the Game
-Boy Four Player Adapter, which three or four Game Boys on one device always use: Wario Blast, F-1
+FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game Boy Four
+Player Adapter works with All Consoles, and three or four Game Boys always use it: Wario Blast, F-1
 Race, Yoshi's Cookie and other four-player games.
 
 **Pair files.** A `.gb2` file, as Batocera writes them, or a `.gba2` file names the games of an All

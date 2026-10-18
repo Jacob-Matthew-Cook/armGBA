@@ -27,7 +27,7 @@ void linkSetEnvironment(retro_environment_t);
 // The loaded console: a Game Boy Advance, a Game Boy (gba NULL), or none.
 void linkSetGba(struct GBA*);
 void linkSetGameBoy(bool loaded);
-// The Wireless Adapter's air to the other players, and whether the adapter is on the link port
+// The Wireless Adapter's air to the other player, and whether the adapter is on the link port
 // instead of the cable.
 const struct RfuAir* linkAir(void);
 void linkSetWireless(bool);
@@ -35,17 +35,22 @@ void linkSetWireless(bool);
 bool linkSession(void);
 // Called before each Game Boy Advance frame: keeps the cable checked during it.
 void linkGbaFrame(struct GBA*);
-// Game Boy Four Player Adapter: whether it is plugged in (the Link Port option), whether this Game
-// Boy is on one in a netplay session, and the adapter run alongside for the sound samples the Game
-// Boy just ran.
-void linkSetGbAdapter(bool);
-bool linkAdapterOn(void);
-void linkAdapterRun(unsigned samples);
+// The Link Timing option: whether exact timing is chosen, and whether it is on.
+void linkSetExact(bool);
+bool linkExactOn(void);
 // Game Boy: whether another Game Boy is on the cable, a transfer this one clocked (returns the byte
 // received), and a check for transfers the other one clocked.
 bool linkGbConnected(void);
 int linkGbTransfer(int out);
 void linkGbPoll(void);
+// Game Boy with exact timing: a transfer it clocks, told as soon as it is under way (sound samples
+// until it ends, and its length); the samples it may run before it must stop; the samples it ran;
+// and its stop, which takes the transfer due there or waits for the console leading, returning
+// false if it is still to wait, for the frame to end early.
+void linkGbClocking(int out, long left, long length);
+long linkGbAllowance(void);
+void linkGbRan(unsigned samples);
+bool linkGbArrived(void);
 
 #ifdef __cplusplus
 }

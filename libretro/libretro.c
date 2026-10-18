@@ -108,6 +108,20 @@ static uint32_t pairOut[MAX_PLAYERS];
 static bool pairWaiting[MAX_PLAYERS];
 static bool pairAnswered[MAX_PLAYERS];
 static uint32_t pairIn[MAX_PLAYERS][3];
+// The data a transfer carries is each console's as the transfer starts, as the wires shift it out
+// from then on. Each console's writes to it in a round are kept, by when, with its data as the
+// round began, so the others' data at a start inside the round can be told after it.
+enum { DATA_WRITES = 8 };
+static struct {
+	uint32_t before;
+	int count;
+	int32_t at[DATA_WRITES];
+	uint32_t value[DATA_WRITES];
+} dataWrites[MAX_PLAYERS];
+static uint32_t roundStartTime[MAX_PLAYERS];
+static bool pairStarted[MAX_PLAYERS];
+static int32_t pairStart[MAX_PLAYERS];
+static uint32_t pairData[MAX_PLAYERS][MAX_PLAYERS];
 // The Wireless Adapters' air: the consoles here hear each other, the messages each sends carried
 // between rounds.
 enum { AIR_QUEUE = 16, AIR_BYTES = 100 };
@@ -299,7 +313,7 @@ void retro_set_environment(retro_environment_t callback) {
 		  { { "l r start", "L + R + Start" }, { "l r a b", "L + R + A + B" }, { "l3 r3", "L3 + R3" }, { "select start a b", "Select + Start + A + B" }, { "off", "Off" }, { NULL, NULL } },
 		  "l r start" },
 		{ "armgba_link_cable", "Link Cable", NULL,
-		  "How games link in netplay. Own Console: each player plays their own game and save, and the cable crosses the network, which stalls on a slow one. All Consoles: every device runs every player's console, smooth with RetroArch's rollback, from the host's games and saves; it also plays multiplayer on one device, a controller for each player. Applies on Restart.",
+		  "How games link. Own Console: two players in netplay, each playing their own game and save, the link crossing the network. All Consoles: two to four consoles on one device, a controller for each player, or in netplay on every device, smooth with RetroArch's rollback, from the host's games and saves. Applies on Restart.",
 		  NULL, "link",
 		  { { "own", "Own Console" }, { "both", "All Consoles" }, { NULL, NULL } }, "own" },
 		{ "armgba_link_players", "Players", NULL,
@@ -310,9 +324,12 @@ void retro_set_environment(retro_environment_t callback) {
 		  NULL, "link", { { "cable", "Link Cable" }, { "wireless", "Wireless Adapter" }, { NULL, NULL } }, "cable" },
 #ifdef ARMGBA_GB
 		{ "armgba_gb_link_port", "Link Port", NULL,
-		  "What joins Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race, Yoshi's Cookie and other four-player games use, for two to four. Applies on Restart.",
+		  "With All Consoles: what joins Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race, Yoshi's Cookie and other four-player games use, for two to four. Applies on Restart.",
 		  NULL, "link", { { "cable", "Link Cable" }, { "adapter", "Four Player Adapter" }, { NULL, NULL } }, "cable" },
 #endif
+		{ "armgba_link_timing", "Link Timing", NULL,
+		  "With Own Console: Standard lets each console run at its own pace, the one clocking a transfer waiting for the other's answer. Exact keeps the other just behind the one clocking, so the two swap data on the cycles a transfer starts and ends, as on a real cable; best on a local network. All Consoles is always exact.",
+		  NULL, "link", { { "standard", "Standard" }, { "exact", "Exact" }, { NULL, NULL } }, "standard" },
 		{ "armgba_link_screens", "Screens", NULL,
 		  "With All Consoles: where the screens go. Three or four consoles are shown in a grid, side by side or top and bottom. L2 and R2 change it while playing.", NULL, "link",
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
@@ -365,6 +382,7 @@ void retro_set_environment(retro_environment_t callback) {
 #ifdef ARMGBA_GB
 		{ "armgba_gb_link_port", "Link Port; cable|adapter" },
 #endif
+		{ "armgba_link_timing", "Link Timing; standard|exact" },
 		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
 		{ "armgba_player2_game", "Player 2's Game; same" },
 		{ NULL, NULL },
@@ -566,8 +584,6 @@ static void readOptions(void) {
 	int const shades = !value ? 0 : !strcmp(value, "pocket") ? 1 : !strcmp(value, "original") ? 2 : !strcmp(value, "light") ? 3 : 0;
 	value = option("armgba_gb_color_correction");
 	gbColorCorrection = value && !strcmp(value, "enabled");
-	value = option("armgba_gb_link_port");
-	linkSetGbAdapter(value && !strcmp(value, "adapter"));
 	value = option("armgba_gb_screen_off");
 	bool const offBackground = value && !strcmp(value, "background");
 	for (int i = gameBoy ? playersHere - 1 : 0; i >= 0; --i) {
@@ -601,6 +617,8 @@ static void readOptions(void) {
 	turboPeriod = value ? atoi(value) : 4;
 	turboPeriod = turboPeriod < 4 ? 4 : turboPeriod > 120 ? 120 : turboPeriod;
 	turboPulse = turboPeriod / 2 < 2 ? 2 : turboPeriod / 2 > 15 ? 15 : turboPeriod / 2;
+	value = option("armgba_link_timing");
+	linkSetExact(value && !strcmp(value, "exact"));
 	value = option("armgba_restart_buttons");
 	restartButtons = !value ? RESTART_L_R_START : !strcmp(value, "l r a b") ? RESTART_L_R_A_B : !strcmp(value, "l3 r3") ? RESTART_STICKS
 	               : !strcmp(value, "select start a b") ? RESTART_SELECT_START_A_B : !strcmp(value, "off") ? RESTART_OFF : RESTART_L_R_START;
@@ -1001,8 +1019,9 @@ static void forgetSaves(void) {
 	copySaves = 0;
 }
 
-static void pairBegin(void* context, int mode, uint32_t out);
+static void pairBegin(void* context, int mode, uint32_t out, int32_t cycles);
 static bool pairFinish(void* context, uint32_t in[3]);
+static void pairWrote(void* context);
 
 // Makes a Game Boy Advance with the game in it, or returns NULL.
 static struct GBA* startAdvance(const struct retro_game_info* game) {
@@ -1149,7 +1168,7 @@ static bool startOtherAdvances(int count, const void* const data[], const size_t
 		if (i) {
 			gbaReset(gbas[i], skipBios);
 		}
-		pairLinks[i] = (struct SioLink) { .context = (void*) (intptr_t) i, .players = count, .id = i, .begin = pairBegin, .finish = pairFinish };
+		pairLinks[i] = (struct SioLink) { .context = (void*) (intptr_t) i, .players = count, .id = i, .begin = pairBegin, .finish = pairFinish, .wrote = pairWrote };
 	}
 	attachPorts();
 	setAdvanceOffsets();
@@ -1872,10 +1891,60 @@ static void runGameBoys(void) {
 // cable when it starts. When it ends, in normal mode player 1 and 2's consoles swap data, and the
 // other takes the transfer if it is waiting for one; in multiplayer mode the parent's word and each
 // child's go to every child.
-static void pairBegin(void* context, int mode, uint32_t out) {
+// Where a console is in the frame while it runs in a round.
+static int32_t roundNow(int i) {
+	return roundDone[i] + (int32_t) ((uint32_t) timingCurrentTime(gbas[i]) - roundStartTime[i]);
+}
+
+static uint32_t dataOf(int i) {
+	int mode;
+	bool ready;
+	return sioOutgoing(gbas[i], &mode, &ready);
+}
+
+static void pairBegin(void* context, int mode, uint32_t out, int32_t cycles) {
+	(void) cycles;
 	int const i = (int) (intptr_t) context;
 	pairMode[i] = mode;
 	pairOut[i] = out;
+	pairStarted[i] = true;
+	pairStart[i] = roundNow(i);
+}
+
+static void pairWrote(void* context) {
+	int const i = (int) (intptr_t) context;
+	int const n = dataWrites[i].count;
+	if (n < DATA_WRITES) {
+		dataWrites[i].at[n] = roundNow(i);
+		dataWrites[i].value[n] = dataOf(i);
+		dataWrites[i].count = n + 1;
+	}
+}
+
+// A console's data at a moment of the round just run.
+static uint32_t dataAt(int i, int32_t when) {
+	uint32_t value = dataWrites[i].before;
+	for (int k = 0; k < dataWrites[i].count && dataWrites[i].at[k] <= when; ++k) {
+		value = dataWrites[i].value[k];
+	}
+	return value;
+}
+
+// Between rounds: the others' data for each transfer that started in the round; then the writes
+// are forgotten, and each console's data is noted as the next round begins.
+static void noteStarts(void) {
+	for (int i = 0; i < playersHere; ++i) {
+		if (pairStarted[i]) {
+			pairStarted[i] = false;
+			for (int k = 0; k < playersHere; ++k) {
+				pairData[i][k] = dataAt(k, pairStart[i]);
+			}
+		}
+	}
+	for (int i = 0; i < playersHere; ++i) {
+		dataWrites[i].count = 0;
+		dataWrites[i].before = dataOf(i);
+	}
 }
 
 static bool pairFinish(void* context, uint32_t in[3]) {
@@ -1917,16 +1986,16 @@ static void exchange(int i) {
 	if (pairMode[i] == MULTI) {
 		uint32_t values[4] = { pairOut[i] & 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
 		for (int k = 1; k < playersHere; ++k) {
-			uint32_t const theirs = sioOutgoing(gbas[k], &mode, &ready);
-			values[k] = in[k - 1] = mode == MULTI ? theirs & 0xFFFF : 0xFFFF;
+			sioOutgoing(gbas[k], &mode, &ready);
+			values[k] = in[k - 1] = mode == MULTI ? pairData[i][k] & 0xFFFF : 0xFFFF;
 		}
 		for (int k = 1; k < playersHere; ++k) {
 			sioReceive(gbas[k], values);
 		}
 	} else if (i < 2) {
 		struct GBA* const other = gbas[1 - i];
-		uint32_t const theirs = sioOutgoing(other, &mode, &ready);
-		in[0] = ready ? theirs : 0xFFFFFFFF;
+		sioOutgoing(other, &mode, &ready);
+		in[0] = ready ? pairData[i][1 - i] : 0xFFFFFFFF;
 		uint32_t const values[4] = { pairOut[i], 0xFFFF, 0xFFFF, 0xFFFF };
 		sioReceive(other, values);
 	}
@@ -1964,6 +2033,7 @@ static void runRound(int i) {
 		return;
 	}
 	uint32_t const start = timingCurrentTime(machine);
+	roundStartTime[i] = start;
 	sliceOver[i] = false;
 	timingSchedule(machine, &sliceEvents[i], left);
 	while (!sliceOver[i] && !pairWaiting[i]) {
@@ -2001,6 +2071,8 @@ static void runAdvances(void) {
 	for (int i = 0; i < playersHere; ++i) {
 		roundDone[i] = gbaAhead[i];
 		sliceEvents[i] = (struct Event) { .callback = sliceEnd, .context = (void*) (intptr_t) i, .priority = 0x7F, .endsRun = true };
+		dataWrites[i].count = 0;
+		dataWrites[i].before = dataOf(i);
 	}
 	for (;;) {
 		bool unfinished = false;
@@ -2012,6 +2084,7 @@ static void runAdvances(void) {
 		}
 		roundEnd = nextRoundEnd();
 		workersRun(runRound, playersHere);
+		noteStarts();
 		carryCable();
 		carryAir();
 		carryReady();

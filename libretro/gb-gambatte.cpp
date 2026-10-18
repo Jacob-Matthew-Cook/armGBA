@@ -546,14 +546,14 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 	return true;
 }
 
-// The eight bits of a transfer this Game Boy clocked are out: the other one's byte comes back. On the
-// Four Player Adapter, a Game Boy's own clock reaches nothing.
+// The eight bits of a transfer this Game Boy clocked are out: the other one's byte comes back.
 void linkClocked() {
-	s->gb->linkStatus(linkAdapterOn() ? 0xFF : linkGbTransfer(s->gb->linkStatus(258)));
+	s->gb->linkStatus(257);
+	s->gb->linkStatus(linkGbTransfer(s->gb->linkStatus(258)));
 }
 
 void updateLink() {
-	if (s->linked != (linkGbConnected() || linkAdapterOn())) {
+	if (s->linked != linkGbConnected()) {
 		s->linked = !s->linked;
 		s->gb->linkStatus(s->linked ? 264 : 265);
 	}
@@ -795,6 +795,57 @@ void meet(long now) {
 	}
 }
 
+// With exact link timing: this Game Boy's transfer ends, and the other's byte comes back.
+void clockedExactly() {
+	s->gb->linkStatus(257);
+	int const in = linkGbTransfer(s->gb->linkStatus(258));
+	s->gb->linkStatus(in & 0xFF);
+	s->gb->linkStatus(266);
+}
+
+// With exact link timing: a frame's samples in parts that stop where the link needs them to: at this
+// Game Boy's own transfer's end, and where the console leading has got to. A transfer of its own is
+// told to the other as soon as it is under way, so the other answers at its start. Waiting for long
+// at a stop, the frame ends early. A transfer that ends inside a part, on the last instruction's
+// cycles, is taken as the part ends.
+void runExactlyParts() {
+	long done = 0;
+	while (done < FRAME_SAMPLES) {
+		long const own = serialLeft(*s);
+		if (own > 0) {
+			linkGbClocking(s->gb->linkStatus(258), own, shortestTransfer(*s));
+		}
+		linkGbPoll();
+		if (own == 0) {
+			clockedExactly();
+			continue;
+		}
+		long const allowed = linkGbAllowance();
+		if (allowed == 0) {
+			if (!linkGbArrived()) {
+				return;
+			}
+			continue;
+		}
+		long count = std::min<long>(FRAME_SAMPLES - done, 2048);
+		count = std::min(count, allowed);
+		count = own > 0 ? std::min(count, own) : count;
+		std::size_t samples = count;
+		if (s->gb->runFor(s->pixels, LIBRETRO_GB_WIDTH, s->native, samples) >= 0) {
+			std::memcpy(s->shown, s->pixels, sizeof(s->shown));
+		}
+		mixDown(samples);
+		done += samples;
+		linkGbRan(samples);
+	}
+}
+
+void runExactly() {
+	s->gb->setLinkCallback(0);
+	runExactlyParts();
+	s->gb->setLinkCallback(linkClocked);
+}
+
 }
 
 extern "C" {
@@ -806,22 +857,23 @@ extern "C" {
 const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** out, size_t* frames) {
 	beginFrame(keys);
 	updateLink();
-	// Linked, a frame runs in sixteen parts with the cable checked between them; on the Four Player
-	// Adapter, in slices with the adapter run after each, and the cable checked as often as before.
-	bool const adapter = linkAdapterOn();
-	int const parts = adapter ? FRAME_SAMPLES / PAIR_SLICE : s->linked ? 16 : 1;
-	int const pollEvery = parts / 16 ? parts / 16 : 1;
+	if (s->linked && linkExactOn()) {
+		runExactly();
+		endFrame();
+		*out = s->samples;
+		*frames = s->sampleCount / 2;
+		return reinterpret_cast<const uint32_t*>(s->shown);
+	}
+	// Linked, a frame runs in sixteen parts with the cable checked between them.
+	int const parts = s->linked ? 16 : 1;
 	bool drawn = false;
 	for (int runs = 0; !drawn && runs < 4 * parts; ++runs) {
-		if (s->linked && runs % pollEvery == 0) {
+		if (s->linked) {
 			linkGbPoll();
 		}
 		std::size_t count = FRAME_SAMPLES / parts;
 		drawn = s->gb->runFor(s->pixels, LIBRETRO_GB_WIDTH, s->native, count) >= 0;
 		mixDown(count);
-		if (adapter) {
-			linkAdapterRun(count);
-		}
 	}
 	endFrame();
 	*out = s->samples;
