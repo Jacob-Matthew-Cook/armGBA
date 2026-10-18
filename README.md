@@ -123,8 +123,8 @@ cartridges: Sachen, TAMA5, MBC6, MBC7, Vast Fame, and the BBD, Hitek, Sintax, Li
 families. The screen palettes, apart from Grayscale (gambatte-libretro's), are SameBoy's. So are the
 Game Boy Color and Game Boy Advance color correction and the free boot ROMs built in.
 
-**Link play.** Link Mode turns it on, two ways; Off is one console, and netplay is RetroArch's usual
-kind:
+**Link play.** Link Mode picks how consoles link. Off, the default, is one console, with RetroArch's
+usual netplay. The other two:
 
 - Separate: each device runs its own player's console, with their own game and save, and the cable
   crosses RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and
@@ -139,21 +139,26 @@ kind:
   player 1's game gets a save of their own, under the game's file name in the save folder's
   armGBA/Player 2 to Player 4 folders; it starts new, or as a copy of player 1's, as New Players'
   Saves says. In netplay the session runs the host's games and saves, and the host writes the
-  players' saves as the game closes. A device that joined keeps its own saves as they were, and the
-  session's in the save folder's armGBA/Remote/Player 1 to Player 4 folders, by the session's
-  players, for Load Save.
+  players' saves as the game closes. A device that joined keeps its own saves as they were, and
+  the session's in the save folder's armGBA/Remote folders (see Backups).
 
-**Backups.** Back Up Save copies a player's save, as it is, to a file beside it named for the time,
-such as Game.20261018-153012.srm, player 1's in the save folder's armGBA/Player 1 folder; the game
-carries on. Player 1's Saves can keep player 1's save there too, beside the other players'; when it
-changes, the newer save is used. Load Save makes one of those backups a
-player's save again, or, with two players or more, gives one player another's current save or
-backup, as Load Into says, outside netplay. It also lists the saves kept from netplay sessions this
-device joined, as Remote Player 1 to 4, each to the other person unless Load Into names a player:
-the session's player 1 (its host) to player 2 here when there is one, its player 2 to player 1. It
-backs up the save it replaces first and restarts that player's console. Backups Kept limits how
-many each player keeps, 10 unless chosen; a save the same as its newest backup isn't backed up
-again.
+**Backups.**
+
+- Back Up Save copies a player's save, as it is, to a file named for the time, such as
+  `Game.20261018-153012.srm`, beside their save; player 1's goes in the save folder's
+  armGBA/Player 1 folder. The game carries on.
+- Load Save makes a backup a player's save again. With two players or more it can also give one
+  player another's current save or backup, as Load Into says. It backs up the save it replaces
+  first and restarts that player's console. Not during netplay.
+- A device that joined another's netplay session keeps that session's saves in armGBA/Remote/Player
+  1 to Player 4, by the session's players, and Load Save lists them as Remote Player 1 to 4. Each
+  goes to the other person unless Load Into names a player: Remote Player 1 (the host) to player 2
+  here when there is one, Remote Player 2 to player 1. Hosting and joining in turn passes both
+  players' saves each way.
+- Backups Kept: 10 per player unless chosen. A save the same as its newest backup isn't backed up
+  again.
+- Player 1's Saves can keep player 1's save in armGBA/Player 1 too, beside the other players'. When
+  it changes, the newer save is used.
 
 The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of
 Pokemon FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game

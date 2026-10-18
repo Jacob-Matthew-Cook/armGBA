@@ -43,16 +43,16 @@ void secondRemoteSavePath(const char* gamePath, int player, const char* extensio
 // Makes the folders a file is to go in.
 void secondMakeFolders(const char* filePath);
 
-// A save's earlier versions, kept beside it named for when they were put aside: "Game.srm" keeps
+// A save's backups, beside it, named for when they were made: "Game.srm" keeps
 // "Game.20261018-153012.srm", with "-2" and on after the time when two fall in the same second.
 // The stamp is the part between the dots.
 enum { SECOND_STAMP = 24 };
-// Lists the stamps of a save's newest earlier versions, newest first. Returns how many, at most max.
-size_t secondEarlier(const char* savePath, char (*stamps)[SECOND_STAMP], size_t max);
-// A stamp for now that the save has no earlier version with.
+// Lists the stamps of a save's newest backups, newest first. Returns how many, at most max.
+size_t secondBackups(const char* savePath, char (*stamps)[SECOND_STAMP], size_t max);
+// A stamp for now that sorts after every backup the save has.
 void secondNewStamp(const char* savePath, char stamp[SECOND_STAMP]);
-// The file of the save's earlier version with this stamp.
-void secondEarlierPath(const char* savePath, const char* stamp, char* out, size_t outSize);
+// The file of the save's backup with this stamp.
+void secondBackupPath(const char* savePath, const char* stamp, char* out, size_t outSize);
 
 // Each game's choice of player 2's game, kept in a text file of "game<TAB>choice" lines: RetroArch
 // keeps one value for every game, and forgets a value its list didn't have before the game loaded.
