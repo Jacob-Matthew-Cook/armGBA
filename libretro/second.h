@@ -32,6 +32,12 @@ void* secondRead(const char* path, size_t* size);
 // " (Player 2)" names a second save for the same game.
 void secondSavePath(const char* gamePath, const char* suffix, const char* extension, const char* firstPath, const char* saveDirectory,
                     char* out, size_t outSize);
+// Where another player keeps their own save of player 1's game: in the save directory's
+// armGBA/Player N folder (beside the game without one), under the game's own file name.
+void secondPlayerSavePath(const char* gamePath, int player, const char* extension, const char* saveDirectory, char* out,
+                          size_t outSize);
+// Makes the folders a file is to go in.
+void secondMakeFolders(const char* filePath);
 
 // Each game's choice of player 2's game, kept in a text file of "game<TAB>choice" lines: RetroArch
 // keeps one value for every game, and forgets a value its list didn't have before the game loaded.

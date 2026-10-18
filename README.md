@@ -51,6 +51,7 @@ The options are in four categories, and a game sees only its own console's optio
 | | Link Timing | Both | Standard, Exact |
 | | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's |
+| | New Players' Saves (applies on restart) | Both | Copy of Player 1's, New Save |
 
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
 set to Shown, the black around it shows too, as on that console's screen.
@@ -128,9 +129,10 @@ Game Boy Color and Game Boy Advance color correction and the free boot ROMs buil
   multiplayer on one device (a controller each) or with RetroArch's rollback netplay, where the
   link never waits on the network. Every device needs every game. Three or four are shown in a
   grid. Player 2's game is picked with Player 2's Game; players 3 and 4 play player 1's. A player on
-  player 1's game gets a save of their own, which starts as a copy of player 1's. In netplay the
-  session runs the host's games and saves: the host writes the players' saves as the game closes,
-  and a device that joined leaves its own as they were.
+  player 1's game gets a save of their own, under the game's file name in the save folder's
+  armGBA/Player 2 to Player 4 folders; it starts as a copy of player 1's, or new, as New Players'
+  Saves says. In netplay the session runs the host's games and saves: the host writes the players'
+  saves as the game closes, and a device that joined leaves its own as they were.
 
 The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of
 Pokemon FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game
