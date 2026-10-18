@@ -346,6 +346,9 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_gb_link_port", "Link Port", NULL,
 		  "What joins the Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race and other four-player games use. Three or four always use the adapter. Applies on Restart.",
 		  NULL, "link", { { "cable", "Link Cable" }, { "adapter", "Four Player Adapter" }, { NULL, NULL } }, "cable" },
+		{ "armgba_gb_link_timing", "Game Boy Link Timing", NULL,
+		  "With Separate: Standard lets each Game Boy run at its own pace, a waiting one sending its next byte ahead; it suits Wi-Fi and games that link in turns, such as trades and battles. Exact keeps the two on the same cycles, as on a real cable, for games that link every frame, and wants a short ping. Game Boy Advances are always exact.",
+		  NULL, "link", { { "standard", "Standard" }, { "exact", "Exact" }, { NULL, NULL } }, "standard" },
 		{ "armgba_link_screens", "Screens", NULL,
 		  "Where the screens go. L2 and R2 change it while playing.", NULL, "link",
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
@@ -421,6 +424,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_link_players", "Players; 2|3|4" },
 		{ "armgba_link_port", "Link Port; cable|wireless" },
 		{ "armgba_gb_link_port", "Link Port; cable|adapter" },
+		{ "armgba_gb_link_timing", "Game Boy Link Timing; standard|exact" },
 		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
 		{ "armgba_player2_game", "Player 2's Game; same" },
 		{ "armgba_back_up_save", "Back Up Save; off|1|2|3|4" },
@@ -645,6 +649,8 @@ static void readOptions(void) {
 	turboPeriod = value ? atoi(value) : 4;
 	turboPeriod = turboPeriod < 4 ? 4 : turboPeriod > 120 ? 120 : turboPeriod;
 	turboPulse = turboPeriod / 2 < 2 ? 2 : turboPeriod / 2 > 15 ? 15 : turboPeriod / 2;
+	value = option("armgba_gb_link_timing");
+	linkSetGbExact(value && !strcmp(value, "exact"));
 	value = option("armgba_restart_buttons");
 	restartButtons = !value ? RESTART_L_R_START : !strcmp(value, "l r a b") ? RESTART_L_R_A_B : !strcmp(value, "l3 r3") ? RESTART_STICKS
 	               : !strcmp(value, "select start a b") ? RESTART_SELECT_START_A_B : !strcmp(value, "off") ? RESTART_OFF : RESTART_L_R_START;
@@ -776,6 +782,7 @@ static bool showOptions(void) {
 		{ "armgba_gb_screen", !advance },
 		{ "armgba_gb_advance_border", !advance },
 		{ "armgba_gb_link_port", !advance && together },
+		{ "armgba_gb_link_timing", !advance && linkSeparateWanted() },
 		{ "armgba_link_players", together },
 		{ "armgba_link_screens", together },
 		{ "armgba_player2_game", together },
