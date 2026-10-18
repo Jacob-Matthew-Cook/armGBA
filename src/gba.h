@@ -537,14 +537,21 @@ enum {
 	RFU_CLIENT_BYTES = 16,
 	// The most consoles an adapter hears.
 	RFU_ROOMS = 8,
+	// The most packets an adapter holds from one sender over a network.
+	RFU_QUEUE = 4,
 };
 
 // A packet over the air, and when it gets there by the receiving console's clock.
 struct RfuPacket {
-	bool sent;
 	uint8_t length;
 	int32_t arrival;
 	uint8_t data[RFU_HOST_BYTES];
+};
+
+// The packets heard from one sender and not yet read, oldest first (rfu.c hear()).
+struct RfuQueue {
+	uint8_t count;
+	struct RfuPacket packets[RFU_QUEUE];
 };
 
 // The Game Boy Advance Wireless Adapter on the link port (rfu.c): the serial side the game talks to,
@@ -581,7 +588,7 @@ struct Rfu {
 		bool active;
 		uint16_t id;
 		uint8_t console;
-		struct RfuPacket rx;
+		struct RfuQueue rx;
 	} clients[RFU_SLOTS];
 	// A client's host and slot, and a connection under way.
 	uint8_t hostConsole;
@@ -589,9 +596,9 @@ struct Rfu {
 	uint8_t number;
 	bool answered;
 	int32_t connected;
-	// A client's packet from its host; a client's packet waiting for the host's next one, or the
+	// A client's packets from its host; a client's packet waiting for the host's next one, or the
 	// host's last packet.
-	struct RfuPacket rx;
+	struct RfuQueue rx;
 	struct RfuPacket tx;
 	// The rooms heard: each host's console, whether it is open now, and when it was last heard.
 	struct {
@@ -642,7 +649,7 @@ struct Jit;
 
 // Padding that puts struct GBA's memories on a page boundary; the assertion after the struct says
 // when to change it. The struct is laid out the same on every CPU, so one value serves all.
-enum { PAD_TO_PAGE = 1119 };
+enum { PAD_TO_PAGE = 3695 };
 
 // Hardware some cartridges have beyond a ROM and a save chip (cart.c).
 enum {
@@ -819,7 +826,7 @@ struct GBA {
 
 _Static_assert(offsetof(struct GBA, iwramCode) % 4096 == 0, "change PAD_TO_PAGE so that iwramCode starts on a page");
 // States are the struct as it lies in memory; this size is the same in every build.
-_Static_assert(sizeof(struct GBA) == 784408, "struct GBA changed: check it is laid out the same on 32-bit and 64-bit CPUs (tests/state-layout.sh), then update this size and STATE_MAGIC");
+_Static_assert(sizeof(struct GBA) == 788504, "struct GBA changed: check it is laid out the same on 32-bit and 64-bit CPUs (tests/state-layout.sh), then update this size and STATE_MAGIC");
 
 #define CPU_FREQUENCY 0x1000000
 
