@@ -149,7 +149,8 @@ carries on. Player 1's Saves can keep player 1's save there too, beside the othe
 changes, the newer save is used. Load Save makes one of those backups a
 player's save again, or, with two players or more, gives one player another's current save or
 backup, as Load Into says, outside netplay. It also lists the saves kept from netplay sessions this
-device joined, as Remote Player 1 to 4, which go to player 1 unless Load Into names another. It
+device joined, as Remote Player 1 to 4, each to the other person unless Load Into names a player:
+the session's player 1 (its host) to player 2 here when there is one, its player 2 to player 1. It
 backs up the save it replaces first and restarts that player's console. Backups Kept limits how
 many each player keeps.
 

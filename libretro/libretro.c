@@ -193,6 +193,8 @@ static struct retro_core_option_v2_definition* loadOption;
 static struct retro_core_option_v2_definition* backUpOption;
 static struct retro_core_option_v2_definition* loadIntoOption;
 static int earlierListed;
+// The player Load Into named when the remote saves' labels were made.
+static int listedInto = -1;
 static char playerValues[MAX_PLAYERS][2];
 // Which options were last shown, once set; and whether the Game Boy cartridge has a tilt sensor
 // (MBC7).
@@ -205,7 +207,7 @@ static bool linkSeparateWanted(void);
 static bool gameBoyLoaded(void);
 static char playerLabels[MAX_PLAYERS][12];
 static char loadValues[EARLIER_CHOICES][SECOND_STAMP + 4];
-static char loadLabels[EARLIER_CHOICES][56];
+static char loadLabels[EARLIER_CHOICES][80];
 
 // Cheat codes from the frontend, by index, and the Game Boy Advance operations they decode to. All
 // codes are decoded again, in order, whenever one changes, because a master code changes how the
@@ -900,6 +902,29 @@ static void stampLabel(const char* stamp, char* out, size_t outSize) {
 	         stamp[15] ? " (" : "", stamp[15] ? stamp + 16 : "", stamp[15] ? ")" : "");
 }
 
+// The player Load Into names, when they are playing here, or -1.
+static int loadIntoPlayer(void) {
+	const char* into = option("armgba_load_into");
+	char file[8192], rtcFile[8192];
+	int const player = into && into[0] >= '1' && into[0] <= '4' ? into[0] - '1' : -1;
+	return player >= 0 && saveFiles(player, file, rtcFile) ? player : -1;
+}
+
+// Where a remote save goes: where Load Into says, or else to the other person: the session's player
+// 1 (the host) to player 2 here when there is one, its player 2 to player 1 here, and players 3 and
+// 4 to the same players here, or player 1.
+static int remoteTarget(int from) {
+	char file[8192], rtcFile[8192];
+	int const named = loadIntoPlayer();
+	if (named >= 0) {
+		return named;
+	}
+	if (from == 0) {
+		return saveFiles(1, file, rtcFile) ? 1 : 0;
+	}
+	return from > 1 && saveFiles(from, file, rtcFile) ? from : 0;
+}
+
 // Lists the players playing as Back Up Save's and Load Into's choices, and their saves as Load
 // Save's: with two or more, each one's current save, then their backups; then the saves kept from
 // other devices' netplay sessions.
@@ -969,11 +994,12 @@ static void fillEarlierSaves(void) {
 			char when[32];
 			stampLabel(stamps[i], when, sizeof(when));
 			snprintf(value, sizeof(loadValues[0]), "r%d %.*s", player + 1, SECOND_STAMP - 1, stamps[i]);
-			snprintf(label, sizeof(loadLabels[0]), "Remote Player %d: %s", player + 1, when);
+			snprintf(label, sizeof(loadLabels[0]), "Remote Player %d into Player %d: %s", player + 1, remoteTarget(player) + 1, when);
 			loadOption->values[n++] = (struct retro_core_option_value) { value, label };
 		}
 	}
 	loadOption->values[n] = (struct retro_core_option_value) { NULL, NULL };
+	listedInto = loadIntoPlayer();
 	backUpOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
 	loadIntoOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
 }
@@ -2377,14 +2403,12 @@ static void readSaveActions(bool act) {
 		snprintf(load, sizeof(load), "%s", value);
 		struct retro_variable off = { "armgba_load_save", "off" };
 		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
-		const char* into = option("armgba_load_into");
-		int const named = into && into[0] >= '1' && into[0] <= '4' ? into[0] - '1' : -1;
+		int const named = loadIntoPlayer();
 		if (act && load[0] >= '1' && load[0] <= '4' && load[1] == ' ') {
 			int const from = load[0] - '1';
 			loadSave(from, false, load + 2, named >= 0 ? named : from);
 		} else if (act && load[0] == 'r' && load[1] >= '1' && load[1] <= '4' && load[2] == ' ') {
-			// A remote save goes to player 1 unless Load Into names another.
-			loadSave(load[1] - '1', true, load + 3, named >= 0 ? named : 0);
+			loadSave(load[1] - '1', true, load + 3, remoteTarget(load[1] - '1'));
 		}
 	}
 }
@@ -2802,7 +2826,7 @@ void retro_run(void) {
 		readOptions();
 		readSaveActions(true);
 		const char* listed = option("armgba_list_saves");
-		if (listed && atoi(listed) != earlierListed) {
+		if ((listed && atoi(listed) != earlierListed) || loadIntoPlayer() != listedInto) {
 			offerEarlierSaves();
 		}
 	}
