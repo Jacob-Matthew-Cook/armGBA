@@ -262,7 +262,7 @@ static void writeSiocnt(struct GBA* gba, uint16_t value) {
 		if (sio->rfu.attached) {
 			sio->rfu.out = outgoing(gba);
 		} else if (linked(sio)) {
-			sio->link->begin(sio->link->context, sio->mode, outgoing(gba));
+			sio->link->begin(sio->link->context, sio->mode, outgoing(gba), TRANSFER_DELAY + transferCycles(sio));
 		}
 		timingDeschedule(gba, &sio->completeEvent);
 		timingSchedule(gba, &sio->completeEvent, TRANSFER_DELAY + transferCycles(sio));
@@ -292,6 +292,13 @@ static void writeRcnt(struct GBA* gba, uint16_t value) {
 	}
 }
 
+static void dataWritten(struct GBA* gba) {
+	struct Sio* sio = &gba->sio;
+	if (linked(sio) && sio->link->wrote) {
+		sio->link->wrote(sio->link->context);
+	}
+}
+
 // Handles writes to the serial registers.
 void sioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	struct Sio* sio = &gba->sio;
@@ -300,6 +307,7 @@ void sioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	case REG_SIODATA32_HI:
 		if (sio->mode == SIO_NORMAL_32) {
 			gba->io[address >> 1] = value;
+			dataWritten(gba);
 		}
 		break;
 	case REG_SIOCNT:
@@ -308,6 +316,7 @@ void sioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	case REG_SIODATA8:
 		if (sio->mode != SIO_UART) {
 			gba->io[address >> 1] = value;
+			dataWritten(gba);
 		}
 		break;
 	case REG_RCNT:

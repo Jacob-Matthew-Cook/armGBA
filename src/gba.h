@@ -508,12 +508,15 @@ struct SioLink {
 	// Whether every other console on the cable is in multiplayer mode, which with this one's own
 	// makes the SD line high. The frontend keeps it, and calls sioLinkChanged when it changes.
 	bool ready;
-	// A transfer this console clocks: begin sends this console's data as the transfer starts,
-	// finish waits for the others' and fills `in` (one value in normal mode, three in multiplayer).
-	// Finish can instead return false, having stopped the console (returnRequested and
-	// timingInterrupt), and is called again on the same cycle when the console runs on.
-	void (*begin)(void* context, int mode, uint32_t out);
+	// A transfer this console clocks: begin sends this console's data as the transfer starts, with
+	// the cycles until it ends; finish waits for the others' and fills `in` (one value in normal mode,
+	// three in multiplayer). Finish can instead return false, having stopped the console
+	// (returnRequested and timingInterrupt), and is called again on the same cycle when the console
+	// runs on.
+	void (*begin)(void* context, int mode, uint32_t out, int32_t cycles);
 	bool (*finish)(void* context, uint32_t in[3]);
+	// Called when the game writes the data it puts on the cable; may be NULL.
+	void (*wrote)(void* context);
 };
 
 // The air between Wireless Adapters: the frontend carries the messages one adapter sends to the
