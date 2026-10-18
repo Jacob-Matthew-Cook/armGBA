@@ -5,16 +5,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // The libretro core. Game Boy Advance games run on armGBA; Game Boy and Game Boy Color games run on
-// the Gambatte core in gambatte/ when it is built in (ARMGBA_GB).
+// the Gambatte core in gambatte/.
 
 #include "libretro.h"
 
 #include "cheats.h"
 #include "gba.h"
-#ifdef ARMGBA_GB
 #include "gb.h"
 #include "link.h"
-#endif
 #include "second.h"
 #include "workers.h"
 
@@ -64,7 +62,6 @@ static int threadedVideo;
 static bool colorCorrection;
 static uint16_t* correctedColors;
 static uint16_t correctedFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
-#ifdef ARMGBA_GB
 static bool gameBoy;
 static enum LibretroGbModel gbModel;
 static bool gbColorCorrection;
@@ -79,7 +76,6 @@ static uint32_t gbAdvanceFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
 static bool gbPair;
 static bool gbAdapter;
 static uint32_t pairFrame[LIBRETRO_GB_WIDTH * 2 * LIBRETRO_GB_HEIGHT * 2];
-#endif
 // How many consoles of a link run here (1 without one), and the players whose save starts as a copy
 // of player 1's, as they run player 1's game; the copy is made before the first frame.
 enum { MAX_PLAYERS = 4 };
@@ -215,10 +211,8 @@ static char loadLabels[EARLIER_CHOICES][80];
 static char** cheatCodes;
 static size_t cheatCodeCount;
 static struct CheatSet cheats;
-#ifdef ARMGBA_GB
 // Whether the memory map given to the frontend is a Game Boy Color's, which has more work RAM.
 static bool gbMapColor;
-#endif
 
 // Two games loaded together, one per console of a link, each with its own save (and clock) files.
 enum {
@@ -230,11 +224,9 @@ enum {
 
 // Whether the consoles of a link run here.
 static bool bothConsoles(void) {
-#ifdef ARMGBA_GB
 	if (gbPair) {
 		return true;
 	}
-#endif
 	return gbaPair;
 }
 
@@ -266,7 +258,6 @@ static void updateRumble(bool on) {
 // Stores the frontend's callbacks and declares this core's options.
 void retro_set_environment(retro_environment_t callback) {
 	environment = callback;
-#ifdef ARMGBA_GB
 	static const struct retro_subsystem_memory_info firstMemory[] = { { "srm", RETRO_MEMORY_SAVE_RAM }, { "rtc", RETRO_MEMORY_RTC } };
 	static const struct retro_subsystem_memory_info secondMemory[] = { { "srm", MEMORY_SECOND_SAVE }, { "rtc", MEMORY_SECOND_RTC } };
 	static const struct retro_subsystem_rom_info roms[] = {
@@ -283,7 +274,6 @@ void retro_set_environment(retro_environment_t callback) {
 		{ NULL, NULL, NULL, 0, 0 },
 	};
 	callback(RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO, (void*) subsystems);
-#endif
 	struct retro_log_callback logging;
 	if (callback(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging)) {
 		logPrintf = logging.log;
@@ -294,7 +284,6 @@ void retro_set_environment(retro_environment_t callback) {
 	static struct retro_core_option_v2_definition definitions[] = {
 		{ "armgba_skip_bios", "Skip BIOS Intro", NULL, "Start games without the Game Boy Advance logo.", NULL, "system",
 		  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
-#ifdef ARMGBA_GB
 		{ "armgba_gb_model", "Game Boy Model", NULL,
 		  "The console Game Boy and Game Boy Color games run on. On the Game Boy Advance, L or R stretches the picture across its screen. Applies on restart.",
 		  NULL, "system",
@@ -303,13 +292,11 @@ void retro_set_environment(retro_environment_t callback) {
 		  "Start through the console's logo: On uses Nintendo's boot ROM when the system directory has it, Open-Source SameBoy's free one built into the core. Applies on restart.",
 		  NULL, "system",
 		  { { "enabled", "On" }, { "disabled", "Off" }, { "open-source", "Open-Source" }, { NULL, NULL } }, "enabled" },
-#endif
 		{ "armgba_threaded_video", "Threaded Video", NULL,
 		  "Draw the picture on a second CPU core. Helps fast-forward and runahead on slower devices, and uses a little more power. One Frame Late is faster still, and shows each frame one frame late.", NULL, "video",
 		  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { "one frame late", "One Frame Late" }, { NULL, NULL } }, "disabled" },
 		{ "armgba_color_correction", "Color Correction", NULL, "Darker, softer colors, as the Game Boy Advance's screen showed them. Costs a little speed.", NULL, "video",
 		  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
-#ifdef ARMGBA_GB
 		{ "armgba_gb_color_correction", "Color Correction", NULL,
 		  "Colors as the Game Boy Color's screen showed them. Not used for games running on an original Game Boy.", NULL, "video",
 		  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
@@ -318,7 +305,6 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_gb_advance_border", "Game Boy Advance Border", NULL,
 		  "On the Game Boy Advance model: Cropped shows only the game's picture, Shown the black around it as that console's screen has.", NULL, "video",
 		  { { "cropped", "Cropped" }, { "shown", "Shown" }, { NULL, NULL } }, "cropped" },
-#endif
 		{ "armgba_turbo_period", "Turbo Button Period", NULL,
 		  "How many frames apart X and Y press A and B while held, and L3 and R3 press L and R in Game Boy Advance games, as in gambatte's and gpSP's cores.", NULL, "input",
 		  {
@@ -355,11 +341,9 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_link_port", "Link Port", NULL,
 		  "What is plugged in: the Link Cable, or the Wireless Adapter that Pokemon FireRed, LeafGreen and Emerald and other games use. Applies on Restart.",
 		  NULL, "link", { { "cable", "Link Cable" }, { "wireless", "Wireless Adapter" }, { NULL, NULL } }, "cable" },
-#ifdef ARMGBA_GB
 		{ "armgba_gb_link_port", "Link Port", NULL,
 		  "What joins the Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race and other four-player games use. Three or four always use the adapter. Applies on Restart.",
 		  NULL, "link", { { "cable", "Link Cable" }, { "adapter", "Four Player Adapter" }, { NULL, NULL } }, "cable" },
-#endif
 		{ "armgba_link_screens", "Screens", NULL,
 		  "Where the screens go. L2 and R2 change it while playing.", NULL, "link",
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
@@ -420,17 +404,13 @@ void retro_set_environment(retro_environment_t callback) {
 	}
 	static const struct retro_variable variables[] = {
 		{ "armgba_skip_bios", "Skip BIOS Intro; disabled|enabled" },
-#ifdef ARMGBA_GB
 		{ "armgba_gb_model", "Game Boy Model; Auto|Game Boy|Game Boy Pocket|Game Boy Color|Game Boy Advance" },
 		{ "armgba_gb_boot_rom", "Boot ROM; enabled|disabled|open-source" },
-#endif
 		{ "armgba_threaded_video", "Threaded Video; disabled|enabled|one frame late" },
 		{ "armgba_color_correction", "Color Correction; disabled|enabled" },
-#ifdef ARMGBA_GB
 		{ "armgba_gb_color_correction", "Color Correction; disabled|enabled" },
 		{ "armgba_gb_screen", "Game Boy Screen; grayscale|original|pocket|light" },
 		{ "armgba_gb_advance_border", "Game Boy Advance Border; cropped|shown" },
-#endif
 		{ "armgba_turbo_period", "Turbo Button Period; 4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83|84|85|86|87|88|89|90|91|92|93|94|95|96|97|98|99|100|101|102|103|104|105|106|107|108|109|110|111|112|113|114|115|116|117|118|119|120" },
 		{ "armgba_gb_tilt", "Tilt Sensor; left stick|right stick|d-pad" },
 		{ "armgba_solar_sensor", "Solar Sensor; 5|6|7|8|9|10|0|1|2|3|4" },
@@ -438,9 +418,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_link_mode", "Link Mode; off|together|separate" },
 		{ "armgba_link_players", "Players; 2|3|4" },
 		{ "armgba_link_port", "Link Port; cable|wireless" },
-#ifdef ARMGBA_GB
 		{ "armgba_gb_link_port", "Link Port; cable|adapter" },
-#endif
 		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
 		{ "armgba_player2_game", "Player 2's Game; same" },
 		{ "armgba_back_up_save", "Back Up Save; off|1|2|3|4" },
@@ -484,11 +462,7 @@ void retro_get_system_info(struct retro_system_info* info) {
 	memset(info, 0, sizeof(*info));
 	info->library_name = "armGBA";
 	info->library_version = "0.1";
-#ifdef ARMGBA_GB
 	info->valid_extensions = "gba|bin|gb|gbc|gb2|gba2";
-#else
-	info->valid_extensions = "gba|bin|gba2";
-#endif
 	info->need_fullpath = false;
 	info->block_extract = false;
 }
@@ -503,7 +477,6 @@ static void geometry(struct retro_game_geometry* geometry) {
 	geometry->max_width = SCREEN_WIDTH * 2;
 	geometry->max_height = SCREEN_HEIGHT * 2;
 	geometry->aspect_ratio = 3.0f / 2.0f;
-#ifdef ARMGBA_GB
 	if (gameBoy && !gbOnAdvance) {
 		geometry->base_width = LIBRETRO_GB_WIDTH;
 		geometry->base_height = LIBRETRO_GB_HEIGHT;
@@ -518,7 +491,6 @@ static void geometry(struct retro_game_geometry* geometry) {
 		geometry->base_width = LIBRETRO_GB_WIDTH;
 		geometry->base_height = LIBRETRO_GB_HEIGHT;
 	}
-#endif
 	if (gbaPair) {
 		geometry->base_width = SCREEN_WIDTH;
 		geometry->base_height = SCREEN_HEIGHT;
@@ -541,9 +513,7 @@ static void announceGeometry(void) {
 // Reports the picture size and timing for the loaded game, at the consoles' own frame rates.
 void retro_get_system_av_info(struct retro_system_av_info* info) {
 	memset(info, 0, sizeof(*info));
-#ifdef ARMGBA_GB
 	gbOnAdvance = gameBoy && !gbPair && libretroGbOnAdvance();
-#endif
 	geometry(&info->geometry);
 	// A Game Boy frame lasts as long as a Game Boy Advance frame.
 	info->timing.fps = FRAME_RATE;
@@ -609,11 +579,7 @@ static void showButtons(bool forGameBoy);
 
 // Whether the loaded game is a Game Boy one.
 static bool gameBoyLoaded(void) {
-#ifdef ARMGBA_GB
 	return gameBoy;
-#else
-	return false;
-#endif
 }
 
 // Reads every option and applies the ones that can change while a game runs.
@@ -633,7 +599,6 @@ static void readOptions(void) {
 	threadedVideo = threaded;
 	value = option("armgba_color_correction");
 	colorCorrection = value && !strcmp(value, "enabled") && buildCorrectedColors();
-#ifdef ARMGBA_GB
 	value = option("armgba_gb_model");
 	gbModel = !value                               ? LIBRETRO_GB_AUTO
 	        : !strcmp(value, "Game Boy")            ? LIBRETRO_GB_DMG
@@ -674,7 +639,6 @@ static void readOptions(void) {
 			announceGeometry();
 		}
 	}
-#endif
 	value = option("armgba_turbo_period");
 	turboPeriod = value ? atoi(value) : 4;
 	turboPeriod = turboPeriod < 4 ? 4 : turboPeriod > 120 ? 120 : turboPeriod;
@@ -838,18 +802,15 @@ static void setOptions(void) {
 	showOptions();
 }
 
-#ifdef ARMGBA_GB
 // Describes memory for the frontend's achievements and cheat search, the same way mGBA's and
 // gambatte-libretro's cores do.
 static void announceMemory(void) {
 	struct retro_memory_descriptor descriptors[11];
 	size_t count = 0;
-#ifdef ARMGBA_GB
 	if (gameBoy) {
 		count = libretroGbMemoryMap(descriptors);
 		gbMapColor = libretroGbIsColor();
 	}
-#endif
 	if (!count && gba) {
 		size_t romSize = gba->romSize + (gba->romSize & 1);
 		const struct retro_memory_descriptor advance[] = {
@@ -874,7 +835,6 @@ static void announceMemory(void) {
 	environment(RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS, &yes);
 }
 
-#ifdef ARMGBA_GB
 // A restart or a loaded state can switch the machine to or from a Game Boy Color, which changes the
 // memory map.
 static void checkGameBoyMemory(void) {
@@ -882,7 +842,6 @@ static void checkGameBoyMemory(void) {
 		announceMemory();
 	}
 }
-#endif
 
 // Game Boy and Game Boy Color games are told apart from Game Boy Advance games by file extension.
 static bool isGameBoy(const char* path) {
@@ -890,7 +849,6 @@ static bool isGameBoy(const char* path) {
 	return dot && (!strcasecmp(dot, ".gb") || !strcasecmp(dot, ".gbc"));
 }
 
-#endif
 
 static bool saveFiles(int player, char file[8192], char rtcFile[8192]);
 static bool backupFiles(int player, char file[8192], char rtcFile[8192]);
@@ -1110,14 +1068,12 @@ static bool adapterWanted(int count) {
 // A player's save memory and Game Boy clock.
 static void* saveMemory(int player, size_t* size) {
 	*size = 0;
-#ifdef ARMGBA_GB
 	if (gameBoy && player < playersHere) {
 		libretroGbSelect(player);
 		void* data = libretroGbSaveRam(size);
 		libretroGbSelect(0);
 		return data;
 	}
-#endif
 	if (!gameBoy && gbas[player]) {
 		*size = gbas[player]->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gbas[player]);
 		return gbas[player]->savedata.storage;
@@ -1127,14 +1083,12 @@ static void* saveMemory(int player, size_t* size) {
 
 static void* rtcMemory(int player, size_t* size) {
 	*size = 0;
-#ifdef ARMGBA_GB
 	if (gameBoy && player < playersHere) {
 		libretroGbSelect(player);
 		void* data = libretroGbRtc(size);
 		libretroGbSelect(0);
 		return data;
 	}
-#endif
 	return NULL;
 }
 
@@ -1437,7 +1391,6 @@ static struct GBA* startAdvance(const struct retro_game_info* game) {
 	return machine;
 }
 
-#ifdef ARMGBA_GB
 // Starts the other players' Game Boys beside player 1's, each with its game, and leaves the network
 // cable out so RetroArch's own netplay runs them all.
 static bool startOtherGameBoys(int count, const void* const data[], const size_t sizes[]) {
@@ -1486,7 +1439,6 @@ static void stopOtherGameBoys(void) {
 	linkSetEnvironment(environment);
 	linkSetGameBoy(true);
 }
-#endif
 
 // The air between the consoles here.
 static void airSend(const struct RfuAir* air, int to, const uint8_t* message, size_t size) {
@@ -1643,11 +1595,7 @@ static void startOthers(const struct retro_game_info* second, const void* sameDa
 	void* read[MAX_PLAYERS] = { NULL };
 	bool started = readOtherGames(pairFile ? NULL : second, sameData, sameSize, count, data, sizes, read);
 	if (started) {
-#ifdef ARMGBA_GB
 		started = gameBoy ? startOtherGameBoys(count, data, sizes) : startOtherAdvances(count, data, sizes);
-#else
-		started = startOtherAdvances(count, data, sizes);
-#endif
 	}
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
 		free(read[i]);
@@ -1668,11 +1616,9 @@ static void stopOthers(void) {
 	for (int player = 1; player < MAX_PLAYERS; ++player) {
 		keptSaves[player].kept = false;
 	}
-#ifdef ARMGBA_GB
 	if (gbPair) {
 		stopOtherGameBoys();
 	}
-#endif
 	if (gbaPair) {
 		stopOtherAdvances();
 	}
@@ -1691,9 +1637,7 @@ static bool runningAsWanted(void) {
 	}
 	const char* choice = chosenSecond();
 	bool same = !strcmp(choice ? choice : "", secondPath) && playersHere == playersWanted();
-#ifdef ARMGBA_GB
 	same &= !gameBoy || gbAdapter == adapterWanted(playersHere);
-#endif
 	return same;
 }
 
@@ -1717,7 +1661,6 @@ static void applySecondChoice(void) {
 	showButtons(gameBoyLoaded());
 }
 
-#ifdef ARMGBA_GB
 // Starts a Game Boy or Game Boy Color game on the Gambatte side, and the other players' beside it
 // with a second game, a pair file or Link Mode on Together.
 static bool loadGameBoy(const struct retro_game_info* game, const struct retro_game_info* second) {
@@ -1755,7 +1698,6 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	announceMemory();
 	return true;
 }
-#endif
 
 // Starts a Game Boy Advance game, and the other players' beside it with a second game, a pair file
 // or Link Mode on Together.
@@ -1826,12 +1768,10 @@ static bool loadPairFile(const struct retro_game_info* file) {
 	pairFile = true;
 	snprintf(pairPath, sizeof(pairPath), "%s", file->path);
 	bool loaded = false;
-#ifdef ARMGBA_GB
 	if (isGameBoyRom(data, first.size)) {
 		gameBoy = false;
 		loaded = loadGameBoy(&first, NULL);
 	} else
-#endif
 	{
 		loaded = loadAdvance(&first, NULL);
 	}
@@ -1855,12 +1795,10 @@ bool retro_load_game(const struct retro_game_info* game) {
 	if (isPairFile(game->path)) {
 		return loadPairFile(game);
 	}
-#ifdef ARMGBA_GB
 	gameBoy = false;
 	if (isGameBoy(game->path)) {
 		return loadGameBoy(game, NULL);
 	}
-#endif
 	return loadAdvance(game, NULL);
 }
 
@@ -1868,17 +1806,13 @@ bool retro_load_game(const struct retro_game_info* game) {
 bool retro_load_game_special(unsigned type, const struct retro_game_info* info, size_t count) {
 	readSaveActions(false);
 	if (type == SUBSYSTEM_ADVANCE_LINK && count == 2 && info[0].data && info[1].data) {
-#ifdef ARMGBA_GB
 		gameBoy = false;
-#endif
 		return loadAdvance(&info[0], &info[1]);
 	}
-#ifdef ARMGBA_GB
 	if (type == SUBSYSTEM_LINK && count == 2 && info[0].data && info[1].data && isGameBoy(info[0].path) && isGameBoy(info[1].path)) {
 		gameBoy = false;
 		return loadGameBoy(&info[0], &info[1]);
 	}
-#endif
 	return false;
 }
 
@@ -1903,7 +1837,6 @@ void retro_unload_game(void) {
 	free(cheatCodes);
 	cheatCodes = NULL;
 	cheatCodeCount = 0;
-#ifdef ARMGBA_GB
 	if (gameBoy) {
 		for (int i = playersHere - 1; i >= 0; --i) {
 			libretroGbSelect(i);
@@ -1914,7 +1847,6 @@ void retro_unload_game(void) {
 		gbAdapter = false;
 		libretroGbSetPlayers(1, false);
 	}
-#endif
 	playersHere = 1;
 	pairFile = false;
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
@@ -1939,7 +1871,6 @@ void retro_reset(void) {
 	readOptions();
 	applySecondChoice();
 	linkSetNetplay(linkSeparateWanted() && !bothConsoles());
-#ifdef ARMGBA_GB
 	if (gameBoy) {
 		for (int i = playersHere - 1; i >= 0; --i) {
 			libretroGbSelect(i);
@@ -1949,7 +1880,6 @@ void retro_reset(void) {
 		checkGameBoyMemory();
 		return;
 	}
-#endif
 	attachPorts();
 	for (int i = 0; i < playersHere; ++i) {
 		gbaReset(gbas[i], skipBios);
@@ -1973,7 +1903,6 @@ static void readMotion(uint16_t keys, int* x, int* y, bool* click) {
 	}
 }
 
-#ifdef ARMGBA_GB
 // Feeds the tilt sensor of a Game Boy cartridge that has one (Kirby Tilt 'n' Tumble). Clicking the
 // stick flicks the console upwards, which is how Kirby jumps.
 static void readTilt(uint16_t keys) {
@@ -1988,7 +1917,6 @@ static void readTilt(uint16_t keys) {
 	held = click;
 	libretroGbSetTilt(x, y);
 }
-#endif
 
 // Feeds a Game Boy Advance cartridge's sensors before each frame. The tilt sensor and the gyro
 // (whose turn is the control's left and right) are scaled as mGBA's SDL frontend scales a stick.
@@ -2076,7 +2004,6 @@ static uint16_t readKeys(unsigned port) {
 	return keys;
 }
 
-#ifdef ARMGBA_GB
 // On the Game Boy Advance model, L or R switches between the game's own size and stretched across
 // the screen, like that console's shoulder buttons. With the tilt sensor on the D-pad, only R does,
 // since L is the flick.
@@ -2110,7 +2037,6 @@ static const uint32_t* advanceFrame(const uint32_t* picture) {
 	}
 	return gbAdvanceFrame;
 }
-#endif
 
 // Holding L2 or R2 fast-forwards at the frontend's fast-forward speed (its Maximum Run Speed), as
 // in gpSP's core.
@@ -2133,13 +2059,11 @@ enum { RESTART_FRAMES = 60 };
 static uint8_t restartHeld[MAX_PLAYERS];
 
 static void restartConsole(int player) {
-#ifdef ARMGBA_GB
 	if (gameBoy) {
 		libretroGbSelect(player);
 		libretroGbRestart();
 		libretroGbSelect(0);
 	} else
-#endif
 	{
 		gbaReset(gbas[player], skipBios);
 	}
@@ -2566,7 +2490,6 @@ static void copyFirstSave(void) {
 	copySaves = 0;
 }
 
-#ifdef ARMGBA_GB
 // Runs the Game Boys for a frame.
 static void runGameBoys(void) {
 	uint16_t keys[MAX_PLAYERS];
@@ -2589,7 +2512,6 @@ static void runGameBoys(void) {
 	}
 	showConsoles(shown, sizeof(uint32_t), LIBRETRO_GB_WIDTH, LIBRETRO_GB_HEIGHT, pairFrame, samples, frames);
 }
-#endif
 
 // The cable between the Game Boy Advances here. When a transfer ends, in normal mode player 1 and 2's
 // consoles swap the data each had as it started, the other taking it if it is waiting for a
@@ -2864,7 +2786,6 @@ void retro_run(void) {
 		keptCheck = 0;
 		writeSaves(false);
 	}
-#ifdef ARMGBA_GB
 	if (gbPair) {
 		runGameBoys();
 		return;
@@ -2896,7 +2817,6 @@ void retro_run(void) {
 		audioBatch(samples, frames);
 		return;
 	}
-#endif
 	if (gbaPair) {
 		runAdvancesFrame();
 		return;
@@ -2937,11 +2857,9 @@ void retro_run(void) {
 // Save states: the size, then saving and loading. A Game Boy Advance state is the machine's whole
 // state; a Game Boy state is Gambatte's.
 static size_t consolesStateSize(void) {
-#ifdef ARMGBA_GB
 	if (gameBoy) {
 		return libretroGbStateSize();
 	}
-#endif
 	if (gbaPair) {
 		return playersHere * (sizeof(gbaAhead[0]) + gbaStateSize() + sizeof(transfers[0]) + sizeof(pairLinks[0].ready) + sizeof(gbaShown[0]));
 	}
@@ -2969,11 +2887,9 @@ static void loadedTag(uint32_t tag) {
 }
 
 static bool saveConsoles(void* data, size_t size) {
-#ifdef ARMGBA_GB
 	if (gameBoy) {
 		return libretroGbSaveState(data, size);
 	}
-#endif
 	if (!gba || size < consolesStateSize()) {
 		return false;
 	}
@@ -3000,13 +2916,11 @@ static bool saveConsoles(void* data, size_t size) {
 }
 
 static bool loadConsoles(const void* data, size_t size) {
-#ifdef ARMGBA_GB
 	if (gameBoy) {
 		bool loaded = libretroGbLoadState(data, size);
 		checkGameBoyMemory();
 		return loaded;
 	}
-#endif
 	if (!gbaPair) {
 		return gba && gbaLoadState(gba, data, size);
 	}
@@ -3071,14 +2985,12 @@ bool retro_unserialize(const void* data, size_t size) {
 
 // Decodes every code again, in order.
 static void applyCheatCodes(void) {
-#ifdef ARMGBA_GB
 	if (gameBoy) {
 		if (!libretroGbSetCheats((const char* const*) cheatCodes, cheatCodeCount)) {
 			logMessage(RETRO_LOG_WARN, "armGBA: a cheat code is neither Game Genie nor GameShark");
 		}
 		return;
 	}
-#endif
 	cheatsClear(&cheats, gba);
 	for (size_t i = 0; i < cheatCodeCount; ++i) {
 		if (cheatCodes[i] && !cheatsAdd(&cheats, cheatCodes[i])) {
@@ -3130,7 +3042,6 @@ void* retro_get_memory_data(unsigned id) {
 	if (!retroArchSaves() && (id == RETRO_MEMORY_SAVE_RAM || id == RETRO_MEMORY_RTC)) {
 		return NULL;
 	}
-#ifdef ARMGBA_GB
 	if (gbPair && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
 		size_t size;
 		libretroGbSelect(1);
@@ -3143,7 +3054,6 @@ void* retro_get_memory_data(unsigned id) {
 		return id == RETRO_MEMORY_SAVE_RAM ? libretroGbSaveRam(&size) : id == RETRO_MEMORY_SYSTEM_RAM ? libretroGbSystemRam(&size)
 		     : id == RETRO_MEMORY_RTC ? libretroGbRtc(&size) : NULL;
 	}
-#endif
 	if (!gba) {
 		return NULL;
 	}
@@ -3168,7 +3078,6 @@ size_t retro_get_memory_size(unsigned id) {
 	if (!retroArchSaves() && (id == RETRO_MEMORY_SAVE_RAM || id == RETRO_MEMORY_RTC)) {
 		return 0;
 	}
-#ifdef ARMGBA_GB
 	if (gbPair && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
 		size_t size;
 		libretroGbSelect(1);
@@ -3187,7 +3096,6 @@ size_t retro_get_memory_size(unsigned id) {
 		}
 		return size;
 	}
-#endif
 	if (!gba) {
 		return 0;
 	}
