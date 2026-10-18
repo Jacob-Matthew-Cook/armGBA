@@ -46,14 +46,15 @@ static bool linked(const struct Sio* sio) {
 	return sio->link && sio->link->players > 1;
 }
 
-// In multiplayer mode SIOCNT shows the cable when a link is attached: SI low on the parent, SD high
-// as every console is ready, and this console's number.
+// In multiplayer mode SIOCNT shows the cable when a link is attached: SI low on the parent, and SD
+// high while every console on it is in multiplayer mode. This console's number shows from its first
+// transfer on.
 static void multiStatus(struct GBA* gba) {
 	struct Sio* sio = &gba->sio;
 	if (sio->mode != SIO_MULTI || !linked(sio)) {
 		return;
 	}
-	sio->siocnt = (sio->siocnt & ~0x007C) | 0x0008 | (sio->link->id ? 0x0004 : 0) | (sio->link->id << 4);
+	sio->siocnt = (sio->siocnt & ~0x004C) | (sio->link->ready ? 0x0008 : 0) | (sio->link->id ? 0x0004 : 0);
 	gba->io[IO(REG_SIOCNT)] = sio->siocnt;
 }
 
@@ -72,6 +73,9 @@ static void finishWith(struct GBA* gba, const uint32_t values[4], uint32_t late)
 	case SIO_MULTI:
 		for (int i = 0; i < 4; ++i) {
 			gba->io[IO(REG_SIOMULTI0) + i] = values[i];
+		}
+		if (linked(sio)) {
+			sio->siocnt = (sio->siocnt & ~0x0030) | sio->link->id << 4;
 		}
 		break;
 	default:
@@ -154,6 +158,14 @@ void sioAttach(struct GBA* gba, const struct SioLink* link) {
 	multiStatus(gba);
 }
 
+void sioLinkChanged(struct GBA* gba) {
+	multiStatus(gba);
+}
+
+bool sioMultiplayer(const struct GBA* gba) {
+	return gba->sio.mode == SIO_MULTI;
+}
+
 // Returns how long a transfer takes in each mode at the chosen baud rate or clock.
 static int32_t transferCycles(const struct Sio* sio) {
 	switch (sio->mode) {
@@ -219,6 +231,10 @@ static void writeSiocnt(struct GBA* gba, uint16_t value) {
 	}
 	if (sio->rfu.attached && sio->mode == SIO_NORMAL_32) {
 		value = rfuSiocnt(gba, before, value);
+	}
+	// The multiplayer ID is read-only, kept from the last transfer.
+	if (sio->mode == SIO_MULTI) {
+		value = (value & ~0x0030) | (before & 0x0030);
 	}
 	sio->siocnt = value;
 	multiStatus(gba);
