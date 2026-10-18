@@ -23,6 +23,7 @@
 #include <math.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 enum {
 	AUDIO_RATE = 32768,
@@ -166,10 +167,16 @@ static char pairPath[4096];
 static char otherPaths[MAX_PLAYERS][4096];
 static int pairCount;
 static bool netplaySeen;
+// In rollback netplay every device runs the session of the device hosting it. Each device tags its
+// session, and the tag goes in every state: a device that loads a state with another device's tag
+// has joined that session, and takes its tag, so the states on every device stay the same.
+static uint32_t sessionTag;
+static bool netplayJoined;
 
 // Saves the core reads and writes itself, each where RetroArch keeps its game's save: the other
 // players' unless the frontend loaded player 2's game, and with a pair file player 1's too. In
-// netplay they are left as they were on each device, since the session runs the host's.
+// rollback netplay the host writes them as the game closes, and a device that joined leaves its own
+// as they were.
 static struct {
 	bool kept;
 	char file[8192];
@@ -987,9 +994,13 @@ static void readOtherSaves(void) {
 	}
 }
 
-// Writes the kept saves and clocks that have changed, except in netplay.
-static void writeSaves(void) {
-	for (int player = 0; player < MAX_PLAYERS && !netplaySeen; ++player) {
+// Writes the kept saves and clocks that have changed; in netplay only as the game closes, on the
+// device hosting it.
+static void writeSaves(bool closing) {
+	if (netplaySeen && (!closing || netplayJoined)) {
+		return;
+	}
+	for (int player = 0; player < MAX_PLAYERS; ++player) {
 		size_t size;
 		void* save = saveMemory(player, &size);
 		if (!keptSaves[player].kept || !save || !size) {
@@ -1272,7 +1283,7 @@ static void startOthers(const struct retro_game_info* second, const void* sameDa
 }
 
 static void stopOthers(void) {
-	writeSaves();
+	writeSaves(false);
 	for (int player = 1; player < MAX_PLAYERS; ++player) {
 		keptSaves[player].kept = false;
 	}
@@ -1483,12 +1494,14 @@ void retro_unload_game(void) {
 	if (!secondFromFrontend) {
 		rememberSecondChoice();
 	}
-	writeSaves();
+	writeSaves(true);
 	forgetSaves();
 	pairFile = false;
 	secondFromFrontend = false;
 	secondPath[0] = '\0';
 	netplaySeen = false;
+	netplayJoined = false;
+	sessionTag = 0;
 	updateRumble(false);
 	cheatsClear(&cheats, NULL);
 	for (size_t i = 0; i < cheatCodeCount; ++i) {
@@ -2158,7 +2171,7 @@ void retro_run(void) {
 	// The kept saves are written when they change, checked every few seconds.
 	if (savesKept() && ++keptCheck >= 300) {
 		keptCheck = 0;
-		writeSaves();
+		writeSaves(false);
 	}
 #ifdef ARMGBA_GB
 	if (gbPair) {
@@ -2244,18 +2257,24 @@ static size_t consolesStateSize(void) {
 	return gbaStateSize();
 }
 
-// In rollback netplay, the saves are the host's, so the kept ones are no longer written on this
-// device.
 static void checkNetplay(void) {
 	int context = RETRO_SAVESTATE_CONTEXT_NORMAL;
-	if (netplaySeen || !environment(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &context) || context != RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY) {
-		return;
+	netplaySeen |= environment(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &context) && context == RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+	// A tag of this device's own: the time, the processor time used and where this core sits in
+	// memory, which differ from one device to the next.
+	while (netplaySeen && !sessionTag) {
+		sessionTag = (uint32_t) time(NULL) * 2654435761u ^ (uint32_t) clock() ^ (uint32_t) (uintptr_t) &sessionTag;
 	}
-	netplaySeen = true;
-	if (savesKept()) {
-		struct retro_message shown = { "Netplay: the saves on this device are left as they were", 240 };
+}
+
+// A state's session tag: one from another device's session, in netplay, means this device joined it.
+static void loadedTag(uint32_t tag) {
+	if (netplaySeen && tag != sessionTag && !netplayJoined && savesKept()) {
+		struct retro_message shown = { "Netplay: the host keeps the players' saves; this device's are left as they were", 240 };
 		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
 	}
+	netplayJoined |= netplaySeen && tag != sessionTag;
+	sessionTag = tag;
 }
 
 static bool saveConsoles(void* data, size_t size) {
@@ -2324,9 +2343,9 @@ static bool loadConsoles(const void* data, size_t size) {
 }
 
 // A state: the consoles', then with the consoles of a link here, how long each player has held the
-// restart buttons, so a rollback restarts a console on the same frame.
+// restart buttons, so a rollback restarts a console on the same frame, and the session's tag.
 size_t retro_serialize_size(void) {
-	return consolesStateSize() + (bothConsoles() ? sizeof(restartHeld) : 0);
+	return consolesStateSize() + (bothConsoles() ? sizeof(restartHeld) + sizeof(sessionTag) : 0);
 }
 
 bool retro_serialize(void* data, size_t size) {
@@ -2335,7 +2354,9 @@ bool retro_serialize(void* data, size_t size) {
 		return false;
 	}
 	if (bothConsoles()) {
-		memcpy((uint8_t*) data + consolesStateSize(), restartHeld, sizeof(restartHeld));
+		uint8_t* const at = (uint8_t*) data + consolesStateSize();
+		memcpy(at, restartHeld, sizeof(restartHeld));
+		memcpy(at + sizeof(restartHeld), &sessionTag, sizeof(sessionTag));
 	}
 	return true;
 }
@@ -2348,7 +2369,11 @@ bool retro_unserialize(const void* data, size_t size) {
 	// A loaded state has every console's save as it was; player 1's isn't copied over them after.
 	copySaves = 0;
 	if (bothConsoles()) {
-		memcpy(restartHeld, (const uint8_t*) data + consolesStateSize(), sizeof(restartHeld));
+		const uint8_t* const at = (const uint8_t*) data + consolesStateSize();
+		memcpy(restartHeld, at, sizeof(restartHeld));
+		uint32_t tag;
+		memcpy(&tag, at + sizeof(restartHeld), sizeof(tag));
+		loadedTag(tag);
 	}
 	return true;
 }
