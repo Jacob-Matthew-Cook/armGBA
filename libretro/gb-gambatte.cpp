@@ -724,16 +724,75 @@ void endFrame() {
 
 // The cable between the two consoles here: when one has clocked out its eight bits, each takes the
 // other's byte. The other takes it only if its serial port is waiting for a clock or clocking too.
+// Both stop their own clocks, as the transfer is done.
 void exchange(Console& clocked, Console& other) {
-	if (!clocked.gb->linkStatus(256)) {
-		return;
-	}
 	clocked.gb->linkStatus(257);
 	int const out = clocked.gb->linkStatus(258);
 	clocked.gb->linkStatus(other.gb->linkStatus(258));
+	clocked.gb->linkStatus(266);
 	other.gb->linkStatus(out);
-	// Had the other one started a transfer on its own clock, this one finished it.
 	other.gb->linkStatus(266);
+}
+
+// Sound samples until a Game Boy's transfer on its own clock ends: -1 for none, 0 when due.
+long serialLeft(Console& c) {
+	if (c.gb->linkStatus(256)) {
+		return 0;
+	}
+	int const cycles = c.gb->linkStatus(268);
+	return cycles < 0 ? -1 : cycles / 2;
+}
+
+// The fewest samples a transfer a Game Boy could start now takes: eight bits at 8192 Hz, or on a
+// Game Boy Color with SC's fast bit, at 262144 Hz.
+long shortestTransfer(Console& c) {
+	return c.gb->isCgb() && c.gb->linkStatus(267) & 0x02 ? 64 : 2048;
+}
+
+// Where the consoles next meet: at the frame's end, at the next transfer's end on the cable or the
+// adapter, and no later than the shortest transfer any console could start from now.
+long nextMeeting(long const done[]) {
+	long now = done[0];
+	for (int i = 1; i < players; ++i) {
+		now = std::min(now, done[i]);
+	}
+	long meet = FRAME_SAMPLES;
+	if (adapterOn) {
+		meet = std::min<long>(meet, std::max<long>(adapter.at, now));
+	}
+	for (int i = 0; i < players; ++i) {
+		long const left = serialLeft(consoles[i]);
+		if (left >= 0) {
+			meet = std::min(meet, done[i] + left);
+		}
+		if (!adapterOn) {
+			meet = std::min(meet, now + shortestTransfer(consoles[i]));
+		}
+	}
+	return meet;
+}
+
+// With every console at the meeting point: the transfers ending there.
+void meet(long now) {
+	if (adapterOn) {
+		// On the adapter, a Game Boy's own clock reaches nothing.
+		for (int i = 0; i < players; ++i) {
+			if (serialLeft(consoles[i]) == 0) {
+				consoles[i].gb->linkStatus(257);
+				consoles[i].gb->linkStatus(0xFF);
+				consoles[i].gb->linkStatus(266);
+			}
+		}
+		while (adapter.at <= now) {
+			adapterTransfer();
+		}
+		return;
+	}
+	for (int i = 0; i < players; ++i) {
+		if (serialLeft(consoles[i]) == 0) {
+			exchange(consoles[i], consoles[1 - i]);
+		}
+	}
 }
 
 }
@@ -778,7 +837,8 @@ void libretroGbRunPlayers(const uint16_t keys[], const uint32_t* pictures[], con
 		beginFrame(keys[i]);
 		done[i] = s->ahead;
 	}
-	// The console furthest behind runs next, so none gets more than a slice ahead of the others.
+	// The consoles run in turns, the one furthest behind next, each up to where they next meet; there
+	// they all stand on the same sample as a transfer ends.
 	for (;;) {
 		int i = 0;
 		for (int j = 1; j < players; ++j) {
@@ -787,30 +847,26 @@ void libretroGbRunPlayers(const uint16_t keys[], const uint32_t* pictures[], con
 		if (done[i] >= FRAME_SAMPLES) {
 			break;
 		}
+		long const meeting = nextMeeting(done);
+		if (meeting <= done[i]) {
+			meet(meeting);
+			if (nextMeeting(done) <= done[i]) {
+				// Nothing ended after all, as a game stopped its transfer: run on a little.
+				s = &consoles[i];
+				std::size_t count = 1;
+				s->gb->runFor(s->pixels, LIBRETRO_GB_WIDTH, s->native, count);
+				mixDown(count);
+				done[i] += count;
+			}
+			continue;
+		}
 		s = &consoles[i];
-		long const left = FRAME_SAMPLES - done[i];
-		std::size_t count = left < PAIR_SLICE ? left : static_cast<long>(PAIR_SLICE);
+		std::size_t count = meeting - done[i];
 		if (s->gb->runFor(s->pixels, LIBRETRO_GB_WIDTH, s->native, count) >= 0) {
 			std::memcpy(s->shown, s->pixels, sizeof(s->shown));
 		}
 		mixDown(count);
 		done[i] += count;
-		if (!adapterOn) {
-			exchange(consoles[i], consoles[1 - i]);
-			continue;
-		}
-		// On the adapter, a Game Boy's own clock reaches nothing.
-		if (s->gb->linkStatus(256)) {
-			s->gb->linkStatus(257);
-			s->gb->linkStatus(0xFF);
-		}
-		long behind = done[0];
-		for (int j = 1; j < players; ++j) {
-			behind = std::min(behind, done[j]);
-		}
-		while (adapter.at <= behind) {
-			adapterTransfer();
-		}
 	}
 	dmg07EndFrame(&adapter, FRAME_SAMPLES);
 	for (int i = 0; i < players; ++i) {

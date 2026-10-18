@@ -157,7 +157,8 @@ public:
 		mem_.write<true, false>(addr, val, cycleCounter_);
 	}
 
-	int linkStatus(int which) { return mem_.linkStatus(which); }
+	// 268: cycles until the serial transfer under way ends, or -1.
+	int linkStatus(int which) { return which == 268 ? mem_.serialLeft(cycleCounter_) : mem_.linkStatus(which); }
 
 	unsigned getBank(unsigned type) { return mem_.getBank(type); }
 	unsigned getAddrBank(unsigned short addr) { return mem_.getAddrBank(addr); }
