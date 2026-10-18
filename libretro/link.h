@@ -38,9 +38,10 @@ void linkGbaFrame(struct GBA*);
 // Whether the frame stopped early, with exact timing, to wait for the console leading; it goes on
 // next time.
 bool linkGbaHeld(void);
-// The Link Timing option: whether exact timing is chosen, and whether it is on.
-void linkSetExact(bool);
+// Whether exact timing is on: for Game Boy Advances on the cable.
 bool linkExactOn(void);
+// Offers RetroArch the netplay that carries the cable (Separate), or leaves it its usual netplay.
+void linkSetNetplay(bool on);
 // Game Boy: whether another Game Boy is on the cable, a transfer this one clocked (returns the byte
 // received), and a check for transfers the other one clocked.
 bool linkGbConnected(void);

@@ -29,7 +29,9 @@ the D-pad; with the D-pad, L is the flick.
 
 ## Options
 
-The options are in four categories, and a game sees only its own console's options.
+The options are in five categories. The menu shows only those that do something for the game loaded
+and the Link Mode chosen: the Tilt and Solar Sensors only for cartridges with one, the link options
+only with Link Mode on.
 
 | Category | Option | Console | Values (default first) |
 | --- | --- | --- | --- |
@@ -44,15 +46,18 @@ The options are in four categories, and a game sees only its own console's optio
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
 | | Restart Buttons | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
-| Link | Link Cable (applies on restart) | Both | Separate, Together |
+| Link | Link Mode (applies on restart) | Both | Off, Together, Separate |
 | | Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
-| | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter |
-| | Link Timing | Both | Standard, Exact |
-| | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only |
-| | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's |
-| | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save |
-| | Copy Save | Both | Off, Player 1 to Player 2, and every other copy onto players 2 to 4 |
+| | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
+| | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
+| | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
+| Saves | Back Up Save | Both | Off, then each player |
+| | Load Into | Both | Same Player, then each player (Together) |
+| | Load Save | Both | Off, then each player's current save (with two or more) and backups |
+| | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
+| | Backups Kept | Both | All, 5, 10, 20 |
+| | Backups Listed | Both | 10, 20, 40, 80, 126 |
 
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
 set to Shown, the black around it shows too, as on that console's screen.
@@ -117,29 +122,29 @@ cartridges: Sachen, TAMA5, MBC6, MBC7, Vast Fame, and the BBD, Hitek, Sintax, Li
 families. The screen palettes, apart from Grayscale (gambatte-libretro's), are SameBoy's. So are the
 Game Boy Color and Game Boy Advance color correction and the free boot ROMs built in.
 
-**Link play.** Two ways to link, picked with the Link Cable option:
+**Link play.** Link Mode turns it on, two ways; Off is one console, and netplay is RetroArch's usual
+kind:
 
 - Separate: each device runs its own player's console, with their own game and save, and the cable
   crosses RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and
   Crystal. It links two players; three or four play Together. Each transfer waits for the other
-  end, so a slow network stalls the cable. Link Timing: Standard suits Wi-Fi and games that link in
-  turns, such as trades and battles; a waiting Game Boy sends its next byte ahead. Exact keeps the
-  two consoles on the same cycles, as on a real cable; games that link every frame, such as Kirby &
-  The Amazing Mirror, need it, and it wants a short ping.
+  end, so a slow network stalls the cable. Game Boys run at their own pace, the one waiting sending
+  its next byte ahead; Game Boy Advances keep to the same cycles, as on a real cable, which games
+  that link every frame, such as Kirby & The Amazing Mirror, need, and want a short ping for.
 - Together: every device runs every player's console, two to four with the Players option, for
   multiplayer on one device (a controller each) or with RetroArch's rollback netplay, where the
   link never waits on the network. Every device needs every game. Three or four are shown in a
   grid. Player 2's game is picked with Player 2's Game; players 3 and 4 play player 1's. A player on
   player 1's game gets a save of their own, under the game's file name in the save folder's
   armGBA/Player 2 to Player 4 folders; it starts new, or as a copy of player 1's, as New Players'
-  Saves says. Copy Save copies one player's save over another's (never player 1's) outside netplay,
-  and restarts that player's console; the save it replaces is kept beside it, named for when, such
-  as Game.20261018-153012.srm. Back Up Save writes any player's save, player 1's too, beside it the
-  same way, with one player or many and in netplay, changing nothing in the game. Load Save makes
-  one of those earlier saves the player's save again, or with Load Into another player's (player 1
-  too), outside netplay, keeping the one it replaces the same way; Earlier Saves Kept limits how many
-  each player keeps. In netplay the session runs the host's games and saves: the host writes the players' saves
-  as the game closes, and a device that joined leaves its own as they were.
+  Saves says. In netplay the session runs the host's games and saves: the host writes the players'
+  saves as the game closes, and a device that joined leaves its own as they were.
+
+**Backups.** Back Up Save copies a player's save, as it is, to a file beside it named for the time,
+such as Game.20261018-153012.srm; the game carries on. Load Save makes one of those backups a
+player's save again, or, with two players or more, gives one player another's current save or
+backup, as Load Into says, outside netplay. It backs up the save it replaces first and restarts
+that player's console. Backups Kept limits how many each player keeps.
 
 The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of
 Pokemon FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game
