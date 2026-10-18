@@ -54,7 +54,7 @@ only with Link Mode on.
 | | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | Saves | Back Up Save | Both | Off, then each player |
-| | Send Save | Both | Off, Send to the Other Player (Separate) |
+| | Send Save | Both | Off, then player 1's current save, backups, remote and received saves (Separate) |
 | | Load Into | Both | Same Player, then each player (Together) |
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
 | | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
@@ -170,10 +170,10 @@ The two ways to link:
   goes to the other person unless Load Into names a player: Remote Player 1 (the host) to player 2
   here when there is one, Remote Player 2 to player 1. Hosting and joining in turn passes both
   players' saves each way.
-- In Separate, linked devices swap saves as they connect, and Send Save sends one again. The other
-  device keeps it in armGBA/Received, and Load Save lists it as Received, going to player 2 when
-  there is one, or player 1. This is the way to bring a player's own save to the host before playing
-  Together.
+- In Separate, linked devices swap their current saves as they connect, and Send Save sends the
+  current save, a backup, or a remote or received save, when chosen. The other device keeps it in
+  armGBA/Received, and Load Save lists it as Received, going to player 2 when there is one, or
+  player 1. This is the way to bring a player's own save to the host before playing Together.
 - Backups Kept: 10 per player unless chosen. A save the same as its newest backup isn't backed up
   again.
 - Player 1's Saves can keep player 1's save in armGBA/Player 1 too, beside the other players'. When
