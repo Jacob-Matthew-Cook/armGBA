@@ -1494,6 +1494,11 @@ bool Memory::getMemoryArea(int which, unsigned char **data, int *length) {
 	}
 }
 
+int Memory::serialLeft(unsigned long const cc) const {
+	unsigned long const end = intreq_.eventTime(intevent_serial);
+	return end == disabled_time ? -1 : end > cc ? static_cast<int>(end - cc) : 0;
+}
+
 int Memory::linkStatus(int which) {
 	switch (which) {
 	case 256: // ClockSignaled
