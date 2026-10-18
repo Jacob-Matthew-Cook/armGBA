@@ -151,18 +151,23 @@ void processEvents(struct GBA* gba) {
 		nextEvent = timingTick(gba, cycles < nextEvent ? nextEvent : cycles);
 		cpu->nextEvent = nextEvent;
 		// While halted, the CPU sleeps until IE & IF, whatever IME and the I flag say; waking takes
-		// a cycle. DMA still runs.
+		// a cycle. DMA still runs. A sleeping CPU moves on to the next event, unless an event asked
+		// for control back: the console then stops where that event ran.
 		if (cpu->halted && !gba->performingDma) {
 			if (gba->irq.available) {
 				cpu->halted = 0;
 				cpu->cycles += 1;
 			} else if (gba->dmaRunnable) {
 				dmaRun(gba);
-			} else {
+			} else if (!gba->returnRequested) {
 				cpu->cycles = nextEvent;
 			}
 		}
 		if (gba->earlyExit || gba->returnRequested) {
+			// Asked for control back: compiled code looks at events again at once, and leaves.
+			if (gba->returnRequested) {
+				cpu->nextEvent = cpu->cycles;
+			}
 			break;
 		}
 	}
