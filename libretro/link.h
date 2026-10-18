@@ -35,6 +35,9 @@ void linkSetWireless(bool);
 bool linkSession(void);
 // Called before each Game Boy Advance frame: keeps the cable checked during it.
 void linkGbaFrame(struct GBA*);
+// Whether the frame stopped early, with exact timing, to wait for the console leading; it goes on
+// next time.
+bool linkGbaHeld(void);
 // The Link Timing option: whether exact timing is chosen, and whether it is on.
 void linkSetExact(bool);
 bool linkExactOn(void);

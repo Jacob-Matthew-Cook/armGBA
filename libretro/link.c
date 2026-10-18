@@ -135,6 +135,8 @@ static struct {
 	// A Game Boy's samples run so far.
 	uint64_t samples;
 	struct Event stop;
+	// A Game Boy Advance follower stopped its frame early to wait for the leader.
+	bool held;
 } exact;
 
 // The SD line, high while the other console is in multiplayer mode.
@@ -481,6 +483,7 @@ static void stopReached(struct GBA* machine, void* context, uint32_t late) {
 	(void) context;
 	(void) late;
 	if (!arrive()) {
+		exact.held = true;
 		machine->returnRequested = true;
 		timingInterrupt(machine);
 		timingSchedule(machine, &exact.stop, 0);
@@ -834,12 +837,17 @@ bool linkExactOn(void) {
 }
 
 void linkGbaFrame(struct GBA* machine) {
+	exact.held = false;
 	timingDeschedule(machine, &pollEvent);
 	if (onCable()) {
 		gbaLook();
 		scheduleStop();
 		timingSchedule(machine, &pollEvent, POLL_CYCLES);
 	}
+}
+
+bool linkGbaHeld(void) {
+	return exact.held;
 }
 
 bool linkGbConnected(void) {
