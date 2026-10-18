@@ -36,6 +36,10 @@ void secondSavePath(const char* gamePath, const char* suffix, const char* extens
 // armGBA/Player N folder (beside the game without one), under the game's own file name.
 void secondPlayerSavePath(const char* gamePath, int player, const char* extension, const char* saveDirectory, char* out,
                           size_t outSize);
+// Where a device that joined another's netplay session keeps that session's saves, by the session's
+// players: the save directory's armGBA/Remote/Player N folder.
+void secondRemoteSavePath(const char* gamePath, int player, const char* extension, const char* saveDirectory, char* out,
+                          size_t outSize);
 // Makes the folders a file is to go in.
 void secondMakeFolders(const char* filePath);
 
