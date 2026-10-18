@@ -335,9 +335,16 @@ void secondPlayerSavePath(const char* gamePath, int player, const char* extensio
 	armgbaSavePath(gamePath, "", player, extension, saveDirectory, out, outSize);
 }
 
-void secondRemoteSavePath(const char* gamePath, int player, const char* extension, const char* saveDirectory, char* out,
-                          size_t outSize) {
-	armgbaSavePath(gamePath, "Remote/", player, extension, saveDirectory, out, outSize);
+void secondRemoteSavePath(const char* gamePath, int player, const char* extension, const char* firstPath, const char* saveDirectory,
+                          char* out, size_t outSize) {
+	// With saves kept beside the games (the save directory is player 1's game's folder), each game's
+	// remote saves go beside that game.
+	char firstFolder[4096];
+	folderOf(firstPath, firstFolder, sizeof(firstFolder));
+	size_t length = saveDirectory ? strlen(saveDirectory) : 0;
+	length -= length > 1 && saveDirectory[length - 1] == '/';
+	bool const besideGames = !length || (length == strlen(firstFolder) && !strncmp(saveDirectory, firstFolder, length));
+	armgbaSavePath(gamePath, "Remote/", player, extension, besideGames ? NULL : saveDirectory, out, outSize);
 }
 
 void secondMakeFolders(const char* filePath) {

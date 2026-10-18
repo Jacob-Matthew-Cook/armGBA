@@ -1202,8 +1202,8 @@ static void* liveSave(int player, size_t* size, void** rtc, size_t* rtcSize) {
 static void remoteFiles(int player, char file[8192], char rtcFile[8192]) {
 	char unsorted[4096];
 	const char* saveDirectory = saveDirectoryFor(unsorted);
-	secondRemoteSavePath(firstPath, player, "srm", saveDirectory, file, 8192);
-	secondRemoteSavePath(firstPath, player, "rtc", saveDirectory, rtcFile, 8192);
+	secondRemoteSavePath(firstPath, player, "srm", firstPath, saveDirectory, file, 8192);
+	secondRemoteSavePath(firstPath, player, "rtc", firstPath, saveDirectory, rtcFile, 8192);
 }
 
 // Where a player's backups go: beside their save, and player 1's in the save folder's armGBA/Player
@@ -2194,8 +2194,8 @@ static void keepSession(void) {
 		}
 		char file[8192], rtcFile[8192];
 		char stamp[SECOND_STAMP];
-		secondRemoteSavePath(gameOf(player), player, "srm", saveDirectory, file, sizeof(file));
-		secondRemoteSavePath(gameOf(player), player, "rtc", saveDirectory, rtcFile, sizeof(rtcFile));
+		secondRemoteSavePath(gameOf(player), player, "srm", firstPath, saveDirectory, file, sizeof(file));
+		secondRemoteSavePath(gameOf(player), player, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
 		if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
 			pruneBackups(file, rtcFile);
 		}
