@@ -369,16 +369,16 @@ void retro_set_environment(retro_environment_t callback) {
 		  "Writes a player's save as it is now beside it, named for when: Game.20261018-153012.srm. It changes nothing in the game, and works with one player, in netplay and with Separate too. Earlier Saves Kept counts these as well.",
 		  NULL, "link", { { "off", "Off" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "off" },
 		{ "armgba_load_into", "Load Into", NULL,
-		  "The player Load Save gives an earlier save to: the player it belongs to, or player 2, 3 or 4, so one player's earlier save can go to another. The player it goes to keeps their own save as an earlier save first; the one given stays where it was.",
-		  NULL, "link", { { "same", "Same Player" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "same" },
+		  "The player Load Save gives an earlier save to: the player it belongs to, or player 1 to 4, so one player's earlier save can go to another. The player it goes to keeps their own save as an earlier save first; the one given stays where it was.",
+		  NULL, "link", { { "same", "Same Player" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "same" },
 		{ "armgba_load_save", "Load Save", NULL,
-		  "With Together, outside netplay: makes one of the players' earlier saves, the ones Copy Save and Load Save keep, the save of the player it belongs to again, or of the player Load Into names, and restarts that player's console. The save it replaces is kept as an earlier save, so choosing that brings it back. Each player's newest are listed, as many as Earlier Saves Listed says.",
+		  "Outside netplay: makes one of the players' earlier saves, the ones Back Up Save, Copy Save and Load Save keep, the save of the player it belongs to again, or of the player Load Into names, and restarts that player's console. The save it replaces is kept as an earlier save, so choosing that brings it back. Each player's newest are listed, as many as Earlier Saves Listed says.",
 		  NULL, "link", { { "off", "Off" }, { NULL, NULL } }, "off" },
 		{ "armgba_keep_saves", "Earlier Saves Kept", NULL,
-		  "How many earlier saves Copy Save and Load Save keep for each player. When there are more, the oldest are deleted.",
+		  "How many earlier saves Back Up Save, Copy Save and Load Save keep for each player. When there are more, the oldest are deleted.",
 		  NULL, "link", { { "all", "All" }, { "5", "5" }, { "10", "10" }, { "20", "20" }, { NULL, NULL } }, "all" },
 		{ "armgba_list_saves", "Earlier Saves Listed", NULL,
-		  "How many of each player's newest earlier saves Load Save lists. The list holds 126 in all, shared by players 2 to 4.",
+		  "How many of each player's newest earlier saves Load Save lists. The list holds 126 in all, shared by the players.",
 		  NULL, "link", { { "10", "10" }, { "20", "20" }, { "40", "40" }, { "80", "80" }, { "126", "126" }, { NULL, NULL } }, "10" },
 		{ NULL, NULL, NULL, NULL, NULL, NULL, { { NULL, NULL } }, NULL },
 	};
@@ -432,7 +432,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_new_save", "New Players' Saves; new|copy" },
 		{ "armgba_copy_save", "Copy Save; off|1 2|1 3|1 4|2 3|2 4|3 2|3 4|4 2|4 3" },
 		{ "armgba_back_up_save", "Back Up Save; off|1|2|3|4" },
-		{ "armgba_load_into", "Load Into; same|2|3|4" },
+		{ "armgba_load_into", "Load Into; same|1|2|3|4" },
 		{ "armgba_load_save", "Load Save; off" },
 		{ "armgba_keep_saves", "Earlier Saves Kept; all|5|10|20" },
 		{ "armgba_list_saves", "Earlier Saves Listed; 10|20|40|80|126" },
@@ -842,13 +842,15 @@ static bool isGameBoy(const char* path) {
 
 #endif
 
+static bool saveFiles(int player, char file[8192], char rtcFile[8192]);
+
 // "20261018-153012-2" as "2026-10-18 15:30:12 (2)".
 static void stampLabel(const char* stamp, char* out, size_t outSize) {
 	snprintf(out, outSize, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s%s%s%s", stamp, stamp + 4, stamp + 6, stamp + 9, stamp + 11, stamp + 13,
 	         stamp[15] ? " (" : "", stamp[15] ? stamp + 16 : "", stamp[15] ? ")" : "");
 }
 
-// Lists the other players' earlier saves as Load Save's choices.
+// Lists the players' earlier saves as Load Save's choices.
 static void fillEarlierSaves(void) {
 	if (!loadOption) {
 		return;
@@ -856,19 +858,23 @@ static void fillEarlierSaves(void) {
 	const char* value = option("armgba_list_saves");
 	earlierListed = value ? atoi(value) : 0;
 	earlierListed = earlierListed > 0 && earlierListed <= EARLIER_CHOICES ? earlierListed : 10;
+	char files[MAX_PLAYERS][8192];
+	char rtcFile[8192];
+	bool playing[MAX_PLAYERS];
 	int players = 0;
-	for (int player = 1; player < playersHere; ++player) {
-		players += keptSaves[player].kept;
+	for (int player = 0; player < MAX_PLAYERS; ++player) {
+		playing[player] = saveFiles(player, files[player], rtcFile);
+		players += playing[player];
 	}
 	int const each = players && earlierListed > EARLIER_CHOICES / players ? EARLIER_CHOICES / players : earlierListed;
 	int n = 0;
 	loadOption->values[n++] = (struct retro_core_option_value) { "off", "Off" };
-	for (int player = 1; player < playersHere; ++player) {
-		if (!keptSaves[player].kept) {
+	for (int player = 0; player < MAX_PLAYERS; ++player) {
+		if (!playing[player]) {
 			continue;
 		}
 		char stamps[EARLIER_CHOICES][SECOND_STAMP];
-		size_t const count = secondEarlier(keptSaves[player].file, stamps, each);
+		size_t const count = secondEarlier(files[player], stamps, each);
 		for (size_t i = 0; i < count; ++i) {
 			char* value = loadValues[n - 1];
 			char* label = loadLabels[n - 1];
@@ -1019,6 +1025,14 @@ static uint64_t hashOf(const void* data, size_t size) {
 	return hash;
 }
 
+static bool fileExists(const char* path) {
+	FILE* f = fopen(path, "rb");
+	if (f) {
+		fclose(f);
+	}
+	return f != NULL;
+}
+
 // Reads a file into memory, as much as fits; returns whether there was a file.
 static bool readFileInto(const char* path, void* data, size_t size) {
 	FILE* f = data && size ? fopen(path, "rb") : NULL;
@@ -1030,16 +1044,18 @@ static bool readFileInto(const char* path, void* data, size_t size) {
 	return read > 0;
 }
 
-static void writeFile(const char* path, const void* data, size_t size) {
+static bool writeFile(const char* path, const void* data, size_t size) {
 	FILE* f = fopen(path, "wb");
-	if (!f) {
+	bool const written = f && fwrite(data, 1, size, f) == size;
+	if (f) {
+		fclose(f);
+	}
+	if (!written) {
 		char message[160];
 		snprintf(message, sizeof(message), "armGBA can't write %.120s", path);
 		showMessage(message);
-		return;
 	}
-	fwrite(data, 1, size, f);
-	fclose(f);
+	return written;
 }
 
 // RetroArch's save directory, or with a pair file the one its games' saves go in.
@@ -1051,6 +1067,36 @@ static const char* saveDirectoryFor(char unsorted[4096]) {
 		saveDirectory = unsorted;
 	}
 	return saveDirectory;
+}
+
+// Where a player's save and clock are kept: the core's file for the save it keeps, or for player 1
+// the one RetroArch keeps. Returns false for a player who isn't playing.
+static bool saveFiles(int player, char file[8192], char rtcFile[8192]) {
+	if (player < playersHere && keptSaves[player].kept) {
+		snprintf(file, 8192, "%s", keptSaves[player].file);
+		snprintf(rtcFile, 8192, "%s", keptSaves[player].rtcFile);
+		return true;
+	}
+	if (player) {
+		return false;
+	}
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	secondSavePath(firstPath, "", "srm", firstPath, saveDirectory, file, 8192);
+	secondSavePath(firstPath, "", "rtc", firstPath, saveDirectory, rtcFile, 8192);
+	return true;
+}
+
+// A player's save and clock memory: the core's, or for player 1 the memory RetroArch saves.
+static void* liveSave(int player, size_t* size, void** rtc, size_t* rtcSize) {
+	if (player < playersHere && keptSaves[player].kept) {
+		*rtc = rtcMemory(player, rtcSize);
+		return saveMemory(player, size);
+	}
+	*rtc = player ? NULL : retro_get_memory_data(RETRO_MEMORY_RTC);
+	*rtcSize = player ? 0 : retro_get_memory_size(RETRO_MEMORY_RTC);
+	*size = player ? 0 : retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+	return player ? NULL : retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
 }
 
 // Reads a player's save and clock from the files given, and keeps the save to be written to file
@@ -1895,24 +1941,37 @@ static const char* gameOf(int player) {
 	return *chosen ? chosen : firstPath;
 }
 
-// Puts a player's save, and clock, aside as an earlier save named for now. Returns false if there
-// was no save file to put aside.
-static bool putAside(int player, char stamp[SECOND_STAMP]) {
-	writeSaves(false);
-	FILE* f = fopen(keptSaves[player].file, "rb");
-	if (!f) {
-		return false;
+// Puts a player's save, and clock, aside as an earlier save named for now: the save as it is in
+// memory, newer than its file. Returns 1 if it did, 0 if there was nothing to put aside (no file and
+// nothing saved yet), and -1 if it couldn't be written.
+static int putAside(int player, char stamp[SECOND_STAMP]) {
+	char file[8192];
+	char rtcFile[8192];
+	size_t size, rtcSize;
+	void* rtc;
+	void* save = liveSave(player, &size, &rtc, &rtcSize);
+	if (!saveFiles(player, file, rtcFile) || !save || !size) {
+		return 0;
 	}
-	fclose(f);
-	secondNewStamp(keptSaves[player].file, stamp);
-	char file[8300];
-	secondEarlierPath(keptSaves[player].file, stamp, file, sizeof(file));
-	if (rename(keptSaves[player].file, file)) {
-		return false;
+	bool blank = !fileExists(file);
+	for (size_t i = 1; blank && i < size; ++i) {
+		blank = ((const uint8_t*) save)[i] == ((const uint8_t*) save)[0];
 	}
-	secondEarlierPath(keptSaves[player].rtcFile, stamp, file, sizeof(file));
-	rename(keptSaves[player].rtcFile, file);
-	return true;
+	if (blank) {
+		return 0;
+	}
+	secondNewStamp(file, stamp);
+	char out[8300];
+	secondEarlierPath(file, stamp, out, sizeof(out));
+	secondMakeFolders(out);
+	if (!writeFile(out, save, size)) {
+		return -1;
+	}
+	if (rtc && rtcSize) {
+		secondEarlierPath(rtcFile, stamp, out, sizeof(out));
+		writeFile(out, rtc, rtcSize);
+	}
+	return 1;
 }
 
 // Deletes a save's oldest earlier versions beyond what Earlier Saves Kept allows.
@@ -1953,7 +2012,7 @@ static void copySave(int from, int to) {
 		void* toRtc = rtcMemory(to, &toRtcSize);
 		if (save && toSave && size == toSize) {
 			char stamp[SECOND_STAMP];
-			bool const kept = putAside(to, stamp);
+			bool const kept = putAside(to, stamp) > 0;
 			memcpy(toSave, save, size);
 			if (rtc && toRtc && rtcSize == toRtcSize) {
 				memcpy(toRtc, rtc, rtcSize);
@@ -1999,52 +2058,51 @@ static bool copyFile(const char* from, const char* to) {
 // copied, and stays where it was.
 static void loadSave(int from, const char* stamp, int to) {
 	char message[160];
-	char file[8300];
-	secondEarlierPath(keptSaves[from].file, stamp, file, sizeof(file));
-	FILE* f = NULL;
-	if (!bothConsoles() || from >= playersHere || !keptSaves[from].kept) {
-		snprintf(message, sizeof(message), "Load Save: player %d isn't playing", from + 1);
-	} else if (to >= playersHere || !keptSaves[to].kept) {
-		snprintf(message, sizeof(message), "Load Save: player %d isn't playing", to + 1);
-	} else if (netplaySeen) {
+	char fromFile[8192], fromRtc[8192], toFile[8192], toRtc[8192];
+	char file[8300], rtcFile[8300];
+	char aside[SECOND_STAMP];
+	bool const fromPlaying = saveFiles(from, fromFile, fromRtc);
+	bool const toPlaying = saveFiles(to, toFile, toRtc);
+	if (fromPlaying) {
+		secondEarlierPath(fromFile, stamp, file, sizeof(file));
+		secondEarlierPath(fromRtc, stamp, rtcFile, sizeof(rtcFile));
+	}
+	if (!fromPlaying || !toPlaying) {
+		snprintf(message, sizeof(message), "Load Save: player %d isn't playing", (fromPlaying ? to : from) + 1);
+	} else if (netplaySeen || linkSession()) {
 		snprintf(message, sizeof(message), "Load Save: not in netplay");
 	} else if (strcmp(gameOf(from), gameOf(to))) {
 		snprintf(message, sizeof(message), "Load Save: players %d and %d play different games", from + 1, to + 1);
-	} else if (!(f = fopen(file, "rb"))) {
+	} else if (!fileExists(file)) {
 		snprintf(message, sizeof(message), "Load Save: that save is gone");
+	} else if (putAside(to, aside) < 0) {
+		snprintf(message, sizeof(message), "Load Save: player %d's save can't be put aside", to + 1);
 	} else {
-		fclose(f);
-		char aside[SECOND_STAMP];
-		putAside(to, aside);
-		if ((f = fopen(keptSaves[to].file, "rb"))) {
-			fclose(f);
-			snprintf(message, sizeof(message), "Load Save: player %d's save can't be put aside", to + 1);
+		if (from == to) {
+			rename(file, toFile);
+			rename(rtcFile, toRtc);
 		} else {
-			char rtcFile[8300];
-			secondEarlierPath(keptSaves[from].rtcFile, stamp, rtcFile, sizeof(rtcFile));
-			if (from == to) {
-				rename(file, keptSaves[to].file);
-				rename(rtcFile, keptSaves[to].rtcFile);
-			} else {
-				secondMakeFolders(keptSaves[to].file);
-				copyFile(file, keptSaves[to].file);
-				copyFile(rtcFile, keptSaves[to].rtcFile);
-			}
-			size_t size, rtcSize;
-			void* save = saveMemory(to, &size);
-			readFileInto(keptSaves[to].file, save, size);
-			readFileInto(keptSaves[to].rtcFile, rtcMemory(to, &rtcSize), rtcSize);
+			secondMakeFolders(toFile);
+			copyFile(file, toFile);
+			copyFile(rtcFile, toRtc);
+		}
+		size_t size, rtcSize;
+		void* rtc;
+		void* save = liveSave(to, &size, &rtc, &rtcSize);
+		readFileInto(toFile, save, size);
+		readFileInto(toRtc, rtc, rtcSize);
+		if (to < playersHere && keptSaves[to].kept) {
 			keptSaves[to].hash = save ? hashOf(save, size) : 0;
-			restartConsole(to);
-			pruneEarlier(keptSaves[to].file, keptSaves[to].rtcFile);
-			offerEarlierSaves();
-			char when[32];
-			stampLabel(stamp, when, sizeof(when));
-			if (from == to) {
-				snprintf(message, sizeof(message), "Player %d's save is now the one from %s", to + 1, when);
-			} else {
-				snprintf(message, sizeof(message), "Player %d's save is now player %d's from %s", to + 1, from + 1, when);
-			}
+		}
+		restartConsole(to);
+		pruneEarlier(toFile, toRtc);
+		offerEarlierSaves();
+		char when[32];
+		stampLabel(stamp, when, sizeof(when));
+		if (from == to) {
+			snprintf(message, sizeof(message), "Player %d's save is now the one from %s", to + 1, when);
+		} else {
+			snprintf(message, sizeof(message), "Player %d's save is now player %d's from %s", to + 1, from + 1, when);
 		}
 	}
 	struct retro_message shown = { message, 240 };
@@ -2052,51 +2110,29 @@ static void loadSave(int from, const char* stamp, int to) {
 }
 
 // The Back Up Save option: writes a player's save, and clock, as it is now beside it, named for now.
-// Player 1's is the one RetroArch keeps, unless the core keeps it.
 static void backUpSave(int player) {
 	char message[160];
 	char file[8192];
 	char rtcFile[8192];
-	void* save = NULL;
-	void* rtc = NULL;
-	size_t size = 0, rtcSize = 0;
-	if (player < playersHere && keptSaves[player].kept) {
-		snprintf(file, sizeof(file), "%s", keptSaves[player].file);
-		snprintf(rtcFile, sizeof(rtcFile), "%s", keptSaves[player].rtcFile);
-		save = saveMemory(player, &size);
-		rtc = rtcMemory(player, &rtcSize);
-	} else if (player == 0) {
-		char unsorted[4096];
-		const char* saveDirectory = saveDirectoryFor(unsorted);
-		secondSavePath(firstPath, "", "srm", firstPath, saveDirectory, file, sizeof(file));
-		secondSavePath(firstPath, "", "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
-		save = retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
-		size = retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
-		rtc = retro_get_memory_data(RETRO_MEMORY_RTC);
-		rtcSize = retro_get_memory_size(RETRO_MEMORY_RTC);
-	}
-	if (player >= playersHere || (player && !keptSaves[player].kept)) {
+	char stamp[SECOND_STAMP];
+	size_t size, rtcSize;
+	void* rtc;
+	if (!saveFiles(player, file, rtcFile)) {
 		snprintf(message, sizeof(message), "Back Up Save: player %d isn't playing", player + 1);
-	} else if (!save || !size) {
+	} else if (!liveSave(player, &size, &rtc, &rtcSize) || !size) {
 		snprintf(message, sizeof(message), "Back Up Save: the game has no save");
 	} else {
-		char stamp[SECOND_STAMP];
-		char out[8300];
-		secondNewStamp(file, stamp);
-		secondEarlierPath(file, stamp, out, sizeof(out));
-		secondMakeFolders(out);
-		writeFile(out, save, size);
-		if (rtc && rtcSize) {
-			secondEarlierPath(rtcFile, stamp, out, sizeof(out));
-			writeFile(out, rtc, rtcSize);
-		}
-		pruneEarlier(file, rtcFile);
-		if (player) {
+		int const done = putAside(player, stamp);
+		if (done > 0) {
+			pruneEarlier(file, rtcFile);
 			offerEarlierSaves();
+			char when[32];
+			stampLabel(stamp, when, sizeof(when));
+			snprintf(message, sizeof(message), "Backed up player %d's save: %s", player + 1, when);
+		} else {
+			snprintf(message, sizeof(message), done ? "Back Up Save: player %d's save can't be written" : "Back Up Save: player %d has nothing saved yet",
+			         player + 1);
 		}
-		char when[32];
-		stampLabel(stamp, when, sizeof(when));
-		snprintf(message, sizeof(message), "Backed up player %d's save: %s", player + 1, when);
 	}
 	struct retro_message shown = { message, 240 };
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
@@ -2131,9 +2167,9 @@ static void readSaveActions(bool act) {
 		struct retro_variable off = { "armgba_load_save", "off" };
 		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
 		const char* into = option("armgba_load_into");
-		if (act && load[0] >= '2' && load[0] <= '4' && load[1] == ' ') {
+		if (act && load[0] >= '1' && load[0] <= '4' && load[1] == ' ') {
 			int const from = load[0] - '1';
-			loadSave(from, load + 2, into && into[0] >= '2' && into[0] <= '4' ? into[0] - '1' : from);
+			loadSave(from, load + 2, into && into[0] >= '1' && into[0] <= '4' ? into[0] - '1' : from);
 		}
 	}
 }
