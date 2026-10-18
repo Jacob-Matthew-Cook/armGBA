@@ -107,7 +107,6 @@ set_target_properties(retro-archive PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(armgba_libretro SHARED libretro/libretro.c libretro/link.c libretro/second.c libretro/dmg07.c libretro/workers.c libretro/gb-gambatte.cpp)
 target_link_libraries(armgba_libretro armgba gambatte retro-archive m z)
-target_compile_definitions(armgba_libretro PRIVATE ARMGBA_GB)
 # A toolchain file may leave C++ without an optimisation level
 target_compile_options(armgba_libretro PRIVATE -O2)
 set_target_properties(armgba_libretro PROPERTIES PREFIX "")

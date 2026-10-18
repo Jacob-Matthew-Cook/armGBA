@@ -409,12 +409,10 @@ static void reply(uint16_t seq, uint32_t data, bool ready) {
 // This console's data for the other's transfer, and whether it takes part (waiting on the external
 // clock, or a multiplayer child).
 static uint32_t ownData(bool* ready) {
-#ifdef ARMGBA_GB
 	if (console == CONSOLE_GB) {
 		*ready = true;
 		return libretroGbLinkOut();
 	}
-#endif
 	int mode;
 	*ready = false;
 	return gba ? sioOutgoing(gba, &mode, ready) : 0xFFFFFFFF;
@@ -422,12 +420,10 @@ static uint32_t ownData(bool* ready) {
 
 // The other console's transfer ends here with its data, and this console's own as sent.
 static void receiveData(uint8_t mode, uint32_t data, uint32_t mine) {
-#ifdef ARMGBA_GB
 	if (console == CONSOLE_GB) {
 		libretroGbLinkIn(data & 0xFF);
 		return;
 	}
-#endif
 	if (!gba) {
 		return;
 	}
@@ -608,7 +604,6 @@ static void pollEventRun(struct GBA* machine, void* context, uint32_t late) {
 // Game Boy send-ahead: offers this Game Boy's byte while it waits for the other's clock, and says when
 // it stops waiting.
 static void offerByte(void) {
-#ifdef ARMGBA_GB
 	bool const ready = (libretroGbLinkControl() & 0x81) == 0x80;
 	uint8_t const byte = libretroGbLinkOut();
 	if (offer.sent && offer.ready == ready && (!ready || (offer.after == taken && offer.byte == byte))) {
@@ -621,7 +616,6 @@ static void offerByte(void) {
 	uint8_t message[5] = { MSG_OFFER, ready, byte };
 	put16(message + 3, taken);
 	send(message, sizeof(message));
-#endif
 }
 
 // The netplay session.
