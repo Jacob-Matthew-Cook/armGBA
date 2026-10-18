@@ -326,29 +326,29 @@ void retro_set_environment(retro_environment_t callback) {
 		  { { "l r start", "L + R + Start" }, { "l r a b", "L + R + A + B" }, { "l3 r3", "L3 + R3" }, { "select start a b", "Select + Start + A + B" }, { "off", "Off" }, { NULL, NULL } },
 		  "l r start" },
 		{ "armgba_link_cable", "Link Cable", NULL,
-		  "How games link. Own Console: two players in netplay, each playing their own game and save, the link crossing the network. All Consoles: two to four consoles on one device, a controller for each player, or in netplay on every device, smooth with RetroArch's rollback, from the host's games and saves. Applies on Restart.",
+		  "How games link. Separate: two players in netplay, each device running its own player's console with their own game and save, the cable crossing the network. Together: two to four consoles on every device, for multiplayer on one device (a controller each) or smooth rollback netplay, from the host's games and saves. Applies on Restart.",
 		  NULL, "link",
-		  { { "own", "Own Console" }, { "both", "All Consoles" }, { NULL, NULL } }, "own" },
+		  { { "own", "Separate" }, { "both", "Together" }, { NULL, NULL } }, "own" },
 		{ "armgba_link_players", "Players", NULL,
-		  "With All Consoles: how many consoles run. Three or four Game Boys join through the Four Player Adapter, Game Boy Advances through the cable in multiplayer mode. Four Game Boy Advances need a fast device. Applies on Restart.",
+		  "With Together: how many consoles run. Three or four Game Boys join through the Four Player Adapter, Game Boy Advances through the cable in multiplayer mode. Four Game Boy Advances need a fast device. Applies on Restart.",
 		  NULL, "link", { { "2", NULL }, { "3", NULL }, { "4", NULL }, { NULL, NULL } }, "2" },
 		{ "armgba_link_port", "Link Port", NULL,
 		  "What is plugged into a Game Boy Advance's link port: the Link Cable, or the Wireless Adapter that Pokemon FireRed, LeafGreen and Emerald, Mario Golf: Advance Tour and others use. Applies on Restart.",
 		  NULL, "link", { { "cable", "Link Cable" }, { "wireless", "Wireless Adapter" }, { NULL, NULL } }, "cable" },
 #ifdef ARMGBA_GB
 		{ "armgba_gb_link_port", "Link Port", NULL,
-		  "With All Consoles: what joins Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race, Yoshi's Cookie and other four-player games use, for two to four. Applies on Restart.",
+		  "With Together: what joins Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race, Yoshi's Cookie and other four-player games use, for two to four. Applies on Restart.",
 		  NULL, "link", { { "cable", "Link Cable" }, { "adapter", "Four Player Adapter" }, { NULL, NULL } }, "cable" },
 #endif
 		{ "armgba_link_timing", "Link Timing", NULL,
-		  "With Own Console: Standard lets each console run at its own pace, the one clocking a transfer waiting for the other's answer. Exact keeps the other just behind the one clocking, so the two swap data on the cycles a transfer starts and ends, as on a real cable; best on a local network. All Consoles is always exact.",
+		  "With Separate: Standard lets each console run at its own pace, the one clocking a transfer waiting for the other's answer; it suits Wi-Fi and games that link in turns, such as trades and battles. Exact keeps the two consoles on the same cycles, as on a real cable; games that link every frame, such as Kirby & The Amazing Mirror, need it, and it wants a short ping. Together is always exact.",
 		  NULL, "link", { { "standard", "Standard" }, { "exact", "Exact" }, { NULL, NULL } }, "standard" },
 		{ "armgba_link_screens", "Screens", NULL,
-		  "With All Consoles: where the screens go. Three or four consoles are shown in a grid, side by side or top and bottom. L2 and R2 change it while playing.", NULL, "link",
+		  "With Together: where the screens go. Three or four consoles are shown in a grid, side by side or top and bottom. L2 and R2 change it while playing.", NULL, "link",
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
 		  "side by side" },
 		{ "armgba_player2_game", "Player 2's Game", NULL,
-		  "With All Consoles: the game on player 2's console, from the games beside player 1's, the likeliest partners first; players 3 and 4 play player 1's. Each game keeps its own save; a player on player 1's game gets a save of their own, which starts as a copy of player 1's. Applies on Restart.",
+		  "With Together: the game on player 2's console, from the games beside player 1's, the likeliest partners first; players 3 and 4 play player 1's. Each game keeps its own save; a player on player 1's game gets a save of their own, which starts as a copy of player 1's. Applies on Restart.",
 		  NULL, "link", { { "same", "Same Game" }, { NULL, NULL } }, "same" },
 		{ NULL, NULL, NULL, NULL, NULL, NULL, { { NULL, NULL } }, NULL },
 	};
@@ -884,7 +884,7 @@ static bool linkBothWanted(void) {
 	return value && !strcmp(value, "both");
 }
 
-// How many consoles All Consoles runs, and whether Game Boys join through the Four Player Adapter:
+// How many consoles Together runs, and whether Game Boys join through the Four Player Adapter:
 // always for three or four.
 static int playersWanted(void) {
 	const char* value = option("armgba_link_players");
@@ -1248,7 +1248,7 @@ static void announcePlayers(void) {
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
 }
 
-// Starts the other players' consoles beside player 1's: two to four in all with All Consoles, as
+// Starts the other players' consoles beside player 1's: two to four in all with Together, as
 // many as a pair file names, or two with the game the frontend loaded for player 2.
 static void startOthers(const struct retro_game_info* second, const void* sameData, size_t sameSize) {
 	secondFromFrontend = second && !pairFile;
@@ -1337,7 +1337,7 @@ static void applySecondChoice(void) {
 
 #ifdef ARMGBA_GB
 // Starts a Game Boy or Game Boy Color game on the Gambatte side, and the other players' beside it
-// with a second game, a pair file or the Link Cable option on All Consoles.
+// with a second game, a pair file or the Link Cable option on Together.
 static bool loadGameBoy(const struct retro_game_info* game, const struct retro_game_info* second) {
 	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_XRGB8888;
 	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
@@ -1372,7 +1372,7 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 #endif
 
 // Starts a Game Boy Advance game, and the other players' beside it with a second game, a pair file
-// or the Link Cable option on All Consoles.
+// or the Link Cable option on Together.
 static bool loadAdvance(const struct retro_game_info* game, const struct retro_game_info* second) {
 	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_RGB565;
 	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
