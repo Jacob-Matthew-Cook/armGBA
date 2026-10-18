@@ -20,9 +20,9 @@
 //
 // The radio side: a host broadcasts and takes up to four clients. The host's packet reaches every
 // client, and each client's packet reaches the host, in the exchanges the adapters keep up by
-// themselves; each end holds one packet per sender, which a newer one replaces. Adapters talk
-// through the air the frontend gives (struct RfuAir) in messages, and keep what they hear in their
-// own console's state, so states and rollback hold the whole conversation.
+// themselves; each end holds the last packet from each sender, or over a network the packets not
+// yet read. Adapters talk through the air the frontend gives (struct RfuAir) in messages, and keep
+// what they hear in their own console's state, so states and rollback hold the whole conversation.
 
 enum {
 	WIRE_ID,
@@ -114,6 +114,29 @@ static int32_t arrival(struct GBA* gba, int32_t delay) {
 	return now(gba) + (network(gba) ? 0 : delay);
 }
 
+// Whether the oldest packet from a sender has arrived.
+static bool ready(struct GBA* gba, const struct RfuQueue* queue) {
+	return queue->count && arrived(gba, queue->packets[0].arrival);
+}
+
+static void take(struct RfuQueue* queue) {
+	--queue->count;
+	memmove(&queue->packets[0], &queue->packets[1], queue->count * sizeof(queue->packets[0]));
+}
+
+// A packet heard. Over a network packets can arrive together, so they wait their turn, and when the
+// queue is full the oldest is lost; on one console the radio spaces them, and a newer one replaces
+// the last.
+static void hear(struct GBA* gba, struct RfuQueue* queue, const uint8_t* data, uint8_t length, int32_t when) {
+	if (queue->count == RFU_QUEUE || (queue->count && !network(gba))) {
+		take(queue);
+	}
+	struct RfuPacket* packet = &queue->packets[queue->count++];
+	packet->length = length;
+	packet->arrival = when;
+	memcpy(packet->data, data, length);
+}
+
 // Device IDs are random on the real adapter; here they come from a generator seeded per console,
 // so a replay makes the same ones.
 static uint16_t newId(struct Rfu* rfu) {
@@ -203,8 +226,7 @@ static void dropClient(struct GBA* gba, bool manual) {
 	}
 	rfu->radio = RADIO_IDLE;
 	rfu->id = 0;
-	rfu->rx.sent = false;
-	rfu->tx.sent = false;
+	rfu->rx.count = 0;
 	wake(gba);
 }
 
@@ -212,7 +234,7 @@ static void dropClient(struct GBA* gba, bool manual) {
 static void loseClient(struct GBA* gba, int slot) {
 	struct Rfu* rfu = &gba->sio.rfu;
 	rfu->clients[slot].active = false;
-	rfu->clients[slot].rx.sent = false;
+	rfu->clients[slot].rx.count = 0;
 	rfu->lost |= 1 << slot;
 	rfu->lostReason = 1;
 	wake(gba);
@@ -249,8 +271,7 @@ static void leave(struct GBA* gba) {
 	rfu->radio = RADIO_IDLE;
 	rfu->open = false;
 	rfu->id = 0;
-	rfu->rx.sent = false;
-	rfu->tx.sent = false;
+	rfu->rx.count = 0;
 	rfu->exchange = false;
 	rfu->lost = 0;
 	if (hosting) {
@@ -303,8 +324,7 @@ static void connect(struct GBA* gba, uint16_t hostId) {
 	rfu->number = 0xFF;
 	rfu->hostId = hostId;
 	rfu->answered = true;
-	rfu->rx.sent = false;
-	rfu->tx.sent = false;
+	rfu->rx.count = 0;
 	for (int i = 0; i < RFU_ROOMS; ++i) {
 		if (rfu->rooms[i].heard && rfu->rooms[i].live && rfu->rooms[i].id == hostId) {
 			rfu->hostConsole = rfu->rooms[i].console;
@@ -393,19 +413,19 @@ static int receive(struct GBA* gba) {
 	uint32_t header = 0;
 	if (rfu->radio == RADIO_HOST) {
 		for (int slot = 0; slot < RFU_SLOTS; ++slot) {
-			struct RfuPacket* rx = &rfu->clients[slot].rx;
-			if (rfu->clients[slot].active && rx->sent && arrived(gba, rx->arrival)) {
-				memcpy(&bytes[total], rx->data, rx->length);
-				total += rx->length;
-				header |= rx->length << (8 + slot * 5);
-				rx->sent = false;
+			struct RfuQueue* rx = &rfu->clients[slot].rx;
+			if (rfu->clients[slot].active && ready(gba, rx)) {
+				memcpy(&bytes[total], rx->packets[0].data, rx->packets[0].length);
+				total += rx->packets[0].length;
+				header |= rx->packets[0].length << (8 + slot * 5);
+				take(rx);
 			}
 		}
-	} else if (rfu->rx.sent && arrived(gba, rfu->rx.arrival)) {
-		memcpy(bytes, rfu->rx.data, rfu->rx.length);
-		total = rfu->rx.length;
+	} else if (ready(gba, &rfu->rx)) {
+		memcpy(bytes, rfu->rx.packets[0].data, rfu->rx.packets[0].length);
+		total = rfu->rx.packets[0].length;
 		header = total;
-		rfu->rx.sent = false;
+		take(&rfu->rx);
 	}
 	rfu->words[0] = header;
 	for (unsigned i = 0; i < (total + 3) / 4; ++i) {
@@ -421,7 +441,7 @@ static void disconnect(struct GBA* gba, uint32_t slots) {
 			if (slots & (1 << slot) && rfu->clients[slot].active) {
 				sendDrop(gba, slot);
 				rfu->clients[slot].active = false;
-				rfu->clients[slot].rx.sent = false;
+				rfu->clients[slot].rx.count = 0;
 			}
 		}
 		if (!rfu->open && !listClients(rfu)) {
@@ -754,8 +774,7 @@ static void setPush(struct Rfu* rfu, uint32_t notice, int length, uint32_t data)
 static bool clientData(struct GBA* gba) {
 	struct Rfu* rfu = &gba->sio.rfu;
 	for (int slot = 0; slot < RFU_SLOTS; ++slot) {
-		struct RfuPacket* rx = &rfu->clients[slot].rx;
-		if (rfu->clients[slot].active && rx->sent && arrived(gba, rx->arrival)) {
+		if (rfu->clients[slot].active && ready(gba, &rfu->clients[slot].rx)) {
 			return true;
 		}
 	}
@@ -774,7 +793,7 @@ static void checkWait(struct GBA* gba) {
 		if (rfu->lost) {
 			setPush(rfu, 0x29, 1, rfu->lost | rfu->lostReason << 8);
 			rfu->lost = 0;
-		} else if (rfu->radio == RADIO_CLIENT && rfu->rx.sent && arrived(gba, rfu->rx.arrival)) {
+		} else if (rfu->radio == RADIO_CLIENT && ready(gba, &rfu->rx)) {
 			setPush(rfu, 0x28, 0, 0);
 		} else if (rfu->radio == RADIO_HOST && ((rfu->exchange && arrived(gba, rfu->exchanged)) || clientData(gba))) {
 			rfu->exchange = false;
@@ -782,8 +801,8 @@ static void checkWait(struct GBA* gba) {
 		} else if (rfu->timed && arrived(gba, rfu->deadline)) {
 			setPush(rfu, 0x27, 0, 0);
 		} else {
-			if (rfu->radio == RADIO_CLIENT && rfu->rx.sent && (!due || (int32_t) (rfu->rx.arrival - soonest) < 0)) {
-				soonest = rfu->rx.arrival;
+			if (rfu->radio == RADIO_CLIENT && rfu->rx.count && (!due || (int32_t) (rfu->rx.packets[0].arrival - soonest) < 0)) {
+				soonest = rfu->rx.packets[0].arrival;
 				due = true;
 			}
 			if (rfu->radio == RADIO_HOST && rfu->exchange && (!due || (int32_t) (rfu->exchanged - soonest) < 0)) {
@@ -791,9 +810,9 @@ static void checkWait(struct GBA* gba) {
 				due = true;
 			}
 			for (int slot = 0; rfu->radio == RADIO_HOST && slot < RFU_SLOTS; ++slot) {
-				struct RfuPacket* rx = &rfu->clients[slot].rx;
-				if (rfu->clients[slot].active && rx->sent && (!due || (int32_t) (rx->arrival - soonest) < 0)) {
-					soonest = rx->arrival;
+				struct RfuQueue* rx = &rfu->clients[slot].rx;
+				if (rfu->clients[slot].active && rx->count && (!due || (int32_t) (rx->packets[0].arrival - soonest) < 0)) {
+					soonest = rx->packets[0].arrival;
 					due = true;
 				}
 			}
@@ -928,7 +947,7 @@ void rfuReceive(struct GBA* gba, int from, const uint8_t* message, size_t size) 
 		for (int slot = 0; slot < RFU_SLOTS; ++slot) {
 			if (rfu->clients[slot].active && rfu->clients[slot].console == from) {
 				rfu->clients[slot].active = false;
-				rfu->clients[slot].rx.sent = false;
+				rfu->clients[slot].rx.count = 0;
 			}
 		}
 		int slot = freeSlot(rfu);
@@ -938,7 +957,7 @@ void rfuReceive(struct GBA* gba, int from, const uint8_t* message, size_t size) 
 			rfu->clients[slot].active = true;
 			rfu->clients[slot].id = newId(rfu);
 			rfu->clients[slot].console = from;
-			rfu->clients[slot].rx.sent = false;
+			rfu->clients[slot].rx.count = 0;
 			answer[0] = AIR_ACCEPT;
 			put16(answer + 4, rfu->clients[slot].id);
 		}
@@ -966,24 +985,17 @@ void rfuReceive(struct GBA* gba, int from, const uint8_t* message, size_t size) 
 		if (size < 4u + message[1] || message[1] > RFU_HOST_BYTES || !client || rfu->number >= RFU_SLOTS || get16(message + 2) != rfu->id) {
 			break;
 		}
-		rfu->rx.sent = true;
-		rfu->rx.length = message[1];
-		rfu->rx.arrival = arrival(gba, HOST_TO_CLIENT);
-		memcpy(rfu->rx.data, message + 4, message[1]);
+		hear(gba, &rfu->rx, message + 4, message[1], arrival(gba, HOST_TO_CLIENT));
 		wake(gba);
 		break;
 	case AIR_CLIENT_DATA: {
 		if (size < 5u + message[2] || message[2] > RFU_CLIENT_BYTES || rfu->radio != RADIO_HOST || message[1] >= RFU_SLOTS) {
 			break;
 		}
-		struct RfuPacket* rx = &rfu->clients[message[1]].rx;
 		if (!rfu->clients[message[1]].active || rfu->clients[message[1]].console != from || rfu->clients[message[1]].id != get16(message + 3)) {
 			break;
 		}
-		rx->sent = true;
-		rx->length = message[2];
-		rx->arrival = arrival(gba, EXCHANGE);
-		memcpy(rx->data, message + 5, message[2]);
+		hear(gba, &rfu->clients[message[1]].rx, message + 5, message[2], arrival(gba, EXCHANGE));
 		wake(gba);
 		break;
 	}
