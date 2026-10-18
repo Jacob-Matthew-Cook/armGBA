@@ -321,7 +321,7 @@ void retro_set_environment(retro_environment_t callback) {
 		  "The sunlight Boktai's sensor sees, from none to full sun. The right stick, pushed up or down, changes it while playing.", NULL, "input",
 		  { { "0", "0 (Dark)" }, { "1", NULL }, { "2", NULL }, { "3", NULL }, { "4", NULL }, { "5", NULL }, { "6", NULL }, { "7", NULL }, { "8", NULL }, { "9", NULL }, { "10", "10 (Full Sun)" }, { NULL, NULL } }, "5" },
 		{ "armgba_restart_buttons", "Restart Buttons", NULL,
-		  "Held for two seconds, restart that player's console, as its power switch would. On many handhelds Select is RetroArch's hotkey button and Select + Start quits, so the buttons with Select come last.",
+		  "Held for a second, restart that player's console, as its power switch would. On many handhelds Select is RetroArch's hotkey button and Select + Start quits, so the buttons with Select come last.",
 		  NULL, "input",
 		  { { "l r start", "L + R + Start" }, { "l r a b", "L + R + A + B" }, { "l3 r3", "L3 + R3" }, { "select start a b", "Select + Start + A + B" }, { "off", "Off" }, { NULL, NULL } },
 		  "l r start" },
@@ -1733,9 +1733,9 @@ static void readFastForward(void) {
 	environment(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &override);
 }
 
-// Holding the Restart Buttons for two seconds restarts that player's console, as its power switch
+// Holding the Restart Buttons for a second restarts that player's console, as its power switch
 // would. Games that reset on A, B, Select and Start do so at once by themselves.
-enum { RESTART_FRAMES = 120 };
+enum { RESTART_FRAMES = 60 };
 static uint8_t restartHeld[MAX_PLAYERS];
 
 static void restartConsole(int player) {
