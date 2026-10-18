@@ -57,7 +57,7 @@ only with Link Mode on.
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
 | | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
 | | Player 1's Saves (applies when a game starts) | Both | RetroArch's Save Folder, armGBA/Player 1 Folder |
-| | Backups Kept | Both | All, 5, 10, 20 |
+| | Backups Kept | Both | 10, 20, All, 5 |
 | | Backups Listed | Both | 10, 20, 40, 80, 126 |
 
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
@@ -152,7 +152,8 @@ backup, as Load Into says, outside netplay. It also lists the saves kept from ne
 device joined, as Remote Player 1 to 4, each to the other person unless Load Into names a player:
 the session's player 1 (its host) to player 2 here when there is one, its player 2 to player 1. It
 backs up the save it replaces first and restarts that player's console. Backups Kept limits how
-many each player keeps.
+many each player keeps, 10 unless chosen; a save the same as its newest backup isn't backed up
+again.
 
 The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of
 Pokemon FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game

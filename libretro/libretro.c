@@ -383,8 +383,8 @@ void retro_set_environment(retro_environment_t callback) {
 		  "Where player 1's save is kept: where RetroArch keeps saves, or in the save folder's armGBA/Player 1 folder, beside the other players' saves and player 1's backups. When it changes, the newer of the two is used. Applies when a game starts.",
 		  NULL, "saves", { { "retroarch", "RetroArch's Save Folder" }, { "armgba", "armGBA/Player 1 Folder" }, { NULL, NULL } }, "retroarch" },
 		{ "armgba_keep_saves", "Backups Kept", NULL,
-		  "How many backups each player keeps. When there are more, the oldest are deleted.",
-		  NULL, "saves", { { "all", "All" }, { "5", "5" }, { "10", "10" }, { "20", "20" }, { NULL, NULL } }, "all" },
+		  "How many backups each player keeps. When there are more, the oldest are deleted. A save the same as its newest backup isn't backed up again.",
+		  NULL, "saves", { { "5", "5" }, { "10", "10" }, { "20", "20" }, { "all", "All" }, { NULL, NULL } }, "10" },
 		{ "armgba_list_saves", "Backups Listed", NULL,
 		  "How many of each player's newest backups Load Save lists. It holds 126 in all.",
 		  NULL, "saves", { { "10", "10" }, { "20", "20" }, { "40", "40" }, { "80", "80" }, { "126", "126" }, { NULL, NULL } }, "10" },
@@ -448,7 +448,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_load_save", "Load Save; off" },
 		{ "armgba_new_save", "New Players' Saves; new|copy" },
 		{ "armgba_player1_saves", "Player 1's Saves; retroarch|armgba" },
-		{ "armgba_keep_saves", "Backups Kept; all|5|10|20" },
+		{ "armgba_keep_saves", "Backups Kept; 10|20|all|5" },
 		{ "armgba_list_saves", "Backups Listed; 10|20|40|80|126" },
 		{ NULL, NULL },
 	};
@@ -2155,22 +2155,44 @@ static const char* gameOf(int player) {
 	return *chosen ? chosen : firstPath;
 }
 
-// Writes a save, and clock, as backups of the save file given, named for now. Returns false if the
-// save couldn't be written.
-static bool writeBackup(const char* file, const char* rtcFile, const void* save, size_t size, const void* rtc, size_t rtcSize,
-                        char stamp[SECOND_STAMP]) {
-	secondNewStamp(file, stamp);
+// Whether a file holds just these bytes.
+static bool fileHolds(const char* path, const void* data, size_t size) {
+	FILE* f = fopen(path, "rb");
+	if (!f) {
+		return false;
+	}
+	uint8_t* held = malloc(size + 1);
+	bool const same = held && fread(held, 1, size + 1, f) == size && !memcmp(held, data, size);
+	free(held);
+	fclose(f);
+	return same;
+}
+
+// Writes a save, and clock, as backups of the save file given, named for now, unless the newest
+// backup already holds that save. Returns 1 if it wrote them, 0 if the newest backup holds the save
+// (stamp is its), and -1 if the save couldn't be written.
+static int writeBackup(const char* file, const char* rtcFile, const void* save, size_t size, const void* rtc, size_t rtcSize,
+                       char stamp[SECOND_STAMP]) {
 	char out[8300];
+	char newest[1][SECOND_STAMP];
+	if (secondEarlier(file, newest, 1)) {
+		secondEarlierPath(file, newest[0], out, sizeof(out));
+		if (fileHolds(out, save, size)) {
+			memcpy(stamp, newest[0], SECOND_STAMP);
+			return 0;
+		}
+	}
+	secondNewStamp(file, stamp);
 	secondEarlierPath(file, stamp, out, sizeof(out));
 	secondMakeFolders(out);
 	if (!writeFile(out, save, size)) {
-		return false;
+		return -1;
 	}
 	if (rtc && rtcSize) {
 		secondEarlierPath(rtcFile, stamp, out, sizeof(out));
 		writeFile(out, rtc, rtcSize);
 	}
-	return true;
+	return 1;
 }
 
 static bool blankSave(const void* save, size_t size) {
@@ -2183,8 +2205,8 @@ static bool blankSave(const void* save, size_t size) {
 }
 
 // Backs up a player's save, and clock, as they are in memory, newer than the file. Returns 1 if it
-// did, 0 if there was nothing to back up (no file and nothing saved yet), and -1 if it couldn't be
-// written.
+// did, 2 if the newest backup already holds the save, 0 if there was nothing to back up (no file and
+// nothing saved yet), and -1 if it couldn't be written.
 static int putAside(int player, char stamp[SECOND_STAMP]) {
 	char file[8192], rtcFile[8192], base[8192], rtcBase[8192];
 	size_t size, rtcSize;
@@ -2196,13 +2218,14 @@ static int putAside(int player, char stamp[SECOND_STAMP]) {
 	if (!fileExists(file) && blankSave(save, size)) {
 		return 0;
 	}
-	return writeBackup(base, rtcBase, save, size, rtc, rtcSize, stamp) ? 1 : -1;
+	int const written = writeBackup(base, rtcBase, save, size, rtc, rtcSize, stamp);
+	return written < 0 ? -1 : written ? 1 : 2;
 }
 
 // Deletes a save's oldest backups beyond what Backups Kept allows.
 static void pruneEarlier(const char* saveFile, const char* rtcFile) {
 	const char* value = option("armgba_keep_saves");
-	size_t const keep = value ? (size_t) atoi(value) : 0;
+	size_t const keep = value ? (size_t) atoi(value) : 10;
 	enum { MOST = 1000 };
 	char (*stamps)[SECOND_STAMP] = keep ? malloc(MOST * SECOND_STAMP) : NULL;
 	if (!stamps) {
@@ -2235,7 +2258,7 @@ static void keepSession(void) {
 		char stamp[SECOND_STAMP];
 		secondRemoteSavePath(gameOf(player), player, "srm", saveDirectory, file, sizeof(file));
 		secondRemoteSavePath(gameOf(player), player, "rtc", saveDirectory, rtcFile, sizeof(rtcFile));
-		if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp)) {
+		if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
 			pruneEarlier(file, rtcFile);
 		}
 	}
@@ -2370,12 +2393,16 @@ static void backUpSave(int player) {
 		snprintf(message, sizeof(message), "Back Up Save: the game has no save");
 	} else {
 		int const done = putAside(player, stamp);
+		char when[32];
 		if (done > 0) {
+			stampLabel(stamp, when, sizeof(when));
+		}
+		if (done == 1) {
 			pruneEarlier(file, rtcFile);
 			offerEarlierSaves();
-			char when[32];
-			stampLabel(stamp, when, sizeof(when));
 			snprintf(message, sizeof(message), "Backed up player %d's save: %s", player + 1, when);
+		} else if (done == 2) {
+			snprintf(message, sizeof(message), "Player %d's save is unchanged since its backup of %s", player + 1, when);
 		} else {
 			snprintf(message, sizeof(message), done ? "Back Up Save: player %d's save can't be written" : "Back Up Save: player %d has nothing saved yet",
 			         player + 1);
