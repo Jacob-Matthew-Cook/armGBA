@@ -48,18 +48,18 @@ only with Link Mode on.
 | | Restart Buttons | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
 | Link | Link Mode (applies on restart) | Both | Off, Together, Separate |
 | | Players (applies on restart) | Both | 2, 3, 4 (Together) |
+| | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
 | | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
 | | Game Boy Link Timing | Game Boy | Standard, Exact (Separate) |
 | | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
-| | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | Saves | Back Up Save | Both | Off, then each player |
-| | Send Save | Both | Off, then player 1's current save, backups, remote and received saves (Separate) |
-| | Load Into | Both | Same Player, then each player (Together) |
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
+| | Load Into | Both | Same Player, then each player (Together) |
+| | Send Save | Both | Off, then player 1's current save, backups, remote and received saves (Separate) |
 | | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
-| | Player 1's Saves (applies when a game starts) | Both | RetroArch's Save Folder, armGBA/Player 1 Folder |
-| | Backups Kept | Both | 10, 20, All, 5 |
+| | Player 1's Save Folder (applies when a game starts) | Both | RetroArch's Save Folder, armGBA/Player 1 Folder |
+| | Backups Kept | Both | 10, 5, 20, All |
 | | Backups Listed | Both | 10, 20, 40, 80, 126 |
 
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
@@ -176,7 +176,7 @@ The two ways to link:
   player 1. This is the way to bring a player's own save to the host before playing Together.
 - Backups Kept: 10 per player unless chosen. A save the same as its newest backup isn't backed up
   again.
-- Player 1's Saves can keep player 1's save in armGBA/Player 1 too, beside the other players'. When
+- Player 1's Save Folder can keep player 1's save in armGBA/Player 1 too, beside the other players'. When
   it changes, the newer save is used.
 
 The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of
