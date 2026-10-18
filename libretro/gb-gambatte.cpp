@@ -404,9 +404,6 @@ size_t stall() {
 // the Light's with its backlight on.
 int screen;
 bool correction;
-// Whether a screen the game has turned off shows its background color, instead of white or the
-// screen's own off shade.
-bool offBackground;
 // What the color table was last built for: 0 uncorrected, 1 a Game Boy Color's screen, 2 a Game Boy
 // Advance's.
 int built = -1;
@@ -449,7 +446,6 @@ void setColors() {
 	// white.
 	static const unsigned long off[4] = { 0xFFFFFF, 0xCFDAAC, 0xD2E6A6, 0x91EAD0 };
 	s->gb->setDmgPaletteColor(0, 4, off[screen]);
-	s->gb->setScreenOffBackground(offBackground);
 	// A Game Boy game started through a Game Boy Color's boot ROM keeps the colors the boot ROM
 	// gave it (a state stores them too), so they aren't replaced here.
 	if (!s->gb->isCgb() || (s->loadFlags & gambatte::GB::NO_BIOS)) {
@@ -658,14 +654,6 @@ void restartAs(LibretroGbModel model) {
 }
 
 extern "C" {
-
-// Called when the Screen Off Behavior option changes, or is read before a game is loaded.
-void libretroGbSetScreenOffBackground(bool on) {
-	offBackground = on;
-	if (s->gb) {
-		s->gb->setScreenOffBackground(on);
-	}
-}
 
 // Called when the Color Correction option changes.
 void libretroGbSetColorCorrection(bool on) {

@@ -370,10 +370,6 @@ void GB::setDmgPaletteColor(int palNum, int colorNum, unsigned long rgb32) {
 	p_->cpu.setDmgPaletteColor(palNum, colorNum, rgb32);
 }
 
-void GB::setScreenOffBackground(bool enabled) {
-	p_->cpu.setScreenOffBackground(enabled);
-}
-
 void GB::setCgbPalette(unsigned *lut) {
 	p_->cpu.setCgbPalette(lut);
 }

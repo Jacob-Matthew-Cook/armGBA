@@ -294,9 +294,6 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_gb_advance_border", "Game Boy Advance Border", NULL,
 		  "On the Game Boy Advance model: Cropped shows only the game's picture, Shown the black around it as that console's screen has.", NULL, "video",
 		  { { "cropped", "Cropped" }, { "shown", "Shown" }, { NULL, NULL } }, "cropped" },
-		{ "armgba_gb_screen_off", "Screen Off Behavior", NULL,
-		  "What shows while a game has its screen off, as between menus: what the console showed (white on the Game Boy Color and Advance), or the game's background color, which spares OLED screens a bright flash.", NULL, "video",
-		  { { "hardware", "As Hardware" }, { "background", "Background Color" }, { NULL, NULL } }, "hardware" },
 #endif
 		{ "armgba_turbo_period", "Turbo Button Period", NULL,
 		  "How many frames apart X and Y press A and B while held, and L3 and R3 press L and R in Game Boy Advance games, as in gambatte's and gpSP's cores.", NULL, "input",
@@ -383,7 +380,6 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_gb_color_correction", "Color Correction; disabled|enabled" },
 		{ "armgba_gb_screen", "Game Boy Screen; grayscale|original|pocket|light" },
 		{ "armgba_gb_advance_border", "Game Boy Advance Border; cropped|shown" },
-		{ "armgba_gb_screen_off", "Screen Off Behavior; hardware|background" },
 #endif
 		{ "armgba_turbo_period", "Turbo Button Period; 4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83|84|85|86|87|88|89|90|91|92|93|94|95|96|97|98|99|100|101|102|103|104|105|106|107|108|109|110|111|112|113|114|115|116|117|118|119|120" },
 		{ "armgba_gb_tilt", "Tilt Sensor; left stick|right stick|d-pad" },
@@ -597,15 +593,12 @@ static void readOptions(void) {
 	int const shades = !value ? 0 : !strcmp(value, "pocket") ? 1 : !strcmp(value, "original") ? 2 : !strcmp(value, "light") ? 3 : 0;
 	value = option("armgba_gb_color_correction");
 	gbColorCorrection = value && !strcmp(value, "enabled");
-	value = option("armgba_gb_screen_off");
-	bool const offBackground = value && !strcmp(value, "background");
 	for (int i = gameBoy ? playersHere - 1 : 0; i >= 0; --i) {
 		libretroGbSelect(i);
 		libretroGbSetScreen(shades);
 		if (gameBoy) {
 			libretroGbSetColorCorrection(gbColorCorrection);
 		}
-		libretroGbSetScreenOffBackground(offBackground);
 	}
 	value = option("armgba_link_screens");
 	int const chosenScreens = !value ? SCREENS_SIDE : !strcmp(value, "top and bottom") ? SCREENS_STACKED
@@ -741,7 +734,7 @@ static void showButtons(bool forGameBoy) {
 // Shows only the options of the loaded game's console, and names its buttons.
 static void showOptions(bool forGameBoy) {
 	static const char* const advance[] = { "armgba_skip_bios", "armgba_threaded_video", "armgba_color_correction", "armgba_solar_sensor", "armgba_link_port" };
-	static const char* const gameBoyKeys[] = { "armgba_gb_model", "armgba_gb_boot_rom", "armgba_gb_color_correction", "armgba_gb_screen", "armgba_gb_advance_border", "armgba_gb_screen_off", "armgba_gb_link_port" };
+	static const char* const gameBoyKeys[] = { "armgba_gb_model", "armgba_gb_boot_rom", "armgba_gb_color_correction", "armgba_gb_screen", "armgba_gb_advance_border", "armgba_gb_link_port" };
 	for (unsigned i = 0; i < sizeof(advance) / sizeof(advance[0]); ++i) {
 		struct retro_core_option_display display = { advance[i], !forGameBoy };
 		environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &display);

@@ -185,12 +185,6 @@ public:
 	void setDmgPaletteColor(int palNum, int colorNum, unsigned long rgb32);
 
 	/**
-	  * armGBA: whether the screen, while the game has it off, shows the game's background color instead
-	  * of what the console's screen shows
-	  */
-	void setScreenOffBackground(bool enabled);
-
-	/**
 	  * Set CGB palette lookup.
 	  * @param uint32[32768], input color (r,g,b) is at lut[r | g << 5 | b << 10]
 	  */

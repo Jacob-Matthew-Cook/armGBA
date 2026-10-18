@@ -120,7 +120,6 @@ LCD::LCD(unsigned char const *oamram, unsigned char const *vram,
 , scanlinecallback(0)
 , scanlinecallbacksl(0)
 , offColor_(0xFFFFFFFF)
-, offBackground_(false)
 {
 	for (int i = 0; i < 3 * 4; ++i)
 		dmgColorsBgr15_[i] = (3 - (i & 3)) * 0x294A + !(i & 3) * 0x421;
@@ -290,8 +289,8 @@ void LCD::updateScreen(bool const blanklcd, unsigned long const cycleCounter, un
 void LCD::whiteScreen() {
 	// TODO: Use during DMG stop mode
 	if (ppu_.frameBuf().fb())
-		// armGBA: the background color if asked for; else white on a Game Boy Color, a Game Boy's own shade
-		clear(ppu_.frameBuf().fb(), offBackground_ ? ppu_.bgPalette()[0] : ppu_.cgb() ? 0xFFFFFFFF : offColor_, ppu_.frameBuf().pitch());
+		// armGBA: white on a Game Boy Color, a Game Boy's own shade
+		clear(ppu_.frameBuf().fb(), ppu_.cgb() ? 0xFFFFFFFF : offColor_, ppu_.frameBuf().pitch());
 }
 
 void LCD::blackScreen() {

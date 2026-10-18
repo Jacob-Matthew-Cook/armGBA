@@ -131,8 +131,6 @@ public:
 		mem_.setDmgPaletteColor(palNum, colorNum, rgb32);
 	}
 
-	void setScreenOffBackground(bool enabled) { mem_.setScreenOffBackground(enabled); }
-
 	void setCgbPalette(unsigned *lut) { mem_.setCgbPalette(lut); }
 	void setTimeMode(bool useCycles) { mem_.setTimeMode(useCycles, cycleCounter_); }
 	void setRtcDivisorOffset(long const rtcDivisorOffset) { mem_.setRtcDivisorOffset(rtcDivisorOffset); }
