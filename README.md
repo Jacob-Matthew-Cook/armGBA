@@ -21,7 +21,7 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | L, R | L, R | Stretch the picture (Game Boy Advance model) |
 | Tilt stick | Tilt and turn (motion sensor games) | Tilt (motion sensor games) |
 | Right stick up, down | Sunlight up, down (solar sensor games) | — |
-| L, R, Start (held 2 s) | Restart that player's console (the Restart Buttons option) | Same |
+| L, R, Start (held 1 s) | Restart that player's console (the Restart Buttons option) | Same |
 
 With the consoles of a link on one device, L2 and R2 change how the screens are shown instead of
 fast-forwarding. The tilt stick is the left stick by default. The Tilt Sensor option moves it to the right stick or
