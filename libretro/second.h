@@ -19,8 +19,8 @@ struct SecondGame {
 };
 
 // Lists the games in the folder the loaded game came from, the likeliest partners for it first: other
-// releases of the same game, then games sharing words with its name (Red with Blue and Yellow), then
-// the rest by name. A Game Boy game's list takes in the gb and gbc folders beside each other. The
+// releases of the same game, then games sharing words with its name (Red with Blue and Yellow), not
+// counting words such as "the" and "of", then the rest by name. A Game Boy game's list takes in the gb and gbc folders beside each other. The
 // loaded game itself is left out. Returns how many, at most max; free with secondFree.
 size_t secondList(const char* loadedPath, bool gameBoy, struct SecondGame* out, size_t max);
 void secondFree(struct SecondGame* games, size_t count);
