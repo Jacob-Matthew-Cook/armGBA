@@ -182,14 +182,21 @@ static struct {
 static unsigned keptCheck;
 
 // The Saves options' lists. Load Save: Off, then each player's current save (with two or more) and
-// backups, then remote saves, newest first, as many as Backups Listed says; an option has room for
-// Off, 126 more and the end of the list. Back Up Save and Load Into: the players playing.
+// backups, then remote and received saves, newest first, as many as Backups Listed says; an option
+// has room for Off, 126 more and the end of the list. Send Save: player 1's current save, backups,
+// and remote and received saves. Back Up Save and Load Into: the players playing.
 enum { BACKUP_CHOICES = RETRO_NUM_CORE_OPTION_VALUES_MAX - 2 };
-static struct retro_core_option_v2_definition* loadOption;
+// A list of saves as an option's choices, after Off.
+struct SaveChoices {
+	struct retro_core_option_v2_definition* option;
+	char values[BACKUP_CHOICES][SECOND_STAMP + 4];
+	char labels[BACKUP_CHOICES][80];
+	int count;
+};
+static struct SaveChoices loadChoices;
+static struct SaveChoices sendChoices;
 static struct retro_core_option_v2_definition* backUpOption;
 static struct retro_core_option_v2_definition* loadIntoOption;
-static char loadValues[BACKUP_CHOICES][SECOND_STAMP + 4];
-static char loadLabels[BACKUP_CHOICES][80];
 static char playerValues[MAX_PLAYERS][2];
 static char playerLabels[MAX_PLAYERS][12];
 static int backupsListed;
@@ -362,8 +369,8 @@ void retro_set_environment(retro_environment_t callback) {
 		  "Copies a player's save, as it is now, to a file beside it named for the time: Game.20261018-153012.srm. The game carries on.",
 		  NULL, "saves", { { "off", "Off" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "off" },
 		{ "armgba_send_save", "Send Save", NULL,
-		  "With Separate, while linked: sends this save to the other player, whose Load Save lists it as Received. Linked devices also swap saves as they connect; a save already received isn't kept again.",
-		  NULL, "saves", { { "off", "Off" }, { "send", "Send to the Other Player" }, { NULL, NULL } }, "off" },
+		  "With Separate, while linked: sends the save chosen, the current one or a backup, to the other player, whose Load Save lists it as Received. Linked devices also swap their current saves as they connect; a save already received isn't kept again.",
+		  NULL, "saves", { { "off", "Off" }, { "1 now", "Player 1: Now" }, { NULL, NULL } }, "off" },
 		{ "armgba_load_into", "Load Into", NULL,
 		  "The player Load Save gives a save to: the one it belongs to, or the player named here.",
 		  NULL, "saves", { { "same", "Same Player" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "same" },
@@ -401,7 +408,9 @@ void retro_set_environment(retro_environment_t callback) {
 			if (!strcmp(definition->key, "armgba_player2_game")) {
 				secondOption = definition;
 			} else if (!strcmp(definition->key, "armgba_load_save")) {
-				loadOption = definition;
+				loadChoices.option = definition;
+			} else if (!strcmp(definition->key, "armgba_send_save")) {
+				sendChoices.option = definition;
 			} else if (!strcmp(definition->key, "armgba_back_up_save")) {
 				backUpOption = definition;
 			} else if (!strcmp(definition->key, "armgba_load_into")) {
@@ -433,7 +442,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
 		{ "armgba_player2_game", "Player 2's Game; same" },
 		{ "armgba_back_up_save", "Back Up Save; off|1|2|3|4" },
-		{ "armgba_send_save", "Send Save; off|send" },
+		{ "armgba_send_save", "Send Save; off|1 now" },
 		{ "armgba_load_into", "Load Into; same|1|2|3|4" },
 		{ "armgba_load_save", "Load Save; off" },
 		{ "armgba_new_save", "New Players' Saves; new|copy" },
@@ -904,26 +913,35 @@ static int remoteTarget(int from) {
 	return from > 1 && saveFiles(from, file, rtcFile) ? from : 0;
 }
 
-// Adds a choice to Load Save's list, after Off and the n before it; returns n + 1.
-static int addLoadChoice(int n, const char* value, const char* label) {
-	snprintf(loadValues[n], sizeof(loadValues[0]), "%s", value);
-	snprintf(loadLabels[n], sizeof(loadLabels[0]), "%s", label);
-	loadOption->values[n + 1] = (struct retro_core_option_value) { loadValues[n], loadLabels[n] };
-	return n + 1;
+// Starts a list over with Off, and ends it after the choices added.
+static void startChoices(struct SaveChoices* list) {
+	list->count = 0;
+	list->option->values[0] = (struct retro_core_option_value) { "off", "Off" };
+	list->option->values[1] = (struct retro_core_option_value) { NULL, NULL };
 }
 
-// Adds a save's newest backups to Load Save's list, as "<tag> <stamp>" named "<name>: <time>".
-static int addBackupChoices(int n, const char* file, int most, const char* tag, const char* name) {
+static void addChoice(struct SaveChoices* list, const char* value, const char* label) {
+	if (list->count >= BACKUP_CHOICES) {
+		return;
+	}
+	int const n = list->count++;
+	snprintf(list->values[n], sizeof(list->values[0]), "%s", value);
+	snprintf(list->labels[n], sizeof(list->labels[0]), "%s", label);
+	list->option->values[n + 1] = (struct retro_core_option_value) { list->values[n], list->labels[n] };
+	list->option->values[n + 2] = (struct retro_core_option_value) { NULL, NULL };
+}
+
+// Adds a save's newest backups to a list, as "<tag> <stamp>" named "<name>: <time>".
+static void addBackupChoices(struct SaveChoices* list, const char* file, int most, const char* tag, const char* name) {
 	char stamps[BACKUP_CHOICES][SECOND_STAMP];
 	size_t const count = secondBackups(file, stamps, most);
-	for (size_t i = 0; i < count && n < BACKUP_CHOICES; ++i) {
+	for (size_t i = 0; i < count; ++i) {
 		char value[SECOND_STAMP + 4], label[80], when[32];
 		stampLabel(stamps[i], when, sizeof(when));
 		snprintf(value, sizeof(value), "%.3s %.*s", tag, SECOND_STAMP - 1, stamps[i]);
 		snprintf(label, sizeof(label), "%s: %s", name, when);
-		n = addLoadChoice(n, value, label);
+		addChoice(list, value, label);
 	}
-	return n;
 }
 
 // Where a received save goes: where Load Into says, or else to player 2, the other person's place,
@@ -936,9 +954,10 @@ static int receivedTarget(void) {
 
 // Lists the players playing as Back Up Save's and Load Into's choices, and their saves as Load
 // Save's: with two or more, each one's current save, then their backups; then the saves kept from
-// other devices' netplay sessions, and those received from the other player of a Separate link.
+// other devices' netplay sessions, and those received from the other player of a Separate link. Send
+// Save lists player 1's current save and the same saves of player 1's.
 static void fillSaveChoices(void) {
-	if (!loadOption || !backUpOption || !loadIntoOption) {
+	if (!loadChoices.option || !sendChoices.option || !backUpOption || !loadIntoOption) {
 		return;
 	}
 	const char* value = option("armgba_list_saves");
@@ -966,11 +985,13 @@ static void fillSaveChoices(void) {
 	int const current = players > 1 ? players : 0;
 	int const room = BACKUP_CHOICES - current;
 	int const each = groups && backupsListed > room / groups ? room / groups : backupsListed;
-	int n = 0;
 	int shown = 0;
 	backUpOption->values[0] = (struct retro_core_option_value) { "off", "Off" };
 	loadIntoOption->values[0] = (struct retro_core_option_value) { "same", "Same Player" };
-	loadOption->values[0] = (struct retro_core_option_value) { "off", "Off" };
+	startChoices(&loadChoices);
+	startChoices(&sendChoices);
+	addChoice(&sendChoices, "1 now", "Player 1: Now");
+	addBackupChoices(&sendChoices, files[0], each, "1", "Player 1");
 	for (int player = 0; player < MAX_PLAYERS; ++player) {
 		if (!playing[player]) {
 			continue;
@@ -985,31 +1006,33 @@ static void fillSaveChoices(void) {
 		if (current) {
 			snprintf(now, sizeof(now), "%s now", tag);
 			snprintf(nowLabel, sizeof(nowLabel), "Player %d: Now", player + 1);
-			n = addLoadChoice(n, now, nowLabel);
+			addChoice(&loadChoices, now, nowLabel);
 		}
-		n = addBackupChoices(n, files[player], each, tag, playerLabels[player]);
+		addBackupChoices(&loadChoices, files[player], each, tag, playerLabels[player]);
 	}
 	for (int player = 0; player < MAX_PLAYERS; ++player) {
 		if (remote[player]) {
 			char tag[4], name[48];
 			snprintf(tag, sizeof(tag), "r%d", player + 1);
 			snprintf(name, sizeof(name), "Remote Player %d into Player %d", player + 1, remoteTarget(player) + 1);
-			n = addBackupChoices(n, remotes[player], each, tag, name);
+			addBackupChoices(&loadChoices, remotes[player], each, tag, name);
+			snprintf(name, sizeof(name), "Remote Player %d", player + 1);
+			addBackupChoices(&sendChoices, remotes[player], each, tag, name);
 		}
 	}
 	if (anyReceived) {
 		char name[32];
 		snprintf(name, sizeof(name), "Received into Player %d", receivedTarget() + 1);
-		n = addBackupChoices(n, received, each, "x", name);
+		addBackupChoices(&loadChoices, received, each, "x", name);
+		addBackupChoices(&sendChoices, received, each, "x", "Received");
 	}
-	loadOption->values[n + 1] = (struct retro_core_option_value) { NULL, NULL };
 	backUpOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
 	loadIntoOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
 	listedInto = loadIntoPlayer();
 }
 
 static void offerSaveChoices(void) {
-	if (coreOptions && loadOption) {
+	if (coreOptions && loadChoices.option) {
 		fillSaveChoices();
 		setOptions();
 	}
@@ -2255,23 +2278,36 @@ static bool sameSize(int from, int to) {
 	return save && toSave && size == toSize;
 }
 
-// Copies a file; returns false if there was none to copy.
-static bool copyFile(const char* from, const char* to) {
-	FILE* f = fopen(from, "rb");
+// Reads a whole file; NULL if there is none, or it is empty.
+static void* readWholeFile(const char* path, size_t* size) {
+	*size = 0;
+	FILE* f = fopen(path, "rb");
 	if (!f) {
-		return false;
+		return NULL;
 	}
 	fseek(f, 0, SEEK_END);
-	long const size = ftell(f);
+	long const length = ftell(f);
 	fseek(f, 0, SEEK_SET);
-	void* data = size > 0 ? malloc(size) : NULL;
-	bool const read = data && fread(data, 1, size, f) == (size_t) size;
+	void* data = length > 0 ? malloc(length) : NULL;
+	if (data && fread(data, 1, length, f) == (size_t) length) {
+		*size = length;
+	} else {
+		free(data);
+		data = NULL;
+	}
 	fclose(f);
-	if (read) {
+	return data;
+}
+
+// Copies a file; returns false if there was none to copy.
+static bool copyFile(const char* from, const char* to) {
+	size_t size;
+	void* data = readWholeFile(from, &size);
+	if (data) {
 		writeFile(to, data, size);
 	}
 	free(data);
-	return read;
+	return data != NULL;
 }
 
 // Where Load Save takes a save from: a player's own backups or current save, a session of another
@@ -2422,6 +2458,30 @@ static void sendSaveOnPairing(void) {
 	sendSave(false);
 }
 
+
+// Sends a backup, a remote save or a received one of player 1's game to the other player.
+static void sendBackup(int source, int from, const char* stamp) {
+	char base[8192], rtcBase[8192], file[8300], rtcFile[8300], game[1024];
+	if (source == FROM_REMOTE) {
+		remoteFiles(from, base, rtcBase);
+	} else if (source == FROM_RECEIVED) {
+		receivedFiles(base, rtcBase);
+	} else {
+		backupFiles(0, base, rtcBase);
+	}
+	secondBackupPath(base, stamp, file, sizeof(file));
+	secondBackupPath(rtcBase, stamp, rtcFile, sizeof(rtcFile));
+	secondGameName(firstPath, game, sizeof(game));
+	size_t size, rtcSize;
+	void* save = readWholeFile(file, &size);
+	void* rtc = readWholeFile(rtcFile, &rtcSize);
+	showMessage(!save                                         ? "Send Save: that save is gone"
+	            : !linkSendSave(game, save, size, rtc, rtcSize) ? "Send Save: no one is linked"
+	                                                            : "Sent that save to the other player");
+	free(save);
+	free(rtc);
+}
+
 // A save the other player sent, of the game named, kept as a received save of that game, unless the
 // newest one received already holds it.
 static void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize) {
@@ -2466,10 +2526,18 @@ static void readSaveActions(bool act) {
 	}
 	value = option("armgba_send_save");
 	if (value && strcmp(value, "off")) {
+		char send[SECOND_STAMP + 4];
+		snprintf(send, sizeof(send), "%s", value);
 		struct retro_variable off = { "armgba_send_save", "off" };
 		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
-		if (act) {
+		if (act && !strcmp(send, "1 now")) {
 			sendSave(true);
+		} else if (act && !strncmp(send, "1 ", 2)) {
+			sendBackup(FROM_PLAYER, 0, send + 2);
+		} else if (act && send[0] == 'r' && send[1] >= '1' && send[1] <= '4' && send[2] == ' ') {
+			sendBackup(FROM_REMOTE, send[1] - '1', send + 3);
+		} else if (act && send[0] == 'x' && send[1] == ' ') {
+			sendBackup(FROM_RECEIVED, 0, send + 2);
 		}
 	}
 	value = option("armgba_load_save");
