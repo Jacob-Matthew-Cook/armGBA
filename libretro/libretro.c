@@ -184,12 +184,25 @@ static struct {
 	uint64_t hash;
 } keptSaves[MAX_PLAYERS];
 static unsigned keptCheck;
-// Load Save's choices: Off, then each other player's earlier saves, newest first, as many as Earlier
-// Saves Listed says. An option has room for Off, 126 more and the end of the list, which the players
-// share.
+// Load Save's choices: Off, then each player's current save (with two or more) and backups, newest
+// first, as many as Backups Listed says. An option has room for Off, 126 more and the end of the
+// list, which the players share. Back Up Save's and Load Into's choices are the players playing.
 enum { EARLIER_CHOICES = RETRO_NUM_CORE_OPTION_VALUES_MAX - 2 };
 static struct retro_core_option_v2_definition* loadOption;
+static struct retro_core_option_v2_definition* backUpOption;
+static struct retro_core_option_v2_definition* loadIntoOption;
 static int earlierListed;
+static char playerValues[MAX_PLAYERS][2];
+// Which options were last shown, once set; and whether the Game Boy cartridge has a tilt sensor
+// (MBC7).
+static bool optionsShown[32];
+static bool optionsShownSet;
+static bool tiltCartridge;
+static bool showOptions(void);
+static bool linkBothWanted(void);
+static bool linkSeparateWanted(void);
+static bool gameBoyLoaded(void);
+static char playerLabels[MAX_PLAYERS][12];
 static char loadValues[EARLIER_CHOICES][SECOND_STAMP + 2];
 static char loadLabels[EARLIER_CHOICES][48];
 
@@ -330,56 +343,45 @@ void retro_set_environment(retro_environment_t callback) {
 		  NULL, "input",
 		  { { "l r start", "L + R + Start" }, { "l r a b", "L + R + A + B" }, { "l3 r3", "L3 + R3" }, { "select start a b", "Select + Start + A + B" }, { "off", "Off" }, { NULL, NULL } },
 		  "l r start" },
-		{ "armgba_link_cable", "Link Cable", NULL,
-		  "How games link. Separate: two players in netplay, each device running its own player's console with their own game and save, the cable crossing the network. Together: two to four consoles on every device, for multiplayer on one device (a controller each) or smooth rollback netplay, from the host's games and saves. Applies on Restart.",
-		  NULL, "link",
-		  { { "own", "Separate" }, { "both", "Together" }, { NULL, NULL } }, "own" },
+		{ "armgba_link_mode", "Link Mode", NULL,
+		  "Off: one console. Together: two to four consoles on this device, for multiplayer here (a controller each) or rollback netplay, all from this device's games and saves. Separate: two players in netplay, each device running its own player's console, game and save. Applies on Restart.",
+		  NULL, "link", { { "off", "Off" }, { "together", "Together" }, { "separate", "Separate" }, { NULL, NULL } }, "off" },
 		{ "armgba_link_players", "Players", NULL,
-		  "With Together: how many consoles run. Three or four Game Boys join through the Four Player Adapter, Game Boy Advances through the cable in multiplayer mode. Four Game Boy Advances need a fast device. Applies on Restart.",
+		  "How many consoles run. Four Game Boy Advances need a fast device. Applies on Restart.",
 		  NULL, "link", { { "2", NULL }, { "3", NULL }, { "4", NULL }, { NULL, NULL } }, "2" },
 		{ "armgba_link_port", "Link Port", NULL,
-		  "What is plugged into a Game Boy Advance's link port: the Link Cable, or the Wireless Adapter that Pokemon FireRed, LeafGreen and Emerald, Mario Golf: Advance Tour and others use. Applies on Restart.",
+		  "What is plugged in: the Link Cable, or the Wireless Adapter that Pokemon FireRed, LeafGreen and Emerald and other games use. Applies on Restart.",
 		  NULL, "link", { { "cable", "Link Cable" }, { "wireless", "Wireless Adapter" }, { NULL, NULL } }, "cable" },
 #ifdef ARMGBA_GB
 		{ "armgba_gb_link_port", "Link Port", NULL,
-		  "With Together: what joins Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race, Yoshi's Cookie and other four-player games use, for two to four. Applies on Restart.",
+		  "What joins the Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race and other four-player games use. Three or four always use the adapter. Applies on Restart.",
 		  NULL, "link", { { "cable", "Link Cable" }, { "adapter", "Four Player Adapter" }, { NULL, NULL } }, "cable" },
 #endif
-		{ "armgba_link_timing", "Link Timing", NULL,
-		  "With Separate: Standard lets each console run at its own pace, the one clocking a transfer waiting for the other's answer; it suits Wi-Fi and games that link in turns, such as trades and battles. Exact keeps the two consoles on the same cycles, as on a real cable; games that link every frame, such as Kirby & The Amazing Mirror, need it, and it wants a short ping. Together is always exact.",
-		  NULL, "link", { { "standard", "Standard" }, { "exact", "Exact" }, { NULL, NULL } }, "standard" },
 		{ "armgba_link_screens", "Screens", NULL,
-		  "With Together: where the screens go. Three or four consoles are shown in a grid, side by side or top and bottom. L2 and R2 change it while playing.", NULL, "link",
+		  "Where the screens go. L2 and R2 change it while playing.", NULL, "link",
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
 		  "side by side" },
 		{ "armgba_player2_game", "Player 2's Game", NULL,
-		  "With Together: the game on player 2's console, from the games beside player 1's, the likeliest partners first; players 3 and 4 play player 1's. Each game keeps its own save; a player on player 1's game gets a save of their own, which starts as a copy of player 1's. Applies on Restart.",
+		  "The game on player 2's console, from the games beside player 1's, likeliest partners first. Players 3 and 4 play player 1's. Applies on Restart.",
 		  NULL, "link", { { "same", "Same Game" }, { NULL, NULL } }, "same" },
-		{ "armgba_new_save", "New Players' Saves", NULL,
-		  "With Together: the save a player on player 1's game starts with when they have none of their own: a new one, or a copy of player 1's. Each player's save is kept under the game's own file name, in the save folder's armGBA/Player 2 to Player 4 folders. Applies on Restart.",
-		  NULL, "link", { { "new", "Create New Save" }, { "copy", "Copy Player 1's Save" }, { NULL, NULL } }, "new" },
-		{ "armgba_copy_save", "Copy Save", NULL,
-		  "With Together, outside netplay: copies one player's save over another's, never player 1's, and restarts that player's console. The save it replaces is kept beside it, named for when: Game.20261018-153012.srm. Load Save brings it back.",
-		  NULL, "link",
-		  { { "off", "Off" }, { "1 2", "Player 1 to Player 2" }, { "1 3", "Player 1 to Player 3" }, { "1 4", "Player 1 to Player 4" },
-		    { "2 3", "Player 2 to Player 3" }, { "2 4", "Player 2 to Player 4" }, { "3 2", "Player 3 to Player 2" },
-		    { "3 4", "Player 3 to Player 4" }, { "4 2", "Player 4 to Player 2" }, { "4 3", "Player 4 to Player 3" }, { NULL, NULL } },
-		  "off" },
 		{ "armgba_back_up_save", "Back Up Save", NULL,
-		  "Writes a player's save as it is now beside it, named for when: Game.20261018-153012.srm. It changes nothing in the game, and works with one player, in netplay and with Separate too. Earlier Saves Kept counts these as well.",
-		  NULL, "link", { { "off", "Off" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "off" },
+		  "Copies a player's save, as it is now, to a file beside it named for the time: Game.20261018-153012.srm. The game carries on.",
+		  NULL, "saves", { { "off", "Off" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "off" },
 		{ "armgba_load_into", "Load Into", NULL,
-		  "The player Load Save gives an earlier save to: the player it belongs to, or player 1 to 4, so one player's earlier save can go to another. The player it goes to keeps their own save as an earlier save first; the one given stays where it was.",
-		  NULL, "link", { { "same", "Same Player" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "same" },
+		  "The player Load Save gives a save to: the one it belongs to, or the player named here.",
+		  NULL, "saves", { { "same", "Same Player" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "same" },
 		{ "armgba_load_save", "Load Save", NULL,
-		  "Outside netplay: makes one of the players' earlier saves, the ones Back Up Save, Copy Save and Load Save keep, the save of the player it belongs to again, or of the player Load Into names, and restarts that player's console. The save it replaces is kept as an earlier save, so choosing that brings it back. Each player's newest are listed, as many as Earlier Saves Listed says.",
-		  NULL, "link", { { "off", "Off" }, { NULL, NULL } }, "off" },
-		{ "armgba_keep_saves", "Earlier Saves Kept", NULL,
-		  "How many earlier saves Back Up Save, Copy Save and Load Save keep for each player. When there are more, the oldest are deleted.",
-		  NULL, "link", { { "all", "All" }, { "5", "5" }, { "10", "10" }, { "20", "20" }, { NULL, NULL } }, "all" },
-		{ "armgba_list_saves", "Earlier Saves Listed", NULL,
-		  "How many of each player's newest earlier saves Load Save lists. The list holds 126 in all, shared by the players.",
-		  NULL, "link", { { "10", "10" }, { "20", "20" }, { "40", "40" }, { "80", "80" }, { "126", "126" }, { NULL, NULL } }, "10" },
+		  "Makes a backed-up save, or another player's current one, a player's save, and restarts their console. The save it replaces is backed up first. Not during netplay.",
+		  NULL, "saves", { { "off", "Off" }, { NULL, NULL } }, "off" },
+		{ "armgba_new_save", "New Players' Saves", NULL,
+		  "What a player on player 1's game starts with when they have no save yet: a new save, or a copy of player 1's. Their saves are kept in the save folder's armGBA/Player 2 to 4 folders. Applies on Restart.",
+		  NULL, "saves", { { "new", "Create New Save" }, { "copy", "Copy Player 1's Save" }, { NULL, NULL } }, "new" },
+		{ "armgba_keep_saves", "Backups Kept", NULL,
+		  "How many backups each player keeps. When there are more, the oldest are deleted.",
+		  NULL, "saves", { { "all", "All" }, { "5", "5" }, { "10", "10" }, { "20", "20" }, { NULL, NULL } }, "all" },
+		{ "armgba_list_saves", "Backups Listed", NULL,
+		  "How many of each player's newest backups Load Save lists. It holds 126 in all.",
+		  NULL, "saves", { { "10", "10" }, { "20", "20" }, { "40", "40" }, { "80", "80" }, { "126", "126" }, { NULL, NULL } }, "10" },
 		{ NULL, NULL, NULL, NULL, NULL, NULL, { { NULL, NULL } }, NULL },
 	};
 	static struct retro_core_option_v2_category categories[] = {
@@ -387,6 +389,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "video", "Video", "Colors, the picture and how it is drawn." },
 		{ "input", "Input", "Turbo buttons and the cartridge sensors." },
 		{ "link", "Link", "Playing together: the link cable, the Wireless Adapter and the Four Player Adapter." },
+		{ "saves", "Saves", "Backing up saves and loading them again." },
 		{ NULL, NULL, NULL },
 	};
 	static struct retro_core_options_v2 options = { categories, definitions };
@@ -399,8 +402,14 @@ void retro_set_environment(retro_environment_t callback) {
 				secondOption = definition;
 			} else if (!strcmp(definition->key, "armgba_load_save")) {
 				loadOption = definition;
+			} else if (!strcmp(definition->key, "armgba_back_up_save")) {
+				backUpOption = definition;
+			} else if (!strcmp(definition->key, "armgba_load_into")) {
+				loadIntoOption = definition;
 			}
 		}
+		struct retro_core_options_update_display_callback display = { showOptions };
+		callback(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK, &display);
 		return;
 	}
 	static const struct retro_variable variables[] = {
@@ -420,22 +429,20 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_gb_tilt", "Tilt Sensor; left stick|right stick|d-pad" },
 		{ "armgba_solar_sensor", "Solar Sensor; 5|6|7|8|9|10|0|1|2|3|4" },
 		{ "armgba_restart_buttons", "Restart Buttons; l r start|l r a b|l3 r3|select start a b|off" },
-		{ "armgba_link_cable", "Link Cable; own|both" },
+		{ "armgba_link_mode", "Link Mode; off|together|separate" },
 		{ "armgba_link_players", "Players; 2|3|4" },
 		{ "armgba_link_port", "Link Port; cable|wireless" },
 #ifdef ARMGBA_GB
 		{ "armgba_gb_link_port", "Link Port; cable|adapter" },
 #endif
-		{ "armgba_link_timing", "Link Timing; standard|exact" },
 		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
 		{ "armgba_player2_game", "Player 2's Game; same" },
-		{ "armgba_new_save", "New Players' Saves; new|copy" },
-		{ "armgba_copy_save", "Copy Save; off|1 2|1 3|1 4|2 3|2 4|3 2|3 4|4 2|4 3" },
 		{ "armgba_back_up_save", "Back Up Save; off|1|2|3|4" },
 		{ "armgba_load_into", "Load Into; same|1|2|3|4" },
 		{ "armgba_load_save", "Load Save; off" },
-		{ "armgba_keep_saves", "Earlier Saves Kept; all|5|10|20" },
-		{ "armgba_list_saves", "Earlier Saves Listed; 10|20|40|80|126" },
+		{ "armgba_new_save", "New Players' Saves; new|copy" },
+		{ "armgba_keep_saves", "Backups Kept; all|5|10|20" },
+		{ "armgba_list_saves", "Backups Listed; 10|20|40|80|126" },
 		{ NULL, NULL },
 	};
 	callback(RETRO_ENVIRONMENT_SET_VARIABLES, (void*) variables);
@@ -665,8 +672,6 @@ static void readOptions(void) {
 	turboPeriod = value ? atoi(value) : 4;
 	turboPeriod = turboPeriod < 4 ? 4 : turboPeriod > 120 ? 120 : turboPeriod;
 	turboPulse = turboPeriod / 2 < 2 ? 2 : turboPeriod / 2 > 15 ? 15 : turboPeriod / 2;
-	value = option("armgba_link_timing");
-	linkSetExact(value && !strcmp(value, "exact"));
 	value = option("armgba_restart_buttons");
 	restartButtons = !value ? RESTART_L_R_START : !strcmp(value, "l r a b") ? RESTART_L_R_A_B : !strcmp(value, "l3 r3") ? RESTART_STICKS
 	               : !strcmp(value, "select start a b") ? RESTART_SELECT_START_A_B : !strcmp(value, "off") ? RESTART_OFF : RESTART_L_R_START;
@@ -773,19 +778,57 @@ static void showButtons(bool forGameBoy) {
 	environment(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, shown);
 }
 
-// Shows only the options of the loaded game's console, and names its buttons.
-static void showOptions(bool forGameBoy) {
-	static const char* const advance[] = { "armgba_skip_bios", "armgba_threaded_video", "armgba_color_correction", "armgba_solar_sensor", "armgba_link_port" };
-	static const char* const gameBoyKeys[] = { "armgba_gb_model", "armgba_gb_boot_rom", "armgba_gb_color_correction", "armgba_gb_screen", "armgba_gb_advance_border", "armgba_gb_link_port" };
-	for (unsigned i = 0; i < sizeof(advance) / sizeof(advance[0]); ++i) {
-		struct retro_core_option_display display = { advance[i], !forGameBoy };
-		environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &display);
+// Shows only the options that do something for the loaded game and the Link Mode chosen: as a game
+// loads, and as RetroArch asks when an option changes in its menu. Returns whether that changed which
+// are shown. With no game loaded, all are shown.
+static bool showOptions(void) {
+	bool const gameBoy = gameBoyLoaded();
+	bool const advance = gba && !gameBoy;
+	int const devices = advance ? gba->gpio.devices : 0;
+	bool const together = linkBothWanted();
+	bool const linked = together || linkSeparateWanted();
+	const struct {
+		const char* key;
+		bool shown;
+	} options[] = {
+		{ "armgba_skip_bios", !gameBoy },
+		{ "armgba_threaded_video", !gameBoy },
+		{ "armgba_color_correction", !gameBoy },
+		{ "armgba_solar_sensor", !gameBoy && (!advance || devices & HW_LIGHT_SENSOR) },
+		{ "armgba_gb_tilt", (!gameBoy && !advance) || devices & (HW_TILT | HW_GYRO) || (gameBoy && tiltCartridge) },
+		{ "armgba_link_port", !gameBoy && linked },
+		{ "armgba_gb_model", !advance },
+		{ "armgba_gb_boot_rom", !advance },
+		{ "armgba_gb_color_correction", !advance },
+		{ "armgba_gb_screen", !advance },
+		{ "armgba_gb_advance_border", !advance },
+		{ "armgba_gb_link_port", !advance && together },
+		{ "armgba_link_players", together },
+		{ "armgba_link_screens", together },
+		{ "armgba_player2_game", together },
+		{ "armgba_new_save", together },
+		{ "armgba_load_into", together },
+	};
+	enum { OPTIONS = sizeof(options) / sizeof(options[0]) };
+	bool changed = false;
+	for (int i = 0; i < OPTIONS; ++i) {
+		if (!optionsShownSet || optionsShown[i] != options[i].shown) {
+			optionsShown[i] = options[i].shown;
+			struct retro_core_option_display display = { options[i].key, options[i].shown };
+			environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &display);
+			changed = true;
+		}
 	}
-	for (unsigned i = 0; i < sizeof(gameBoyKeys) / sizeof(gameBoyKeys[0]); ++i) {
-		struct retro_core_option_display display = { gameBoyKeys[i], forGameBoy };
-		environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &display);
-	}
-	showButtons(forGameBoy);
+	optionsShownSet = true;
+	return changed;
+}
+
+// Gives RetroArch the options again, after a list of choices changed. That shows every option, so
+// the ones that do nothing are hidden again.
+static void setOptions(void) {
+	environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, coreOptions);
+	optionsShownSet = false;
+	showOptions();
 }
 
 #ifdef ARMGBA_GB
@@ -850,9 +893,10 @@ static void stampLabel(const char* stamp, char* out, size_t outSize) {
 	         stamp[15] ? " (" : "", stamp[15] ? stamp + 16 : "", stamp[15] ? ")" : "");
 }
 
-// Lists the players' earlier saves as Load Save's choices.
+// Lists the players playing as Back Up Save's and Load Into's choices, and their saves as Load
+// Save's: with two or more, each one's current save, then their backups.
 static void fillEarlierSaves(void) {
-	if (!loadOption) {
+	if (!loadOption || !backUpOption || !loadIntoOption) {
 		return;
 	}
 	const char* value = option("armgba_list_saves");
@@ -866,12 +910,28 @@ static void fillEarlierSaves(void) {
 		playing[player] = saveFiles(player, files[player], rtcFile);
 		players += playing[player];
 	}
-	int const each = players && earlierListed > EARLIER_CHOICES / players ? EARLIER_CHOICES / players : earlierListed;
+	int const current = players > 1 ? players : 0;
+	int const room = EARLIER_CHOICES - current;
+	int const each = players && earlierListed > room / players ? room / players : earlierListed;
 	int n = 0;
+	int shown = 0;
+	backUpOption->values[0] = (struct retro_core_option_value) { "off", "Off" };
+	loadIntoOption->values[0] = (struct retro_core_option_value) { "same", "Same Player" };
 	loadOption->values[n++] = (struct retro_core_option_value) { "off", "Off" };
 	for (int player = 0; player < MAX_PLAYERS; ++player) {
 		if (!playing[player]) {
 			continue;
+		}
+		snprintf(playerValues[player], sizeof(playerValues[0]), "%d", player + 1);
+		snprintf(playerLabels[player], sizeof(playerLabels[0]), "Player %d", player + 1);
+		++shown;
+		backUpOption->values[shown] = (struct retro_core_option_value) { playerValues[player], playerLabels[player] };
+		loadIntoOption->values[shown] = (struct retro_core_option_value) { playerValues[player], playerLabels[player] };
+		if (current) {
+			snprintf(loadValues[n - 1], sizeof(loadValues[0]), "%d now", player + 1);
+			snprintf(loadLabels[n - 1], sizeof(loadLabels[0]), "Player %d: Now", player + 1);
+			loadOption->values[n] = (struct retro_core_option_value) { loadValues[n - 1], loadLabels[n - 1] };
+			++n;
 		}
 		char stamps[EARLIER_CHOICES][SECOND_STAMP];
 		size_t const count = secondEarlier(files[player], stamps, each);
@@ -886,12 +946,14 @@ static void fillEarlierSaves(void) {
 		}
 	}
 	loadOption->values[n] = (struct retro_core_option_value) { NULL, NULL };
+	backUpOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
+	loadIntoOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
 }
 
 static void offerEarlierSaves(void) {
 	if (coreOptions && loadOption) {
 		fillEarlierSaves();
-		environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, coreOptions);
+		setOptions();
 	}
 }
 
@@ -912,7 +974,7 @@ static void offerSecondGames(const char* path, bool forGameBoy) {
 	}
 	secondOption->values[secondCount + 1] = (struct retro_core_option_value) { NULL, NULL };
 	fillEarlierSaves();
-	environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, coreOptions);
+	setOptions();
 }
 
 // The file in the save directory (or beside player 1's game) where each game's choice is kept.
@@ -969,8 +1031,13 @@ static const char* chosenSecond(void) {
 }
 
 static bool linkBothWanted(void) {
-	const char* value = option("armgba_link_cable");
-	return value && !strcmp(value, "both");
+	const char* value = option("armgba_link_mode");
+	return value && !strcmp(value, "together");
+}
+
+static bool linkSeparateWanted(void) {
+	const char* value = option("armgba_link_mode");
+	return value && !strcmp(value, "separate");
 }
 
 // How many consoles Together runs, and whether Game Boys join through the Four Player Adapter:
@@ -1319,7 +1386,7 @@ static void carryAir(void) {
 // the consoles here.
 static void attachPorts(void) {
 	const char* value = option("armgba_link_port");
-	bool wireless = value && !strcmp(value, "wireless");
+	bool wireless = value && !strcmp(value, "wireless") && (linkBothWanted() || linkSeparateWanted());
 	linkSetWireless(wireless && !gbaPair);
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
 		if (!gbas[i]) {
@@ -1508,12 +1575,13 @@ static void applySecondChoice(void) {
 		startOthers(NULL, NULL, 0);
 	}
 	announceGeometry();
-	showOptions(gameBoyLoaded());
+	showOptions();
+	showButtons(gameBoyLoaded());
 }
 
 #ifdef ARMGBA_GB
 // Starts a Game Boy or Game Boy Color game on the Gambatte side, and the other players' beside it
-// with a second game, a pair file or the Link Cable option on Together.
+// with a second game, a pair file or Link Mode on Together.
 static bool loadGameBoy(const struct retro_game_info* game, const struct retro_game_info* second) {
 	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_XRGB8888;
 	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
@@ -1537,18 +1605,21 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	}
 	gameBoy = true;
 	gbStretched = false;
+	tiltCartridge = game->size > 0x147 && ((const uint8_t*) game->data)[0x147] == 0x22;
 	linkSetGameBoy(true);
 	if (second || linkBothWanted() || pairFile) {
 		startOthers(second, game->data, game->size);
 	}
-	showOptions(true);
+	linkSetNetplay(linkSeparateWanted() && !bothConsoles());
+	showOptions();
+	showButtons(true);
 	announceMemory();
 	return true;
 }
 #endif
 
 // Starts a Game Boy Advance game, and the other players' beside it with a second game, a pair file
-// or the Link Cable option on Together.
+// or Link Mode on Together.
 static bool loadAdvance(const struct retro_game_info* game, const struct retro_game_info* second) {
 	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_RGB565;
 	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
@@ -1563,7 +1634,7 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	if (!gba) {
 		return false;
 	}
-	showOptions(false);
+	showButtons(false);
 	threadedVideo = 0;
 	readOptions();
 	gbaReset(gba, skipBios);
@@ -1572,6 +1643,8 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	if (second || linkBothWanted() || pairFile) {
 		startOthers(second, game->data, game->size);
 	}
+	linkSetNetplay(linkSeparateWanted() && !bothConsoles());
+	showOptions();
 	announceMemory();
 	struct retro_rumble_interface rumble = { NULL };
 	setRumble = gba->gpio.devices & HW_RUMBLE && environment(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &rumble) ? rumble.set_rumble_state : NULL;
@@ -1725,6 +1798,7 @@ void retro_reset(void) {
 	// options first.
 	readOptions();
 	applySecondChoice();
+	linkSetNetplay(linkSeparateWanted() && !bothConsoles());
 #ifdef ARMGBA_GB
 	if (gameBoy) {
 		for (int i = playersHere - 1; i >= 0; --i) {
@@ -1941,9 +2015,9 @@ static const char* gameOf(int player) {
 	return *chosen ? chosen : firstPath;
 }
 
-// Puts a player's save, and clock, aside as an earlier save named for now: the save as it is in
-// memory, newer than its file. Returns 1 if it did, 0 if there was nothing to put aside (no file and
-// nothing saved yet), and -1 if it couldn't be written.
+// Backs up a player's save, and clock, to files named for now: the save as it is in memory, newer
+// than its file. Returns 1 if it did, 0 if there was nothing to back up (no file and nothing saved
+// yet), and -1 if it couldn't be written.
 static int putAside(int player, char stamp[SECOND_STAMP]) {
 	char file[8192];
 	char rtcFile[8192];
@@ -1974,7 +2048,7 @@ static int putAside(int player, char stamp[SECOND_STAMP]) {
 	return 1;
 }
 
-// Deletes a save's oldest earlier versions beyond what Earlier Saves Kept allows.
+// Deletes a save's oldest backups beyond what Backups Kept allows.
 static void pruneEarlier(const char* saveFile, const char* rtcFile) {
 	const char* value = option("armgba_keep_saves");
 	size_t const keep = value ? (size_t) atoi(value) : 0;
@@ -1994,44 +2068,14 @@ static void pruneEarlier(const char* saveFile, const char* rtcFile) {
 	free(stamps);
 }
 
-// The Copy Save option: copies one player's save, and clock, over another's, puts the one it
-// replaces aside, and restarts that player's console so its game reads the copy.
-static void copySave(int from, int to) {
-	char message[160];
-	if (!bothConsoles() || from >= playersHere || to >= playersHere) {
-		snprintf(message, sizeof(message), "Copy Save: player %d isn't playing", (from >= playersHere ? from : to) + 1);
-	} else if (netplaySeen) {
-		snprintf(message, sizeof(message), "Copy Save: not in netplay");
-	} else if (strcmp(gameOf(from), gameOf(to)) || !keptSaves[to].kept) {
-		snprintf(message, sizeof(message), "Copy Save: players %d and %d play different games", from + 1, to + 1);
-	} else {
-		size_t size, toSize, rtcSize, toRtcSize;
-		void* save = saveMemory(from, &size);
-		void* toSave = saveMemory(to, &toSize);
-		void* rtc = rtcMemory(from, &rtcSize);
-		void* toRtc = rtcMemory(to, &toRtcSize);
-		if (save && toSave && size == toSize) {
-			char stamp[SECOND_STAMP];
-			bool const kept = putAside(to, stamp) > 0;
-			memcpy(toSave, save, size);
-			if (rtc && toRtc && rtcSize == toRtcSize) {
-				memcpy(toRtc, rtc, rtcSize);
-				writeFile(keptSaves[to].rtcFile, toRtc, toRtcSize);
-			}
-			secondMakeFolders(keptSaves[to].file);
-			writeFile(keptSaves[to].file, toSave, toSize);
-			keptSaves[to].hash = hashOf(toSave, toSize);
-			restartConsole(to);
-			pruneEarlier(keptSaves[to].file, keptSaves[to].rtcFile);
-			offerEarlierSaves();
-			snprintf(message, sizeof(message), kept ? "Copied player %d's save to player %d; the old one is in Load Save" : "Copied player %d's save to player %d",
-			         from + 1, to + 1);
-		} else {
-			snprintf(message, sizeof(message), "Copy Save: players %d and %d's saves differ in size", from + 1, to + 1);
-		}
-	}
-	struct retro_message shown = { message, 240 };
-	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+// Whether two players' saves are the same size, so one can be copied over the other.
+static bool sameSize(int from, int to) {
+	size_t size, toSize, rtcSize, toRtcSize;
+	void* rtc;
+	void* toRtc;
+	void* save = liveSave(from, &size, &rtc, &rtcSize);
+	void* toSave = liveSave(to, &toSize, &toRtc, &toRtcSize);
+	return save && toSave && size == toSize;
 }
 
 // Copies a file; returns false if there was none to copy.
@@ -2053,14 +2097,15 @@ static bool copyFile(const char* from, const char* to) {
 	return read;
 }
 
-// The Load Save option: makes one of player from's earlier saves player to's save, puts the one it
-// replaces aside, and restarts that player's console. An earlier save given to another player is
-// copied, and stays where it was.
+// The Load Save option: makes one of player from's backups, or their current save ("now"), player
+// to's save, backs up the one it replaces, and restarts that player's console. A backup given to
+// another player is copied, and stays where it was.
 static void loadSave(int from, const char* stamp, int to) {
 	char message[160];
 	char fromFile[8192], fromRtc[8192], toFile[8192], toRtc[8192];
 	char file[8300], rtcFile[8300];
 	char aside[SECOND_STAMP];
+	bool const current = !strcmp(stamp, "now");
 	bool const fromPlaying = saveFiles(from, fromFile, fromRtc);
 	bool const toPlaying = saveFiles(to, toFile, toRtc);
 	if (fromPlaying) {
@@ -2073,33 +2118,53 @@ static void loadSave(int from, const char* stamp, int to) {
 		snprintf(message, sizeof(message), "Load Save: not in netplay");
 	} else if (strcmp(gameOf(from), gameOf(to))) {
 		snprintf(message, sizeof(message), "Load Save: players %d and %d play different games", from + 1, to + 1);
-	} else if (!fileExists(file)) {
+	} else if (current && from == to) {
+		snprintf(message, sizeof(message), "Load Save: that is player %d's save already", to + 1);
+	} else if (current && !sameSize(from, to)) {
+		snprintf(message, sizeof(message), "Load Save: players %d and %d's saves differ in size", from + 1, to + 1);
+	} else if (!current && !fileExists(file)) {
 		snprintf(message, sizeof(message), "Load Save: that save is gone");
 	} else if (putAside(to, aside) < 0) {
 		snprintf(message, sizeof(message), "Load Save: player %d's save can't be put aside", to + 1);
 	} else {
-		if (from == to) {
-			rename(file, toFile);
-			rename(rtcFile, toRtc);
-		} else {
-			secondMakeFolders(toFile);
-			copyFile(file, toFile);
-			copyFile(rtcFile, toRtc);
-		}
 		size_t size, rtcSize;
 		void* rtc;
 		void* save = liveSave(to, &size, &rtc, &rtcSize);
-		readFileInto(toFile, save, size);
-		readFileInto(toRtc, rtc, rtcSize);
+		if (current) {
+			size_t fromSize, fromRtcSize;
+			void* fromRtcData;
+			memcpy(save, liveSave(from, &fromSize, &fromRtcData, &fromRtcSize), size);
+			secondMakeFolders(toFile);
+			writeFile(toFile, save, size);
+			if (rtc && fromRtcData && rtcSize == fromRtcSize) {
+				memcpy(rtc, fromRtcData, rtcSize);
+				writeFile(toRtc, rtc, rtcSize);
+			}
+		} else {
+			if (from == to) {
+				rename(file, toFile);
+				rename(rtcFile, toRtc);
+			} else {
+				secondMakeFolders(toFile);
+				copyFile(file, toFile);
+				copyFile(rtcFile, toRtc);
+			}
+			readFileInto(toFile, save, size);
+			readFileInto(toRtc, rtc, rtcSize);
+		}
 		if (to < playersHere && keptSaves[to].kept) {
 			keptSaves[to].hash = save ? hashOf(save, size) : 0;
 		}
 		restartConsole(to);
 		pruneEarlier(toFile, toRtc);
 		offerEarlierSaves();
-		char when[32];
-		stampLabel(stamp, when, sizeof(when));
-		if (from == to) {
+		char when[32] = "";
+		if (!current) {
+			stampLabel(stamp, when, sizeof(when));
+		}
+		if (current) {
+			snprintf(message, sizeof(message), "Player %d's save is now a copy of player %d's", to + 1, from + 1);
+		} else if (from == to) {
 			snprintf(message, sizeof(message), "Player %d's save is now the one from %s", to + 1, when);
 		} else {
 			snprintf(message, sizeof(message), "Player %d's save is now player %d's from %s", to + 1, from + 1, when);
@@ -2138,20 +2203,10 @@ static void backUpSave(int player) {
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
 }
 
-// Copy Save, Back Up Save and Load Save act once when chosen, then go back to Off. Chosen when a game starts, as
-// RetroArch may have kept them, they only go back to Off.
+// Back Up Save and Load Save act once when chosen, then go back to Off. Chosen when a game starts,
+// as RetroArch may have kept them, they only go back to Off.
 static void readSaveActions(bool act) {
-	const char* value = option("armgba_copy_save");
-	if (value && strcmp(value, "off")) {
-		char copy[4];
-		snprintf(copy, sizeof(copy), "%s", value);
-		struct retro_variable off = { "armgba_copy_save", "off" };
-		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
-		if (act && copy[0] >= '1' && copy[0] <= '4' && copy[2] >= '2' && copy[2] <= '4') {
-			copySave(copy[0] - '1', copy[2] - '1');
-		}
-	}
-	value = option("armgba_back_up_save");
+	const char* value = option("armgba_back_up_save");
 	if (value && strcmp(value, "off")) {
 		int const player = value[0] - '1';
 		struct retro_variable off = { "armgba_back_up_save", "off" };
