@@ -363,7 +363,7 @@ static void splitSave(const char* savePath, char* stem, size_t stemSize, const c
 	*extension = dot;
 }
 
-void secondEarlierPath(const char* savePath, const char* stamp, char* out, size_t outSize) {
+void secondBackupPath(const char* savePath, const char* stamp, char* out, size_t outSize) {
 	char stem[4096];
 	const char* extension;
 	splitSave(savePath, stem, sizeof(stem), &extension);
@@ -390,7 +390,7 @@ static int newerFirst(const void* a, const void* b) {
 	return time ? time : atoi(y[15] ? y + 16 : "1") - atoi(x[15] ? x + 16 : "1");
 }
 
-size_t secondEarlier(const char* savePath, char (*stamps)[SECOND_STAMP], size_t max) {
+size_t secondBackups(const char* savePath, char (*stamps)[SECOND_STAMP], size_t max) {
 	char stem[4096];
 	const char* extension;
 	splitSave(savePath, stem, sizeof(stem), &extension);
@@ -443,10 +443,10 @@ void secondNewStamp(const char* savePath, char stamp[SECOND_STAMP]) {
 	time_t const now = time(NULL);
 	char base[16];
 	strftime(base, sizeof(base), "%Y%m%d-%H%M%S", localtime(&now));
-	// After every earlier version from the same second, so it lists as the newest.
+	// After every backup from the same second, so it lists as the newest.
 	enum { MOST = 1000 };
 	char (*stamps)[SECOND_STAMP] = malloc(MOST * SECOND_STAMP);
-	size_t const count = stamps ? secondEarlier(savePath, stamps, MOST) : 0;
+	size_t const count = stamps ? secondBackups(savePath, stamps, MOST) : 0;
 	int last = 0;
 	for (size_t i = 0; i < count; ++i) {
 		if (!strncmp(stamps[i], base, 15)) {
