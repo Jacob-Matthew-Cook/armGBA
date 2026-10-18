@@ -94,8 +94,24 @@ static int words(const char* name, char out[16][32]) {
 	return count;
 }
 
+// Words that say nothing about which game it is, so sharing them doesn't make two games partners:
+// articles and joining words, in the languages of the releases. ("Version" stays: it marks the
+// paired releases, as Pokemon's.)
+static bool filler(const char* word) {
+	static const char* const fillers[] = {
+		"a", "an", "and", "of", "the", "de", "del", "des", "du", "la", "le", "les", "el", "los", "et", "y", "der", "die",
+		"das", "und", "von", NULL,
+	};
+	for (int i = 0; fillers[i]; ++i) {
+		if (!strcmp(word, fillers[i])) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // How likely a game is to link with the loaded one: every release of the same game first, then by
-// the words their names share.
+// the words their names share, filler words aside.
 static int likeness(const char* name, char loaded[16][32], int loadedCount) {
 	char theirs[16][32];
 	int count = words(name, theirs);
@@ -103,6 +119,9 @@ static int likeness(const char* name, char loaded[16][32], int loadedCount) {
 	int shared = 0;
 	for (int i = 0; i < count; ++i) {
 		same &= !strcmp(theirs[i], loaded[i]);
+		if (filler(theirs[i])) {
+			continue;
+		}
 		for (int k = 0; k < loadedCount; ++k) {
 			if (!strcmp(theirs[i], loaded[k])) {
 				++shared;
