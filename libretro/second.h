@@ -41,6 +41,12 @@ void secondPlayerSavePath(const char* gamePath, int player, const char* extensio
 // the games, so a Game Boy Color game's are in the gbc folder though player 1 played from gb.
 void secondRemoteSavePath(const char* gamePath, int player, const char* extension, const char* firstPath, const char* saveDirectory,
                           char* out, size_t outSize);
+// Where saves sent by the other player of a Separate link are kept: armGBA/Received, in the same
+// place as armGBA/Remote.
+void secondReceivedSavePath(const char* gamePath, const char* extension, const char* firstPath, const char* saveDirectory, char* out,
+                            size_t outSize);
+// A game's file name without its folder or extension, as its save is named.
+void secondGameName(const char* gamePath, char* out, size_t outSize);
 // Makes the folders a file is to go in.
 void secondMakeFolders(const char* filePath);
 

@@ -361,6 +361,9 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_back_up_save", "Back Up Save", NULL,
 		  "Copies a player's save, as it is now, to a file beside it named for the time: Game.20261018-153012.srm. The game carries on.",
 		  NULL, "saves", { { "off", "Off" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "off" },
+		{ "armgba_send_save", "Send Save", NULL,
+		  "With Separate, while linked: sends this save to the other player, whose Load Save lists it as Received. Linked devices also swap saves as they connect; a save already received isn't kept again.",
+		  NULL, "saves", { { "off", "Off" }, { "send", "Send to the Other Player" }, { NULL, NULL } }, "off" },
 		{ "armgba_load_into", "Load Into", NULL,
 		  "The player Load Save gives a save to: the one it belongs to, or the player named here.",
 		  NULL, "saves", { { "same", "Same Player" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "same" },
@@ -430,6 +433,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
 		{ "armgba_player2_game", "Player 2's Game; same" },
 		{ "armgba_back_up_save", "Back Up Save; off|1|2|3|4" },
+		{ "armgba_send_save", "Send Save; off|send" },
 		{ "armgba_load_into", "Load Into; same|1|2|3|4" },
 		{ "armgba_load_save", "Load Save; off" },
 		{ "armgba_new_save", "New Players' Saves; new|copy" },
@@ -528,10 +532,14 @@ void retro_get_system_av_info(struct retro_system_av_info* info) {
 	info->timing.sample_rate = AUDIO_RATE;
 }
 
+static void sendSaveOnPairing(void);
+static void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);
+
 // Nothing needs setting up before a game is loaded.
 void retro_init(void) {
 	cheatsInit(&cheats);
 	linkSetEnvironment(environment);
+	linkSetSaveHooks(sendSaveOnPairing, saveReceived);
 }
 
 // Frees what the core allocated once the frontend is done with it.
@@ -790,6 +798,7 @@ static bool showOptions(void) {
 		{ "armgba_player2_game", together },
 		{ "armgba_new_save", together },
 		{ "armgba_load_into", together },
+		{ "armgba_send_save", linkSeparateWanted() },
 	};
 	enum { OPTIONS = sizeof(options) / sizeof(options[0]) };
 	bool changed = false;
@@ -864,6 +873,7 @@ static bool isGameBoy(const char* path) {
 static bool saveFiles(int player, char file[8192], char rtcFile[8192]);
 static bool backupFiles(int player, char file[8192], char rtcFile[8192]);
 static void remoteFiles(int player, char file[8192], char rtcFile[8192]);
+static void receivedFiles(char file[8192], char rtcFile[8192]);
 
 // "20261018-153012-2" as "2026-10-18 15:30:12 (2)".
 static void stampLabel(const char* stamp, char* out, size_t outSize) {
@@ -916,9 +926,17 @@ static int addBackupChoices(int n, const char* file, int most, const char* tag, 
 	return n;
 }
 
+// Where a received save goes: where Load Into says, or else to player 2, the other person's place,
+// when there is one, or player 1.
+static int receivedTarget(void) {
+	char file[8192], rtcFile[8192];
+	int const named = loadIntoPlayer();
+	return named >= 0 ? named : saveFiles(1, file, rtcFile) ? 1 : 0;
+}
+
 // Lists the players playing as Back Up Save's and Load Into's choices, and their saves as Load
 // Save's: with two or more, each one's current save, then their backups; then the saves kept from
-// other devices' netplay sessions.
+// other devices' netplay sessions, and those received from the other player of a Separate link.
 static void fillSaveChoices(void) {
 	if (!loadOption || !backUpOption || !loadIntoOption) {
 		return;
@@ -931,10 +949,13 @@ static void fillSaveChoices(void) {
 	char rtcFile[8192];
 	bool playing[MAX_PLAYERS];
 	bool remote[MAX_PLAYERS];
+	char received[8192];
+	char stamp[1][SECOND_STAMP];
+	receivedFiles(received, rtcFile);
+	bool const anyReceived = *firstPath && secondBackups(received, stamp, 1);
 	int players = 0;
-	int groups = 0;
+	int groups = anyReceived;
 	for (int player = 0; player < MAX_PLAYERS; ++player) {
-		char stamp[1][SECOND_STAMP];
 		playing[player] = backupFiles(player, files[player], rtcFile);
 		remoteFiles(player, remotes[player], rtcFile);
 		remote[player] = *firstPath && secondBackups(remotes[player], stamp, 1);
@@ -975,6 +996,11 @@ static void fillSaveChoices(void) {
 			snprintf(name, sizeof(name), "Remote Player %d into Player %d", player + 1, remoteTarget(player) + 1);
 			n = addBackupChoices(n, remotes[player], each, tag, name);
 		}
+	}
+	if (anyReceived) {
+		char name[32];
+		snprintf(name, sizeof(name), "Received into Player %d", receivedTarget() + 1);
+		n = addBackupChoices(n, received, each, "x", name);
 	}
 	loadOption->values[n + 1] = (struct retro_core_option_value) { NULL, NULL };
 	backUpOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
@@ -1213,6 +1239,14 @@ static void remoteFiles(int player, char file[8192], char rtcFile[8192]) {
 	const char* saveDirectory = saveDirectoryFor(unsorted);
 	secondRemoteSavePath(firstPath, player, "srm", firstPath, saveDirectory, file, 8192);
 	secondRemoteSavePath(firstPath, player, "rtc", firstPath, saveDirectory, rtcFile, 8192);
+}
+
+// Where the saves of player 1's game sent by the other player of a Separate link are.
+static void receivedFiles(char file[8192], char rtcFile[8192]) {
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	secondReceivedSavePath(firstPath, "srm", firstPath, saveDirectory, file, 8192);
+	secondReceivedSavePath(firstPath, "rtc", firstPath, saveDirectory, rtcFile, 8192);
 }
 
 // Where a player's backups go: beside their save, and player 1's in the save folder's armGBA/Player
@@ -2240,22 +2274,29 @@ static bool copyFile(const char* from, const char* to) {
 	return read;
 }
 
+// Where Load Save takes a save from: a player's own backups or current save, a session of another
+// device's that this one joined, or the other player of a Separate link.
+enum { FROM_PLAYER, FROM_REMOTE, FROM_RECEIVED };
+
 // The Load Save option: makes one of player from's backups, or their current save ("now"), or a
-// save of the session's player from kept from another device's netplay (remote), player to's save,
-// backs up the one it replaces, and restarts that player's console. A save given to another player,
-// or a remote one, is copied, and stays where it was.
-static void loadSave(int from, bool remote, const char* stamp, int to) {
+// save of the session's player from kept from another device's netplay, or one received, player
+// to's save, backs up the one it replaces, and restarts that player's console. A save given to
+// another player, or from another device, is copied, and stays where it was.
+static void loadSave(int source, int from, const char* stamp, int to) {
 	char message[160];
 	char fromBase[8192], fromRtcBase[8192], toFile[8192], toRtc[8192], toBase[8192], toRtcBase[8192];
 	char file[8300], rtcFile[8300];
 	char replaced[SECOND_STAMP];
 	bool const current = !strcmp(stamp, "now");
 	bool fromPlaying = true;
-	if (remote) {
+	if (source == FROM_REMOTE) {
 		remoteFiles(from, fromBase, fromRtcBase);
+	} else if (source == FROM_RECEIVED) {
+		receivedFiles(fromBase, fromRtcBase);
 	} else {
 		fromPlaying = backupFiles(from, fromBase, fromRtcBase);
 	}
+	bool const remote = source != FROM_PLAYER;
 	bool const toPlaying = saveFiles(to, toFile, toRtc) && backupFiles(to, toBase, toRtcBase);
 	const char* fromGame = remote ? firstPath : gameOf(from);
 	if (fromPlaying) {
@@ -2314,6 +2355,8 @@ static void loadSave(int from, bool remote, const char* stamp, int to) {
 		}
 		if (current) {
 			snprintf(message, sizeof(message), "Player %d's save is now a copy of player %d's", to + 1, from + 1);
+		} else if (source == FROM_RECEIVED) {
+			snprintf(message, sizeof(message), "Player %d's save is now the one received %s", to + 1, when);
 		} else if (remote) {
 			snprintf(message, sizeof(message), "Player %d's save is now remote player %d's from %s", to + 1, from + 1, when);
 		} else if (from == to) {
@@ -2359,6 +2402,56 @@ static void backUpSave(int player) {
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
 }
 
+// Sends player 1's save of this game to the other player of a Separate link: when chosen (asked),
+// and as the other player pairs.
+static void sendSave(bool asked) {
+	size_t size, rtcSize;
+	void* rtc;
+	void* save = liveSave(0, &size, &rtc, &rtcSize);
+	char game[1024];
+	secondGameName(firstPath, game, sizeof(game));
+	char const* problem = !save || !size || blankSave(save, size) ? "Send Save: nothing saved yet"
+	                    : !linkSendSave(game, save, size, rtc, rtcSize) ? "Send Save: no one is linked"
+	                                                                     : NULL;
+	if (asked) {
+		showMessage(problem ? problem : "Sent this save to the other player");
+	}
+}
+
+static void sendSaveOnPairing(void) {
+	sendSave(false);
+}
+
+// A save the other player sent, of the game named, kept as a received save of that game, unless the
+// newest one received already holds it.
+static void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize) {
+	// The game's file, for where its saves are: player 1's, a game beside it, or else beside player 1's.
+	char path[4096];
+	char name[1024];
+	secondGameName(firstPath, name, sizeof(name));
+	snprintf(path, sizeof(path), "%s", firstPath);
+	for (size_t i = 0; strcmp(name, game) && i < secondCount; ++i) {
+		secondGameName(secondGames[i].path, name, sizeof(name));
+		snprintf(path, sizeof(path), "%s", secondGames[i].path);
+	}
+	if (strcmp(name, game)) {
+		char const* slash = strrchr(firstPath, '/');
+		snprintf(path, sizeof(path), "%.*s%s.srm", slash ? (int) (slash - firstPath + 1) : 0, firstPath, game);
+	}
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	char file[8192], rtcFile[8192], stamp[SECOND_STAMP];
+	secondReceivedSavePath(path, "srm", firstPath, saveDirectory, file, sizeof(file));
+	secondReceivedSavePath(path, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
+	if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
+		pruneBackups(file, rtcFile);
+		offerSaveChoices();
+		char message[1200];
+		snprintf(message, sizeof(message), "Received the other player's save of %s", game);
+		showMessage(message);
+	}
+}
+
 // Back Up Save and Load Save act once when chosen, then go back to Off. Chosen when a game starts,
 // as RetroArch may have kept them, they only go back to Off.
 static void readSaveActions(bool act) {
@@ -2371,6 +2464,14 @@ static void readSaveActions(bool act) {
 			backUpSave(player);
 		}
 	}
+	value = option("armgba_send_save");
+	if (value && strcmp(value, "off")) {
+		struct retro_variable off = { "armgba_send_save", "off" };
+		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
+		if (act) {
+			sendSave(true);
+		}
+	}
 	value = option("armgba_load_save");
 	if (value && strcmp(value, "off")) {
 		char load[SECOND_STAMP + 4];
@@ -2380,9 +2481,11 @@ static void readSaveActions(bool act) {
 		int const named = loadIntoPlayer();
 		if (act && load[0] >= '1' && load[0] <= '4' && load[1] == ' ') {
 			int const from = load[0] - '1';
-			loadSave(from, false, load + 2, named >= 0 ? named : from);
+			loadSave(FROM_PLAYER, from, load + 2, named >= 0 ? named : from);
 		} else if (act && load[0] == 'r' && load[1] >= '1' && load[1] <= '4' && load[2] == ' ') {
-			loadSave(load[1] - '1', true, load + 3, remoteTarget(load[1] - '1'));
+			loadSave(FROM_REMOTE, load[1] - '1', load + 3, remoteTarget(load[1] - '1'));
+		} else if (act && load[0] == 'x' && load[1] == ' ') {
+			loadSave(FROM_RECEIVED, 0, load + 2, receivedTarget());
 		}
 	}
 }

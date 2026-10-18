@@ -6,6 +6,7 @@
 #include "link.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -62,6 +63,7 @@ enum {
 	MSG_GRANT,
 	MSG_RFU,
 	MSG_GONE,
+	MSG_SAVE,
 };
 // A request's mode: a Game Boy Advance serial mode, or a Game Boy transfer that took the other's
 // offered byte.
@@ -75,6 +77,20 @@ static uint16_t self;
 static int console;
 static struct GBA* gba;
 static bool wireless;
+
+// Saves passed between the players: this device's, sent a piece a frame, and the other's as it
+// arrives, the save then its clock. The libretro core is told when the other player pairs, so it can
+// send its save, and when a save has come.
+enum { SAVE_PIECE = 4096, SAVE_MOST = 1 << 20 };
+static struct {
+	uint8_t* data;
+	uint32_t size;
+	uint32_t saveSize;
+	uint32_t done;
+	char game[256];
+} outgoing, incoming;
+static void (*partnerJoined)(void);
+static void (*saveArrived)(const char* game, const uint8_t* save, size_t saveSize, const uint8_t* rtc, size_t rtcSize);
 
 // The cable: this console and the other's, in the host's order, the host first.
 static uint16_t cable[2];
@@ -244,6 +260,9 @@ static void announce(void) {
 	if (*text && environment) {
 		struct retro_message message = { text, 300 };
 		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &message);
+	}
+	if (state == 2 && partnerJoined) {
+		partnerJoined();
 	}
 }
 
@@ -631,6 +650,61 @@ static void offerByte(void) {
 
 // The netplay session.
 
+// A save going to the other player: the next piece. Each piece names where it goes in the whole,
+// the whole's size, where the clock starts and the game.
+static void sendSavePiece(void) {
+	if (!outgoing.data || !onCable()) {
+		return;
+	}
+	size_t const nameLength = strlen(outgoing.game);
+	uint32_t const length = outgoing.size - outgoing.done < SAVE_PIECE ? outgoing.size - outgoing.done : SAVE_PIECE;
+	uint8_t message[14 + 255 + SAVE_PIECE] = { MSG_SAVE };
+	put32(message + 1, outgoing.done);
+	put32(message + 5, outgoing.size);
+	put32(message + 9, outgoing.saveSize);
+	message[13] = nameLength;
+	memcpy(message + 14, outgoing.game, nameLength);
+	memcpy(message + 14 + nameLength, outgoing.data + outgoing.done, length);
+	send(message, 14 + nameLength + length);
+	outgoing.done += length;
+	if (outgoing.done == outgoing.size) {
+		free(outgoing.data);
+		outgoing.data = NULL;
+	}
+}
+
+// A piece of the other player's save. Pieces come in order; the first starts a new save.
+static void receiveSavePiece(const uint8_t* message, size_t size) {
+	if (size < 14 || size < 14u + message[13]) {
+		return;
+	}
+	uint32_t const offset = get32(message + 1);
+	uint32_t const total = get32(message + 5);
+	uint32_t const saveSize = get32(message + 9);
+	size_t const nameLength = message[13];
+	size_t const length = size - 14 - nameLength;
+	if (offset == 0) {
+		free(incoming.data);
+		incoming.data = total && total <= SAVE_MOST && saveSize <= total ? malloc(total) : NULL;
+		incoming.size = total;
+		incoming.saveSize = saveSize;
+		incoming.done = 0;
+		snprintf(incoming.game, sizeof(incoming.game), "%.*s", (int) nameLength, (const char*) message + 14);
+	}
+	if (!incoming.data || offset != incoming.done || total != incoming.size || length > total - offset) {
+		return;
+	}
+	memcpy(incoming.data + offset, message + 14 + nameLength, length);
+	incoming.done += length;
+	if (incoming.done == incoming.size) {
+		if (saveArrived) {
+			saveArrived(incoming.game, incoming.data, incoming.saveSize, incoming.data + incoming.saveSize, incoming.size - incoming.saveSize);
+		}
+		free(incoming.data);
+		incoming.data = NULL;
+	}
+}
+
 static void receive(const void* buffer, size_t size, uint16_t from) {
 	const uint8_t* message = buffer;
 	if (size < 2) {
@@ -700,6 +774,11 @@ static void receive(const void* buffer, size_t size, uint16_t from) {
 			rfuPeerGone(gba, get16(message + 1));
 		}
 		break;
+	case MSG_SAVE:
+		if (isPartner(from)) {
+			receiveSavePiece(message, size);
+		}
+		break;
 	}
 }
 
@@ -734,6 +813,9 @@ static void start(uint16_t id, retro_netpacket_send_t sendFunction, retro_netpac
 }
 
 static void stop(void) {
+	free(outgoing.data);
+	free(incoming.data);
+	outgoing.data = incoming.data = NULL;
 	session = false;
 	sendPacket = NULL;
 	pollPackets = NULL;
@@ -747,10 +829,13 @@ static void stop(void) {
 	cableChanged();
 }
 
-// Every half second: the host repeats the cable and a client not on it says hello again, since a
-// packet sent while a player is still joining can be lost.
+// Every frame a piece of a save being sent; every half second the host repeats the cable and a
+// client not on it says hello again, since a packet sent while a player is still joining can be lost.
 static void sessionPoll(void) {
 	static unsigned frames;
+	if (session) {
+		sendSavePiece();
+	}
 	if (!session || ++frames % 30) {
 		return;
 	}
@@ -828,6 +913,31 @@ void linkSetWireless(bool on) {
 		wireless = on;
 		cableChanged();
 	}
+}
+
+bool linkSendSave(const char* game, const void* save, size_t saveSize, const void* rtc, size_t rtcSize) {
+	if (!onCable() || !saveSize || saveSize + rtcSize > SAVE_MOST) {
+		return false;
+	}
+	free(outgoing.data);
+	outgoing.data = malloc(saveSize + rtcSize);
+	if (!outgoing.data) {
+		return false;
+	}
+	memcpy(outgoing.data, save, saveSize);
+	if (rtcSize) {
+		memcpy(outgoing.data + saveSize, rtc, rtcSize);
+	}
+	outgoing.size = saveSize + rtcSize;
+	outgoing.saveSize = saveSize;
+	outgoing.done = 0;
+	snprintf(outgoing.game, sizeof(outgoing.game), "%.255s", game);
+	return true;
+}
+
+void linkSetSaveHooks(void (*joined)(void), void (*arrived)(const char*, const uint8_t*, size_t, const uint8_t*, size_t)) {
+	partnerJoined = joined;
+	saveArrived = arrived;
 }
 
 void linkSetNetplay(bool on) {
