@@ -840,7 +840,6 @@ void gbaDestroy(struct GBA*);
 bool gbaLoadBios(struct GBA*, const void* data, size_t size);
 bool gbaLoadRom(struct GBA*, const void* data, size_t size);
 void gbaReset(struct GBA*, bool skipBios);
-void gbaRunFrame(struct GBA*);
 void gbaRunPart(struct GBA*);
 void gbaSetKeys(struct GBA*, uint16_t keys);
 void gbaRaiseIrq(struct GBA*, int irq, uint32_t late);
@@ -857,7 +856,7 @@ void gbaInterrupt(struct GBA*);
 void gbaFrameStarted(struct GBA*, uint32_t late);
 void gbaFrameEnded(struct GBA*);
 
-// state.c: save states, for the same game in the same build, taken between calls to gbaRunFrame.
+// state.c: save states, for the same game in the same build, taken between frames.
 size_t gbaStateSize(void);
 void gbaSaveState(struct GBA*, void* state);
 bool gbaLoadState(struct GBA*, const void* state, size_t size);

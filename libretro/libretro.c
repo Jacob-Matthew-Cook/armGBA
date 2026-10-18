@@ -2186,7 +2186,17 @@ void retro_run(void) {
 	gbaSetKeys(gba, keys);
 	readSensors(keys);
 	linkGbaFrame(gba);
-	gbaRunFrame(gba);
+	uint32_t const frame = gba->video.frameCounter;
+	do {
+		gbaRunPart(gba);
+	} while (gba->video.frameCounter == frame && !linkGbaHeld());
+	if (gba->video.frameCounter == frame) {
+		// Held for the link: the picture is half drawn, so the last one shows again.
+		videoRefresh(NULL, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t));
+		audioBatch((const int16_t*) gba->audio.out, gba->audio.outCount);
+		gba->audio.outCount = 0;
+		return;
+	}
 	updateRumble(gba->gpio.rumble);
 	if (cheats.count || cheats.patchCount) {
 		cheatsApply(&cheats, gba);

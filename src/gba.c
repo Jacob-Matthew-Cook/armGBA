@@ -289,14 +289,6 @@ void gbaReset(struct GBA* gba, bool skipBios) {
 	stepReset(gba);
 }
 
-// Runs until the next frame is complete.
-void gbaRunFrame(struct GBA* gba) {
-	uint32_t frame = gba->video.frameCounter;
-	while (gba->video.frameCounter == frame) {
-		jitRunLoop(gba);
-	}
-}
-
 // Runs until the frame ends or an event asks for control back with returnRequested.
 void gbaRunPart(struct GBA* gba) {
 	jitRunLoop(gba);
