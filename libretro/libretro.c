@@ -24,6 +24,7 @@
 #include <string.h>
 #include <strings.h>
 #include <time.h>
+#include <sys/stat.h>
 
 enum {
 	AUDIO_RATE = 32768,
@@ -203,8 +204,8 @@ static bool linkBothWanted(void);
 static bool linkSeparateWanted(void);
 static bool gameBoyLoaded(void);
 static char playerLabels[MAX_PLAYERS][12];
-static char loadValues[EARLIER_CHOICES][SECOND_STAMP + 2];
-static char loadLabels[EARLIER_CHOICES][48];
+static char loadValues[EARLIER_CHOICES][SECOND_STAMP + 4];
+static char loadLabels[EARLIER_CHOICES][56];
 
 // Cheat codes from the frontend, by index, and the Game Boy Advance operations they decode to. All
 // codes are decoded again, in order, whenever one changes, because a master code changes how the
@@ -376,6 +377,9 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_new_save", "New Players' Saves", NULL,
 		  "What a player on player 1's game starts with when they have no save yet: a new save, or a copy of player 1's. Their saves are kept in the save folder's armGBA/Player 2 to 4 folders. Applies on Restart.",
 		  NULL, "saves", { { "new", "Create New Save" }, { "copy", "Copy Player 1's Save" }, { NULL, NULL } }, "new" },
+		{ "armgba_player1_saves", "Player 1's Saves", NULL,
+		  "Where player 1's save is kept: where RetroArch keeps saves, or in the save folder's armGBA/Player 1 folder, beside the other players' saves and player 1's backups. When it changes, the newer of the two is used. Applies when a game starts.",
+		  NULL, "saves", { { "retroarch", "RetroArch's Save Folder" }, { "armgba", "armGBA/Player 1 Folder" }, { NULL, NULL } }, "retroarch" },
 		{ "armgba_keep_saves", "Backups Kept", NULL,
 		  "How many backups each player keeps. When there are more, the oldest are deleted.",
 		  NULL, "saves", { { "all", "All" }, { "5", "5" }, { "10", "10" }, { "20", "20" }, { NULL, NULL } }, "all" },
@@ -441,6 +445,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ "armgba_load_into", "Load Into; same|1|2|3|4" },
 		{ "armgba_load_save", "Load Save; off" },
 		{ "armgba_new_save", "New Players' Saves; new|copy" },
+		{ "armgba_player1_saves", "Player 1's Saves; retroarch|armgba" },
 		{ "armgba_keep_saves", "Backups Kept; all|5|10|20" },
 		{ "armgba_list_saves", "Backups Listed; 10|20|40|80|126" },
 		{ NULL, NULL },
@@ -848,7 +853,7 @@ static void announceMemory(void) {
 		const struct retro_memory_descriptor advance[] = {
 			{ RETRO_MEMDESC_SYSTEM_RAM, gba->iwram, 0, 0x03000000, 0xFF000000, 0, SIZE_IWRAM, NULL },
 			{ RETRO_MEMDESC_SYSTEM_RAM, gba->ewram, 0, 0x02000000, 0xFF000000, 0, SIZE_EWRAM, NULL },
-			{ 0, gba->savedata.storage, 0, 0x0E000000, 0, 0, retro_get_memory_size(RETRO_MEMORY_SAVE_RAM), NULL },
+			{ 0, gba->savedata.storage, 0, 0x0E000000, 0, 0, gba->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gba), NULL },
 			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x08000000, 0, 0, romSize, NULL },
 			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x0A000000, 0, 0, romSize, NULL },
 			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x0C000000, 0, 0, romSize, NULL },
@@ -886,6 +891,8 @@ static bool isGameBoy(const char* path) {
 #endif
 
 static bool saveFiles(int player, char file[8192], char rtcFile[8192]);
+static bool backupFiles(int player, char file[8192], char rtcFile[8192]);
+static void remoteFiles(int player, char file[8192], char rtcFile[8192]);
 
 // "20261018-153012-2" as "2026-10-18 15:30:12 (2)".
 static void stampLabel(const char* stamp, char* out, size_t outSize) {
@@ -894,7 +901,8 @@ static void stampLabel(const char* stamp, char* out, size_t outSize) {
 }
 
 // Lists the players playing as Back Up Save's and Load Into's choices, and their saves as Load
-// Save's: with two or more, each one's current save, then their backups.
+// Save's: with two or more, each one's current save, then their backups; then the saves kept from
+// other devices' netplay sessions.
 static void fillEarlierSaves(void) {
 	if (!loadOption || !backUpOption || !loadIntoOption) {
 		return;
@@ -903,16 +911,23 @@ static void fillEarlierSaves(void) {
 	earlierListed = value ? atoi(value) : 0;
 	earlierListed = earlierListed > 0 && earlierListed <= EARLIER_CHOICES ? earlierListed : 10;
 	char files[MAX_PLAYERS][8192];
+	char remotes[MAX_PLAYERS][8192];
 	char rtcFile[8192];
 	bool playing[MAX_PLAYERS];
+	bool remote[MAX_PLAYERS];
 	int players = 0;
+	int groups = 0;
 	for (int player = 0; player < MAX_PLAYERS; ++player) {
-		playing[player] = saveFiles(player, files[player], rtcFile);
+		char stamp[1][SECOND_STAMP];
+		playing[player] = backupFiles(player, files[player], rtcFile);
+		remoteFiles(player, remotes[player], rtcFile);
+		remote[player] = *firstPath && secondEarlier(remotes[player], stamp, 1);
 		players += playing[player];
+		groups += playing[player] + remote[player];
 	}
 	int const current = players > 1 ? players : 0;
 	int const room = EARLIER_CHOICES - current;
-	int const each = players && earlierListed > room / players ? room / players : earlierListed;
+	int const each = groups && earlierListed > room / groups ? room / groups : earlierListed;
 	int n = 0;
 	int shown = 0;
 	backUpOption->values[0] = (struct retro_core_option_value) { "off", "Off" };
@@ -942,6 +957,19 @@ static void fillEarlierSaves(void) {
 			stampLabel(stamps[i], when, sizeof(when));
 			snprintf(value, sizeof(loadValues[0]), "%d %.*s", player + 1, SECOND_STAMP - 1, stamps[i]);
 			snprintf(label, sizeof(loadLabels[0]), "Player %d: %s", player + 1, when);
+			loadOption->values[n++] = (struct retro_core_option_value) { value, label };
+		}
+	}
+	for (int player = 0; player < MAX_PLAYERS; ++player) {
+		char stamps[EARLIER_CHOICES][SECOND_STAMP];
+		size_t const count = remote[player] ? secondEarlier(remotes[player], stamps, each) : 0;
+		for (size_t i = 0; i < count; ++i) {
+			char* value = loadValues[n - 1];
+			char* label = loadLabels[n - 1];
+			char when[32];
+			stampLabel(stamps[i], when, sizeof(when));
+			snprintf(value, sizeof(loadValues[0]), "r%d %.*s", player + 1, SECOND_STAMP - 1, stamps[i]);
+			snprintf(label, sizeof(loadLabels[0]), "Remote Player %d: %s", player + 1, when);
 			loadOption->values[n++] = (struct retro_core_option_value) { value, label };
 		}
 	}
@@ -1156,14 +1184,35 @@ static bool saveFiles(int player, char file[8192], char rtcFile[8192]) {
 
 // A player's save and clock memory: the core's, or for player 1 the memory RetroArch saves.
 static void* liveSave(int player, size_t* size, void** rtc, size_t* rtcSize) {
-	if (player < playersHere && keptSaves[player].kept) {
-		*rtc = rtcMemory(player, rtcSize);
-		return saveMemory(player, size);
+	*rtc = NULL;
+	*rtcSize = *size = 0;
+	if (player && (player >= playersHere || !keptSaves[player].kept)) {
+		return NULL;
 	}
-	*rtc = player ? NULL : retro_get_memory_data(RETRO_MEMORY_RTC);
-	*rtcSize = player ? 0 : retro_get_memory_size(RETRO_MEMORY_RTC);
-	*size = player ? 0 : retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
-	return player ? NULL : retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+	*rtc = rtcMemory(player, rtcSize);
+	return saveMemory(player, size);
+}
+
+// Where the saves of player 1's game from another device's netplay session are, by that session's
+// players.
+static void remoteFiles(int player, char file[8192], char rtcFile[8192]) {
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	secondRemoteSavePath(firstPath, player, "srm", saveDirectory, file, 8192);
+	secondRemoteSavePath(firstPath, player, "rtc", saveDirectory, rtcFile, 8192);
+}
+
+// Where a player's backups go: beside their save, and player 1's in the save folder's armGBA/Player
+// 1 folder.
+static bool backupFiles(int player, char file[8192], char rtcFile[8192]) {
+	if (player || pairFile) {
+		return saveFiles(player, file, rtcFile);
+	}
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	secondPlayerSavePath(firstPath, 0, "srm", saveDirectory, file, 8192);
+	secondPlayerSavePath(firstPath, 0, "rtc", saveDirectory, rtcFile, 8192);
+	return true;
 }
 
 // Reads a player's save and clock from the files given, and keeps the save to be written to file
@@ -1175,7 +1224,8 @@ static bool keepSave(int player, const char* readFrom, const char* rtcFrom, cons
 	void* save = saveMemory(player, &size);
 	bool found = readFileInto(readFrom, save, size);
 	size_t rtcSize;
-	readFileInto(rtcFrom, rtcMemory(player, &rtcSize), rtcSize);
+	void* rtc = rtcMemory(player, &rtcSize);
+	readFileInto(rtcFrom, rtc, rtcSize);
 	keptSaves[player].hash = save ? hashOf(save, size) : 0;
 	keptSaves[player].kept = true;
 	keptCheck = 0;
@@ -1220,6 +1270,63 @@ static bool readPlayerSave(int player) {
 	return found;
 }
 
+// Whether RetroArch reads and writes player 1's save: not when the core keeps it (in armGBA/Player 1,
+// or with a pair file), nor on a device that joined another's netplay session, which would write the
+// host's save over its own as the game closes.
+static bool retroArchSaves(void) {
+	return !keptSaves[0].kept && !netplayJoined;
+}
+
+// Whether file a is newer than file b, or b is missing.
+static bool newerFile(const char* a, const char* b) {
+	struct stat sa, sb;
+	return !stat(a, &sa) && (stat(b, &sb) || sa.st_mtime > sb.st_mtime);
+}
+
+// Player 1's save when RetroArch keeps it in its folder but armGBA/Player 1 has a newer one, which
+// takes its place on the first frame, after RetroArch has read its own.
+static bool playerOneNewer;
+static char playerOneFile[8192];
+static char playerOneRtc[8192];
+
+// Player 1's save: kept by the core in armGBA/Player 1 when Player 1's Saves says so, or left to
+// RetroArch. The newer of the two files is read, so changing the option keeps the latest save.
+static void readPlayerOneSave(void) {
+	playerOneNewer = false;
+	if (pairFile) {
+		return;
+	}
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	char retroArchFile[8192], retroArchRtc[8192];
+	secondSavePath(firstPath, "", "srm", firstPath, saveDirectory, retroArchFile, sizeof(retroArchFile));
+	secondSavePath(firstPath, "", "rtc", firstPath, saveDirectory, retroArchRtc, sizeof(retroArchRtc));
+	secondPlayerSavePath(firstPath, 0, "srm", saveDirectory, playerOneFile, sizeof(playerOneFile));
+	secondPlayerSavePath(firstPath, 0, "rtc", saveDirectory, playerOneRtc, sizeof(playerOneRtc));
+	const char* value = option("armgba_player1_saves");
+	if (value && !strcmp(value, "armgba")) {
+		bool const older = newerFile(retroArchFile, playerOneFile);
+		keepSave(0, older ? retroArchFile : playerOneFile, older ? retroArchRtc : playerOneRtc, playerOneFile, playerOneRtc);
+		// Written to the folder next time saves are written, though unchanged.
+		keptSaves[0].hash ^= older;
+	} else {
+		playerOneNewer = newerFile(playerOneFile, retroArchFile);
+	}
+}
+
+static void readNewerPlayerOne(void) {
+	if (!playerOneNewer) {
+		return;
+	}
+	playerOneNewer = false;
+	size_t size, rtcSize;
+	void* save = saveMemory(0, &size);
+	void* rtc = rtcMemory(0, &rtcSize);
+	readFileInto(playerOneFile, save, size);
+	readFileInto(playerOneRtc, rtc, rtcSize);
+	showMessage("Player 1's save: the newer one, from armGBA/Player 1");
+}
+
 // The other players' saves. A player on player 1's game gets a save of their own; until they have
 // one, it starts new, or as a copy of player 1's, as the New Players' Saves option says.
 static void readOtherSaves(void) {
@@ -1236,9 +1343,14 @@ static void readOtherSaves(void) {
 	offerEarlierSaves();
 }
 
+static void keepSession(void);
+
 // Writes the kept saves and clocks that have changed; in netplay only as the game closes, on the
-// device hosting it.
+// device hosting it. A device that joined keeps the session's saves as backups.
 static void writeSaves(bool closing) {
+	if (netplaySeen && closing && netplayJoined) {
+		keepSession();
+	}
 	if (netplaySeen && (!closing || netplayJoined)) {
 		return;
 	}
@@ -1605,6 +1717,7 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	}
 	gameBoy = true;
 	gbStretched = false;
+	readPlayerOneSave();
 	tiltCartridge = game->size > 0x147 && ((const uint8_t*) game->data)[0x147] == 0x22;
 	linkSetGameBoy(true);
 	if (second || linkBothWanted() || pairFile) {
@@ -1638,6 +1751,7 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	threadedVideo = 0;
 	readOptions();
 	gbaReset(gba, skipBios);
+	readPlayerOneSave();
 	linkSetGba(gba);
 	attachPorts();
 	if (second || linkBothWanted() || pairFile) {
@@ -2015,37 +2129,48 @@ static const char* gameOf(int player) {
 	return *chosen ? chosen : firstPath;
 }
 
-// Backs up a player's save, and clock, to files named for now: the save as it is in memory, newer
-// than its file. Returns 1 if it did, 0 if there was nothing to back up (no file and nothing saved
-// yet), and -1 if it couldn't be written.
-static int putAside(int player, char stamp[SECOND_STAMP]) {
-	char file[8192];
-	char rtcFile[8192];
-	size_t size, rtcSize;
-	void* rtc;
-	void* save = liveSave(player, &size, &rtc, &rtcSize);
-	if (!saveFiles(player, file, rtcFile) || !save || !size) {
-		return 0;
-	}
-	bool blank = !fileExists(file);
-	for (size_t i = 1; blank && i < size; ++i) {
-		blank = ((const uint8_t*) save)[i] == ((const uint8_t*) save)[0];
-	}
-	if (blank) {
-		return 0;
-	}
+// Writes a save, and clock, as backups of the save file given, named for now. Returns false if the
+// save couldn't be written.
+static bool writeBackup(const char* file, const char* rtcFile, const void* save, size_t size, const void* rtc, size_t rtcSize,
+                        char stamp[SECOND_STAMP]) {
 	secondNewStamp(file, stamp);
 	char out[8300];
 	secondEarlierPath(file, stamp, out, sizeof(out));
 	secondMakeFolders(out);
 	if (!writeFile(out, save, size)) {
-		return -1;
+		return false;
 	}
 	if (rtc && rtcSize) {
 		secondEarlierPath(rtcFile, stamp, out, sizeof(out));
 		writeFile(out, rtc, rtcSize);
 	}
-	return 1;
+	return true;
+}
+
+static bool blankSave(const void* save, size_t size) {
+	for (size_t i = 1; i < size; ++i) {
+		if (((const uint8_t*) save)[i] != ((const uint8_t*) save)[0]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// Backs up a player's save, and clock, as they are in memory, newer than the file. Returns 1 if it
+// did, 0 if there was nothing to back up (no file and nothing saved yet), and -1 if it couldn't be
+// written.
+static int putAside(int player, char stamp[SECOND_STAMP]) {
+	char file[8192], rtcFile[8192], base[8192], rtcBase[8192];
+	size_t size, rtcSize;
+	void* rtc;
+	void* save = liveSave(player, &size, &rtc, &rtcSize);
+	if (!saveFiles(player, file, rtcFile) || !backupFiles(player, base, rtcBase) || !save || !size) {
+		return 0;
+	}
+	if (!fileExists(file) && blankSave(save, size)) {
+		return 0;
+	}
+	return writeBackup(base, rtcBase, save, size, rtc, rtcSize, stamp) ? 1 : -1;
 }
 
 // Deletes a save's oldest backups beyond what Backups Kept allows.
@@ -2066,6 +2191,28 @@ static void pruneEarlier(const char* saveFile, const char* rtcFile) {
 		remove(file);
 	}
 	free(stamps);
+}
+
+// A device that joined another's netplay session keeps the session's saves, never over its own, in
+// armGBA/Remote by the session's players, for Load Save.
+static void keepSession(void) {
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	for (int player = 0; player < playersHere; ++player) {
+		size_t size, rtcSize;
+		void* rtc;
+		void* save = liveSave(player, &size, &rtc, &rtcSize);
+		if (!save || !size || blankSave(save, size)) {
+			continue;
+		}
+		char file[8192], rtcFile[8192];
+		char stamp[SECOND_STAMP];
+		secondRemoteSavePath(gameOf(player), player, "srm", saveDirectory, file, sizeof(file));
+		secondRemoteSavePath(gameOf(player), player, "rtc", saveDirectory, rtcFile, sizeof(rtcFile));
+		if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp)) {
+			pruneEarlier(file, rtcFile);
+		}
+	}
 }
 
 // Whether two players' saves are the same size, so one can be copied over the other.
@@ -2097,27 +2244,34 @@ static bool copyFile(const char* from, const char* to) {
 	return read;
 }
 
-// The Load Save option: makes one of player from's backups, or their current save ("now"), player
-// to's save, backs up the one it replaces, and restarts that player's console. A backup given to
-// another player is copied, and stays where it was.
-static void loadSave(int from, const char* stamp, int to) {
+// The Load Save option: makes one of player from's backups, or their current save ("now"), or a
+// save of the session's player from kept from another device's netplay (remote), player to's save,
+// backs up the one it replaces, and restarts that player's console. A save given to another player,
+// or a remote one, is copied, and stays where it was.
+static void loadSave(int from, bool remote, const char* stamp, int to) {
 	char message[160];
-	char fromFile[8192], fromRtc[8192], toFile[8192], toRtc[8192];
+	char fromBase[8192], fromRtcBase[8192], toFile[8192], toRtc[8192], toBase[8192], toRtcBase[8192];
 	char file[8300], rtcFile[8300];
 	char aside[SECOND_STAMP];
 	bool const current = !strcmp(stamp, "now");
-	bool const fromPlaying = saveFiles(from, fromFile, fromRtc);
-	bool const toPlaying = saveFiles(to, toFile, toRtc);
+	bool fromPlaying = true;
+	if (remote) {
+		remoteFiles(from, fromBase, fromRtcBase);
+	} else {
+		fromPlaying = backupFiles(from, fromBase, fromRtcBase);
+	}
+	bool const toPlaying = saveFiles(to, toFile, toRtc) && backupFiles(to, toBase, toRtcBase);
+	const char* fromGame = remote ? firstPath : gameOf(from);
 	if (fromPlaying) {
-		secondEarlierPath(fromFile, stamp, file, sizeof(file));
-		secondEarlierPath(fromRtc, stamp, rtcFile, sizeof(rtcFile));
+		secondEarlierPath(fromBase, stamp, file, sizeof(file));
+		secondEarlierPath(fromRtcBase, stamp, rtcFile, sizeof(rtcFile));
 	}
 	if (!fromPlaying || !toPlaying) {
 		snprintf(message, sizeof(message), "Load Save: player %d isn't playing", (fromPlaying ? to : from) + 1);
 	} else if (netplaySeen || linkSession()) {
 		snprintf(message, sizeof(message), "Load Save: not in netplay");
-	} else if (strcmp(gameOf(from), gameOf(to))) {
-		snprintf(message, sizeof(message), "Load Save: players %d and %d play different games", from + 1, to + 1);
+	} else if (strcmp(fromGame, gameOf(to))) {
+		snprintf(message, sizeof(message), "Load Save: that save is for another game than player %d's", to + 1);
 	} else if (current && from == to) {
 		snprintf(message, sizeof(message), "Load Save: that is player %d's save already", to + 1);
 	} else if (current && !sameSize(from, to)) {
@@ -2141,7 +2295,7 @@ static void loadSave(int from, const char* stamp, int to) {
 				writeFile(toRtc, rtc, rtcSize);
 			}
 		} else {
-			if (from == to) {
+			if (from == to && !remote) {
 				rename(file, toFile);
 				rename(rtcFile, toRtc);
 			} else {
@@ -2156,7 +2310,7 @@ static void loadSave(int from, const char* stamp, int to) {
 			keptSaves[to].hash = save ? hashOf(save, size) : 0;
 		}
 		restartConsole(to);
-		pruneEarlier(toFile, toRtc);
+		pruneEarlier(toBase, toRtcBase);
 		offerEarlierSaves();
 		char when[32] = "";
 		if (!current) {
@@ -2164,6 +2318,8 @@ static void loadSave(int from, const char* stamp, int to) {
 		}
 		if (current) {
 			snprintf(message, sizeof(message), "Player %d's save is now a copy of player %d's", to + 1, from + 1);
+		} else if (remote) {
+			snprintf(message, sizeof(message), "Player %d's save is now remote player %d's from %s", to + 1, from + 1, when);
 		} else if (from == to) {
 			snprintf(message, sizeof(message), "Player %d's save is now the one from %s", to + 1, when);
 		} else {
@@ -2182,7 +2338,7 @@ static void backUpSave(int player) {
 	char stamp[SECOND_STAMP];
 	size_t size, rtcSize;
 	void* rtc;
-	if (!saveFiles(player, file, rtcFile)) {
+	if (!backupFiles(player, file, rtcFile)) {
 		snprintf(message, sizeof(message), "Back Up Save: player %d isn't playing", player + 1);
 	} else if (!liveSave(player, &size, &rtc, &rtcSize) || !size) {
 		snprintf(message, sizeof(message), "Back Up Save: the game has no save");
@@ -2217,14 +2373,18 @@ static void readSaveActions(bool act) {
 	}
 	value = option("armgba_load_save");
 	if (value && strcmp(value, "off")) {
-		char load[SECOND_STAMP + 2];
+		char load[SECOND_STAMP + 4];
 		snprintf(load, sizeof(load), "%s", value);
 		struct retro_variable off = { "armgba_load_save", "off" };
 		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
 		const char* into = option("armgba_load_into");
+		int const named = into && into[0] >= '1' && into[0] <= '4' ? into[0] - '1' : -1;
 		if (act && load[0] >= '1' && load[0] <= '4' && load[1] == ' ') {
 			int const from = load[0] - '1';
-			loadSave(from, load + 2, into && into[0] >= '1' && into[0] <= '4' ? into[0] - '1' : from);
+			loadSave(from, false, load + 2, named >= 0 ? named : from);
+		} else if (act && load[0] == 'r' && load[1] >= '1' && load[1] <= '4' && load[2] == ' ') {
+			// A remote save goes to player 1 unless Load Into names another.
+			loadSave(load[1] - '1', true, load + 3, named >= 0 ? named : 0);
 		}
 	}
 }
@@ -2636,6 +2796,7 @@ static void runAdvancesFrame(void) {
 
 // Runs one frame of the game and hands its picture and sound to the frontend.
 void retro_run(void) {
+	readNewerPlayerOne();
 	bool updated = false;
 	if (environment(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated) {
 		readOptions();
@@ -2748,8 +2909,8 @@ static void checkNetplay(void) {
 
 // A state's session tag: one from another device's session, in netplay, means this device joined it.
 static void loadedTag(uint32_t tag) {
-	if (netplaySeen && tag != sessionTag && !netplayJoined && savesKept()) {
-		struct retro_message shown = { "Netplay: the host keeps the players' saves; this device's are left as they were", 240 };
+	if (netplaySeen && tag != sessionTag && !netplayJoined) {
+		struct retro_message shown = { "Netplay: this device's saves stay as they were; the session's are kept as backups when it ends", 240 };
 		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
 	}
 	netplayJoined |= netplaySeen && tag != sessionTag;
@@ -2915,6 +3076,9 @@ void* retro_get_memory_data(unsigned id) {
 	if (pairFile && id != RETRO_MEMORY_SYSTEM_RAM) {
 		return NULL;
 	}
+	if (!retroArchSaves() && (id == RETRO_MEMORY_SAVE_RAM || id == RETRO_MEMORY_RTC)) {
+		return NULL;
+	}
 #ifdef ARMGBA_GB
 	if (gbPair && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
 		size_t size;
@@ -2948,6 +3112,9 @@ void* retro_get_memory_data(unsigned id) {
 // mGBA's core, so a save file from either core loads.
 size_t retro_get_memory_size(unsigned id) {
 	if (pairFile && id != RETRO_MEMORY_SYSTEM_RAM) {
+		return 0;
+	}
+	if (!retroArchSaves() && (id == RETRO_MEMORY_SAVE_RAM || id == RETRO_MEMORY_RTC)) {
 		return 0;
 	}
 #ifdef ARMGBA_GB

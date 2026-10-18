@@ -317,8 +317,8 @@ void secondSavePath(const char* gamePath, const char* suffix, const char* extens
 	snprintf(out, outSize, "%s/%s%s.%s", folders[found], name, suffix, extension);
 }
 
-void secondPlayerSavePath(const char* gamePath, int player, const char* extension, const char* saveDirectory, char* out,
-                          size_t outSize) {
+static void armgbaSavePath(const char* gamePath, const char* within, int player, const char* extension, const char* saveDirectory,
+                           char* out, size_t outSize) {
 	char folder[4096];
 	if (saveDirectory && *saveDirectory) {
 		snprintf(folder, sizeof(folder), "%s", saveDirectory);
@@ -327,7 +327,17 @@ void secondPlayerSavePath(const char* gamePath, int player, const char* extensio
 	}
 	char name[1024];
 	baseName(gamePath, name, sizeof(name));
-	snprintf(out, outSize, "%s/armGBA/Player %d/%s.%s", folder, player + 1, name, extension);
+	snprintf(out, outSize, "%s/armGBA/%sPlayer %d/%s.%s", folder, within, player + 1, name, extension);
+}
+
+void secondPlayerSavePath(const char* gamePath, int player, const char* extension, const char* saveDirectory, char* out,
+                          size_t outSize) {
+	armgbaSavePath(gamePath, "", player, extension, saveDirectory, out, outSize);
+}
+
+void secondRemoteSavePath(const char* gamePath, int player, const char* extension, const char* saveDirectory, char* out,
+                          size_t outSize) {
+	armgbaSavePath(gamePath, "Remote/", player, extension, saveDirectory, out, outSize);
 }
 
 void secondMakeFolders(const char* filePath) {
