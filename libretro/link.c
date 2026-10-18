@@ -26,6 +26,7 @@
 // - Exact: the console that clocked last leads, and the other stays just behind it, as far as the
 //   leader says it has got. A transfer names the cycles it starts and ends on: the follower runs to
 //   the start, answers with its data then, and takes the leader's data at the end, as on a cable.
+//   When the lead passes to the console behind, the other moves its link clock back to meet it.
 
 enum {
 	MAX_PEERS = 8,
@@ -537,8 +538,10 @@ static bool finish(void* context, uint32_t in[3]) {
 }
 
 // The other console's request arrives. Two consoles clocking at once swap their data, as the wires
-// would. A request naming its cycles makes its sender the leader; one starting before where this
-// console has got, as the lead passes to a console behind it, is taken at once.
+// would. A request naming its cycles makes its sender the leader. One starting before where this
+// console has got, as the lead passes to a console behind it, moves this console's link clock back
+// to the start: two consoles' clocks are apart by whatever their power-on times were, and this way
+// the transfer itself stays exact on both.
 static void heardRequest(uint16_t from, const uint8_t* message, size_t size) {
 	offered.ready = false;
 	if (own.waiting && own.mode != MODE_MULTI) {
@@ -558,7 +561,11 @@ static void heardRequest(uint16_t from, const uint8_t* message, size_t size) {
 		request->end = get64(message + 16);
 		exact.leader = from;
 		align(request->start);
-		request->timed = request->start >= linkTime();
+		uint64_t const time = linkTime();
+		if (request->start < time) {
+			exact.origin += time - request->start;
+		}
+		request->timed = true;
 		exact.granted = request->end > exact.granted ? request->end : exact.granted;
 	}
 	scheduleStop();
