@@ -45,8 +45,8 @@ The options are in four categories, and a game sees only its own console's optio
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
 | | Restart Buttons | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
-| Link | Link Cable (applies on restart) | Both | Own Console, All Consoles |
-| | Players (applies on restart) | Both | 2, 3, 4 (All Consoles) |
+| Link | Link Cable (applies on restart) | Both | Separate, Together |
+| | Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
 | | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter |
 | | Link Timing | Both | Standard, Exact |
@@ -118,26 +118,28 @@ Game Boy Color and Game Boy Advance color correction and the free boot ROMs buil
 
 **Link play.** Two ways to link, picked with the Link Cable option:
 
-- Own Console: each player runs their own game and save on their own device, and the link crosses
-  RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and Crystal.
-  It links two players; three or four play on All Consoles. A slow network stalls the cable, since
-  each transfer waits for the other end; a waiting Game Boy sends its next byte ahead to spare the
-  clocking one most of that wait. Link Timing set to Exact keeps the two consoles on the same cycle,
-  as on a real cable, and suits a local network.
-- All Consoles: one device runs every player's console, two to four with the Players option, for
-  multiplayer on one device (a controller each) or with RetroArch's rollback netplay, where every
-  device runs them all and the link never waits on the network. Every device needs every game.
-  Three or four are shown in a grid. Player 2's game is picked with Player 2's Game; players 3 and 4
-  play player 1's. A player on player 1's game gets a save of their own, which starts as a copy of
-  player 1's.
+- Separate: each device runs its own player's console, with their own game and save, and the cable
+  crosses RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and
+  Crystal. It links two players; three or four play Together. Each transfer waits for the other
+  end, so a slow network stalls the cable. Link Timing: Standard suits Wi-Fi and games that link in
+  turns, such as trades and battles; a waiting Game Boy sends its next byte ahead. Exact keeps the
+  two consoles on the same cycles, as on a real cable; games that link every frame, such as Kirby &
+  The Amazing Mirror, need it, and it wants a short ping.
+- Together: every device runs every player's console, two to four with the Players option, for
+  multiplayer on one device (a controller each) or with RetroArch's rollback netplay, where the
+  link never waits on the network. Every device needs every game. Three or four are shown in a
+  grid. Player 2's game is picked with Player 2's Game; players 3 and 4 play player 1's. A player on
+  player 1's game gets a save of their own, which starts as a copy of player 1's. In netplay the
+  session runs the host's games and saves: the host writes the players' saves as the game closes,
+  and a device that joined leaves its own as they were.
 
-The Game Boy Advance Wireless Adapter (Link Port) works in both: the Union Room and trades of Pokemon
-FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game Boy Four
-Player Adapter works with All Consoles, and three or four Game Boys always use it: Wario Blast, F-1
-Race, Yoshi's Cookie and other four-player games.
+The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of
+Pokemon FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game
+Boy Four Player Adapter works with Together, and three or four Game Boys always use it: Wario Blast,
+F-1 Race, Yoshi's Cookie and other four-player games.
 
-**Pair files.** A `.gb2` file, as Batocera writes them, or a `.gba2` file names the games of an All
-Consoles link, two to four, one per line, and opens like a game from RetroArch's Load Content:
+**Pair files.** A `.gb2` file, as Batocera writes them, or a `.gba2` file names the games of a link
+played Together, two to four, one per line, and opens like a game from RetroArch's Load Content:
 
     gb:Pokemon - Yellow Version.zip
     gbc:Pokemon - Crystal Version.zip
