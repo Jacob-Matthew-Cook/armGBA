@@ -16,6 +16,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include <file/archive_file.h>
 #include <file/file_path.h>
@@ -338,6 +339,116 @@ void secondMakeFolders(const char* filePath) {
 			mkdir(path, 0755);
 		}
 		*slash = '/';
+	}
+}
+
+// Splits a save's path at its name's last dot: the part before, and the extension with its dot.
+static void splitSave(const char* savePath, char* stem, size_t stemSize, const char** extension) {
+	const char* slash = strrchr(savePath, '/');
+	const char* dot = strrchr(savePath, '.');
+	if (!dot || (slash && dot < slash)) {
+		dot = savePath + strlen(savePath);
+	}
+	snprintf(stem, stemSize, "%.*s", (int) (dot - savePath), savePath);
+	*extension = dot;
+}
+
+void secondEarlierPath(const char* savePath, const char* stamp, char* out, size_t outSize) {
+	char stem[4096];
+	const char* extension;
+	splitSave(savePath, stem, sizeof(stem), &extension);
+	snprintf(out, outSize, "%s.%s%s", stem, stamp, extension);
+}
+
+// Whether a name is a stamp: eight digits, a dash, six digits, then maybe a dash and a count.
+static bool isStamp(const char* name, size_t length) {
+	if (length < 15 || length == 16 || length >= SECOND_STAMP || name[8] != '-' || (length > 15 && name[15] != '-')) {
+		return false;
+	}
+	for (size_t i = 0; i < length; ++i) {
+		if (i != 8 && i != 15 && !isdigit((unsigned char) name[i])) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static int newerFirst(const void* a, const void* b) {
+	const char* x = a;
+	const char* y = b;
+	int const time = strncmp(y, x, 15);
+	return time ? time : atoi(y[15] ? y + 16 : "1") - atoi(x[15] ? x + 16 : "1");
+}
+
+size_t secondEarlier(const char* savePath, char (*stamps)[SECOND_STAMP], size_t max) {
+	char stem[4096];
+	const char* extension;
+	splitSave(savePath, stem, sizeof(stem), &extension);
+	char* slash = strrchr(stem, '/');
+	if (!slash) {
+		return 0;
+	}
+	*slash = '\0';
+	const char* name = slash + 1;
+	size_t const nameLength = strlen(name);
+	size_t const extensionLength = strlen(extension);
+	DIR* dir = opendir(*stem ? stem : "/");
+	if (!dir) {
+		return 0;
+	}
+	size_t count = 0;
+	struct dirent* entry;
+	while (max && (entry = readdir(dir))) {
+		const char* file = entry->d_name;
+		size_t const length = strlen(file);
+		if (length <= nameLength + 1 + extensionLength || strncmp(file, name, nameLength) || file[nameLength] != '.'
+		    || strcmp(file + length - extensionLength, extension)) {
+			continue;
+		}
+		size_t const stampLength = length - nameLength - 1 - extensionLength;
+		if (!isStamp(file + nameLength + 1, stampLength)) {
+			continue;
+		}
+		char stamp[SECOND_STAMP];
+		snprintf(stamp, sizeof(stamp), "%.*s", (int) stampLength, file + nameLength + 1);
+		if (count < max) {
+			memcpy(stamps[count++], stamp, SECOND_STAMP);
+			continue;
+		}
+		// The list is full: a newer one takes the oldest one's place.
+		size_t oldest = 0;
+		for (size_t i = 1; i < count; ++i) {
+			oldest = newerFirst(stamps[i], stamps[oldest]) > 0 ? i : oldest;
+		}
+		if (newerFirst(stamp, stamps[oldest]) < 0) {
+			memcpy(stamps[oldest], stamp, SECOND_STAMP);
+		}
+	}
+	closedir(dir);
+	qsort(stamps, count, sizeof(stamps[0]), newerFirst);
+	return count;
+}
+
+void secondNewStamp(const char* savePath, char stamp[SECOND_STAMP]) {
+	time_t const now = time(NULL);
+	char base[16];
+	strftime(base, sizeof(base), "%Y%m%d-%H%M%S", localtime(&now));
+	// After every earlier version from the same second, so it lists as the newest.
+	enum { MOST = 1000 };
+	char (*stamps)[SECOND_STAMP] = malloc(MOST * SECOND_STAMP);
+	size_t const count = stamps ? secondEarlier(savePath, stamps, MOST) : 0;
+	int last = 0;
+	for (size_t i = 0; i < count; ++i) {
+		if (!strncmp(stamps[i], base, 15)) {
+			int const n = stamps[i][15] ? atoi(stamps[i] + 16) : 1;
+			last = n > last ? n : last;
+		}
+	}
+	free(stamps);
+	if (last) {
+		snprintf(stamp, SECOND_STAMP, "%s-%d", base, last + 1);
+	} else {
+		snprintf(stamp, SECOND_STAMP, "%s", base);
 	}
 }
 
