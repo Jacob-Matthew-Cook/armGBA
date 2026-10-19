@@ -23,9 +23,10 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | Right stick up, down | Sunlight up, down (solar sensor games) | — |
 | L, R, Start (held 1 s) | Restart that player's console (the Restart Buttons option) | Same |
 
-With the consoles of a link on one device, R2 changes how the screens are shown and L2 fast-forwards;
-in netplay, L2 changes them back instead. The tilt stick is the left stick by default. The Tilt Sensor option moves it to the right stick or
-the D-pad; with the D-pad, L is the flick.
+With the consoles of a link on one device, R2 changes how the screens are shown and L2 fast-forwards,
+or changes them back as the L2 Button option says; in netplay, L2 changes them back. The tilt stick
+is the left stick by default. The Tilt Sensor option moves it to the right stick or the D-pad; with
+the D-pad, L is the flick.
 
 ## Options
 
@@ -53,6 +54,7 @@ only with Link Mode on.
 | | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
 | | Game Boy Link Timing | Game Boy | Standard, Exact (Separate) |
 | | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
+| | L2 Button | Both | Fast Forward, Previous Screens (Together) |
 | Saves | Back Up Save | Both | Off, then each player |
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
 | | Load Into | Both | Same Player, then each player (Together) |
