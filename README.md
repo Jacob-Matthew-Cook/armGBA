@@ -23,8 +23,8 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | Right stick up, down | Sunlight up, down (solar sensor games) | — |
 | L, R, Start (held 1 s) | Restart that player's console (the Restart Buttons option) | Same |
 
-With the consoles of a link on one device, L2 and R2 change how the screens are shown instead of
-fast-forwarding. The tilt stick is the left stick by default. The Tilt Sensor option moves it to the right stick or
+With the consoles of a link on one device, R2 changes how the screens are shown and L2 fast-forwards;
+in netplay, L2 changes them back instead. The tilt stick is the left stick by default. The Tilt Sensor option moves it to the right stick or
 the D-pad; with the D-pad, L is the flick.
 
 ## Options

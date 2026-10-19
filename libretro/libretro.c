@@ -388,7 +388,7 @@ void retro_set_environment(retro_environment_t callback) {
 		  "Standard suits Wi-Fi and games that link in turns, such as trades and battles. Exact keeps both Game Boys in step, as a real cable does, for games that link all the time; it slows with a long ping. Game Boy Advances are always exact.",
 		  NULL, "link", { { "standard", "Standard (smooth on Wi-Fi)" }, { "exact", "Exact (if a game errors or desyncs)" }, { NULL, NULL } }, "standard" },
 		{ "armgba_link_screens", "Screens", NULL,
-		  "Where the screens go. L2 and R2 change it while playing.", NULL, "link",
+		  "Where the screens go. R2 changes it while playing, and L2 fast-forwards (in netplay, L2 goes back).", NULL, "link",
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
 		  "side by side" },
 		{ "armgba_back_up_save", "Back Up Save", NULL,
@@ -641,7 +641,7 @@ static void readOptions(void) {
 	value = option("armgba_link_screens");
 	int const chosenScreens = !value ? SCREENS_SIDE : !strcmp(value, "top and bottom") ? SCREENS_STACKED
 	                        : !strncmp(value, "player ", 7) ? SCREENS_ONE + (value[7] - '1') % MAX_PLAYERS : SCREENS_SIDE;
-	// L2 and R2 change the screens too; the option wins only when it changes.
+	// R2 (and L2 in netplay) changes the screens too; the option wins only when it changes.
 	if (chosenScreens != screensOption) {
 		screensOption = screens = chosenScreens;
 		if (togetherRunning()) {
@@ -720,7 +720,7 @@ static void showButtons(void) {
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X, "Turbo A");
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y, "Turbo B");
 	if (togetherRunning()) {
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Previous Screens");
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Fast Forward (Previous Screens in Netplay)");
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Next Screens");
 	} else {
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Fast Forward");
@@ -2110,12 +2110,16 @@ static const uint32_t* advanceFrame(const uint32_t* picture) {
 }
 
 // Holding L2 or R2 fast-forwards at the frontend's fast-forward speed (its Maximum Run Speed), as
-// in gpSP's core.
+// in gpSP's core; with the consoles of a link here, L2 on any controller, as R2 changes the screens.
+// Not in netplay, where the other players' consoles would wait for this one's.
 static void readFastForward(void) {
 	static bool held;
-	// Not in netplay: the other players' consoles would wait for this one's. With the linked
-	// consoles here, L2 and R2 change the screens instead.
-	bool now = !linkSession() && !togetherRunning() && (inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2) || inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2));
+	bool now = false;
+	for (int port = 0; port < (togetherRunning() ? playersHere : 1); ++port) {
+		now |= inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2);
+		now |= !togetherRunning() && inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2);
+	}
+	now &= !linkSession() && !netplaySeen;
 	if (now == held) {
 		return;
 	}
@@ -2572,8 +2576,9 @@ static void readRestarts(const uint16_t keys[]) {
 	}
 }
 
-// With the consoles here, R2 on any controller moves to the next way of showing the screens and L2
-// to the one before: side by side or a grid, top and bottom (two consoles), then each one alone.
+// With the consoles here, R2 on any controller moves to the next way of showing the screens, and in
+// netplay L2 to the one before: side by side or a grid, top and bottom (two consoles), then each one
+// alone. Outside netplay L2 fast-forwards instead.
 static void readScreensKeys(void) {
 	static bool held[MAX_PLAYERS][2];
 	int ways[SCREENS_COUNT];
@@ -2591,7 +2596,7 @@ static void readScreensKeys(void) {
 	}
 	int step = 0;
 	for (int port = 0; port < playersHere; ++port) {
-		for (int k = 0; k < 2; ++k) {
+		for (int k = netplaySeen ? 0 : 1; k < 2; ++k) {
 			bool const now = inputState(port, RETRO_DEVICE_JOYPAD, 0, k ? RETRO_DEVICE_ID_JOYPAD_R2 : RETRO_DEVICE_ID_JOYPAD_L2);
 			if (now && !held[port][k]) {
 				step += k ? 1 : -1;
