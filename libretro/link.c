@@ -706,6 +706,21 @@ static void receiveSavePiece(const uint8_t* message, size_t size) {
 	}
 }
 
+// The host hears which console a player runs.
+static void heardHello(uint16_t from, int theirConsole) {
+	int i = 0;
+	while (i < peerCount && peers[i].id != from) {
+		++i;
+	}
+	if (i == peerCount && peerCount < MAX_PEERS) {
+		peers[peerCount++].id = from;
+	}
+	if (i < peerCount) {
+		peers[i].console = theirConsole;
+		hostRebuild();
+	}
+}
+
 static void receive(const void* buffer, size_t size, uint16_t from) {
 	const uint8_t* message = buffer;
 	if (size < 2) {
@@ -714,17 +729,7 @@ static void receive(const void* buffer, size_t size, uint16_t from) {
 	switch (message[0]) {
 	case MSG_HELLO:
 		if (self == 0) {
-			int i = 0;
-			while (i < peerCount && peers[i].id != from) {
-				++i;
-			}
-			if (i == peerCount && peerCount < MAX_PEERS) {
-				peers[peerCount++].id = from;
-			}
-			if (i < peerCount) {
-				peers[i].console = message[1];
-				hostRebuild();
-			}
+			heardHello(from, message[1]);
 		}
 		break;
 	case MSG_ROSTER:
