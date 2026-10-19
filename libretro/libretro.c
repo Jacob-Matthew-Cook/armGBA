@@ -3120,10 +3120,16 @@ static bool loadConsoles(const void* data, size_t size) {
 	return true;
 }
 
-// A state: the consoles', then with the consoles of a link here, how long each player has held the
-// restart buttons, so a rollback restarts a console on the same frame, and the session's tag.
+// A state: the consoles'; with the consoles of a link here, how long each player has held the
+// restart buttons, so a rollback restarts a console on the same frame; then the session's tag, which
+// tells a device in netplay that it joined another's session. A state from before the tag, of one
+// console, still loads.
+static size_t extraStateSize(void) {
+	return togetherRunning() ? sizeof(restartHeld) : 0;
+}
+
 size_t retro_serialize_size(void) {
-	return consolesStateSize() + (togetherRunning() ? sizeof(restartHeld) + sizeof(sessionTag) : 0);
+	return consolesStateSize() + extraStateSize() + sizeof(sessionTag);
 }
 
 bool retro_serialize(void* data, size_t size) {
@@ -3131,26 +3137,25 @@ bool retro_serialize(void* data, size_t size) {
 	if (size < retro_serialize_size() || !saveConsoles(data, consolesStateSize())) {
 		return false;
 	}
-	if (togetherRunning()) {
-		uint8_t* const at = (uint8_t*) data + consolesStateSize();
-		memcpy(at, restartHeld, sizeof(restartHeld));
-		memcpy(at + sizeof(restartHeld), &sessionTag, sizeof(sessionTag));
-	}
+	uint8_t* const at = (uint8_t*) data + consolesStateSize();
+	memcpy(at, restartHeld, extraStateSize());
+	memcpy(at + extraStateSize(), &sessionTag, sizeof(sessionTag));
 	return true;
 }
 
 bool retro_unserialize(const void* data, size_t size) {
 	checkNetplay();
-	if (size < retro_serialize_size() || !loadConsoles(data, consolesStateSize())) {
+	bool const tagged = size >= retro_serialize_size();
+	if (!(tagged || (size == consolesStateSize() && !togetherRunning())) || !loadConsoles(data, consolesStateSize())) {
 		return false;
 	}
 	// A loaded state has every console's save as it was; player 1's isn't copied over them after.
 	copySaves = 0;
-	if (togetherRunning()) {
+	if (tagged) {
 		const uint8_t* const at = (const uint8_t*) data + consolesStateSize();
-		memcpy(restartHeld, at, sizeof(restartHeld));
+		memcpy(restartHeld, at, extraStateSize());
 		uint32_t tag;
-		memcpy(&tag, at + sizeof(restartHeld), sizeof(tag));
+		memcpy(&tag, at + extraStateSize(), sizeof(tag));
 		loadedTag(tag);
 	}
 	return true;
