@@ -165,7 +165,6 @@ static bool otherMulti;
 static bool ownMulti;
 static bool ownMultiTold;
 
-// The Wireless Adapter's air: messages to and from the other player.
 static void airSend(const struct RfuAir*, int to, const uint8_t* message, size_t size);
 static struct RfuAir air = { 0, true, airSend };
 
@@ -612,7 +611,6 @@ static void poll(void) {
 	takeRequests();
 }
 
-// A Game Boy Advance's regular look at the cable.
 static void gbaLook(void) {
 	takeRequests();
 	tellMode(false);

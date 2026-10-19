@@ -341,10 +341,9 @@ void secondPlayerSavePath(const char* gamePath, int player, const char* extensio
 	armgbaSavePath(gamePath, within, extension, saveDirectory, out, outSize);
 }
 
-// The folder a game's saves go in, by where player 1's game keeps its own: beside the game when
-// saves are kept with the games (the save directory is player 1's game's folder); in the folder
-// named for the game's folder when RetroArch sorts saves by content folder (the save directory is
-// named for player 1's game's folder); or else the save directory.
+// The folder a game's saves go in, following player 1's game: beside the game when saves are kept
+// with the games, in the folder named for the game's folder when RetroArch sorts saves by content
+// folder, or else the save directory.
 static void gameSaveFolder(const char* gamePath, const char* firstPath, const char* saveDirectory, char* out, size_t outSize) {
 	char firstFolder[4096];
 	char gameFolder[4096];
