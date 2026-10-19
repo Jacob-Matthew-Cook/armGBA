@@ -39,26 +39,21 @@ static retro_log_printf_t logPrintf;
 
 static struct GBA* gba;
 static bool skipBios;
-// What moves a cartridge's tilt sensor or gyro: 0 is the left stick, 1 the right stick, 2 the
-// D-pad.
+// 0 left stick, 1 right stick, 2 D-pad.
 static int tiltControl;
-// The buttons that, held, restart a player's console (the Restart Buttons option).
 enum { RESTART_L_R_START, RESTART_L_R_A_B, RESTART_STICKS, RESTART_SELECT_START_A_B, RESTART_OFF };
 static int restartButtons;
 // Turbo timing: each press-and-release cycle lasts turboPeriod frames, and the button is held for
 // the first turboPulse of them.
 static unsigned turboPeriod = 4;
 static unsigned turboPulse = 2;
-// Sunlight level for Boktai's solar sensor, 0 to 10.
+// Boktai's sunlight, 0 to 10.
 static int solarLevel = 5;
-// The frontend's rumble callback, if it has one, and whether the motor is currently on.
 static retro_set_rumble_state_t setRumble;
 static bool rumbling;
-// Threaded video: 0 off, 1 on, 2 on with each frame shown one frame late so drawing can overlap the
-// next frame.
+// 0 off, 1 on, 2 one frame late.
 static int threadedVideo;
-// Color correction for the Game Boy Advance's screen: a lookup table from each RGB565 color
-// (ignoring green's low bit) to its corrected color.
+// Color correction: each RGB565 color, green's low bit ignored, to its corrected color.
 static bool colorCorrection;
 static uint16_t* correctedColors;
 static uint16_t correctedFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
@@ -71,15 +66,13 @@ static bool gbOnAdvance;
 static bool gbStretched;
 static bool gbCropped;
 static uint32_t gbAdvanceFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
-// The consoles of a Game Boy link can run here: player 1's on the first controller, player 2's on
-// the second and so on, joined by the cable (two) or the Four Player Adapter.
+// Game Boys linked here, a controller each, by the cable (two) or the Four Player Adapter.
 static bool gbTogether;
 static bool gbAdapter;
 static uint32_t gbTogetherFrame[LIBRETRO_GB_WIDTH * 2 * LIBRETRO_GB_HEIGHT * 2];
-// How many consoles of a link run here (1 without one), and the players whose save starts as a copy
-// of player 1's, as they run player 1's game; the copy is made before the first frame.
 enum { MAX_PLAYERS = 4 };
 static int playersHere = 1;
+// Players whose save starts as a copy of player 1's, made before the first frame.
 static uint8_t copySaves;
 
 // The consoles of a Game Boy Advance link can run here too, up to four on one cable, each on a thread
@@ -90,7 +83,6 @@ static uint8_t copySaves;
 // console starts part of a frame after the one before, as real consoles are never in step.
 enum {
 	GBA_FRAME_CYCLES = 280896,
-	// A round ends no later than the end of a frame.
 	ROUND_LONGEST = GBA_FRAME_CYCLES,
 };
 static struct GBA* gbas[MAX_PLAYERS];
@@ -126,8 +118,7 @@ static struct {
 	uint32_t value[DATA_WRITES];
 } dataWrites[MAX_PLAYERS];
 static uint32_t roundStartTime[MAX_PLAYERS];
-// The Wireless Adapters' air: the consoles here hear each other, the messages each sends carried
-// between rounds.
+// The Wireless Adapters of the consoles here: their messages are carried between rounds.
 enum { AIR_QUEUE = 16, AIR_BYTES = 100 };
 static struct RfuAir airs[MAX_PLAYERS];
 static struct {
@@ -140,19 +131,16 @@ static uint16_t gbaShown[MAX_PLAYERS][SCREEN_WIDTH * SCREEN_HEIGHT];
 static uint16_t gbaTogetherFrame[SCREEN_WIDTH * 2 * SCREEN_HEIGHT * 2];
 static uint16_t gbaCorrected[MAX_PLAYERS][SCREEN_WIDTH * SCREEN_HEIGHT];
 
-// With the consoles here, where the screens go: two side by side or one above the other, three or
-// four in a grid, or one console's alone (SCREENS_ONE and the player); and their sound mixed.
+// How the screens are shown: side by side, stacked, a grid, or one player's alone (SCREENS_ONE +
+// player).
 enum { SCREENS_SIDE, SCREENS_STACKED, SCREENS_ONE, SCREENS_COUNT = SCREENS_ONE + MAX_PLAYERS };
 static int screens;
 static int screensOption = -1;
-// Whether L2 fast-forwards with the consoles here, outside netplay (the L2 Button option), or goes
-// back to the screens before.
+// The L2 Button option: fast-forward, or the previous screens.
 static bool l2FastForward = true;
 static int16_t mixedSamples[2 * 4096];
 
-// Player 2's game, picked in the menu from the games beside player 1's, loaded with it by the
-// frontend, or named with it in a pair file: the choices offered, and the game running (empty for the
-// same game as player 1).
+// Player 2's game: the choices offered, and the game running (empty for player 1's).
 enum { SECOND_CHOICES = 126 };
 static struct retro_core_options_v2* coreOptions;
 static struct retro_core_option_v2_definition* secondOption;
@@ -185,12 +173,8 @@ static struct {
 } keptSaves[MAX_PLAYERS];
 static unsigned keptCheck;
 
-// The Saves options' lists. Load Save: Off, then each player's current save (with two or more) and
-// backups, then remote and received saves, newest first, as many as Backups Listed says; an option
-// has room for Off, 126 more and the end of the list. Send Save: player 1's current save, backups,
-// and remote and received saves. Back Up Save and Load Into: the players playing.
+// The Saves options' lists. An option holds Off, 126 choices and the end of the list.
 enum { BACKUP_CHOICES = RETRO_NUM_CORE_OPTION_VALUES_MAX - 2 };
-// A list of saves as an option's choices, after Off.
 struct SaveChoices {
 	struct retro_core_option_v2_definition* option;
 	char values[BACKUP_CHOICES][SECOND_STAMP + 4];
@@ -256,7 +240,6 @@ static bool togetherRunning(void) {
 	return gbTogether || gbaTogether;
 }
 
-// Writes a line to the frontend's log, or to stderr if it has none.
 static void logMessage(enum retro_log_level level, const char* message) {
 	if (logPrintf) {
 		logPrintf(level, "%s\n", message);
@@ -265,19 +248,16 @@ static void logMessage(enum retro_log_level level, const char* message) {
 	}
 }
 
-// Shows a message on screen for a number of frames.
 static void notify(const char* message, unsigned frames) {
 	struct retro_message shown = { message, frames };
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
 }
 
-// Shows a problem on screen for a few seconds and logs it.
 static void showMessage(const char* message) {
 	notify(message, 180);
 	logMessage(RETRO_LOG_ERROR, message);
 }
 
-// Tells the frontend when the rumble motor turns on or off.
 static void updateRumble(bool on) {
 	if (on != rumbling && setRumble) {
 		setRumble(0, RETRO_RUMBLE_STRONG, on ? 0xFFFF : 0);
@@ -288,7 +268,6 @@ static void updateRumble(bool on) {
 
 // The frontend's calls to set the core up, and what the core tells it.
 
-// Turbo Button Period's choices: 4 to 120 frames.
 static void fillTurboPeriods(struct retro_core_option_v2_definition* definitions) {
 	static char periods[117][4];
 	for (; definitions->key && strcmp(definitions->key, "armgba_turbo_period"); ++definitions) {
@@ -318,7 +297,6 @@ static void setVariables(retro_environment_t callback, const struct retro_core_o
 	callback(RETRO_ENVIRONMENT_SET_VARIABLES, variables);
 }
 
-// Stores the frontend's callbacks and declares this core's options.
 void retro_set_environment(retro_environment_t callback) {
 	environment = callback;
 	static const struct retro_subsystem_memory_info firstMemory[] = { { "srm", RETRO_MEMORY_SAVE_RAM }, { "rtc", RETRO_MEMORY_RTC } };
@@ -341,9 +319,8 @@ void retro_set_environment(retro_environment_t callback) {
 	if (callback(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging)) {
 		logPrintf = logging.log;
 	}
-	// Option keys and values match saved configurations; the labels are what the menu shows. They
-	// come in five categories, System, Video, Input, Link and Saves, and showOptions hides those that
-	// do nothing for the game loaded and the Link Mode chosen.
+	// Keys and values match saved configurations; labels are what the menu shows. showOptions hides
+	// the options that do nothing for the game and Link Mode.
 	static struct retro_core_option_v2_definition definitions[] = {
 		{ "armgba_skip_bios", "Skip BIOS Intro", NULL, "Start games without the Game Boy Advance logo.", NULL, "system",
 		  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
@@ -489,12 +466,10 @@ void retro_set_input_state(retro_input_state_t callback) {
 	inputState = callback;
 }
 
-// The libretro API version this core implements.
 unsigned retro_api_version(void) {
 	return RETRO_API_VERSION;
 }
 
-// Reports the core's name, version and the file types it loads.
 void retro_get_system_info(struct retro_system_info* info) {
 	memset(info, 0, sizeof(*info));
 	info->library_name = "armGBA";
@@ -540,14 +515,12 @@ static void geometry(struct retro_game_geometry* geometry) {
 	}
 }
 
-// Tells the frontend the picture size has changed.
 static void announceGeometry(void) {
 	struct retro_game_geometry changed;
 	geometry(&changed);
 	environment(RETRO_ENVIRONMENT_SET_GEOMETRY, &changed);
 }
 
-// Reports the picture size and timing for the loaded game, at the consoles' own frame rates.
 void retro_get_system_av_info(struct retro_system_av_info* info) {
 	memset(info, 0, sizeof(*info));
 	gbOnAdvance = gameBoy && !gbTogether && libretroGbOnAdvance();
@@ -557,21 +530,18 @@ void retro_get_system_av_info(struct retro_system_av_info* info) {
 	info->timing.sample_rate = AUDIO_RATE;
 }
 
-// Nothing needs setting up before a game is loaded.
 void retro_init(void) {
 	cheatsInit(&cheats);
 	linkSetEnvironment(environment);
 	linkSetSaveHooks(sendSaveOnPairing, saveReceived);
 }
 
-// Frees what the core allocated once the frontend is done with it.
 void retro_deinit(void) {
 	free(correctedColors);
 	correctedColors = NULL;
 	colorCorrection = false;
 }
 
-// Every player's controller is a RetroPad.
 void retro_set_controller_port_device(unsigned port, unsigned device) {
 }
 
@@ -609,14 +579,12 @@ static bool buildCorrectedColors(void) {
 	return true;
 }
 
-// Returns an option's current value, or NULL if the frontend has none.
 static const char* option(const char* key) {
 	struct retro_variable variable = { key, NULL };
 	return environment(RETRO_ENVIRONMENT_GET_VARIABLE, &variable) ? variable.value : NULL;
 }
 
-// Tells the frontend what each button does for the loaded console, including the stick, D-pad or
-// click that moves a cartridge's tilt sensor, wherever the Tilt Sensor option puts it.
+// Names each button for the loaded console, including the tilt sensor's controls.
 static void showButtons(void) {
 	bool const forGameBoy = gameBoy;
 	static struct retro_input_descriptor shown[80];
@@ -663,7 +631,6 @@ static void showButtons(void) {
 	if (!forGameBoy && tiltControl != 1) {
 		BUTTON(RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y, "Sunlight (Solar Sensor)");
 	}
-	// The other players' consoles, each on its own controller.
 	for (port = 1; port < (unsigned) playersHere; ++port) {
 		static const unsigned ids[12] = {
 			RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_RIGHT,
@@ -683,7 +650,6 @@ static void showButtons(void) {
 	environment(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, shown);
 }
 
-// Reads every option and applies the ones that can change while a game runs.
 static void readOptions(void) {
 	const char* value = option("armgba_skip_bios");
 	skipBios = value && !strcmp(value, "enabled");
@@ -771,9 +737,8 @@ static void readOptions(void) {
 	}
 }
 
-// Shows only the options that do something for the loaded game and the Link Mode chosen: as a game
-// loads, and as RetroArch asks when an option changes in its menu. Returns whether that changed which
-// are shown. With no game loaded, all are shown.
+// Hides the options that do nothing for the game and Link Mode. RetroArch calls it when an option
+// changes; returns whether that changed which are shown.
 static bool showOptions(void) {
 	bool const gameBoy = gameBoy;
 	bool const advance = gba && !gameBoy;
@@ -819,8 +784,8 @@ static bool showOptions(void) {
 	return changed;
 }
 
-// Gives RetroArch the options again, after a list of choices changed. That shows every option, so
-// the ones that do nothing are hidden again.
+// Sets the options again after a list of choices changed. That shows every option, so they are
+// hidden again.
 static void setOptions(void) {
 	environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, coreOptions);
 	optionsShownSet = false;
@@ -837,14 +802,13 @@ static bool separateWanted(void) {
 	return value && !strcmp(value, "separate");
 }
 
-// How many consoles Together runs, and whether Game Boys join through the Four Player Adapter:
-// always for three or four.
 static int playersWanted(void) {
 	const char* value = option("armgba_link_players");
 	int const count = value ? atoi(value) : 2;
 	return count < 2 ? 2 : count > MAX_PLAYERS ? MAX_PLAYERS : count;
 }
 
+// Three or four Game Boys always use the Four Player Adapter.
 static bool adapterWanted(int count) {
 	const char* value = option("armgba_gb_link_port");
 	return count > 2 || (value && !strcmp(value, "adapter"));
@@ -852,8 +816,7 @@ static bool adapterWanted(int count) {
 
 // Player 2's Game.
 
-// Offers the games beside the loaded one as Player 2's Game. The option's values are its list, so
-// the options are set again with it.
+// Lists the games beside the loaded one as Player 2's Game's choices.
 static void offerSecondGames(const char* path, bool forGameBoy) {
 	secondFree(secondGames, secondCount);
 	secondCount = path ? secondList(path, forGameBoy, secondGames, SECOND_CHOICES) : 0;
@@ -872,7 +835,8 @@ static void offerSecondGames(const char* path, bool forGameBoy) {
 	setOptions();
 }
 
-// The file in the save directory (or beside player 1's game) where each game's choice is kept.
+// The file remembering each game's Player 2's Game: in the save directory, or beside player 1's
+// game.
 static void secondMemoryFile(char* out, size_t outSize) {
 	const char* saveDirectory = NULL;
 	environment(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &saveDirectory);
@@ -894,7 +858,6 @@ static bool offered(const char* value) {
 	return value && !strcmp(value, "same");
 }
 
-// Sets Player 2's Game to the one this game had last time.
 static void recallSecondChoice(void) {
 	char memory[4096];
 	char choice[4096];
@@ -925,7 +888,6 @@ static const char* chosenSecond(void) {
 	return NULL;
 }
 
-// The game on a player's console.
 static const char* gameOf(int player) {
 	const char* chosen = player == 1 ? secondPath : player > 1 ? otherPaths[player] : "";
 	return *chosen ? chosen : firstPath;
@@ -933,7 +895,6 @@ static const char* gameOf(int player) {
 
 // Save files: each player's save memory and where its file is.
 
-// A player's save memory and Game Boy clock.
 static void* saveMemory(int player, size_t* size) {
 	*size = 0;
 	if (gameBoy && player < playersHere) {
@@ -1022,7 +983,6 @@ static void* readWholeFile(const char* path, size_t* size) {
 	return data;
 }
 
-// Copies a file; returns false if there was none to copy.
 static bool copyFile(const char* from, const char* to) {
 	size_t size;
 	void* data = readWholeFile(from, &size);
@@ -1044,7 +1004,6 @@ static const char* saveDirectoryFor(char unsorted[4096]) {
 	return saveDirectory;
 }
 
-// Player 1's game's save and clock files where RetroArch keeps them.
 static void retroArchFiles(char file[8192], char rtcFile[8192]) {
 	char unsorted[4096];
 	const char* saveDirectory = saveDirectoryFor(unsorted);
@@ -1052,7 +1011,6 @@ static void retroArchFiles(char file[8192], char rtcFile[8192]) {
 	secondSavePath(firstPath, "", "rtc", firstPath, saveDirectory, rtcFile, 8192);
 }
 
-// Player 1's game's save and clock files in a player's armGBA/Player N folder.
 static void folderFiles(int player, char file[8192], char rtcFile[8192]) {
 	char unsorted[4096];
 	const char* saveDirectory = saveDirectoryFor(unsorted);
@@ -1075,7 +1033,6 @@ static bool saveFiles(int player, char file[8192], char rtcFile[8192]) {
 	return true;
 }
 
-// A player's save and clock memory: the core's, or for player 1 the memory RetroArch saves.
 static void* liveSave(int player, size_t* size, void** rtc, size_t* rtcSize) {
 	*rtc = NULL;
 	*rtcSize = *size = 0;
@@ -1095,7 +1052,6 @@ static void remoteFiles(int player, char file[8192], char rtcFile[8192]) {
 	secondRemoteSavePath(firstPath, player, "rtc", firstPath, saveDirectory, rtcFile, 8192);
 }
 
-// Where the saves of player 1's game sent by the other player of a Separate link are.
 static void receivedFiles(char file[8192], char rtcFile[8192]) {
 	char unsorted[4096];
 	const char* saveDirectory = saveDirectoryFor(unsorted);
@@ -1172,7 +1128,6 @@ static bool retroArchSaves(void) {
 	return !keptSaves[0].kept && !netplayJoined;
 }
 
-// Whether file a is newer than file b, or b is missing.
 static bool newerFile(const char* a, const char* b) {
 	struct stat sa, sb;
 	return !stat(a, &sa) && (stat(b, &sb) || sa.st_mtime > sb.st_mtime);
@@ -1280,7 +1235,6 @@ static void forgetSaves(void) {
 	copySaves = 0;
 }
 
-// Gives the players on player 1's game, with no save of their own yet, a copy of player 1's.
 static void copyFirstSave(void) {
 	for (int player = 1; player < playersHere; ++player) {
 		if (!(copySaves & 1 << player)) {
@@ -1309,7 +1263,6 @@ static void stampLabel(const char* stamp, char* out, size_t outSize) {
 	         stamp[15] ? " (" : "", stamp[15] ? stamp + 16 : "", stamp[15] ? ")" : "");
 }
 
-// Whether a file holds just these bytes.
 static bool fileHolds(const char* path, const void* data, size_t size) {
 	FILE* f = fopen(path, "rb");
 	if (!f) {
@@ -1376,7 +1329,6 @@ static int backUpPlayer(int player, char stamp[SECOND_STAMP]) {
 	return written < 0 ? -1 : written ? 1 : 2;
 }
 
-// Deletes a save's oldest backups beyond what Backups Kept allows.
 static void pruneBackups(const char* saveFile, const char* rtcFile) {
 	const char* value = option("armgba_keep_saves");
 	size_t const keep = value ? (size_t) atoi(value) : 10;
@@ -1449,7 +1401,6 @@ static int receivedTarget(void) {
 	return named >= 0 ? named : saveFiles(1, file, rtcFile) ? 1 : 0;
 }
 
-// Starts a list over with Off, and ends it after the choices added.
 static void startChoices(struct SaveChoices* list) {
 	list->count = 0;
 	list->option->values[0] = (struct retro_core_option_value) { "off", "Off" };
@@ -1480,10 +1431,8 @@ static void addBackupChoices(struct SaveChoices* list, const char* file, int mos
 	}
 }
 
-// Lists the players playing as Back Up Save's and Load Into's choices, and their saves as Load
-// Save's: with two or more, each one's current save, then their backups; then the saves kept from
-// other devices' netplay sessions, and those received from the other player of a Separate link. Send
-// Save lists player 1's current save and the same saves of player 1's.
+// Fills Back Up Save's and Load Into's choices with the players playing, and Load Save's and Send
+// Save's with their saves.
 static void fillSaveChoices(void) {
 	if (!loadChoices.option || !sendChoices.option || !backUpOption || !loadIntoOption) {
 		return;
@@ -1566,7 +1515,6 @@ static void offerSaveChoices(void) {
 	}
 }
 
-// Whether two players' saves are the same size, so one can be copied over the other.
 static bool sameSize(int from, int to) {
 	size_t size, toSize, rtcSize, toRtcSize;
 	void* rtc;
@@ -1598,10 +1546,9 @@ static void restartConsole(int player) {
 // device's that this one joined, or the other player of a Separate link.
 enum { FROM_PLAYER, FROM_REMOTE, FROM_RECEIVED };
 
-// The Load Save option: makes one of player from's backups, or their current save ("now"), or a
-// save of the session's player from kept from another device's netplay, or one received, player
-// to's save, backs up the one it replaces, and restarts that player's console. A save given to
-// another player, or from another device, is copied, and stays where it was.
+// Load Save: makes a backup, a player's current save ("now"), a remote or a received save player
+// to's save, backing up the one it replaces, and restarts that console. A save given to another
+// player is copied.
 static void loadSave(int source, int from, const char* stamp, int to) {
 	char message[160];
 	char fromBase[8192], fromRtcBase[8192], toFile[8192], toRtc[8192], toBase[8192], toRtcBase[8192];
@@ -1688,7 +1635,6 @@ static void loadSave(int source, int from, const char* stamp, int to) {
 	notify(message, 240);
 }
 
-// The Back Up Save option: backs up a player's save, and clock, as they are now.
 static void backUpSave(int player) {
 	char message[160];
 	char file[8192];
@@ -1740,7 +1686,6 @@ static void sendSaveOnPairing(void) {
 	sendSave(false);
 }
 
-// Sends a backup, a remote save or a received one of player 1's game to the other player.
 static void sendBackup(int source, int from, const char* stamp) {
 	char base[8192], rtcBase[8192], file[8300], rtcFile[8300], game[1024];
 	if (source == FROM_REMOTE) {
@@ -1841,7 +1786,6 @@ static void readSaveActions(bool act) {
 
 // Starting and stopping the consoles: loading a game, the other players' consoles, Restart.
 
-// Loads gba_bios.bin from the system directory.
 static bool loadBios(struct GBA* machine) {
 	const char* directory = NULL;
 	if (!environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory) || !directory) {
@@ -1863,7 +1807,6 @@ static bool loadBios(struct GBA* machine) {
 	return gbaLoadBios(machine, bios, sizeof(bios));
 }
 
-// Makes a Game Boy Advance with the game in it, or returns NULL.
 static struct GBA* startAdvance(const struct retro_game_info* game) {
 	struct GBA* machine = gbaCreate();
 	if (!machine) {
@@ -1879,8 +1822,7 @@ static struct GBA* startAdvance(const struct retro_game_info* game) {
 	return machine;
 }
 
-// Starts the other players' Game Boys beside player 1's, each with its game, and leaves the network
-// cable out so RetroArch's own netplay runs them all.
+// Starts the other players' Game Boys; RetroArch's own netplay runs them all.
 static bool startOtherGameBoys(int count, const void* const data[], const size_t sizes[]) {
 	const char* directory = NULL;
 	environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory);
@@ -2020,7 +1962,6 @@ static bool readOtherGames(const struct retro_game_info* second, const void* sam
 	return true;
 }
 
-// Tells the players what runs: player 2's game, or how many play.
 static void announcePlayers(void) {
 	char message[300];
 	const char* name = strrchr(secondPath, '/');
@@ -2083,7 +2024,6 @@ static void offerLinkNetplay(void) {
 	linkSetNetplay(separateWanted() && !togetherRunning());
 }
 
-// Whether the consoles running are the ones the link options ask for.
 static bool runningAsWanted(void) {
 	bool const want = togetherWanted();
 	if (togetherRunning() != want) {
@@ -2175,8 +2115,6 @@ static bool isGameBoyRom(const void* data, size_t size) {
 	return size >= 0x150 && ((const uint8_t*) data)[0x104] == 0xCE && ((const uint8_t*) data)[0x105] == 0xED;
 }
 
-// Starts a Game Boy or Game Boy Color game on the Gambatte side, and the other players' beside it
-// with a second game, a pair file or Link Mode on Together.
 static bool loadGameBoy(const struct retro_game_info* game, const struct retro_game_info* second) {
 	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_XRGB8888;
 	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
@@ -2213,8 +2151,6 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	return true;
 }
 
-// Starts a Game Boy Advance game, and the other players' beside it with a second game, a pair file
-// or Link Mode on Together.
 static bool loadAdvance(const struct retro_game_info* game, const struct retro_game_info* second) {
 	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_RGB565;
 	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
@@ -2248,7 +2184,6 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	return true;
 }
 
-// Starts the games a pair file names, each player with their game's own save.
 static bool loadPairFile(const struct retro_game_info* file) {
 	char games[MAX_PLAYERS][4096];
 	pairCount = secondPairFile(file->path, file->data, file->size, games);
@@ -2287,7 +2222,6 @@ static bool loadPairFile(const struct retro_game_info* file) {
 	return loaded;
 }
 
-// Starts a game on the side it belongs to.
 bool retro_load_game(const struct retro_game_info* game) {
 	readSaveActions(false);
 	if (!game || !game->data) {
@@ -2303,7 +2237,6 @@ bool retro_load_game(const struct retro_game_info* game) {
 	return loadAdvance(game, NULL);
 }
 
-// Two games, one for each console of a link.
 bool retro_load_game_special(unsigned type, const struct retro_game_info* info, size_t count) {
 	readSaveActions(false);
 	if (type == SUBSYSTEM_ADVANCE_LINK && count == 2 && info[0].data && info[1].data) {
@@ -2317,7 +2250,6 @@ bool retro_load_game_special(unsigned type, const struct retro_game_info* info, 
 	return false;
 }
 
-// Frees whichever machine was running, and its cheat codes.
 void retro_unload_game(void) {
 	if (!secondFromFrontend) {
 		rememberSecondChoice();
@@ -2364,7 +2296,6 @@ void retro_unload_game(void) {
 	gbaTogether = false;
 }
 
-// The frontend's Restart.
 void retro_reset(void) {
 	// Restart can come straight after an option change, before a frame has read it, so read the
 	// options first.
@@ -2520,9 +2451,8 @@ static void readStretch(uint16_t keys) {
 	held = now;
 }
 
-// Holding L2 or R2 fast-forwards at the frontend's fast-forward speed (its Maximum Run Speed), as
-// in gpSP's core; with the consoles of a link here, L2 on any controller, as the L2 Button option
-// says, since R2 changes the screens. Not in netplay, where the other players' consoles would wait.
+// L2 or R2 held fast-forwards at RetroArch's maximum run speed; with the consoles here only L2, as
+// the L2 Button option says. Not in netplay, where the other consoles would wait.
 static void readFastForward(void) {
 	static bool held;
 	bool now = false;
@@ -2566,9 +2496,8 @@ static void readRestarts(const uint16_t keys[]) {
 	}
 }
 
-// With the consoles here, R2 on any controller moves to the next way of showing the screens, and L2
-// to the one before, unless it fast-forwards (the L2 Button option, outside netplay): side by side or
-// a grid, top and bottom (two consoles), then each one alone.
+// R2 on any controller moves to the next way of showing the screens, and L2 back unless it
+// fast-forwards.
 static void readScreensKeys(void) {
 	static bool held[MAX_PLAYERS][2];
 	int ways[SCREENS_COUNT];
@@ -2665,7 +2594,6 @@ static void showConsoles(const void* const pictures[], size_t pixelBytes, int wi
 	audioBatch(mixedSamples, count);
 }
 
-// Runs the Game Boys for a frame.
 static void runGameBoys(void) {
 	uint16_t keys[MAX_PLAYERS];
 	for (int i = 0; i < playersHere; ++i) {
@@ -2688,7 +2616,6 @@ static void runGameBoys(void) {
 	showConsoles(shown, sizeof(uint32_t), LIBRETRO_GB_WIDTH, LIBRETRO_GB_HEIGHT, gbTogetherFrame, samples, frames);
 }
 
-// The air between the consoles here.
 static void airSend(const struct RfuAir* air, int to, const uint8_t* message, size_t size) {
 	int const from = air->self;
 	if (airQueued[from] == AIR_QUEUE || size > AIR_BYTES) {
@@ -2905,7 +2832,6 @@ static int32_t nextRoundEnd(void) {
 	return (int32_t) end;
 }
 
-// Runs the Game Boy Advances for a frame's worth of cycles each, in rounds.
 static void runAdvances(void) {
 	for (int i = 0; i < playersHere; ++i) {
 		roundDone[i] = gbaAhead[i];
@@ -2974,7 +2900,6 @@ static void runAdvancesFrame(void) {
 	}
 }
 
-// Runs one frame of the game and hands its picture and sound to the frontend.
 void retro_run(void) {
 	readNewerPlayerOne();
 	bool updated = false;
@@ -3198,7 +3123,6 @@ bool retro_unserialize(const void* data, size_t size) {
 
 // Cheats, and the memory the frontend sees.
 
-// Decodes every code again, in order.
 static void applyCheatCodes(void) {
 	if (gameBoy) {
 		if (!libretroGbSetCheats((const char* const*) cheatCodes, cheatCodeCount)) {
@@ -3243,7 +3167,6 @@ void retro_cheat_set(unsigned index, bool enabled, const char* code) {
 	applyCheatCodes();
 }
 
-// NTSC timing, in libretro's terms.
 unsigned retro_get_region(void) {
 	return RETRO_REGION_NTSC;
 }
