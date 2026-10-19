@@ -231,6 +231,12 @@ enum {
 	MEMORY_SECOND_RTC = 0x101,
 };
 
+// A Game Boy Advance's save memory: until the game shows its save type, as large as the largest, as
+// in mGBA's core, so a save file from either core loads.
+static size_t saveSize(struct GBA* machine) {
+	return machine->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(machine);
+}
+
 // Whether the consoles of a link run here: Together, a pair file, or two games from the frontend.
 static bool togetherRunning(void) {
 	return gbTogether || gbaTogether;
@@ -832,7 +838,7 @@ static void announceMemory(void) {
 		const struct retro_memory_descriptor advance[] = {
 			{ RETRO_MEMDESC_SYSTEM_RAM, gba->iwram, 0, 0x03000000, 0xFF000000, 0, SIZE_IWRAM, NULL },
 			{ RETRO_MEMDESC_SYSTEM_RAM, gba->ewram, 0, 0x02000000, 0xFF000000, 0, SIZE_EWRAM, NULL },
-			{ 0, gba->savedata.storage, 0, 0x0E000000, 0, 0, gba->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gba), NULL },
+			{ 0, gba->savedata.storage, 0, 0x0E000000, 0, 0, saveSize(gba), NULL },
 			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x08000000, 0, 0, romSize, NULL },
 			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x0A000000, 0, 0, romSize, NULL },
 			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x0C000000, 0, 0, romSize, NULL },
@@ -1131,7 +1137,7 @@ static void* saveMemory(int player, size_t* size) {
 		return data;
 	}
 	if (!gameBoy && gbas[player]) {
-		*size = gbas[player]->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gbas[player]);
+		*size = saveSize(gbas[player]);
 		return gbas[player]->savedata.storage;
 	}
 	return NULL;
@@ -3211,9 +3217,11 @@ unsigned retro_get_region(void) {
 	return RETRO_REGION_NTSC;
 }
 
-// Memory the frontend may read or keep: the cartridge's save memory (loaded and saved as the save
-// file), a Game Boy cartridge's clock (as the .rtc file), and work RAM for achievements and cheats.
-void* retro_get_memory_data(unsigned id) {
+// Memory the frontend may read or keep, and its size: the cartridge's save memory (loaded and saved
+// as the save file), a Game Boy cartridge's clock (as the .rtc file), and work RAM for achievements
+// and cheats. RetroArch gets no save memory when the core keeps player 1's save itself.
+static void* memory(unsigned id, size_t* size) {
+	*size = 0;
 	if (pairFile && id != RETRO_MEMORY_SYSTEM_RAM) {
 		return NULL;
 	}
@@ -3221,70 +3229,44 @@ void* retro_get_memory_data(unsigned id) {
 		return NULL;
 	}
 	if (gbTogether && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
-		size_t size;
 		libretroGbSelect(1);
-		void* const data = id == MEMORY_SECOND_SAVE ? libretroGbSaveRam(&size) : libretroGbRtc(&size);
+		void* const data = id == MEMORY_SECOND_SAVE ? libretroGbSaveRam(size) : libretroGbRtc(size);
 		libretroGbSelect(0);
 		return data;
 	}
 	if (gameBoy) {
-		size_t size;
-		return id == RETRO_MEMORY_SAVE_RAM ? libretroGbSaveRam(&size) : id == RETRO_MEMORY_SYSTEM_RAM ? libretroGbSystemRam(&size)
-		     : id == RETRO_MEMORY_RTC ? libretroGbRtc(&size) : NULL;
+		return id == RETRO_MEMORY_SAVE_RAM ? libretroGbSaveRam(size) : id == RETRO_MEMORY_SYSTEM_RAM ? libretroGbSystemRam(size)
+		     : id == RETRO_MEMORY_RTC                                ? libretroGbRtc(size)
+		                                                             : NULL;
 	}
 	if (!gba) {
 		return NULL;
 	}
 	switch (id) {
 	case MEMORY_SECOND_SAVE:
-		return gbaTogether ? gbas[1]->savedata.storage : NULL;
+		if (!gbaTogether) {
+			return NULL;
+		}
+		*size = saveSize(gbas[1]);
+		return gbas[1]->savedata.storage;
 	case RETRO_MEMORY_SAVE_RAM:
+		*size = saveSize(gba);
 		return gba->savedata.storage;
 	case RETRO_MEMORY_SYSTEM_RAM:
+		*size = SIZE_EWRAM;
 		return gba->ewram;
 	default:
 		return NULL;
 	}
 }
 
-// Until the game shows its save type, save memory is as large as the largest save type, as in
-// mGBA's core, so a save file from either core loads.
+void* retro_get_memory_data(unsigned id) {
+	size_t size;
+	return memory(id, &size);
+}
+
 size_t retro_get_memory_size(unsigned id) {
-	if (pairFile && id != RETRO_MEMORY_SYSTEM_RAM) {
-		return 0;
-	}
-	if (!retroArchSaves() && (id == RETRO_MEMORY_SAVE_RAM || id == RETRO_MEMORY_RTC)) {
-		return 0;
-	}
-	if (gbTogether && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
-		size_t size;
-		libretroGbSelect(1);
-		id == MEMORY_SECOND_SAVE ? libretroGbSaveRam(&size) : libretroGbRtc(&size);
-		libretroGbSelect(0);
-		return size;
-	}
-	if (gameBoy) {
-		size_t size = 0;
-		if (id == RETRO_MEMORY_SAVE_RAM) {
-			libretroGbSaveRam(&size);
-		} else if (id == RETRO_MEMORY_SYSTEM_RAM) {
-			libretroGbSystemRam(&size);
-		} else if (id == RETRO_MEMORY_RTC) {
-			libretroGbRtc(&size);
-		}
-		return size;
-	}
-	if (!gba) {
-		return 0;
-	}
-	switch (id) {
-	case MEMORY_SECOND_SAVE:
-		return !gbaTogether ? 0 : gbas[1]->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gbas[1]);
-	case RETRO_MEMORY_SAVE_RAM:
-		return gba->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gba);
-	case RETRO_MEMORY_SYSTEM_RAM:
-		return SIZE_EWRAM;
-	default:
-		return 0;
-	}
+	size_t size;
+	memory(id, &size);
+	return size;
 }
