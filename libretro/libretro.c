@@ -2579,10 +2579,21 @@ static void readRestarts(const uint16_t keys[]) {
 	}
 }
 
-// R2 on any controller moves to the next way of showing the screens, and L2 back unless it
-// fast-forwards.
+// Whether RetroArch is running this frame again, for a netplay rollback or runahead, rather than
+// for the first time.
+static bool rerunning(void) {
+	int enabled = RETRO_AV_ENABLE_VIDEO;
+	return environment(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &enabled) && !(enabled & RETRO_AV_ENABLE_VIDEO);
+}
+
+// R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. Each device
+// shows the screens its own way: in netplay only this device's player changes them, the host's
+// player 1 or a joined device's player 2, as RetroArch doesn't say which player is here.
 static void readScreensKeys(void) {
 	static bool held[MAX_PLAYERS][2];
+	if (rerunning()) {
+		return;
+	}
 	int ways[SCREENS_COUNT];
 	int count = 0;
 	ways[count++] = SCREENS_SIDE;
@@ -2596,8 +2607,12 @@ static void readScreensKeys(void) {
 	for (int i = 0; i < count; ++i) {
 		at = ways[i] == screens ? i : at;
 	}
+	int const here = netplayJoined ? 1 : 0;
 	int step = 0;
 	for (int port = 0; port < playersHere; ++port) {
+		if (netplaySeen && port != here) {
+			continue;
+		}
 		for (int k = netplaySeen || !l2FastForward ? 0 : 1; k < 2; ++k) {
 			bool const now = inputState(port, RETRO_DEVICE_JOYPAD, 0, k ? RETRO_DEVICE_ID_JOYPAD_R2 : RETRO_DEVICE_ID_JOYPAD_L2);
 			if (now && !held[port][k]) {
