@@ -216,6 +216,15 @@ static bool tiltCartridge;
 static bool showOptions(void);
 static bool togetherWanted(void);
 static bool separateWanted(void);
+static void fillSaveChoices(void);
+static void offerSaveChoices(void);
+static void keepSession(void);
+static void sendSaveOnPairing(void);
+static void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);
+static void airSend(const struct RfuAir* air, int to, const uint8_t* message, size_t size);
+static void cableBegin(void* context, int mode, uint32_t out, int32_t cycles);
+static bool cableFinish(void* context, uint32_t in[3]);
+static void cableWrote(void* context);
 
 // Cheat codes from the frontend, by index, and the Game Boy Advance operations they decode to. All
 // codes are decoded again, in order, whenever one changes, because a master code changes how the
@@ -233,6 +242,8 @@ enum {
 	MEMORY_SECOND_SAVE = 0x100,
 	MEMORY_SECOND_RTC = 0x101,
 };
+
+// Helpers.
 
 // A Game Boy Advance's save memory: until the game shows its save type, as large as the largest, as
 // in mGBA's core, so a save file from either core loads.
@@ -274,6 +285,8 @@ static void updateRumble(bool on) {
 	}
 	rumbling = on;
 }
+
+// The frontend's calls to set the core up, and what the core tells it.
 
 // Turbo Button Period's choices: 4 to 120 frames.
 static void fillTurboPeriods(struct retro_core_option_v2_definition* definitions) {
@@ -544,9 +557,6 @@ void retro_get_system_av_info(struct retro_system_av_info* info) {
 	info->timing.sample_rate = AUDIO_RATE;
 }
 
-static void sendSaveOnPairing(void);
-static void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);
-
 // Nothing needs setting up before a game is loaded.
 void retro_init(void) {
 	cheatsInit(&cheats);
@@ -564,6 +574,8 @@ void retro_deinit(void) {
 // Every player's controller is a RetroPad.
 void retro_set_controller_port_device(unsigned port, unsigned device) {
 }
+
+// Options.
 
 // Builds the color correction table from Pokefan531's measurements of the screen: its primaries
 // mixed in linear light, at a gamma of 2.2.
@@ -603,7 +615,73 @@ static const char* option(const char* key) {
 	return environment(RETRO_ENVIRONMENT_GET_VARIABLE, &variable) ? variable.value : NULL;
 }
 
-static void showButtons(void);
+// Tells the frontend what each button does for the loaded console, including the stick, D-pad or
+// click that moves a cartridge's tilt sensor, wherever the Tilt Sensor option puts it.
+static void showButtons(void) {
+	bool const forGameBoy = gameBoy;
+	static struct retro_input_descriptor shown[80];
+	size_t n = 0;
+#define BUTTON(device, index, id, name) shown[n++] = (struct retro_input_descriptor) { port, device, index, id, name }
+	unsigned port = 0;
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT, "Left");
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP, "Up");
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN, "Down");
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right");
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B, "B");
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A, "A");
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT, "Select");
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Start");
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X, "Turbo A");
+	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y, "Turbo B");
+	if (togetherRunning()) {
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, l2FastForward ? "Fast Forward (Previous Screens in Netplay)" : "Previous Screens");
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Next Screens");
+	} else {
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Fast Forward");
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Fast Forward");
+	}
+	if (forGameBoy) {
+		// A Game Boy has no L or R; on the Game Boy Advance model they stretch the picture. With
+		// the tilt sensor on the D-pad, L is the flick.
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, tiltControl == 2 ? "Flick (Motion Sensor)" : "Stretch (Game Boy Advance Model)");
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "Stretch (Game Boy Advance Model)");
+	} else {
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, "L");
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "R");
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3, "Turbo L");
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3, "Turbo R");
+	}
+	if (tiltControl < 2) {
+		unsigned const stick = tiltControl ? RETRO_DEVICE_INDEX_ANALOG_RIGHT : RETRO_DEVICE_INDEX_ANALOG_LEFT;
+		BUTTON(RETRO_DEVICE_ANALOG, stick, RETRO_DEVICE_ID_ANALOG_X, "Tilt / Turn (Motion Sensor)");
+		BUTTON(RETRO_DEVICE_ANALOG, stick, RETRO_DEVICE_ID_ANALOG_Y,
+		       !forGameBoy && tiltControl == 1 ? "Tilt Up / Down, Sunlight" : "Tilt Up / Down (Motion Sensor)");
+		if (forGameBoy) {
+			BUTTON(RETRO_DEVICE_JOYPAD, 0, tiltControl ? RETRO_DEVICE_ID_JOYPAD_R3 : RETRO_DEVICE_ID_JOYPAD_L3, "Flick (Motion Sensor)");
+		}
+	}
+	if (!forGameBoy && tiltControl != 1) {
+		BUTTON(RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y, "Sunlight (Solar Sensor)");
+	}
+	// The other players' consoles, each on its own controller.
+	for (port = 1; port < (unsigned) playersHere; ++port) {
+		static const unsigned ids[12] = {
+			RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_RIGHT,
+			RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START,
+			RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_JOYPAD_L2, RETRO_DEVICE_ID_JOYPAD_R2,
+		};
+		for (int i = 0; i < 12; ++i) {
+			BUTTON(RETRO_DEVICE_JOYPAD, 0, ids[i], shown[i].description);
+		}
+		if (!forGameBoy) {
+			BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, "L");
+			BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "R");
+		}
+	}
+#undef BUTTON
+	shown[n] = (struct retro_input_descriptor) { 0, 0, 0, 0, NULL };
+	environment(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, shown);
+}
 
 // Reads every option and applies the ones that can change while a game runs.
 static void readOptions(void) {
@@ -693,96 +771,6 @@ static void readOptions(void) {
 	}
 }
 
-// Loads gba_bios.bin from the system directory.
-static bool loadBios(struct GBA* machine) {
-	const char* directory = NULL;
-	if (!environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory) || !directory) {
-		showMessage("armGBA: no system directory for gba_bios.bin");
-		return false;
-	}
-	char path[4096];
-	snprintf(path, sizeof(path), "%s/gba_bios.bin", directory);
-	FILE* f = fopen(path, "rb");
-	uint8_t bios[SIZE_BIOS];
-	bool read = f && fread(bios, 1, sizeof(bios), f) == sizeof(bios);
-	if (f) {
-		fclose(f);
-	}
-	if (!read) {
-		showMessage("armGBA needs gba_bios.bin in the system directory");
-		return false;
-	}
-	return gbaLoadBios(machine, bios, sizeof(bios));
-}
-
-// Tells the frontend what each button does for the loaded console, including the stick, D-pad or
-// click that moves a cartridge's tilt sensor, wherever the Tilt Sensor option puts it.
-static void showButtons(void) {
-	bool const forGameBoy = gameBoy;
-	static struct retro_input_descriptor shown[80];
-	size_t n = 0;
-#define BUTTON(device, index, id, name) shown[n++] = (struct retro_input_descriptor) { port, device, index, id, name }
-	unsigned port = 0;
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT, "Left");
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP, "Up");
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN, "Down");
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right");
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B, "B");
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A, "A");
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT, "Select");
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Start");
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X, "Turbo A");
-	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y, "Turbo B");
-	if (togetherRunning()) {
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, l2FastForward ? "Fast Forward (Previous Screens in Netplay)" : "Previous Screens");
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Next Screens");
-	} else {
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Fast Forward");
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Fast Forward");
-	}
-	if (forGameBoy) {
-		// A Game Boy has no L or R; on the Game Boy Advance model they stretch the picture. With
-		// the tilt sensor on the D-pad, L is the flick.
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, tiltControl == 2 ? "Flick (Motion Sensor)" : "Stretch (Game Boy Advance Model)");
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "Stretch (Game Boy Advance Model)");
-	} else {
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, "L");
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "R");
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3, "Turbo L");
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3, "Turbo R");
-	}
-	if (tiltControl < 2) {
-		unsigned const stick = tiltControl ? RETRO_DEVICE_INDEX_ANALOG_RIGHT : RETRO_DEVICE_INDEX_ANALOG_LEFT;
-		BUTTON(RETRO_DEVICE_ANALOG, stick, RETRO_DEVICE_ID_ANALOG_X, "Tilt / Turn (Motion Sensor)");
-		BUTTON(RETRO_DEVICE_ANALOG, stick, RETRO_DEVICE_ID_ANALOG_Y,
-		       !forGameBoy && tiltControl == 1 ? "Tilt Up / Down, Sunlight" : "Tilt Up / Down (Motion Sensor)");
-		if (forGameBoy) {
-			BUTTON(RETRO_DEVICE_JOYPAD, 0, tiltControl ? RETRO_DEVICE_ID_JOYPAD_R3 : RETRO_DEVICE_ID_JOYPAD_L3, "Flick (Motion Sensor)");
-		}
-	}
-	if (!forGameBoy && tiltControl != 1) {
-		BUTTON(RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y, "Sunlight (Solar Sensor)");
-	}
-	// The other players' consoles, each on its own controller.
-	for (port = 1; port < (unsigned) playersHere; ++port) {
-		static const unsigned ids[12] = {
-			RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_RIGHT,
-			RETRO_DEVICE_ID_JOYPAD_B, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_START,
-			RETRO_DEVICE_ID_JOYPAD_X, RETRO_DEVICE_ID_JOYPAD_Y, RETRO_DEVICE_ID_JOYPAD_L2, RETRO_DEVICE_ID_JOYPAD_R2,
-		};
-		for (int i = 0; i < 12; ++i) {
-			BUTTON(RETRO_DEVICE_JOYPAD, 0, ids[i], shown[i].description);
-		}
-		if (!forGameBoy) {
-			BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, "L");
-			BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "R");
-		}
-	}
-#undef BUTTON
-	shown[n] = (struct retro_input_descriptor) { 0, 0, 0, 0, NULL };
-	environment(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, shown);
-}
-
 // Shows only the options that do something for the loaded game and the Link Mode chosen: as a game
 // loads, and as RetroArch asks when an option changes in its menu. Returns whether that changed which
 // are shown. With no game loaded, all are shown.
@@ -839,212 +827,30 @@ static void setOptions(void) {
 	showOptions();
 }
 
-// Describes memory for the frontend's achievements and cheat search, the same way mGBA's and
-// gambatte-libretro's cores do.
-static void announceMemory(void) {
-	struct retro_memory_descriptor descriptors[11];
-	size_t count = 0;
-	if (gameBoy) {
-		count = libretroGbMemoryMap(descriptors);
-		gbMapColor = libretroGbIsColor();
-	}
-	if (!count && gba) {
-		size_t romSize = gba->romSize + (gba->romSize & 1);
-		const struct retro_memory_descriptor advance[] = {
-			{ RETRO_MEMDESC_SYSTEM_RAM, gba->iwram, 0, 0x03000000, 0xFF000000, 0, SIZE_IWRAM, NULL },
-			{ RETRO_MEMDESC_SYSTEM_RAM, gba->ewram, 0, 0x02000000, 0xFF000000, 0, SIZE_EWRAM, NULL },
-			{ 0, gba->savedata.storage, 0, 0x0E000000, 0, 0, saveSize(gba), NULL },
-			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x08000000, 0, 0, romSize, NULL },
-			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x0A000000, 0, 0, romSize, NULL },
-			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x0C000000, 0, 0, romSize, NULL },
-			{ RETRO_MEMDESC_CONST, gba->bios, 0, 0x00000000, 0, 0, SIZE_BIOS, NULL },
-			{ 0, gba->vram, 0, 0x06000000, 0xFF000000, 0, SIZE_VRAM, NULL },
-			{ 0, gba->palette, 0, 0x05000000, 0xFF000000, 0, SIZE_PALETTE, NULL },
-			{ 0, gba->oam, 0, 0x07000000, 0xFF000000, 0, SIZE_OAM, NULL },
-			{ 0, gba->io, 0, 0x04000000, 0, 0, SIZE_IO, NULL },
-		};
-		count = sizeof(advance) / sizeof(advance[0]);
-		memcpy(descriptors, advance, sizeof(advance));
-	}
-	struct retro_memory_map map = { descriptors, count };
-	environment(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &map);
-	bool yes = true;
-	environment(RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS, &yes);
+static bool togetherWanted(void) {
+	const char* value = option("armgba_link_mode");
+	return value && !strcmp(value, "together");
 }
 
-// A restart or a loaded state can switch the machine to or from a Game Boy Color, which changes the
-// memory map.
-static void checkGameBoyMemory(void) {
-	if (gbMapColor != libretroGbIsColor()) {
-		announceMemory();
-	}
+static bool separateWanted(void) {
+	const char* value = option("armgba_link_mode");
+	return value && !strcmp(value, "separate");
 }
 
-// Game Boy and Game Boy Color games are told apart from Game Boy Advance games by file extension.
-static bool hasGameBoyExtension(const char* path) {
-	const char* dot = path ? strrchr(path, '.') : NULL;
-	return dot && (!strcasecmp(dot, ".gb") || !strcasecmp(dot, ".gbc"));
+// How many consoles Together runs, and whether Game Boys join through the Four Player Adapter:
+// always for three or four.
+static int playersWanted(void) {
+	const char* value = option("armgba_link_players");
+	int const count = value ? atoi(value) : 2;
+	return count < 2 ? 2 : count > MAX_PLAYERS ? MAX_PLAYERS : count;
 }
 
-
-static bool saveFiles(int player, char file[8192], char rtcFile[8192]);
-static bool backupFiles(int player, char file[8192], char rtcFile[8192]);
-static void remoteFiles(int player, char file[8192], char rtcFile[8192]);
-static void receivedFiles(char file[8192], char rtcFile[8192]);
-
-// "20261018-153012-2" as "2026-10-18 15:30:12 (2)".
-static void stampLabel(const char* stamp, char* out, size_t outSize) {
-	snprintf(out, outSize, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s%s%s%s", stamp, stamp + 4, stamp + 6, stamp + 9, stamp + 11, stamp + 13,
-	         stamp[15] ? " (" : "", stamp[15] ? stamp + 16 : "", stamp[15] ? ")" : "");
+static bool adapterWanted(int count) {
+	const char* value = option("armgba_gb_link_port");
+	return count > 2 || (value && !strcmp(value, "adapter"));
 }
 
-// The player Load Into names, when they are playing here, or -1.
-static int loadIntoPlayer(void) {
-	const char* into = option("armgba_load_into");
-	char file[8192], rtcFile[8192];
-	int const player = into && into[0] >= '1' && into[0] <= '4' ? into[0] - '1' : -1;
-	return player >= 0 && saveFiles(player, file, rtcFile) ? player : -1;
-}
-
-// Where a remote save goes: where Load Into says, or else to the other person: the session's player
-// 1 (the host) to player 2 here when there is one, its player 2 to player 1 here, and players 3 and
-// 4 to the same players here, or player 1.
-static int remoteTarget(int from) {
-	char file[8192], rtcFile[8192];
-	int const named = loadIntoPlayer();
-	if (named >= 0) {
-		return named;
-	}
-	if (from == 0) {
-		return saveFiles(1, file, rtcFile) ? 1 : 0;
-	}
-	return from > 1 && saveFiles(from, file, rtcFile) ? from : 0;
-}
-
-// Starts a list over with Off, and ends it after the choices added.
-static void startChoices(struct SaveChoices* list) {
-	list->count = 0;
-	list->option->values[0] = (struct retro_core_option_value) { "off", "Off" };
-	list->option->values[1] = (struct retro_core_option_value) { NULL, NULL };
-}
-
-static void addChoice(struct SaveChoices* list, const char* value, const char* label) {
-	if (list->count >= BACKUP_CHOICES) {
-		return;
-	}
-	int const n = list->count++;
-	snprintf(list->values[n], sizeof(list->values[0]), "%s", value);
-	snprintf(list->labels[n], sizeof(list->labels[0]), "%s", label);
-	list->option->values[n + 1] = (struct retro_core_option_value) { list->values[n], list->labels[n] };
-	list->option->values[n + 2] = (struct retro_core_option_value) { NULL, NULL };
-}
-
-// Adds a save's newest backups to a list, as "<tag> <stamp>" named "<name>: <time>".
-static void addBackupChoices(struct SaveChoices* list, const char* file, int most, const char* tag, const char* name) {
-	char stamps[BACKUP_CHOICES][SECOND_STAMP];
-	size_t const count = secondBackups(file, stamps, most);
-	for (size_t i = 0; i < count; ++i) {
-		char value[SECOND_STAMP + 4], label[80], when[32];
-		stampLabel(stamps[i], when, sizeof(when));
-		snprintf(value, sizeof(value), "%.3s %.*s", tag, SECOND_STAMP - 1, stamps[i]);
-		snprintf(label, sizeof(label), "%s: %s", name, when);
-		addChoice(list, value, label);
-	}
-}
-
-// Where a received save goes: where Load Into says, or else to player 2, the other person's place,
-// when there is one, or player 1.
-static int receivedTarget(void) {
-	char file[8192], rtcFile[8192];
-	int const named = loadIntoPlayer();
-	return named >= 0 ? named : saveFiles(1, file, rtcFile) ? 1 : 0;
-}
-
-// Lists the players playing as Back Up Save's and Load Into's choices, and their saves as Load
-// Save's: with two or more, each one's current save, then their backups; then the saves kept from
-// other devices' netplay sessions, and those received from the other player of a Separate link. Send
-// Save lists player 1's current save and the same saves of player 1's.
-static void fillSaveChoices(void) {
-	if (!loadChoices.option || !sendChoices.option || !backUpOption || !loadIntoOption) {
-		return;
-	}
-	const char* value = option("armgba_list_saves");
-	backupsListed = value ? atoi(value) : 0;
-	backupsListed = backupsListed > 0 && backupsListed <= BACKUP_CHOICES ? backupsListed : 10;
-	char files[MAX_PLAYERS][8192];
-	char remotes[MAX_PLAYERS][8192];
-	char rtcFile[8192];
-	bool playing[MAX_PLAYERS];
-	bool remote[MAX_PLAYERS];
-	char received[8192];
-	char stamp[1][SECOND_STAMP];
-	receivedFiles(received, rtcFile);
-	bool const anyReceived = *firstPath && secondBackups(received, stamp, 1);
-	int players = 0;
-	int groups = anyReceived;
-	for (int player = 0; player < MAX_PLAYERS; ++player) {
-		playing[player] = backupFiles(player, files[player], rtcFile);
-		remoteFiles(player, remotes[player], rtcFile);
-		remote[player] = *firstPath && secondBackups(remotes[player], stamp, 1);
-		players += playing[player];
-		groups += playing[player] + remote[player];
-	}
-	// Each player's current save, then the backups, shared out.
-	int const current = players > 1 ? players : 0;
-	int const room = BACKUP_CHOICES - current;
-	int const each = groups && backupsListed > room / groups ? room / groups : backupsListed;
-	int shown = 0;
-	backUpOption->values[0] = (struct retro_core_option_value) { "off", "Off" };
-	loadIntoOption->values[0] = (struct retro_core_option_value) { "same", "Same Player" };
-	startChoices(&loadChoices);
-	startChoices(&sendChoices);
-	addChoice(&sendChoices, "1 now", "Player 1: Now");
-	addBackupChoices(&sendChoices, files[0], each, "1", "Player 1");
-	for (int player = 0; player < MAX_PLAYERS; ++player) {
-		if (!playing[player]) {
-			continue;
-		}
-		snprintf(playerValues[player], sizeof(playerValues[0]), "%d", player + 1);
-		snprintf(playerLabels[player], sizeof(playerLabels[0]), "Player %d", player + 1);
-		++shown;
-		backUpOption->values[shown] = (struct retro_core_option_value) { playerValues[player], playerLabels[player] };
-		loadIntoOption->values[shown] = (struct retro_core_option_value) { playerValues[player], playerLabels[player] };
-		char tag[4], now[8], nowLabel[24];
-		snprintf(tag, sizeof(tag), "%d", player + 1);
-		if (current) {
-			snprintf(now, sizeof(now), "%s now", tag);
-			snprintf(nowLabel, sizeof(nowLabel), "Player %d: Now", player + 1);
-			addChoice(&loadChoices, now, nowLabel);
-		}
-		addBackupChoices(&loadChoices, files[player], each, tag, playerLabels[player]);
-	}
-	for (int player = 0; player < MAX_PLAYERS; ++player) {
-		if (remote[player]) {
-			char tag[4], name[48];
-			snprintf(tag, sizeof(tag), "r%d", player + 1);
-			snprintf(name, sizeof(name), "Remote Player %d into Player %d", player + 1, remoteTarget(player) + 1);
-			addBackupChoices(&loadChoices, remotes[player], each, tag, name);
-			snprintf(name, sizeof(name), "Remote Player %d", player + 1);
-			addBackupChoices(&sendChoices, remotes[player], each, tag, name);
-		}
-	}
-	if (anyReceived) {
-		char name[32];
-		snprintf(name, sizeof(name), "Received into Player %d", receivedTarget() + 1);
-		addBackupChoices(&loadChoices, received, each, "x", name);
-		addBackupChoices(&sendChoices, received, each, "x", "Received");
-	}
-	backUpOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
-	loadIntoOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
-	listedInto = loadIntoPlayer();
-}
-
-static void offerSaveChoices(void) {
-	if (coreOptions && loadChoices.option) {
-		fillSaveChoices();
-		setOptions();
-	}
-}
+// Player 2's Game.
 
 // Offers the games beside the loaded one as Player 2's Game. The option's values are its list, so
 // the options are set again with it.
@@ -1119,28 +925,13 @@ static const char* chosenSecond(void) {
 	return NULL;
 }
 
-static bool togetherWanted(void) {
-	const char* value = option("armgba_link_mode");
-	return value && !strcmp(value, "together");
+// The game on a player's console.
+static const char* gameOf(int player) {
+	const char* chosen = player == 1 ? secondPath : player > 1 ? otherPaths[player] : "";
+	return *chosen ? chosen : firstPath;
 }
 
-static bool separateWanted(void) {
-	const char* value = option("armgba_link_mode");
-	return value && !strcmp(value, "separate");
-}
-
-// How many consoles Together runs, and whether Game Boys join through the Four Player Adapter:
-// always for three or four.
-static int playersWanted(void) {
-	const char* value = option("armgba_link_players");
-	int const count = value ? atoi(value) : 2;
-	return count < 2 ? 2 : count > MAX_PLAYERS ? MAX_PLAYERS : count;
-}
-
-static bool adapterWanted(int count) {
-	const char* value = option("armgba_gb_link_port");
-	return count > 2 || (value && !strcmp(value, "adapter"));
-}
+// Save files: each player's save memory and where its file is.
 
 // A player's save memory and Game Boy clock.
 static void* saveMemory(int player, size_t* size) {
@@ -1208,6 +999,38 @@ static bool writeFile(const char* path, const void* data, size_t size) {
 		showMessage(message);
 	}
 	return written;
+}
+
+// Reads a whole file; NULL if there is none, or it is empty.
+static void* readWholeFile(const char* path, size_t* size) {
+	*size = 0;
+	FILE* f = fopen(path, "rb");
+	if (!f) {
+		return NULL;
+	}
+	fseek(f, 0, SEEK_END);
+	long const length = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	void* data = length > 0 ? malloc(length) : NULL;
+	if (data && fread(data, 1, length, f) == (size_t) length) {
+		*size = length;
+	} else {
+		free(data);
+		data = NULL;
+	}
+	fclose(f);
+	return data;
+}
+
+// Copies a file; returns false if there was none to copy.
+static bool copyFile(const char* from, const char* to) {
+	size_t size;
+	void* data = readWholeFile(from, &size);
+	if (data) {
+		writeFile(to, data, size);
+	}
+	free(data);
+	return data != NULL;
 }
 
 // RetroArch's save directory, or with a pair file the one its games' saves go in.
@@ -1411,8 +1234,6 @@ static void readOtherSaves(void) {
 	offerSaveChoices();
 }
 
-static void keepSession(void);
-
 // Writes the kept saves and clocks that have changed; in netplay only as the game closes, on the
 // device hosting it. A device that joined keeps the session's saves in armGBA/Remote.
 static void writeSaves(bool closing) {
@@ -1459,9 +1280,588 @@ static void forgetSaves(void) {
 	copySaves = 0;
 }
 
-static void cableBegin(void* context, int mode, uint32_t out, int32_t cycles);
-static bool cableFinish(void* context, uint32_t in[3]);
-static void cableWrote(void* context);
+// Gives the players on player 1's game, with no save of their own yet, a copy of player 1's.
+static void copyFirstSave(void) {
+	for (int player = 1; player < playersHere; ++player) {
+		if (!(copySaves & 1 << player)) {
+			continue;
+		}
+		if (!gameBoy) {
+			memcpy(gbas[player]->savedata.storage, gba->savedata.storage, sizeof(gba->savedata.storage));
+			continue;
+		}
+		size_t size;
+		size_t otherSize;
+		const void* const first = saveMemory(0, &size);
+		void* const other = saveMemory(player, &otherSize);
+		if (first && other && size == otherSize) {
+			memcpy(other, first, size);
+		}
+	}
+	copySaves = 0;
+}
+
+// Backups, and the Back Up Save, Load Save and Send Save options.
+
+// "20261018-153012-2" as "2026-10-18 15:30:12 (2)".
+static void stampLabel(const char* stamp, char* out, size_t outSize) {
+	snprintf(out, outSize, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s%s%s%s", stamp, stamp + 4, stamp + 6, stamp + 9, stamp + 11, stamp + 13,
+	         stamp[15] ? " (" : "", stamp[15] ? stamp + 16 : "", stamp[15] ? ")" : "");
+}
+
+// Whether a file holds just these bytes.
+static bool fileHolds(const char* path, const void* data, size_t size) {
+	FILE* f = fopen(path, "rb");
+	if (!f) {
+		return false;
+	}
+	uint8_t* held = malloc(size + 1);
+	bool const same = held && fread(held, 1, size + 1, f) == size && !memcmp(held, data, size);
+	free(held);
+	fclose(f);
+	return same;
+}
+
+// Writes a save, and clock, as backups of the save file given, named for now, unless the newest
+// backup already holds that save. Returns 1 if it wrote them, 0 if the newest backup holds the save
+// (stamp is its), and -1 if the save couldn't be written.
+static int writeBackup(const char* file, const char* rtcFile, const void* save, size_t size, const void* rtc, size_t rtcSize,
+                       char stamp[SECOND_STAMP]) {
+	char out[8300];
+	char newest[1][SECOND_STAMP];
+	if (secondBackups(file, newest, 1)) {
+		secondBackupPath(file, newest[0], out, sizeof(out));
+		if (fileHolds(out, save, size)) {
+			memcpy(stamp, newest[0], SECOND_STAMP);
+			return 0;
+		}
+	}
+	secondNewStamp(file, stamp);
+	secondBackupPath(file, stamp, out, sizeof(out));
+	secondMakeFolders(out);
+	if (!writeFile(out, save, size)) {
+		return -1;
+	}
+	if (rtc && rtcSize) {
+		secondBackupPath(rtcFile, stamp, out, sizeof(out));
+		writeFile(out, rtc, rtcSize);
+	}
+	return 1;
+}
+
+static bool blankSave(const void* save, size_t size) {
+	for (size_t i = 1; i < size; ++i) {
+		if (((const uint8_t*) save)[i] != ((const uint8_t*) save)[0]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// Backs up a player's save, and clock, as they are in memory, newer than the file. Returns 1 if it
+// did, 2 if the newest backup already holds the save, 0 if there was nothing to back up (no file and
+// nothing saved yet), and -1 if it couldn't be written.
+static int backUpPlayer(int player, char stamp[SECOND_STAMP]) {
+	char file[8192], rtcFile[8192], base[8192], rtcBase[8192];
+	size_t size, rtcSize;
+	void* rtc;
+	void* save = liveSave(player, &size, &rtc, &rtcSize);
+	if (!saveFiles(player, file, rtcFile) || !backupFiles(player, base, rtcBase) || !save || !size) {
+		return 0;
+	}
+	if (!fileExists(file) && blankSave(save, size)) {
+		return 0;
+	}
+	int const written = writeBackup(base, rtcBase, save, size, rtc, rtcSize, stamp);
+	return written < 0 ? -1 : written ? 1 : 2;
+}
+
+// Deletes a save's oldest backups beyond what Backups Kept allows.
+static void pruneBackups(const char* saveFile, const char* rtcFile) {
+	const char* value = option("armgba_keep_saves");
+	size_t const keep = value ? (size_t) atoi(value) : 10;
+	enum { MOST = 1000 };
+	char (*stamps)[SECOND_STAMP] = keep ? malloc(MOST * SECOND_STAMP) : NULL;
+	if (!stamps) {
+		return;
+	}
+	size_t const count = secondBackups(saveFile, stamps, MOST);
+	for (size_t i = keep; i < count; ++i) {
+		char file[8300];
+		secondBackupPath(saveFile, stamps[i], file, sizeof(file));
+		remove(file);
+		secondBackupPath(rtcFile, stamps[i], file, sizeof(file));
+		remove(file);
+	}
+	free(stamps);
+}
+
+// A device that joined another's netplay session keeps the session's saves, never over its own, in
+// armGBA/Remote by the session's players, for Load Save.
+static void keepSession(void) {
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	for (int player = 0; player < playersHere; ++player) {
+		size_t size, rtcSize;
+		void* rtc;
+		void* save = liveSave(player, &size, &rtc, &rtcSize);
+		if (!save || !size || blankSave(save, size)) {
+			continue;
+		}
+		char file[8192], rtcFile[8192];
+		char stamp[SECOND_STAMP];
+		secondRemoteSavePath(gameOf(player), player, "srm", firstPath, saveDirectory, file, sizeof(file));
+		secondRemoteSavePath(gameOf(player), player, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
+		if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
+			pruneBackups(file, rtcFile);
+		}
+	}
+}
+
+// The player Load Into names, when they are playing here, or -1.
+static int loadIntoPlayer(void) {
+	const char* into = option("armgba_load_into");
+	char file[8192], rtcFile[8192];
+	int const player = into && into[0] >= '1' && into[0] <= '4' ? into[0] - '1' : -1;
+	return player >= 0 && saveFiles(player, file, rtcFile) ? player : -1;
+}
+
+// Where a remote save goes: where Load Into says, or else to the other person: the session's player
+// 1 (the host) to player 2 here when there is one, its player 2 to player 1 here, and players 3 and
+// 4 to the same players here, or player 1.
+static int remoteTarget(int from) {
+	char file[8192], rtcFile[8192];
+	int const named = loadIntoPlayer();
+	if (named >= 0) {
+		return named;
+	}
+	if (from == 0) {
+		return saveFiles(1, file, rtcFile) ? 1 : 0;
+	}
+	return from > 1 && saveFiles(from, file, rtcFile) ? from : 0;
+}
+
+// Where a received save goes: where Load Into says, or else to player 2, the other person's place,
+// when there is one, or player 1.
+static int receivedTarget(void) {
+	char file[8192], rtcFile[8192];
+	int const named = loadIntoPlayer();
+	return named >= 0 ? named : saveFiles(1, file, rtcFile) ? 1 : 0;
+}
+
+// Starts a list over with Off, and ends it after the choices added.
+static void startChoices(struct SaveChoices* list) {
+	list->count = 0;
+	list->option->values[0] = (struct retro_core_option_value) { "off", "Off" };
+	list->option->values[1] = (struct retro_core_option_value) { NULL, NULL };
+}
+
+static void addChoice(struct SaveChoices* list, const char* value, const char* label) {
+	if (list->count >= BACKUP_CHOICES) {
+		return;
+	}
+	int const n = list->count++;
+	snprintf(list->values[n], sizeof(list->values[0]), "%s", value);
+	snprintf(list->labels[n], sizeof(list->labels[0]), "%s", label);
+	list->option->values[n + 1] = (struct retro_core_option_value) { list->values[n], list->labels[n] };
+	list->option->values[n + 2] = (struct retro_core_option_value) { NULL, NULL };
+}
+
+// Adds a save's newest backups to a list, as "<tag> <stamp>" named "<name>: <time>".
+static void addBackupChoices(struct SaveChoices* list, const char* file, int most, const char* tag, const char* name) {
+	char stamps[BACKUP_CHOICES][SECOND_STAMP];
+	size_t const count = secondBackups(file, stamps, most);
+	for (size_t i = 0; i < count; ++i) {
+		char value[SECOND_STAMP + 4], label[80], when[32];
+		stampLabel(stamps[i], when, sizeof(when));
+		snprintf(value, sizeof(value), "%.3s %.*s", tag, SECOND_STAMP - 1, stamps[i]);
+		snprintf(label, sizeof(label), "%s: %s", name, when);
+		addChoice(list, value, label);
+	}
+}
+
+// Lists the players playing as Back Up Save's and Load Into's choices, and their saves as Load
+// Save's: with two or more, each one's current save, then their backups; then the saves kept from
+// other devices' netplay sessions, and those received from the other player of a Separate link. Send
+// Save lists player 1's current save and the same saves of player 1's.
+static void fillSaveChoices(void) {
+	if (!loadChoices.option || !sendChoices.option || !backUpOption || !loadIntoOption) {
+		return;
+	}
+	const char* value = option("armgba_list_saves");
+	backupsListed = value ? atoi(value) : 0;
+	backupsListed = backupsListed > 0 && backupsListed <= BACKUP_CHOICES ? backupsListed : 10;
+	char files[MAX_PLAYERS][8192];
+	char remotes[MAX_PLAYERS][8192];
+	char rtcFile[8192];
+	bool playing[MAX_PLAYERS];
+	bool remote[MAX_PLAYERS];
+	char received[8192];
+	char stamp[1][SECOND_STAMP];
+	receivedFiles(received, rtcFile);
+	bool const anyReceived = *firstPath && secondBackups(received, stamp, 1);
+	int players = 0;
+	int groups = anyReceived;
+	for (int player = 0; player < MAX_PLAYERS; ++player) {
+		playing[player] = backupFiles(player, files[player], rtcFile);
+		remoteFiles(player, remotes[player], rtcFile);
+		remote[player] = *firstPath && secondBackups(remotes[player], stamp, 1);
+		players += playing[player];
+		groups += playing[player] + remote[player];
+	}
+	// Each player's current save, then the backups, shared out.
+	int const current = players > 1 ? players : 0;
+	int const room = BACKUP_CHOICES - current;
+	int const each = groups && backupsListed > room / groups ? room / groups : backupsListed;
+	int shown = 0;
+	backUpOption->values[0] = (struct retro_core_option_value) { "off", "Off" };
+	loadIntoOption->values[0] = (struct retro_core_option_value) { "same", "Same Player" };
+	startChoices(&loadChoices);
+	startChoices(&sendChoices);
+	addChoice(&sendChoices, "1 now", "Player 1: Now");
+	addBackupChoices(&sendChoices, files[0], each, "1", "Player 1");
+	for (int player = 0; player < MAX_PLAYERS; ++player) {
+		if (!playing[player]) {
+			continue;
+		}
+		snprintf(playerValues[player], sizeof(playerValues[0]), "%d", player + 1);
+		snprintf(playerLabels[player], sizeof(playerLabels[0]), "Player %d", player + 1);
+		++shown;
+		backUpOption->values[shown] = (struct retro_core_option_value) { playerValues[player], playerLabels[player] };
+		loadIntoOption->values[shown] = (struct retro_core_option_value) { playerValues[player], playerLabels[player] };
+		char tag[4], now[8], nowLabel[24];
+		snprintf(tag, sizeof(tag), "%d", player + 1);
+		if (current) {
+			snprintf(now, sizeof(now), "%s now", tag);
+			snprintf(nowLabel, sizeof(nowLabel), "Player %d: Now", player + 1);
+			addChoice(&loadChoices, now, nowLabel);
+		}
+		addBackupChoices(&loadChoices, files[player], each, tag, playerLabels[player]);
+	}
+	for (int player = 0; player < MAX_PLAYERS; ++player) {
+		if (remote[player]) {
+			char tag[4], name[48];
+			snprintf(tag, sizeof(tag), "r%d", player + 1);
+			snprintf(name, sizeof(name), "Remote Player %d into Player %d", player + 1, remoteTarget(player) + 1);
+			addBackupChoices(&loadChoices, remotes[player], each, tag, name);
+			snprintf(name, sizeof(name), "Remote Player %d", player + 1);
+			addBackupChoices(&sendChoices, remotes[player], each, tag, name);
+		}
+	}
+	if (anyReceived) {
+		char name[32];
+		snprintf(name, sizeof(name), "Received into Player %d", receivedTarget() + 1);
+		addBackupChoices(&loadChoices, received, each, "x", name);
+		addBackupChoices(&sendChoices, received, each, "x", "Received");
+	}
+	backUpOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
+	loadIntoOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
+	listedInto = loadIntoPlayer();
+}
+
+static void offerSaveChoices(void) {
+	if (coreOptions && loadChoices.option) {
+		fillSaveChoices();
+		setOptions();
+	}
+}
+
+// Whether two players' saves are the same size, so one can be copied over the other.
+static bool sameSize(int from, int to) {
+	size_t size, toSize, rtcSize, toRtcSize;
+	void* rtc;
+	void* toRtc;
+	void* save = liveSave(from, &size, &rtc, &rtcSize);
+	void* toSave = liveSave(to, &toSize, &toRtc, &toRtcSize);
+	return save && toSave && size == toSize;
+}
+
+// Holding the Restart Buttons for a second restarts that player's console, as its power switch
+// would. Games that reset on A, B, Select and Start do so at once by themselves.
+enum { RESTART_FRAMES = 60 };
+static uint8_t restartHeld[MAX_PLAYERS];
+
+static void restartConsole(int player) {
+	if (gameBoy) {
+		libretroGbSelect(player);
+		libretroGbRestart();
+		libretroGbSelect(0);
+	} else {
+		gbaReset(gbas[player], skipBios);
+	}
+	char message[48];
+	snprintf(message, sizeof(message), playersHere > 1 ? "Player %d's console restarted" : "Restarted", player + 1);
+	notify(message, 120);
+}
+
+// Where Load Save takes a save from: a player's own backups or current save, a session of another
+// device's that this one joined, or the other player of a Separate link.
+enum { FROM_PLAYER, FROM_REMOTE, FROM_RECEIVED };
+
+// The Load Save option: makes one of player from's backups, or their current save ("now"), or a
+// save of the session's player from kept from another device's netplay, or one received, player
+// to's save, backs up the one it replaces, and restarts that player's console. A save given to
+// another player, or from another device, is copied, and stays where it was.
+static void loadSave(int source, int from, const char* stamp, int to) {
+	char message[160];
+	char fromBase[8192], fromRtcBase[8192], toFile[8192], toRtc[8192], toBase[8192], toRtcBase[8192];
+	char file[8300], rtcFile[8300];
+	char replaced[SECOND_STAMP];
+	bool const current = !strcmp(stamp, "now");
+	bool fromPlaying = true;
+	if (source == FROM_REMOTE) {
+		remoteFiles(from, fromBase, fromRtcBase);
+	} else if (source == FROM_RECEIVED) {
+		receivedFiles(fromBase, fromRtcBase);
+	} else {
+		fromPlaying = backupFiles(from, fromBase, fromRtcBase);
+	}
+	bool const remote = source != FROM_PLAYER;
+	bool const toPlaying = saveFiles(to, toFile, toRtc) && backupFiles(to, toBase, toRtcBase);
+	const char* fromGame = remote ? firstPath : gameOf(from);
+	if (fromPlaying) {
+		secondBackupPath(fromBase, stamp, file, sizeof(file));
+		secondBackupPath(fromRtcBase, stamp, rtcFile, sizeof(rtcFile));
+	}
+	if (!fromPlaying || !toPlaying) {
+		snprintf(message, sizeof(message), "Load Save: player %d isn't playing", (fromPlaying ? to : from) + 1);
+	} else if (netplaySeen || linkSession()) {
+		snprintf(message, sizeof(message), "Load Save: not in netplay");
+	} else if (strcmp(fromGame, gameOf(to))) {
+		snprintf(message, sizeof(message), "Load Save: that save is for another game than player %d's", to + 1);
+	} else if (current && from == to) {
+		snprintf(message, sizeof(message), "Load Save: that is player %d's save already", to + 1);
+	} else if (current && !sameSize(from, to)) {
+		snprintf(message, sizeof(message), "Load Save: players %d and %d's saves differ in size", from + 1, to + 1);
+	} else if (!current && !fileExists(file)) {
+		snprintf(message, sizeof(message), "Load Save: that save is gone");
+	} else if (backUpPlayer(to, replaced) < 0) {
+		snprintf(message, sizeof(message), "Load Save: player %d's save can't be backed up", to + 1);
+	} else {
+		size_t size, rtcSize;
+		void* rtc;
+		void* save = liveSave(to, &size, &rtc, &rtcSize);
+		if (current) {
+			size_t fromSize, fromRtcSize;
+			void* fromRtcData;
+			memcpy(save, liveSave(from, &fromSize, &fromRtcData, &fromRtcSize), size);
+			secondMakeFolders(toFile);
+			writeFile(toFile, save, size);
+			if (rtc && fromRtcData && rtcSize == fromRtcSize) {
+				memcpy(rtc, fromRtcData, rtcSize);
+				writeFile(toRtc, rtc, rtcSize);
+			}
+		} else {
+			if (from == to && !remote) {
+				rename(file, toFile);
+				rename(rtcFile, toRtc);
+			} else {
+				secondMakeFolders(toFile);
+				copyFile(file, toFile);
+				copyFile(rtcFile, toRtc);
+			}
+			readFileInto(toFile, save, size);
+			readFileInto(toRtc, rtc, rtcSize);
+		}
+		if (to < playersHere && keptSaves[to].kept) {
+			keptSaves[to].hash = save ? hashOf(save, size) : 0;
+		}
+		restartConsole(to);
+		pruneBackups(toBase, toRtcBase);
+		offerSaveChoices();
+		char when[32] = "";
+		if (!current) {
+			stampLabel(stamp, when, sizeof(when));
+		}
+		if (current) {
+			snprintf(message, sizeof(message), "Player %d's save is now a copy of player %d's", to + 1, from + 1);
+		} else if (source == FROM_RECEIVED) {
+			snprintf(message, sizeof(message), "Player %d's save is now the one received %s", to + 1, when);
+		} else if (remote) {
+			snprintf(message, sizeof(message), "Player %d's save is now remote player %d's from %s", to + 1, from + 1, when);
+		} else if (from == to) {
+			snprintf(message, sizeof(message), "Player %d's save is now the one from %s", to + 1, when);
+		} else {
+			snprintf(message, sizeof(message), "Player %d's save is now player %d's from %s", to + 1, from + 1, when);
+		}
+	}
+	notify(message, 240);
+}
+
+// The Back Up Save option: backs up a player's save, and clock, as they are now.
+static void backUpSave(int player) {
+	char message[160];
+	char file[8192];
+	char rtcFile[8192];
+	char stamp[SECOND_STAMP];
+	size_t size, rtcSize;
+	void* rtc;
+	if (!backupFiles(player, file, rtcFile)) {
+		snprintf(message, sizeof(message), "Back Up Save: player %d isn't playing", player + 1);
+	} else if (!liveSave(player, &size, &rtc, &rtcSize) || !size) {
+		snprintf(message, sizeof(message), "Back Up Save: the game has no save");
+	} else {
+		int const done = backUpPlayer(player, stamp);
+		char when[32];
+		if (done > 0) {
+			stampLabel(stamp, when, sizeof(when));
+		}
+		if (done == 1) {
+			pruneBackups(file, rtcFile);
+			offerSaveChoices();
+			snprintf(message, sizeof(message), "Backed up player %d's save: %s", player + 1, when);
+		} else if (done == 2) {
+			snprintf(message, sizeof(message), "Player %d's save is unchanged since its backup of %s", player + 1, when);
+		} else {
+			snprintf(message, sizeof(message), done ? "Back Up Save: player %d's save can't be written" : "Back Up Save: player %d has nothing saved yet",
+			         player + 1);
+		}
+	}
+	notify(message, 240);
+}
+
+// Sends player 1's save of this game to the other player of a Separate link: when chosen (asked),
+// and as the other player pairs.
+static void sendSave(bool asked) {
+	size_t size, rtcSize;
+	void* rtc;
+	void* save = liveSave(0, &size, &rtc, &rtcSize);
+	char game[1024];
+	secondGameName(firstPath, game, sizeof(game));
+	char const* problem = !save || !size || blankSave(save, size) ? "Send Save: nothing saved yet"
+	                    : !linkSendSave(game, save, size, rtc, rtcSize) ? "Send Save: no one is linked"
+	                                                                     : NULL;
+	if (asked) {
+		showMessage(problem ? problem : "Sent this save to the other player");
+	}
+}
+
+static void sendSaveOnPairing(void) {
+	sendSave(false);
+}
+
+// Sends a backup, a remote save or a received one of player 1's game to the other player.
+static void sendBackup(int source, int from, const char* stamp) {
+	char base[8192], rtcBase[8192], file[8300], rtcFile[8300], game[1024];
+	if (source == FROM_REMOTE) {
+		remoteFiles(from, base, rtcBase);
+	} else if (source == FROM_RECEIVED) {
+		receivedFiles(base, rtcBase);
+	} else {
+		backupFiles(0, base, rtcBase);
+	}
+	secondBackupPath(base, stamp, file, sizeof(file));
+	secondBackupPath(rtcBase, stamp, rtcFile, sizeof(rtcFile));
+	secondGameName(firstPath, game, sizeof(game));
+	size_t size, rtcSize;
+	void* save = readWholeFile(file, &size);
+	void* rtc = readWholeFile(rtcFile, &rtcSize);
+	showMessage(!save                                         ? "Send Save: that save is gone"
+	            : !linkSendSave(game, save, size, rtc, rtcSize) ? "Send Save: no one is linked"
+	                                                            : "Sent that save to the other player");
+	free(save);
+	free(rtc);
+}
+
+// A save the other player sent, of the game named, kept as a received save of that game, unless the
+// newest one received already holds it.
+static void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize) {
+	// The game's file, for where its saves are: player 1's, a game beside it, or else beside player 1's.
+	char path[4096];
+	char name[1024];
+	secondGameName(firstPath, name, sizeof(name));
+	snprintf(path, sizeof(path), "%s", firstPath);
+	for (size_t i = 0; strcmp(name, game) && i < secondCount; ++i) {
+		secondGameName(secondGames[i].path, name, sizeof(name));
+		snprintf(path, sizeof(path), "%s", secondGames[i].path);
+	}
+	if (strcmp(name, game)) {
+		char const* slash = strrchr(firstPath, '/');
+		snprintf(path, sizeof(path), "%.*s%s.srm", slash ? (int) (slash - firstPath + 1) : 0, firstPath, game);
+	}
+	char unsorted[4096];
+	const char* saveDirectory = saveDirectoryFor(unsorted);
+	char file[8192], rtcFile[8192], stamp[SECOND_STAMP];
+	secondReceivedSavePath(path, "srm", firstPath, saveDirectory, file, sizeof(file));
+	secondReceivedSavePath(path, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
+	if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
+		pruneBackups(file, rtcFile);
+		offerSaveChoices();
+		char message[1200];
+		snprintf(message, sizeof(message), "Received the other player's save of %s", game);
+		showMessage(message);
+	}
+}
+
+// Back Up Save and Load Save act once when chosen, then go back to Off. Chosen when a game starts,
+// as RetroArch may have kept them, they only go back to Off.
+static void readSaveActions(bool act) {
+	const char* value = option("armgba_back_up_save");
+	if (value && strcmp(value, "off")) {
+		int const player = value[0] - '1';
+		struct retro_variable off = { "armgba_back_up_save", "off" };
+		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
+		if (act && player >= 0 && player < MAX_PLAYERS) {
+			backUpSave(player);
+		}
+	}
+	value = option("armgba_send_save");
+	if (value && strcmp(value, "off")) {
+		char send[SECOND_STAMP + 4];
+		snprintf(send, sizeof(send), "%s", value);
+		struct retro_variable off = { "armgba_send_save", "off" };
+		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
+		if (act && !strcmp(send, "1 now")) {
+			sendSave(true);
+		} else if (act && !strncmp(send, "1 ", 2)) {
+			sendBackup(FROM_PLAYER, 0, send + 2);
+		} else if (act && send[0] == 'r' && send[1] >= '1' && send[1] <= '4' && send[2] == ' ') {
+			sendBackup(FROM_REMOTE, send[1] - '1', send + 3);
+		} else if (act && send[0] == 'x' && send[1] == ' ') {
+			sendBackup(FROM_RECEIVED, 0, send + 2);
+		}
+	}
+	value = option("armgba_load_save");
+	if (value && strcmp(value, "off")) {
+		char load[SECOND_STAMP + 4];
+		snprintf(load, sizeof(load), "%s", value);
+		struct retro_variable off = { "armgba_load_save", "off" };
+		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
+		int const named = loadIntoPlayer();
+		if (act && load[0] >= '1' && load[0] <= '4' && load[1] == ' ') {
+			int const from = load[0] - '1';
+			loadSave(FROM_PLAYER, from, load + 2, named >= 0 ? named : from);
+		} else if (act && load[0] == 'r' && load[1] >= '1' && load[1] <= '4' && load[2] == ' ') {
+			loadSave(FROM_REMOTE, load[1] - '1', load + 3, remoteTarget(load[1] - '1'));
+		} else if (act && load[0] == 'x' && load[1] == ' ') {
+			loadSave(FROM_RECEIVED, 0, load + 2, receivedTarget());
+		}
+	}
+}
+
+// Starting and stopping the consoles: loading a game, the other players' consoles, Restart.
+
+// Loads gba_bios.bin from the system directory.
+static bool loadBios(struct GBA* machine) {
+	const char* directory = NULL;
+	if (!environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory) || !directory) {
+		showMessage("armGBA: no system directory for gba_bios.bin");
+		return false;
+	}
+	char path[4096];
+	snprintf(path, sizeof(path), "%s/gba_bios.bin", directory);
+	FILE* f = fopen(path, "rb");
+	uint8_t bios[SIZE_BIOS];
+	bool read = f && fread(bios, 1, sizeof(bios), f) == sizeof(bios);
+	if (f) {
+		fclose(f);
+	}
+	if (!read) {
+		showMessage("armGBA needs gba_bios.bin in the system directory");
+		return false;
+	}
+	return gbaLoadBios(machine, bios, sizeof(bios));
+}
 
 // Makes a Game Boy Advance with the game in it, or returns NULL.
 static struct GBA* startAdvance(const struct retro_game_info* game) {
@@ -1524,38 +1924,6 @@ static void stopOtherGameBoys(void) {
 	gbAdapter = false;
 	playersHere = 1;
 	linkSetGameBoy(true);
-}
-
-// The air between the consoles here.
-static void airSend(const struct RfuAir* air, int to, const uint8_t* message, size_t size) {
-	int const from = air->self;
-	if (airQueued[from] == AIR_QUEUE || size > AIR_BYTES) {
-		return;
-	}
-	airQueue[from][airQueued[from]].to = to;
-	airQueue[from][airQueued[from]].size = size;
-	memcpy(airQueue[from][airQueued[from]].data, message, size);
-	++airQueued[from];
-}
-
-// Between rounds: each console's messages reach the others, in the order the consoles come, and the
-// answers they bring go out the same way.
-static void carryAir(void) {
-	for (bool any = true; any;) {
-		any = false;
-		for (int from = 0; from < MAX_PLAYERS; ++from) {
-			int const count = airQueued[from];
-			airQueued[from] = 0;
-			for (int k = 0; k < count; ++k) {
-				any = true;
-				for (int i = 0; i < MAX_PLAYERS; ++i) {
-					if (i != from && gbas[i] && (airQueue[from][k].to < 0 || airQueue[from][k].to == i)) {
-						rfuReceive(gbas[i], from, airQueue[from][k].data, airQueue[from][k].size);
-					}
-				}
-			}
-		}
-	}
 }
 
 // Plugs the Link Port option's choice into each console: the Wireless Adapter, or the cable between
@@ -1750,6 +2118,63 @@ static void applyLinkOptions(void) {
 	showButtons();
 }
 
+// Describes memory for the frontend's achievements and cheat search, the same way mGBA's and
+// gambatte-libretro's cores do.
+static void announceMemory(void) {
+	struct retro_memory_descriptor descriptors[11];
+	size_t count = 0;
+	if (gameBoy) {
+		count = libretroGbMemoryMap(descriptors);
+		gbMapColor = libretroGbIsColor();
+	}
+	if (!count && gba) {
+		size_t romSize = gba->romSize + (gba->romSize & 1);
+		const struct retro_memory_descriptor advance[] = {
+			{ RETRO_MEMDESC_SYSTEM_RAM, gba->iwram, 0, 0x03000000, 0xFF000000, 0, SIZE_IWRAM, NULL },
+			{ RETRO_MEMDESC_SYSTEM_RAM, gba->ewram, 0, 0x02000000, 0xFF000000, 0, SIZE_EWRAM, NULL },
+			{ 0, gba->savedata.storage, 0, 0x0E000000, 0, 0, saveSize(gba), NULL },
+			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x08000000, 0, 0, romSize, NULL },
+			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x0A000000, 0, 0, romSize, NULL },
+			{ RETRO_MEMDESC_CONST, gba->rom, 0, 0x0C000000, 0, 0, romSize, NULL },
+			{ RETRO_MEMDESC_CONST, gba->bios, 0, 0x00000000, 0, 0, SIZE_BIOS, NULL },
+			{ 0, gba->vram, 0, 0x06000000, 0xFF000000, 0, SIZE_VRAM, NULL },
+			{ 0, gba->palette, 0, 0x05000000, 0xFF000000, 0, SIZE_PALETTE, NULL },
+			{ 0, gba->oam, 0, 0x07000000, 0xFF000000, 0, SIZE_OAM, NULL },
+			{ 0, gba->io, 0, 0x04000000, 0, 0, SIZE_IO, NULL },
+		};
+		count = sizeof(advance) / sizeof(advance[0]);
+		memcpy(descriptors, advance, sizeof(advance));
+	}
+	struct retro_memory_map map = { descriptors, count };
+	environment(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &map);
+	bool yes = true;
+	environment(RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS, &yes);
+}
+
+// A restart or a loaded state can switch the machine to or from a Game Boy Color, which changes the
+// memory map.
+static void checkGameBoyMemory(void) {
+	if (gbMapColor != libretroGbIsColor()) {
+		announceMemory();
+	}
+}
+
+// Game Boy and Game Boy Color games are told apart from Game Boy Advance games by file extension.
+static bool hasGameBoyExtension(const char* path) {
+	const char* dot = path ? strrchr(path, '.') : NULL;
+	return dot && (!strcasecmp(dot, ".gb") || !strcasecmp(dot, ".gbc"));
+}
+
+static bool isPairFile(const char* path) {
+	const char* dot = path ? strrchr(path, '.') : NULL;
+	return dot && (!strcasecmp(dot, ".gb2") || !strcasecmp(dot, ".gba2"));
+}
+
+static bool isGameBoyRom(const void* data, size_t size) {
+	// A Game Boy cartridge has the Nintendo logo at 0x104.
+	return size >= 0x150 && ((const uint8_t*) data)[0x104] == 0xCE && ((const uint8_t*) data)[0x105] == 0xED;
+}
+
 // Starts a Game Boy or Game Boy Color game on the Gambatte side, and the other players' beside it
 // with a second game, a pair file or Link Mode on Together.
 static bool loadGameBoy(const struct retro_game_info* game, const struct retro_game_info* second) {
@@ -1823,16 +2248,6 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	return true;
 }
 
-static bool isPairFile(const char* path) {
-	const char* dot = path ? strrchr(path, '.') : NULL;
-	return dot && (!strcasecmp(dot, ".gb2") || !strcasecmp(dot, ".gba2"));
-}
-
-static bool isGameBoyRom(const void* data, size_t size) {
-	// A Game Boy cartridge has the Nintendo logo at 0x104.
-	return size >= 0x150 && ((const uint8_t*) data)[0x104] == 0xCE && ((const uint8_t*) data)[0x105] == 0xED;
-}
-
 // Starts the games a pair file names, each player with their game's own save.
 static bool loadPairFile(const struct retro_game_info* file) {
 	char games[MAX_PLAYERS][4096];
@@ -1871,8 +2286,6 @@ static bool loadPairFile(const struct retro_game_info* file) {
 	free(data);
 	return loaded;
 }
-
-static void readSaveActions(bool act);
 
 // Starts a game on the side it belongs to.
 bool retro_load_game(const struct retro_game_info* game) {
@@ -1973,6 +2386,8 @@ void retro_reset(void) {
 	}
 	setAdvanceOffsets();
 }
+
+// Input.
 
 // Reads the motion sensor control: a stick, or the D-pad pushed all the way, giving -0x7FFF to
 // 0x7FFF on each axis. Also reports whether the stick is clicked, or L is held when using the
@@ -2105,25 +2520,6 @@ static void readStretch(uint16_t keys) {
 	held = now;
 }
 
-// Returns the picture as a Game Boy Advance shows it, on black: centered on its 240x160 screen, or
-// stretched to 240x144 by doubling every other column.
-static const uint32_t* advanceFrame(const uint32_t* picture) {
-	uint32_t* row = gbAdvanceFrame + (SCREEN_HEIGHT - LIBRETRO_GB_HEIGHT) / 2 * SCREEN_WIDTH;
-	int const border = (SCREEN_WIDTH - LIBRETRO_GB_WIDTH) / 2;
-	for (int y = 0; y < LIBRETRO_GB_HEIGHT; ++y, row += SCREEN_WIDTH, picture += LIBRETRO_GB_WIDTH) {
-		if (gbStretched) {
-			for (int x = 0; x < SCREEN_WIDTH; ++x) {
-				row[x] = picture[x * 2 / 3];
-			}
-		} else {
-			memset(row, 0, border * sizeof(*row));
-			memcpy(row + border, picture, LIBRETRO_GB_WIDTH * sizeof(*row));
-			memset(row + border + LIBRETRO_GB_WIDTH, 0, border * sizeof(*row));
-		}
-	}
-	return gbAdvanceFrame;
-}
-
 // Holding L2 or R2 fast-forwards at the frontend's fast-forward speed (its Maximum Run Speed), as
 // in gpSP's core; with the consoles of a link here, L2 on any controller, as the L2 Button option
 // says, since R2 changes the screens. Not in netplay, where the other players' consoles would wait.
@@ -2141,427 +2537,6 @@ static void readFastForward(void) {
 	held = now;
 	struct retro_fastforwarding_override override = { .ratio = -1.0f, .fastforward = now, .notification = true, .inhibit_toggle = now };
 	environment(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &override);
-}
-
-// Holding the Restart Buttons for a second restarts that player's console, as its power switch
-// would. Games that reset on A, B, Select and Start do so at once by themselves.
-enum { RESTART_FRAMES = 60 };
-static uint8_t restartHeld[MAX_PLAYERS];
-
-static void restartConsole(int player) {
-	if (gameBoy) {
-		libretroGbSelect(player);
-		libretroGbRestart();
-		libretroGbSelect(0);
-	} else {
-		gbaReset(gbas[player], skipBios);
-	}
-	char message[48];
-	snprintf(message, sizeof(message), playersHere > 1 ? "Player %d's console restarted" : "Restarted", player + 1);
-	notify(message, 120);
-}
-
-// The game on a player's console.
-static const char* gameOf(int player) {
-	const char* chosen = player == 1 ? secondPath : player > 1 ? otherPaths[player] : "";
-	return *chosen ? chosen : firstPath;
-}
-
-// Whether a file holds just these bytes.
-static bool fileHolds(const char* path, const void* data, size_t size) {
-	FILE* f = fopen(path, "rb");
-	if (!f) {
-		return false;
-	}
-	uint8_t* held = malloc(size + 1);
-	bool const same = held && fread(held, 1, size + 1, f) == size && !memcmp(held, data, size);
-	free(held);
-	fclose(f);
-	return same;
-}
-
-// Writes a save, and clock, as backups of the save file given, named for now, unless the newest
-// backup already holds that save. Returns 1 if it wrote them, 0 if the newest backup holds the save
-// (stamp is its), and -1 if the save couldn't be written.
-static int writeBackup(const char* file, const char* rtcFile, const void* save, size_t size, const void* rtc, size_t rtcSize,
-                       char stamp[SECOND_STAMP]) {
-	char out[8300];
-	char newest[1][SECOND_STAMP];
-	if (secondBackups(file, newest, 1)) {
-		secondBackupPath(file, newest[0], out, sizeof(out));
-		if (fileHolds(out, save, size)) {
-			memcpy(stamp, newest[0], SECOND_STAMP);
-			return 0;
-		}
-	}
-	secondNewStamp(file, stamp);
-	secondBackupPath(file, stamp, out, sizeof(out));
-	secondMakeFolders(out);
-	if (!writeFile(out, save, size)) {
-		return -1;
-	}
-	if (rtc && rtcSize) {
-		secondBackupPath(rtcFile, stamp, out, sizeof(out));
-		writeFile(out, rtc, rtcSize);
-	}
-	return 1;
-}
-
-static bool blankSave(const void* save, size_t size) {
-	for (size_t i = 1; i < size; ++i) {
-		if (((const uint8_t*) save)[i] != ((const uint8_t*) save)[0]) {
-			return false;
-		}
-	}
-	return true;
-}
-
-// Backs up a player's save, and clock, as they are in memory, newer than the file. Returns 1 if it
-// did, 2 if the newest backup already holds the save, 0 if there was nothing to back up (no file and
-// nothing saved yet), and -1 if it couldn't be written.
-static int backUpPlayer(int player, char stamp[SECOND_STAMP]) {
-	char file[8192], rtcFile[8192], base[8192], rtcBase[8192];
-	size_t size, rtcSize;
-	void* rtc;
-	void* save = liveSave(player, &size, &rtc, &rtcSize);
-	if (!saveFiles(player, file, rtcFile) || !backupFiles(player, base, rtcBase) || !save || !size) {
-		return 0;
-	}
-	if (!fileExists(file) && blankSave(save, size)) {
-		return 0;
-	}
-	int const written = writeBackup(base, rtcBase, save, size, rtc, rtcSize, stamp);
-	return written < 0 ? -1 : written ? 1 : 2;
-}
-
-// Deletes a save's oldest backups beyond what Backups Kept allows.
-static void pruneBackups(const char* saveFile, const char* rtcFile) {
-	const char* value = option("armgba_keep_saves");
-	size_t const keep = value ? (size_t) atoi(value) : 10;
-	enum { MOST = 1000 };
-	char (*stamps)[SECOND_STAMP] = keep ? malloc(MOST * SECOND_STAMP) : NULL;
-	if (!stamps) {
-		return;
-	}
-	size_t const count = secondBackups(saveFile, stamps, MOST);
-	for (size_t i = keep; i < count; ++i) {
-		char file[8300];
-		secondBackupPath(saveFile, stamps[i], file, sizeof(file));
-		remove(file);
-		secondBackupPath(rtcFile, stamps[i], file, sizeof(file));
-		remove(file);
-	}
-	free(stamps);
-}
-
-// A device that joined another's netplay session keeps the session's saves, never over its own, in
-// armGBA/Remote by the session's players, for Load Save.
-static void keepSession(void) {
-	char unsorted[4096];
-	const char* saveDirectory = saveDirectoryFor(unsorted);
-	for (int player = 0; player < playersHere; ++player) {
-		size_t size, rtcSize;
-		void* rtc;
-		void* save = liveSave(player, &size, &rtc, &rtcSize);
-		if (!save || !size || blankSave(save, size)) {
-			continue;
-		}
-		char file[8192], rtcFile[8192];
-		char stamp[SECOND_STAMP];
-		secondRemoteSavePath(gameOf(player), player, "srm", firstPath, saveDirectory, file, sizeof(file));
-		secondRemoteSavePath(gameOf(player), player, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
-		if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
-			pruneBackups(file, rtcFile);
-		}
-	}
-}
-
-// Whether two players' saves are the same size, so one can be copied over the other.
-static bool sameSize(int from, int to) {
-	size_t size, toSize, rtcSize, toRtcSize;
-	void* rtc;
-	void* toRtc;
-	void* save = liveSave(from, &size, &rtc, &rtcSize);
-	void* toSave = liveSave(to, &toSize, &toRtc, &toRtcSize);
-	return save && toSave && size == toSize;
-}
-
-// Reads a whole file; NULL if there is none, or it is empty.
-static void* readWholeFile(const char* path, size_t* size) {
-	*size = 0;
-	FILE* f = fopen(path, "rb");
-	if (!f) {
-		return NULL;
-	}
-	fseek(f, 0, SEEK_END);
-	long const length = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	void* data = length > 0 ? malloc(length) : NULL;
-	if (data && fread(data, 1, length, f) == (size_t) length) {
-		*size = length;
-	} else {
-		free(data);
-		data = NULL;
-	}
-	fclose(f);
-	return data;
-}
-
-// Copies a file; returns false if there was none to copy.
-static bool copyFile(const char* from, const char* to) {
-	size_t size;
-	void* data = readWholeFile(from, &size);
-	if (data) {
-		writeFile(to, data, size);
-	}
-	free(data);
-	return data != NULL;
-}
-
-// Where Load Save takes a save from: a player's own backups or current save, a session of another
-// device's that this one joined, or the other player of a Separate link.
-enum { FROM_PLAYER, FROM_REMOTE, FROM_RECEIVED };
-
-// The Load Save option: makes one of player from's backups, or their current save ("now"), or a
-// save of the session's player from kept from another device's netplay, or one received, player
-// to's save, backs up the one it replaces, and restarts that player's console. A save given to
-// another player, or from another device, is copied, and stays where it was.
-static void loadSave(int source, int from, const char* stamp, int to) {
-	char message[160];
-	char fromBase[8192], fromRtcBase[8192], toFile[8192], toRtc[8192], toBase[8192], toRtcBase[8192];
-	char file[8300], rtcFile[8300];
-	char replaced[SECOND_STAMP];
-	bool const current = !strcmp(stamp, "now");
-	bool fromPlaying = true;
-	if (source == FROM_REMOTE) {
-		remoteFiles(from, fromBase, fromRtcBase);
-	} else if (source == FROM_RECEIVED) {
-		receivedFiles(fromBase, fromRtcBase);
-	} else {
-		fromPlaying = backupFiles(from, fromBase, fromRtcBase);
-	}
-	bool const remote = source != FROM_PLAYER;
-	bool const toPlaying = saveFiles(to, toFile, toRtc) && backupFiles(to, toBase, toRtcBase);
-	const char* fromGame = remote ? firstPath : gameOf(from);
-	if (fromPlaying) {
-		secondBackupPath(fromBase, stamp, file, sizeof(file));
-		secondBackupPath(fromRtcBase, stamp, rtcFile, sizeof(rtcFile));
-	}
-	if (!fromPlaying || !toPlaying) {
-		snprintf(message, sizeof(message), "Load Save: player %d isn't playing", (fromPlaying ? to : from) + 1);
-	} else if (netplaySeen || linkSession()) {
-		snprintf(message, sizeof(message), "Load Save: not in netplay");
-	} else if (strcmp(fromGame, gameOf(to))) {
-		snprintf(message, sizeof(message), "Load Save: that save is for another game than player %d's", to + 1);
-	} else if (current && from == to) {
-		snprintf(message, sizeof(message), "Load Save: that is player %d's save already", to + 1);
-	} else if (current && !sameSize(from, to)) {
-		snprintf(message, sizeof(message), "Load Save: players %d and %d's saves differ in size", from + 1, to + 1);
-	} else if (!current && !fileExists(file)) {
-		snprintf(message, sizeof(message), "Load Save: that save is gone");
-	} else if (backUpPlayer(to, replaced) < 0) {
-		snprintf(message, sizeof(message), "Load Save: player %d's save can't be backed up", to + 1);
-	} else {
-		size_t size, rtcSize;
-		void* rtc;
-		void* save = liveSave(to, &size, &rtc, &rtcSize);
-		if (current) {
-			size_t fromSize, fromRtcSize;
-			void* fromRtcData;
-			memcpy(save, liveSave(from, &fromSize, &fromRtcData, &fromRtcSize), size);
-			secondMakeFolders(toFile);
-			writeFile(toFile, save, size);
-			if (rtc && fromRtcData && rtcSize == fromRtcSize) {
-				memcpy(rtc, fromRtcData, rtcSize);
-				writeFile(toRtc, rtc, rtcSize);
-			}
-		} else {
-			if (from == to && !remote) {
-				rename(file, toFile);
-				rename(rtcFile, toRtc);
-			} else {
-				secondMakeFolders(toFile);
-				copyFile(file, toFile);
-				copyFile(rtcFile, toRtc);
-			}
-			readFileInto(toFile, save, size);
-			readFileInto(toRtc, rtc, rtcSize);
-		}
-		if (to < playersHere && keptSaves[to].kept) {
-			keptSaves[to].hash = save ? hashOf(save, size) : 0;
-		}
-		restartConsole(to);
-		pruneBackups(toBase, toRtcBase);
-		offerSaveChoices();
-		char when[32] = "";
-		if (!current) {
-			stampLabel(stamp, when, sizeof(when));
-		}
-		if (current) {
-			snprintf(message, sizeof(message), "Player %d's save is now a copy of player %d's", to + 1, from + 1);
-		} else if (source == FROM_RECEIVED) {
-			snprintf(message, sizeof(message), "Player %d's save is now the one received %s", to + 1, when);
-		} else if (remote) {
-			snprintf(message, sizeof(message), "Player %d's save is now remote player %d's from %s", to + 1, from + 1, when);
-		} else if (from == to) {
-			snprintf(message, sizeof(message), "Player %d's save is now the one from %s", to + 1, when);
-		} else {
-			snprintf(message, sizeof(message), "Player %d's save is now player %d's from %s", to + 1, from + 1, when);
-		}
-	}
-	notify(message, 240);
-}
-
-// The Back Up Save option: backs up a player's save, and clock, as they are now.
-static void backUpSave(int player) {
-	char message[160];
-	char file[8192];
-	char rtcFile[8192];
-	char stamp[SECOND_STAMP];
-	size_t size, rtcSize;
-	void* rtc;
-	if (!backupFiles(player, file, rtcFile)) {
-		snprintf(message, sizeof(message), "Back Up Save: player %d isn't playing", player + 1);
-	} else if (!liveSave(player, &size, &rtc, &rtcSize) || !size) {
-		snprintf(message, sizeof(message), "Back Up Save: the game has no save");
-	} else {
-		int const done = backUpPlayer(player, stamp);
-		char when[32];
-		if (done > 0) {
-			stampLabel(stamp, when, sizeof(when));
-		}
-		if (done == 1) {
-			pruneBackups(file, rtcFile);
-			offerSaveChoices();
-			snprintf(message, sizeof(message), "Backed up player %d's save: %s", player + 1, when);
-		} else if (done == 2) {
-			snprintf(message, sizeof(message), "Player %d's save is unchanged since its backup of %s", player + 1, when);
-		} else {
-			snprintf(message, sizeof(message), done ? "Back Up Save: player %d's save can't be written" : "Back Up Save: player %d has nothing saved yet",
-			         player + 1);
-		}
-	}
-	notify(message, 240);
-}
-
-// Sends player 1's save of this game to the other player of a Separate link: when chosen (asked),
-// and as the other player pairs.
-static void sendSave(bool asked) {
-	size_t size, rtcSize;
-	void* rtc;
-	void* save = liveSave(0, &size, &rtc, &rtcSize);
-	char game[1024];
-	secondGameName(firstPath, game, sizeof(game));
-	char const* problem = !save || !size || blankSave(save, size) ? "Send Save: nothing saved yet"
-	                    : !linkSendSave(game, save, size, rtc, rtcSize) ? "Send Save: no one is linked"
-	                                                                     : NULL;
-	if (asked) {
-		showMessage(problem ? problem : "Sent this save to the other player");
-	}
-}
-
-static void sendSaveOnPairing(void) {
-	sendSave(false);
-}
-
-
-// Sends a backup, a remote save or a received one of player 1's game to the other player.
-static void sendBackup(int source, int from, const char* stamp) {
-	char base[8192], rtcBase[8192], file[8300], rtcFile[8300], game[1024];
-	if (source == FROM_REMOTE) {
-		remoteFiles(from, base, rtcBase);
-	} else if (source == FROM_RECEIVED) {
-		receivedFiles(base, rtcBase);
-	} else {
-		backupFiles(0, base, rtcBase);
-	}
-	secondBackupPath(base, stamp, file, sizeof(file));
-	secondBackupPath(rtcBase, stamp, rtcFile, sizeof(rtcFile));
-	secondGameName(firstPath, game, sizeof(game));
-	size_t size, rtcSize;
-	void* save = readWholeFile(file, &size);
-	void* rtc = readWholeFile(rtcFile, &rtcSize);
-	showMessage(!save                                         ? "Send Save: that save is gone"
-	            : !linkSendSave(game, save, size, rtc, rtcSize) ? "Send Save: no one is linked"
-	                                                            : "Sent that save to the other player");
-	free(save);
-	free(rtc);
-}
-
-// A save the other player sent, of the game named, kept as a received save of that game, unless the
-// newest one received already holds it.
-static void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize) {
-	// The game's file, for where its saves are: player 1's, a game beside it, or else beside player 1's.
-	char path[4096];
-	char name[1024];
-	secondGameName(firstPath, name, sizeof(name));
-	snprintf(path, sizeof(path), "%s", firstPath);
-	for (size_t i = 0; strcmp(name, game) && i < secondCount; ++i) {
-		secondGameName(secondGames[i].path, name, sizeof(name));
-		snprintf(path, sizeof(path), "%s", secondGames[i].path);
-	}
-	if (strcmp(name, game)) {
-		char const* slash = strrchr(firstPath, '/');
-		snprintf(path, sizeof(path), "%.*s%s.srm", slash ? (int) (slash - firstPath + 1) : 0, firstPath, game);
-	}
-	char unsorted[4096];
-	const char* saveDirectory = saveDirectoryFor(unsorted);
-	char file[8192], rtcFile[8192], stamp[SECOND_STAMP];
-	secondReceivedSavePath(path, "srm", firstPath, saveDirectory, file, sizeof(file));
-	secondReceivedSavePath(path, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
-	if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
-		pruneBackups(file, rtcFile);
-		offerSaveChoices();
-		char message[1200];
-		snprintf(message, sizeof(message), "Received the other player's save of %s", game);
-		showMessage(message);
-	}
-}
-
-// Back Up Save and Load Save act once when chosen, then go back to Off. Chosen when a game starts,
-// as RetroArch may have kept them, they only go back to Off.
-static void readSaveActions(bool act) {
-	const char* value = option("armgba_back_up_save");
-	if (value && strcmp(value, "off")) {
-		int const player = value[0] - '1';
-		struct retro_variable off = { "armgba_back_up_save", "off" };
-		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
-		if (act && player >= 0 && player < MAX_PLAYERS) {
-			backUpSave(player);
-		}
-	}
-	value = option("armgba_send_save");
-	if (value && strcmp(value, "off")) {
-		char send[SECOND_STAMP + 4];
-		snprintf(send, sizeof(send), "%s", value);
-		struct retro_variable off = { "armgba_send_save", "off" };
-		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
-		if (act && !strcmp(send, "1 now")) {
-			sendSave(true);
-		} else if (act && !strncmp(send, "1 ", 2)) {
-			sendBackup(FROM_PLAYER, 0, send + 2);
-		} else if (act && send[0] == 'r' && send[1] >= '1' && send[1] <= '4' && send[2] == ' ') {
-			sendBackup(FROM_REMOTE, send[1] - '1', send + 3);
-		} else if (act && send[0] == 'x' && send[1] == ' ') {
-			sendBackup(FROM_RECEIVED, 0, send + 2);
-		}
-	}
-	value = option("armgba_load_save");
-	if (value && strcmp(value, "off")) {
-		char load[SECOND_STAMP + 4];
-		snprintf(load, sizeof(load), "%s", value);
-		struct retro_variable off = { "armgba_load_save", "off" };
-		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
-		int const named = loadIntoPlayer();
-		if (act && load[0] >= '1' && load[0] <= '4' && load[1] == ' ') {
-			int const from = load[0] - '1';
-			loadSave(FROM_PLAYER, from, load + 2, named >= 0 ? named : from);
-		} else if (act && load[0] == 'r' && load[1] >= '1' && load[1] <= '4' && load[2] == ' ') {
-			loadSave(FROM_REMOTE, load[1] - '1', load + 3, remoteTarget(load[1] - '1'));
-		} else if (act && load[0] == 'x' && load[1] == ' ') {
-			loadSave(FROM_RECEIVED, 0, load + 2, receivedTarget());
-		}
-	}
 }
 
 // Whether a player holds the Restart Buttons. Keys are the console's: A 0x1, B 0x2, Select 0x4,
@@ -2633,6 +2608,27 @@ static void readScreensKeys(void) {
 	notify(name, 120);
 }
 
+// Running a frame.
+
+// Returns the picture as a Game Boy Advance shows it, on black: centered on its 240x160 screen, or
+// stretched to 240x144 by doubling every other column.
+static const uint32_t* advanceFrame(const uint32_t* picture) {
+	uint32_t* row = gbAdvanceFrame + (SCREEN_HEIGHT - LIBRETRO_GB_HEIGHT) / 2 * SCREEN_WIDTH;
+	int const border = (SCREEN_WIDTH - LIBRETRO_GB_WIDTH) / 2;
+	for (int y = 0; y < LIBRETRO_GB_HEIGHT; ++y, row += SCREEN_WIDTH, picture += LIBRETRO_GB_WIDTH) {
+		if (gbStretched) {
+			for (int x = 0; x < SCREEN_WIDTH; ++x) {
+				row[x] = picture[x * 2 / 3];
+			}
+		} else {
+			memset(row, 0, border * sizeof(*row));
+			memcpy(row + border, picture, LIBRETRO_GB_WIDTH * sizeof(*row));
+			memset(row + border + LIBRETRO_GB_WIDTH, 0, border * sizeof(*row));
+		}
+	}
+	return gbAdvanceFrame;
+}
+
 // Puts the consoles' pictures side by side, one above the other, in a grid, or one alone, as chosen,
 // and hands over their sound mixed, or the shown one's.
 static void showConsoles(const void* const pictures[], size_t pixelBytes, int width, int height, void* frame, const int16_t* const samples[],
@@ -2669,27 +2665,6 @@ static void showConsoles(const void* const pictures[], size_t pixelBytes, int wi
 	audioBatch(mixedSamples, count);
 }
 
-// Gives the players on player 1's game, with no save of their own yet, a copy of player 1's.
-static void copyFirstSave(void) {
-	for (int player = 1; player < playersHere; ++player) {
-		if (!(copySaves & 1 << player)) {
-			continue;
-		}
-		if (!gameBoy) {
-			memcpy(gbas[player]->savedata.storage, gba->savedata.storage, sizeof(gba->savedata.storage));
-			continue;
-		}
-		size_t size;
-		size_t otherSize;
-		const void* const first = saveMemory(0, &size);
-		void* const other = saveMemory(player, &otherSize);
-		if (first && other && size == otherSize) {
-			memcpy(other, first, size);
-		}
-	}
-	copySaves = 0;
-}
-
 // Runs the Game Boys for a frame.
 static void runGameBoys(void) {
 	uint16_t keys[MAX_PLAYERS];
@@ -2711,6 +2686,38 @@ static void runGameBoys(void) {
 		shown[i] = pictures[i];
 	}
 	showConsoles(shown, sizeof(uint32_t), LIBRETRO_GB_WIDTH, LIBRETRO_GB_HEIGHT, gbTogetherFrame, samples, frames);
+}
+
+// The air between the consoles here.
+static void airSend(const struct RfuAir* air, int to, const uint8_t* message, size_t size) {
+	int const from = air->self;
+	if (airQueued[from] == AIR_QUEUE || size > AIR_BYTES) {
+		return;
+	}
+	airQueue[from][airQueued[from]].to = to;
+	airQueue[from][airQueued[from]].size = size;
+	memcpy(airQueue[from][airQueued[from]].data, message, size);
+	++airQueued[from];
+}
+
+// Between rounds: each console's messages reach the others, in the order the consoles come, and the
+// answers they bring go out the same way.
+static void carryAir(void) {
+	for (bool any = true; any;) {
+		any = false;
+		for (int from = 0; from < MAX_PLAYERS; ++from) {
+			int const count = airQueued[from];
+			airQueued[from] = 0;
+			for (int k = 0; k < count; ++k) {
+				any = true;
+				for (int i = 0; i < MAX_PLAYERS; ++i) {
+					if (i != from && gbas[i] && (airQueue[from][k].to < 0 || airQueue[from][k].to == i)) {
+						rfuReceive(gbas[i], from, airQueue[from][k].data, airQueue[from][k].size);
+					}
+				}
+			}
+		}
+	}
 }
 
 // The cable between the Game Boy Advances here. When a transfer ends, in normal mode player 1 and 2's
@@ -3054,6 +3061,8 @@ void retro_run(void) {
 	gba->audio.outCount = 0;
 }
 
+// States.
+
 // Save states: the size, then saving and loading. A Game Boy Advance state is the machine's whole
 // state; a Game Boy state is Gambatte's.
 static size_t consolesStateSize(void) {
@@ -3186,6 +3195,8 @@ bool retro_unserialize(const void* data, size_t size) {
 	}
 	return true;
 }
+
+// Cheats, and the memory the frontend sees.
 
 // Decodes every code again, in order.
 static void applyCheatCodes(void) {
