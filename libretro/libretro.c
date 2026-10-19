@@ -213,7 +213,6 @@ static bool tiltCartridge;
 static bool showOptions(void);
 static bool linkBothWanted(void);
 static bool linkSeparateWanted(void);
-static bool gameBoyLoaded(void);
 
 // Cheat codes from the frontend, by index, and the Game Boy Advance operations they decode to. All
 // codes are decoded again, in order, whenever one changes, because a master code changes how the
@@ -234,10 +233,7 @@ enum {
 
 // Whether the consoles of a link run here.
 static bool bothConsoles(void) {
-	if (gbPair) {
-		return true;
-	}
-	return gbaPair;
+	return gbPair || gbaPair;
 }
 
 // Writes a line to the frontend's log, or to stderr if it has none.
@@ -249,10 +245,15 @@ static void logMessage(enum retro_log_level level, const char* message) {
 	}
 }
 
-// Shows a message on screen for a few seconds and logs it.
-static void showMessage(const char* message) {
-	struct retro_message shown = { message, 180 };
+// Shows a message on screen for a number of frames.
+static void notify(const char* message, unsigned frames) {
+	struct retro_message shown = { message, frames };
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+}
+
+// Shows a problem on screen for a few seconds and logs it.
+static void showMessage(const char* message) {
+	notify(message, 180);
 	logMessage(RETRO_LOG_ERROR, message);
 }
 
@@ -288,9 +289,9 @@ void retro_set_environment(retro_environment_t callback) {
 	if (callback(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging)) {
 		logPrintf = logging.log;
 	}
-	// Option keys and values match saved configurations; the labels are what the menu shows. Each
-	// game sees only its own console's options, listed in order of use: turbo first, then starting
-	// and running, colors, and controls.
+	// Option keys and values match saved configurations; the labels are what the menu shows. They
+	// come in five categories, System, Video, Input, Link and Saves, and showOptions hides those that
+	// do nothing for the game loaded and the Link Mode chosen.
 	static struct retro_core_option_v2_definition definitions[] = {
 		{ "armgba_skip_bios", "Skip BIOS Intro", NULL, "Start games without the Game Boy Advance logo.", NULL, "system",
 		  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
@@ -559,7 +560,7 @@ void retro_deinit(void) {
 	colorCorrection = false;
 }
 
-// The core always uses one controller.
+// Every player's controller is a RetroPad.
 void retro_set_controller_port_device(unsigned port, unsigned device) {
 }
 
@@ -601,12 +602,7 @@ static const char* option(const char* key) {
 	return environment(RETRO_ENVIRONMENT_GET_VARIABLE, &variable) ? variable.value : NULL;
 }
 
-static void showButtons(bool forGameBoy);
-
-// Whether the loaded game is a Game Boy one.
-static bool gameBoyLoaded(void) {
-	return gameBoy;
-}
+static void showButtons(void);
 
 // Reads every option and applies the ones that can change while a game runs.
 static void readOptions(void) {
@@ -678,8 +674,8 @@ static void readOptions(void) {
 	int const tilt = !value ? 0 : !strcmp(value, "right stick") ? 1 : !strcmp(value, "d-pad") ? 2 : 0;
 	if (tilt != tiltControl) {
 		tiltControl = tilt;
-		if (gba || gameBoyLoaded()) {
-			showButtons(gameBoyLoaded());
+		if (gba || gameBoy) {
+			showButtons();
 		}
 	}
 	value = option("armgba_solar_sensor");
@@ -712,7 +708,8 @@ static bool loadBios(struct GBA* machine) {
 
 // Tells the frontend what each button does for the loaded console, including the stick, D-pad or
 // click that moves a cartridge's tilt sensor, wherever the Tilt Sensor option puts it.
-static void showButtons(bool forGameBoy) {
+static void showButtons(void) {
+	bool const forGameBoy = gameBoy;
 	static struct retro_input_descriptor shown[80];
 	size_t n = 0;
 #define BUTTON(device, index, id, name) shown[n++] = (struct retro_input_descriptor) { port, device, index, id, name }
@@ -781,7 +778,7 @@ static void showButtons(bool forGameBoy) {
 // loads, and as RetroArch asks when an option changes in its menu. Returns whether that changed which
 // are shown. With no game loaded, all are shown.
 static bool showOptions(void) {
-	bool const gameBoy = gameBoyLoaded();
+	bool const gameBoy = gameBoy;
 	bool const advance = gba && !gameBoy;
 	int const devices = advance ? gba->gpio.devices : 0;
 	bool const together = linkBothWanted();
@@ -874,7 +871,7 @@ static void checkGameBoyMemory(void) {
 }
 
 // Game Boy and Game Boy Color games are told apart from Game Boy Advance games by file extension.
-static bool isGameBoy(const char* path) {
+static bool hasGameBoyExtension(const char* path) {
 	const char* dot = path ? strrchr(path, '.') : NULL;
 	return dot && (!strcasecmp(dot, ".gb") || !strcasecmp(dot, ".gbc"));
 }
@@ -1502,7 +1499,6 @@ static bool startOtherGameBoys(int count, const void* const data[], const size_t
 	gbPair = true;
 	gbAdapter = adapter;
 	playersHere = count;
-	environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, NULL);
 	linkSetGameBoy(false);
 	return true;
 }
@@ -1517,7 +1513,6 @@ static void stopOtherGameBoys(void) {
 	gbPair = false;
 	gbAdapter = false;
 	playersHere = 1;
-	linkSetEnvironment(environment);
 	linkSetGameBoy(true);
 }
 
@@ -1604,7 +1599,6 @@ static bool startOtherAdvances(int count, const void* const data[], const size_t
 	attachPorts();
 	setAdvanceOffsets();
 	workersStart(count);
-	environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, NULL);
 	return true;
 }
 
@@ -1619,7 +1613,6 @@ static void stopOtherAdvances(void) {
 	gbaPair = false;
 	playersHere = 1;
 	sioAttach(gba, NULL);
-	linkSetEnvironment(environment);
 	linkSetGba(gba);
 	attachPorts();
 }
@@ -1658,8 +1651,7 @@ static void announcePlayers(void) {
 	} else {
 		snprintf(message, sizeof(message), "Player 2: %.240s", *secondPath ? (name ? name + 1 : secondPath) : "the same game, with its own save");
 	}
-	struct retro_message shown = { message, 240 };
-	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+	notify(message, 240);
 }
 
 // Starts the other players' consoles beside player 1's: two to four in all with Together, as
@@ -1707,6 +1699,12 @@ static void stopOthers(void) {
 	secondFromFrontend = false;
 }
 
+// Offers RetroArch the netplay that carries the cable when Link Mode is Separate, and its usual
+// netplay otherwise.
+static void offerLinkNetplay(void) {
+	linkSetNetplay(linkSeparateWanted() && !bothConsoles());
+}
+
 // Whether the consoles running are the ones the link options ask for.
 static bool runningAsWanted(void) {
 	bool const want = linkBothWanted();
@@ -1722,8 +1720,8 @@ static bool runningAsWanted(void) {
 	return same;
 }
 
-// Restart takes in a change of the link options or of Player 2's Game.
-static void applySecondChoice(void) {
+// Restart takes in a change of Link Mode, Players, a Link Port or Player 2's Game.
+static void applyLinkOptions(void) {
 	if (secondFromFrontend || pairFile) {
 		return;
 	}
@@ -1739,7 +1737,7 @@ static void applySecondChoice(void) {
 	}
 	announceGeometry();
 	showOptions();
-	showButtons(gameBoyLoaded());
+	showButtons();
 }
 
 // Starts a Game Boy or Game Boy Color game on the Gambatte side, and the other players' beside it
@@ -1773,9 +1771,9 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	if (second || linkBothWanted() || pairFile) {
 		startOthers(second, game->data, game->size);
 	}
-	linkSetNetplay(linkSeparateWanted() && !bothConsoles());
+	offerLinkNetplay();
 	showOptions();
-	showButtons(true);
+	showButtons();
 	announceMemory();
 	return true;
 }
@@ -1796,7 +1794,7 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	if (!gba) {
 		return false;
 	}
-	showButtons(false);
+	showButtons();
 	threadedVideo = 0;
 	readOptions();
 	gbaReset(gba, skipBios);
@@ -1806,7 +1804,7 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	if (second || linkBothWanted() || pairFile) {
 		startOthers(second, game->data, game->size);
 	}
-	linkSetNetplay(linkSeparateWanted() && !bothConsoles());
+	offerLinkNetplay();
 	showOptions();
 	announceMemory();
 	struct retro_rumble_interface rumble = { NULL };
@@ -1852,8 +1850,7 @@ static bool loadPairFile(const struct retro_game_info* file) {
 	if (isGameBoyRom(data, first.size)) {
 		gameBoy = false;
 		loaded = loadGameBoy(&first, NULL);
-	} else
-	{
+	} else {
 		loaded = loadAdvance(&first, NULL);
 	}
 	if (loaded) {
@@ -1877,7 +1874,7 @@ bool retro_load_game(const struct retro_game_info* game) {
 		return loadPairFile(game);
 	}
 	gameBoy = false;
-	if (isGameBoy(game->path)) {
+	if (hasGameBoyExtension(game->path)) {
 		return loadGameBoy(game, NULL);
 	}
 	return loadAdvance(game, NULL);
@@ -1890,7 +1887,7 @@ bool retro_load_game_special(unsigned type, const struct retro_game_info* info, 
 		gameBoy = false;
 		return loadAdvance(&info[0], &info[1]);
 	}
-	if (type == SUBSYSTEM_LINK && count == 2 && info[0].data && info[1].data && isGameBoy(info[0].path) && isGameBoy(info[1].path)) {
+	if (type == SUBSYSTEM_LINK && count == 2 && info[0].data && info[1].data && hasGameBoyExtension(info[0].path) && hasGameBoyExtension(info[1].path)) {
 		gameBoy = false;
 		return loadGameBoy(&info[0], &info[1]);
 	}
@@ -1929,7 +1926,6 @@ void retro_unload_game(void) {
 		libretroGbSetPlayers(1, false);
 	}
 	playersHere = 1;
-	pairFile = false;
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
 		otherPaths[i][0] = '\0';
 	}
@@ -1950,8 +1946,8 @@ void retro_reset(void) {
 	// Restart can come straight after an option change, before a frame has read it, so read the
 	// options first.
 	readOptions();
-	applySecondChoice();
-	linkSetNetplay(linkSeparateWanted() && !bothConsoles());
+	applyLinkOptions();
+	offerLinkNetplay();
 	if (gameBoy) {
 		for (int i = playersHere - 1; i >= 0; --i) {
 			libretroGbSelect(i);
@@ -2024,8 +2020,7 @@ static void readSensors(uint16_t keys) {
 			solarLevel += brighter ? (solarLevel < 10) : -(solarLevel > 0);
 			char message[32];
 			snprintf(message, sizeof(message), "Sunlight %d of 10", solarLevel);
-			struct retro_message shown = { message, 120 };
-			environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+			notify(message, 120);
 		}
 		held = brighter || darker;
 		gba->gpio.luminance = 0xFF - (0x16 + (solarLevel ? levels[solarLevel - 1] : 0));
@@ -2144,14 +2139,12 @@ static void restartConsole(int player) {
 		libretroGbSelect(player);
 		libretroGbRestart();
 		libretroGbSelect(0);
-	} else
-	{
+	} else {
 		gbaReset(gbas[player], skipBios);
 	}
 	char message[48];
 	snprintf(message, sizeof(message), playersHere > 1 ? "Player %d's console restarted" : "Restarted", player + 1);
-	struct retro_message shown = { message, 120 };
-	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+	notify(message, 120);
 }
 
 // The game on a player's console.
@@ -2402,8 +2395,7 @@ static void loadSave(int source, int from, const char* stamp, int to) {
 			snprintf(message, sizeof(message), "Player %d's save is now player %d's from %s", to + 1, from + 1, when);
 		}
 	}
-	struct retro_message shown = { message, 240 };
-	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+	notify(message, 240);
 }
 
 // The Back Up Save option: backs up a player's save, and clock, as they are now.
@@ -2435,8 +2427,7 @@ static void backUpSave(int player) {
 			         player + 1);
 		}
 	}
-	struct retro_message shown = { message, 240 };
-	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+	notify(message, 240);
 }
 
 // Sends player 1's save of this game to the other player of a Separate link: when chosen (asked),
@@ -2624,8 +2615,7 @@ static void readScreensKeys(void) {
 	} else {
 		snprintf(name, sizeof(name), "%s", playersHere > 2 ? "Grid" : screens == SCREENS_SIDE ? "Side by Side" : "Top and Bottom");
 	}
-	struct retro_message shown = { name, 120 };
-	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+	notify(name, 120);
 }
 
 // Puts the consoles' pictures side by side, one above the other, in a grid, or one alone, as chosen,
@@ -2670,7 +2660,7 @@ static void copyFirstSave(void) {
 		if (!(copySaves & 1 << player)) {
 			continue;
 		}
-		if (!gameBoyLoaded()) {
+		if (!gameBoy) {
 			memcpy(gbas[player]->savedata.storage, gba->savedata.storage, sizeof(gba->savedata.storage));
 			continue;
 		}
@@ -3074,8 +3064,7 @@ static void checkNetplay(void) {
 // A state's session tag: one from another device's session, in netplay, means this device joined it.
 static void loadedTag(uint32_t tag) {
 	if (netplaySeen && tag != sessionTag && !netplayJoined) {
-		struct retro_message shown = { "Netplay: this device's saves stay as they were; the session's are kept as backups when it ends", 240 };
-		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
+		notify("Netplay: this device's saves stay as they were; the session's are kept as backups when it ends", 240);
 	}
 	netplayJoined |= netplaySeen && tag != sessionTag;
 	sessionTag = tag;
