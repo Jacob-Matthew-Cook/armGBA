@@ -287,7 +287,6 @@ void readRtcFile() {
 	s->gb->setRtcRegs(r);
 }
 
-// Writes the clock's current state into the .rtc file.
 void writeRtcFile() {
 	if (s->gb->hasHuC3()) {
 		unsigned long long const now = std::time(0);
@@ -315,7 +314,6 @@ void writeRtcFile() {
 	}
 }
 
-// Gambatte asks for the buttons through a callback.
 unsigned input(void* console) {
 	return static_cast<Console*>(console)->pressed;
 }
@@ -590,7 +588,6 @@ bool libretroGbLoad(const void* rom, size_t size, const char* systemDirectory, e
 	return true;
 }
 
-// Frees the machine.
 void libretroGbUnload(void) {
 	delete s->gb;
 	s->gb = 0;
@@ -655,13 +652,11 @@ void restartAs(LibretroGbModel model) {
 
 extern "C" {
 
-// Called when the Color Correction option changes.
 void libretroGbSetColorCorrection(bool on) {
 	correction = on;
 	setColors();
 }
 
-// Called when the Game Boy Screen option changes, or is read before a game is loaded.
 void libretroGbSetBootRom(enum LibretroGbBoot boot) {
 	bootWanted = boot;
 }
@@ -1077,7 +1072,6 @@ bool saveOne(void* data, size_t size) {
 	return true;
 }
 
-// Loads a state saved by saveOne.
 bool loadOne(const void* data, size_t size) {
 	gambatte::uint_least32_t length;
 	if (!s->gb || size < sizeof(length)) {
