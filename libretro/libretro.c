@@ -145,6 +145,9 @@ static uint16_t gbaCorrected[MAX_PLAYERS][SCREEN_WIDTH * SCREEN_HEIGHT];
 enum { SCREENS_SIDE, SCREENS_STACKED, SCREENS_ONE, SCREENS_COUNT = SCREENS_ONE + MAX_PLAYERS };
 static int screens;
 static int screensOption = -1;
+// Whether L2 fast-forwards with the consoles here, outside netplay (the L2 Button option), or goes
+// back to the screens before.
+static bool l2FastForward = true;
 static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game, picked in the menu from the games beside player 1's, loaded with it by the
@@ -391,6 +394,9 @@ void retro_set_environment(retro_environment_t callback) {
 		  "Where the screens go. R2 changes it while playing, and L2 fast-forwards (in netplay, L2 goes back).", NULL, "link",
 		  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
 		  "side by side" },
+		{ "armgba_link_l2", "L2 Button", NULL,
+		  "With Together, outside netplay: L2 fast-forwards while held, or goes back to the screens before. R2 always moves to the next screens, and in netplay L2 goes back.",
+		  NULL, "link", { { "fast forward", "Fast Forward" }, { "previous screens", "Previous Screens" }, { NULL, NULL } }, "fast forward" },
 		{ "armgba_back_up_save", "Back Up Save", NULL,
 		  "Copies a player's save, as it is now, to a file beside it named for the time: Game.20261018-153012.srm. The game carries on.",
 		  NULL, "saves", { { "off", "Off" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "off" },
@@ -648,6 +654,14 @@ static void readOptions(void) {
 			announceGeometry();
 		}
 	}
+	value = option("armgba_link_l2");
+	bool const fastForward = !value || strcmp(value, "previous screens");
+	if (fastForward != l2FastForward) {
+		l2FastForward = fastForward;
+		if (togetherRunning()) {
+			showButtons();
+		}
+	}
 	value = option("armgba_gb_advance_border");
 	bool const cropped = !value || strcmp(value, "shown");
 	if (cropped != gbCropped) {
@@ -720,7 +734,7 @@ static void showButtons(void) {
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X, "Turbo A");
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y, "Turbo B");
 	if (togetherRunning()) {
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Fast Forward (Previous Screens in Netplay)");
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, l2FastForward ? "Fast Forward (Previous Screens in Netplay)" : "Previous Screens");
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Next Screens");
 	} else {
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Fast Forward");
@@ -797,6 +811,7 @@ static bool showOptions(void) {
 		{ "armgba_gb_link_timing", !advance && separateWanted() },
 		{ "armgba_link_players", together },
 		{ "armgba_link_screens", together },
+		{ "armgba_link_l2", together },
 		{ "armgba_player2_game", together },
 		{ "armgba_new_save", together },
 		{ "armgba_load_into", together },
@@ -2110,13 +2125,13 @@ static const uint32_t* advanceFrame(const uint32_t* picture) {
 }
 
 // Holding L2 or R2 fast-forwards at the frontend's fast-forward speed (its Maximum Run Speed), as
-// in gpSP's core; with the consoles of a link here, L2 on any controller, as R2 changes the screens.
-// Not in netplay, where the other players' consoles would wait for this one's.
+// in gpSP's core; with the consoles of a link here, L2 on any controller, as the L2 Button option
+// says, since R2 changes the screens. Not in netplay, where the other players' consoles would wait.
 static void readFastForward(void) {
 	static bool held;
 	bool now = false;
 	for (int port = 0; port < (togetherRunning() ? playersHere : 1); ++port) {
-		now |= inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2);
+		now |= (!togetherRunning() || l2FastForward) && inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2);
 		now |= !togetherRunning() && inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2);
 	}
 	now &= !linkSession() && !netplaySeen;
@@ -2576,9 +2591,9 @@ static void readRestarts(const uint16_t keys[]) {
 	}
 }
 
-// With the consoles here, R2 on any controller moves to the next way of showing the screens, and in
-// netplay L2 to the one before: side by side or a grid, top and bottom (two consoles), then each one
-// alone. Outside netplay L2 fast-forwards instead.
+// With the consoles here, R2 on any controller moves to the next way of showing the screens, and L2
+// to the one before, unless it fast-forwards (the L2 Button option, outside netplay): side by side or
+// a grid, top and bottom (two consoles), then each one alone.
 static void readScreensKeys(void) {
 	static bool held[MAX_PLAYERS][2];
 	int ways[SCREENS_COUNT];
@@ -2596,7 +2611,7 @@ static void readScreensKeys(void) {
 	}
 	int step = 0;
 	for (int port = 0; port < playersHere; ++port) {
-		for (int k = netplaySeen ? 0 : 1; k < 2; ++k) {
+		for (int k = netplaySeen || !l2FastForward ? 0 : 1; k < 2; ++k) {
 			bool const now = inputState(port, RETRO_DEVICE_JOYPAD, 0, k ? RETRO_DEVICE_ID_JOYPAD_R2 : RETRO_DEVICE_ID_JOYPAD_L2);
 			if (now && !held[port][k]) {
 				step += k ? 1 : -1;
