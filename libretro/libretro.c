@@ -266,6 +266,36 @@ static void updateRumble(bool on) {
 	rumbling = on;
 }
 
+// Turbo Button Period's choices: 4 to 120 frames.
+static void fillTurboPeriods(struct retro_core_option_v2_definition* definitions) {
+	static char periods[117][4];
+	for (; definitions->key && strcmp(definitions->key, "armgba_turbo_period"); ++definitions) {
+	}
+	for (int i = 0; definitions->key && i < 117; ++i) {
+		snprintf(periods[i], sizeof(periods[i]), "%d", i + 4);
+		definitions->values[i] = (struct retro_core_option_value) { periods[i], NULL };
+	}
+}
+
+// Older frontends take each option as "Label; value|value", the default first, made here from the
+// definitions.
+static void setVariables(retro_environment_t callback, const struct retro_core_option_v2_definition* definitions) {
+	static struct retro_variable variables[64];
+	static char text[64][1024];
+	int n = 0;
+	for (; definitions->key && n < 63; ++definitions, ++n) {
+		size_t at = snprintf(text[n], sizeof(text[n]), "%s; %s", definitions->desc, definitions->default_value);
+		for (int i = 0; definitions->values[i].value && at < sizeof(text[n]); ++i) {
+			if (strcmp(definitions->values[i].value, definitions->default_value)) {
+				at += snprintf(text[n] + at, sizeof(text[n]) - at, "|%s", definitions->values[i].value);
+			}
+		}
+		variables[n] = (struct retro_variable) { definitions->key, text[n] };
+	}
+	variables[n] = (struct retro_variable) { NULL, NULL };
+	callback(RETRO_ENVIRONMENT_SET_VARIABLES, variables);
+}
+
 // Stores the frontend's callbacks and declares this core's options.
 void retro_set_environment(retro_environment_t callback) {
 	environment = callback;
@@ -318,19 +348,7 @@ void retro_set_environment(retro_environment_t callback) {
 		  { { "cropped", "Cropped" }, { "shown", "Shown" }, { NULL, NULL } }, "cropped" },
 		{ "armgba_turbo_period", "Turbo Button Period", NULL,
 		  "How many frames apart X and Y press A and B while held, and L3 and R3 press L and R in Game Boy Advance games, as in gambatte's and gpSP's cores.", NULL, "input",
-		  {
-		    { "4", NULL }, { "5", NULL }, { "6", NULL }, { "7", NULL }, { "8", NULL }, { "9", NULL }, { "10", NULL }, { "11", NULL }, { "12", NULL }, { "13", NULL }, { "14", NULL }, { "15", NULL },
-		    { "16", NULL }, { "17", NULL }, { "18", NULL }, { "19", NULL }, { "20", NULL }, { "21", NULL }, { "22", NULL }, { "23", NULL }, { "24", NULL }, { "25", NULL }, { "26", NULL }, { "27", NULL },
-		    { "28", NULL }, { "29", NULL }, { "30", NULL }, { "31", NULL }, { "32", NULL }, { "33", NULL }, { "34", NULL }, { "35", NULL }, { "36", NULL }, { "37", NULL }, { "38", NULL }, { "39", NULL },
-		    { "40", NULL }, { "41", NULL }, { "42", NULL }, { "43", NULL }, { "44", NULL }, { "45", NULL }, { "46", NULL }, { "47", NULL }, { "48", NULL }, { "49", NULL }, { "50", NULL }, { "51", NULL },
-		    { "52", NULL }, { "53", NULL }, { "54", NULL }, { "55", NULL }, { "56", NULL }, { "57", NULL }, { "58", NULL }, { "59", NULL }, { "60", NULL }, { "61", NULL }, { "62", NULL }, { "63", NULL },
-		    { "64", NULL }, { "65", NULL }, { "66", NULL }, { "67", NULL }, { "68", NULL }, { "69", NULL }, { "70", NULL }, { "71", NULL }, { "72", NULL }, { "73", NULL }, { "74", NULL }, { "75", NULL },
-		    { "76", NULL }, { "77", NULL }, { "78", NULL }, { "79", NULL }, { "80", NULL }, { "81", NULL }, { "82", NULL }, { "83", NULL }, { "84", NULL }, { "85", NULL }, { "86", NULL }, { "87", NULL },
-		    { "88", NULL }, { "89", NULL }, { "90", NULL }, { "91", NULL }, { "92", NULL }, { "93", NULL }, { "94", NULL }, { "95", NULL }, { "96", NULL }, { "97", NULL }, { "98", NULL }, { "99", NULL },
-		    { "100", NULL }, { "101", NULL }, { "102", NULL }, { "103", NULL }, { "104", NULL }, { "105", NULL }, { "106", NULL }, { "107", NULL }, { "108", NULL }, { "109", NULL }, { "110", NULL }, { "111", NULL },
-		    { "112", NULL }, { "113", NULL }, { "114", NULL }, { "115", NULL }, { "116", NULL }, { "117", NULL }, { "118", NULL }, { "119", NULL }, { "120", NULL }, { NULL, NULL }
-		  },
-		  "4" },
+		  { { NULL, NULL } }, "4" },
 		{ "armgba_gb_tilt", "Tilt Sensor", NULL,
 		  "What tilts or turns the cartridge in games with a motion sensor: Kirby Tilt 'n' Tumble, Yoshi Topsy-Turvy, WarioWare: Twisted!, where turning is left and right.",
 		  NULL, "input",
@@ -402,6 +420,7 @@ void retro_set_environment(retro_environment_t callback) {
 		{ NULL, NULL, NULL },
 	};
 	static struct retro_core_options_v2 options = { categories, definitions };
+	fillTurboPeriods(definitions);
 	unsigned version = 0;
 	if (callback(RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION, &version) && version >= 2) {
 		callback(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &options);
@@ -423,37 +442,7 @@ void retro_set_environment(retro_environment_t callback) {
 		callback(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK, &display);
 		return;
 	}
-	static const struct retro_variable variables[] = {
-		{ "armgba_skip_bios", "Skip BIOS Intro; disabled|enabled" },
-		{ "armgba_gb_model", "Game Boy Model; Auto|Game Boy|Game Boy Pocket|Game Boy Color|Game Boy Advance" },
-		{ "armgba_gb_boot_rom", "Boot ROM; enabled|disabled|open-source" },
-		{ "armgba_threaded_video", "Threaded Video; disabled|enabled|one frame late" },
-		{ "armgba_color_correction", "Color Correction; disabled|enabled" },
-		{ "armgba_gb_color_correction", "Color Correction; disabled|enabled" },
-		{ "armgba_gb_screen", "Game Boy Screen; grayscale|original|pocket|light" },
-		{ "armgba_gb_advance_border", "Game Boy Advance Border; cropped|shown" },
-		{ "armgba_turbo_period", "Turbo Button Period; 4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83|84|85|86|87|88|89|90|91|92|93|94|95|96|97|98|99|100|101|102|103|104|105|106|107|108|109|110|111|112|113|114|115|116|117|118|119|120" },
-		{ "armgba_gb_tilt", "Tilt Sensor; left stick|right stick|d-pad" },
-		{ "armgba_solar_sensor", "Solar Sensor; 5|6|7|8|9|10|0|1|2|3|4" },
-		{ "armgba_restart_buttons", "Restart Buttons; l r start|l r a b|l3 r3|select start a b|off" },
-		{ "armgba_link_mode", "Link Mode; off|together|separate" },
-		{ "armgba_link_players", "Players; 2|3|4" },
-		{ "armgba_player2_game", "Player 2's Game; same" },
-		{ "armgba_link_port", "Link Port; cable|wireless" },
-		{ "armgba_gb_link_port", "Link Port; cable|adapter" },
-		{ "armgba_gb_link_timing", "Game Boy Link Timing; standard|exact" },
-		{ "armgba_link_screens", "Screens; side by side|top and bottom|player 1|player 2|player 3|player 4" },
-		{ "armgba_back_up_save", "Back Up Save; off|1|2|3|4" },
-		{ "armgba_load_save", "Load Save; off" },
-		{ "armgba_load_into", "Load Into; same|1|2|3|4" },
-		{ "armgba_send_save", "Send Save; off|1 now" },
-		{ "armgba_new_save", "New Players' Saves; new|copy" },
-		{ "armgba_player1_saves", "Player 1's Save Folder; retroarch|armgba" },
-		{ "armgba_keep_saves", "Backups Kept; 10|20|all|5" },
-		{ "armgba_list_saves", "Backups Listed; 10|20|40|80|126" },
-		{ NULL, NULL },
-	};
-	callback(RETRO_ENVIRONMENT_SET_VARIABLES, (void*) variables);
+	setVariables(callback, definitions);
 }
 
 void retro_set_video_refresh(retro_video_refresh_t callback) {
