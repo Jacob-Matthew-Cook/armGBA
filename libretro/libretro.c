@@ -73,9 +73,9 @@ static bool gbCropped;
 static uint32_t gbAdvanceFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
 // The consoles of a Game Boy link can run here: player 1's on the first controller, player 2's on
 // the second and so on, joined by the cable (two) or the Four Player Adapter.
-static bool gbPair;
+static bool gbTogether;
 static bool gbAdapter;
-static uint32_t pairFrame[LIBRETRO_GB_WIDTH * 2 * LIBRETRO_GB_HEIGHT * 2];
+static uint32_t gbTogetherFrame[LIBRETRO_GB_WIDTH * 2 * LIBRETRO_GB_HEIGHT * 2];
 // How many consoles of a link run here (1 without one), and the players whose save starts as a copy
 // of player 1's, as they run player 1's game; the copy is made before the first frame.
 enum { MAX_PLAYERS = 4 };
@@ -94,7 +94,7 @@ enum {
 	ROUND_LONGEST = GBA_FRAME_CYCLES,
 };
 static struct GBA* gbas[MAX_PLAYERS];
-static bool gbaPair;
+static bool gbaTogether;
 static int32_t gbaAhead[MAX_PLAYERS];
 static struct Event sliceEvents[MAX_PLAYERS];
 static bool sliceOver[MAX_PLAYERS];
@@ -102,7 +102,7 @@ static int32_t roundDone[MAX_PLAYERS];
 // The cable: each console's transfer, and the others' data for it, handed over between rounds. A
 // transfer can end in the frame after it starts, so the transfers are part of a state.
 enum { MULTIPLAYER = 2 };
-static struct SioLink pairLinks[MAX_PLAYERS];
+static struct SioLink cables[MAX_PLAYERS];
 static struct Transfer {
 	int32_t mode;
 	uint32_t out;
@@ -137,7 +137,7 @@ static struct {
 } airQueue[MAX_PLAYERS][AIR_QUEUE];
 static int airQueued[MAX_PLAYERS];
 static uint16_t gbaShown[MAX_PLAYERS][SCREEN_WIDTH * SCREEN_HEIGHT];
-static uint16_t gbaPairFrame[SCREEN_WIDTH * 2 * SCREEN_HEIGHT * 2];
+static uint16_t gbaTogetherFrame[SCREEN_WIDTH * 2 * SCREEN_HEIGHT * 2];
 static uint16_t gbaCorrected[MAX_PLAYERS][SCREEN_WIDTH * SCREEN_HEIGHT];
 
 // With the consoles here, where the screens go: two side by side or one above the other, three or
@@ -145,7 +145,7 @@ static uint16_t gbaCorrected[MAX_PLAYERS][SCREEN_WIDTH * SCREEN_HEIGHT];
 enum { SCREENS_SIDE, SCREENS_STACKED, SCREENS_ONE, SCREENS_COUNT = SCREENS_ONE + MAX_PLAYERS };
 static int screens;
 static int screensOption = -1;
-static int16_t pairSamples[2 * 4096];
+static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game, picked in the menu from the games beside player 1's, loaded with it by the
 // frontend, or named with it in a pair file: the choices offered, and the game running (empty for the
@@ -211,8 +211,8 @@ static bool optionsShownSet;
 static bool tiltCartridge;
 
 static bool showOptions(void);
-static bool linkBothWanted(void);
-static bool linkSeparateWanted(void);
+static bool togetherWanted(void);
+static bool separateWanted(void);
 
 // Cheat codes from the frontend, by index, and the Game Boy Advance operations they decode to. All
 // codes are decoded again, in order, whenever one changes, because a master code changes how the
@@ -231,9 +231,9 @@ enum {
 	MEMORY_SECOND_RTC = 0x101,
 };
 
-// Whether the consoles of a link run here.
-static bool bothConsoles(void) {
-	return gbPair || gbaPair;
+// Whether the consoles of a link run here: Together, a pair file, or two games from the frontend.
+static bool togetherRunning(void) {
+	return gbTogether || gbaTogether;
 }
 
 // Writes a line to the frontend's log, or to stderr if it has none.
@@ -499,15 +499,15 @@ static void geometry(struct retro_game_geometry* geometry) {
 		geometry->base_height = LIBRETRO_GB_HEIGHT;
 		geometry->aspect_ratio = gbStretched ? 5.0f / 3.0f : 10.0f / 9.0f;
 	}
-	if (gameBoy && gbPair) {
+	if (gameBoy && gbTogether) {
 		geometry->base_width = LIBRETRO_GB_WIDTH;
 		geometry->base_height = LIBRETRO_GB_HEIGHT;
 	}
-	if (gbaPair) {
+	if (gbaTogether) {
 		geometry->base_width = SCREEN_WIDTH;
 		geometry->base_height = SCREEN_HEIGHT;
 	}
-	if (bothConsoles()) {
+	if (togetherRunning()) {
 		bool const grid = playersHere > 2 && screens < SCREENS_ONE;
 		geometry->base_width *= screens == SCREENS_SIDE || grid ? 2 : 1;
 		geometry->base_height *= screens == SCREENS_STACKED || grid ? 2 : 1;
@@ -525,7 +525,7 @@ static void announceGeometry(void) {
 // Reports the picture size and timing for the loaded game, at the consoles' own frame rates.
 void retro_get_system_av_info(struct retro_system_av_info* info) {
 	memset(info, 0, sizeof(*info));
-	gbOnAdvance = gameBoy && !gbPair && libretroGbOnAdvance();
+	gbOnAdvance = gameBoy && !gbTogether && libretroGbOnAdvance();
 	geometry(&info->geometry);
 	// A Game Boy frame lasts as long as a Game Boy Advance frame.
 	info->timing.fps = FRAME_RATE;
@@ -600,7 +600,7 @@ static void readOptions(void) {
 	value = option("armgba_threaded_video");
 	int threaded = !value ? 0 : !strcmp(value, "enabled") ? 1 : !strcmp(value, "one frame late") ? 2 : 0;
 	// Linked consoles run in turns, which a render thread would only slow.
-	threaded = gbaPair ? 0 : threaded;
+	threaded = gbaTogether ? 0 : threaded;
 	if (gba && threaded != threadedVideo) {
 		renderThreadStop(gba);
 		if (threaded) {
@@ -638,7 +638,7 @@ static void readOptions(void) {
 	// L2 and R2 change the screens too; the option wins only when it changes.
 	if (chosenScreens != screensOption) {
 		screensOption = screens = chosenScreens;
-		if (bothConsoles()) {
+		if (togetherRunning()) {
 			announceGeometry();
 		}
 	}
@@ -713,7 +713,7 @@ static void showButtons(void) {
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Start");
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X, "Turbo A");
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y, "Turbo B");
-	if (bothConsoles()) {
+	if (togetherRunning()) {
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Previous Screens");
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Next Screens");
 	} else {
@@ -770,8 +770,8 @@ static bool showOptions(void) {
 	bool const gameBoy = gameBoy;
 	bool const advance = gba && !gameBoy;
 	int const devices = advance ? gba->gpio.devices : 0;
-	bool const together = linkBothWanted();
-	bool const linked = together || linkSeparateWanted();
+	bool const together = togetherWanted();
+	bool const linked = together || separateWanted();
 	const struct {
 		const char* key;
 		bool shown;
@@ -788,13 +788,13 @@ static bool showOptions(void) {
 		{ "armgba_gb_screen", !advance },
 		{ "armgba_gb_advance_border", !advance },
 		{ "armgba_gb_link_port", !advance && together },
-		{ "armgba_gb_link_timing", !advance && linkSeparateWanted() },
+		{ "armgba_gb_link_timing", !advance && separateWanted() },
 		{ "armgba_link_players", together },
 		{ "armgba_link_screens", together },
 		{ "armgba_player2_game", together },
 		{ "armgba_new_save", together },
 		{ "armgba_load_into", together },
-		{ "armgba_send_save", linkSeparateWanted() },
+		{ "armgba_send_save", separateWanted() },
 	};
 	enum { OPTIONS = sizeof(options) / sizeof(options[0]) };
 	bool changed = false;
@@ -1098,12 +1098,12 @@ static const char* chosenSecond(void) {
 	return NULL;
 }
 
-static bool linkBothWanted(void) {
+static bool togetherWanted(void) {
 	const char* value = option("armgba_link_mode");
 	return value && !strcmp(value, "together");
 }
 
-static bool linkSeparateWanted(void) {
+static bool separateWanted(void) {
 	const char* value = option("armgba_link_mode");
 	return value && !strcmp(value, "separate");
 }
@@ -1438,9 +1438,9 @@ static void forgetSaves(void) {
 	copySaves = 0;
 }
 
-static void pairBegin(void* context, int mode, uint32_t out, int32_t cycles);
-static bool pairFinish(void* context, uint32_t in[3]);
-static void pairWrote(void* context);
+static void cableBegin(void* context, int mode, uint32_t out, int32_t cycles);
+static bool cableFinish(void* context, uint32_t in[3]);
+static void cableWrote(void* context);
 
 // Makes a Game Boy Advance with the game in it, or returns NULL.
 static struct GBA* startAdvance(const struct retro_game_info* game) {
@@ -1485,7 +1485,7 @@ static bool startOtherGameBoys(int count, const void* const data[], const size_t
 		return false;
 	}
 	libretroGbSelect(0);
-	gbPair = true;
+	gbTogether = true;
 	gbAdapter = adapter;
 	playersHere = count;
 	linkSetGameBoy(false);
@@ -1499,7 +1499,7 @@ static void stopOtherGameBoys(void) {
 	}
 	libretroGbSelect(0);
 	libretroGbSetPlayers(1, false);
-	gbPair = false;
+	gbTogether = false;
 	gbAdapter = false;
 	playersHere = 1;
 	linkSetGameBoy(true);
@@ -1541,16 +1541,16 @@ static void carryAir(void) {
 // the consoles here.
 static void attachPorts(void) {
 	const char* value = option("armgba_link_port");
-	bool wireless = value && !strcmp(value, "wireless") && (linkBothWanted() || linkSeparateWanted());
-	linkSetWireless(wireless && !gbaPair);
+	bool wireless = value && !strcmp(value, "wireless") && (togetherWanted() || separateWanted());
+	linkSetWireless(wireless && !gbaTogether);
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
 		if (!gbas[i]) {
 			continue;
 		}
 		airs[i] = (struct RfuAir) { i, false, airSend };
-		rfuAttach(gbas[i], wireless, gbaPair ? &airs[i] : linkAir());
-		if (gbaPair) {
-			sioAttach(gbas[i], wireless ? NULL : &pairLinks[i]);
+		rfuAttach(gbas[i], wireless, gbaTogether ? &airs[i] : linkAir());
+		if (gbaTogether) {
+			sioAttach(gbas[i], wireless ? NULL : &cables[i]);
 		}
 	}
 }
@@ -1576,14 +1576,14 @@ static bool startOtherAdvances(int count, const void* const data[], const size_t
 		renderThreadStop(gba);
 		threadedVideo = 0;
 	}
-	gbaPair = true;
+	gbaTogether = true;
 	playersHere = count;
 	linkSetGba(NULL);
 	for (int i = 0; i < count; ++i) {
 		if (i) {
 			gbaReset(gbas[i], skipBios);
 		}
-		pairLinks[i] = (struct SioLink) { .context = (void*) (intptr_t) i, .players = count, .id = i, .begin = pairBegin, .finish = pairFinish, .wrote = pairWrote };
+		cables[i] = (struct SioLink) { .context = (void*) (intptr_t) i, .players = count, .id = i, .begin = cableBegin, .finish = cableFinish, .wrote = cableWrote };
 	}
 	attachPorts();
 	setAdvanceOffsets();
@@ -1599,7 +1599,7 @@ static void stopOtherAdvances(void) {
 		}
 		gbas[i] = NULL;
 	}
-	gbaPair = false;
+	gbaTogether = false;
 	playersHere = 1;
 	sioAttach(gba, NULL);
 	linkSetGba(gba);
@@ -1678,10 +1678,10 @@ static void stopOthers(void) {
 	for (int player = 1; player < MAX_PLAYERS; ++player) {
 		keptSaves[player].kept = false;
 	}
-	if (gbPair) {
+	if (gbTogether) {
 		stopOtherGameBoys();
 	}
-	if (gbaPair) {
+	if (gbaTogether) {
 		stopOtherAdvances();
 	}
 	secondPath[0] = '\0';
@@ -1691,13 +1691,13 @@ static void stopOthers(void) {
 // Offers RetroArch the netplay that carries the cable when Link Mode is Separate, and its usual
 // netplay otherwise.
 static void offerLinkNetplay(void) {
-	linkSetNetplay(linkSeparateWanted() && !bothConsoles());
+	linkSetNetplay(separateWanted() && !togetherRunning());
 }
 
 // Whether the consoles running are the ones the link options ask for.
 static bool runningAsWanted(void) {
-	bool const want = linkBothWanted();
-	if (bothConsoles() != want) {
+	bool const want = togetherWanted();
+	if (togetherRunning() != want) {
 		return false;
 	}
 	if (!want) {
@@ -1718,10 +1718,10 @@ static void applyLinkOptions(void) {
 	if (runningAsWanted()) {
 		return;
 	}
-	if (bothConsoles()) {
+	if (togetherRunning()) {
 		stopOthers();
 	}
-	if (linkBothWanted()) {
+	if (togetherWanted()) {
 		startOthers(NULL, NULL, 0);
 	}
 	announceGeometry();
@@ -1741,7 +1741,7 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory);
 	offerSecondGames(game->path, true);
 	recallSecondChoice();
-	gbPair = false;
+	gbTogether = false;
 	playersHere = 1;
 	libretroGbSetPlayers(1, false);
 	readOptions();
@@ -1757,7 +1757,7 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	readPlayerOneSave();
 	tiltCartridge = game->size > 0x147 && ((const uint8_t*) game->data)[0x147] == 0x22;
 	linkSetGameBoy(true);
-	if (second || linkBothWanted() || pairFile) {
+	if (second || togetherWanted() || pairFile) {
 		startOthers(second, game->data, game->size);
 	}
 	offerLinkNetplay();
@@ -1778,7 +1778,7 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	offerSecondGames(game->path, false);
 	recallSecondChoice();
 	gbas[0] = gba = startAdvance(game);
-	gbaPair = false;
+	gbaTogether = false;
 	playersHere = 1;
 	if (!gba) {
 		return false;
@@ -1790,7 +1790,7 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	readPlayerOneSave();
 	linkSetGba(gba);
 	attachPorts();
-	if (second || linkBothWanted() || pairFile) {
+	if (second || togetherWanted() || pairFile) {
 		startOthers(second, game->data, game->size);
 	}
 	offerLinkNetplay();
@@ -1910,7 +1910,7 @@ void retro_unload_game(void) {
 			libretroGbUnload();
 		}
 		gameBoy = false;
-		gbPair = false;
+		gbTogether = false;
 		gbAdapter = false;
 		libretroGbSetPlayers(1, false);
 	}
@@ -1927,7 +1927,7 @@ void retro_unload_game(void) {
 		gbas[i] = NULL;
 	}
 	gba = NULL;
-	gbaPair = false;
+	gbaTogether = false;
 }
 
 // The frontend's Restart.
@@ -2109,7 +2109,7 @@ static void readFastForward(void) {
 	static bool held;
 	// Not in netplay: the other players' consoles would wait for this one's. With the linked
 	// consoles here, L2 and R2 change the screens instead.
-	bool now = !linkSession() && !bothConsoles() && (inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2) || inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2));
+	bool now = !linkSession() && !togetherRunning() && (inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2) || inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2));
 	if (now == held) {
 		return;
 	}
@@ -2629,7 +2629,7 @@ static void showConsoles(const void* const pictures[], size_t pixelBytes, int wi
 		}
 	}
 	videoRefresh(frame, width * columns, height * rows, row * columns);
-	size_t count = sizeof(pairSamples) / sizeof(pairSamples[0]) / 2;
+	size_t count = sizeof(mixedSamples) / sizeof(mixedSamples[0]) / 2;
 	for (int i = 0; i < playersHere; ++i) {
 		count = frames[i] < count ? frames[i] : count;
 	}
@@ -2638,9 +2638,9 @@ static void showConsoles(const void* const pictures[], size_t pixelBytes, int wi
 		for (int i = 0; i < playersHere; ++i) {
 			sum += samples[i][k];
 		}
-		pairSamples[k] = sum / playersHere;
+		mixedSamples[k] = sum / playersHere;
 	}
-	audioBatch(pairSamples, count);
+	audioBatch(mixedSamples, count);
 }
 
 // Gives the players on player 1's game, with no save of their own yet, a copy of player 1's.
@@ -2684,7 +2684,7 @@ static void runGameBoys(void) {
 	for (int i = 0; i < playersHere; ++i) {
 		shown[i] = pictures[i];
 	}
-	showConsoles(shown, sizeof(uint32_t), LIBRETRO_GB_WIDTH, LIBRETRO_GB_HEIGHT, pairFrame, samples, frames);
+	showConsoles(shown, sizeof(uint32_t), LIBRETRO_GB_WIDTH, LIBRETRO_GB_HEIGHT, gbTogetherFrame, samples, frames);
 }
 
 // The cable between the Game Boy Advances here. When a transfer ends, in normal mode player 1 and 2's
@@ -2702,7 +2702,7 @@ static uint32_t dataOf(int i) {
 	return sioOutgoing(gbas[i], &mode, &ready);
 }
 
-static void pairBegin(void* context, int mode, uint32_t out, int32_t cycles) {
+static void cableBegin(void* context, int mode, uint32_t out, int32_t cycles) {
 	int const i = (int) (intptr_t) context;
 	struct Transfer* const t = &transfers[i];
 	memset(t, 0, sizeof(*t));
@@ -2717,7 +2717,7 @@ static void pairBegin(void* context, int mode, uint32_t out, int32_t cycles) {
 	}
 }
 
-static void pairWrote(void* context) {
+static void cableWrote(void* context) {
 	int const i = (int) (intptr_t) context;
 	int const n = dataWrites[i].count;
 	if (n < DATA_WRITES) {
@@ -2754,7 +2754,7 @@ static void takeData(void) {
 	}
 }
 
-static bool pairFinish(void* context, uint32_t in[3]) {
+static bool cableFinish(void* context, uint32_t in[3]) {
 	int const i = (int) (intptr_t) context;
 	struct Transfer* const t = &transfers[i];
 	if (!t->answered) {
@@ -2775,8 +2775,8 @@ static void carryReady(void) {
 		for (int k = 0; k < playersHere; ++k) {
 			ready &= k == i || sioMultiplayer(gbas[k]);
 		}
-		if (ready != pairLinks[i].ready) {
-			pairLinks[i].ready = ready;
+		if (ready != cables[i].ready) {
+			cables[i].ready = ready;
 			sioLinkChanged(gbas[i]);
 		}
 	}
@@ -2935,7 +2935,7 @@ static void runAdvancesFrame(void) {
 		samples[i] = (const int16_t*) gbas[i]->audio.out;
 		frames[i] = gbas[i]->audio.outCount;
 	}
-	showConsoles(pictures, sizeof(uint16_t), SCREEN_WIDTH, SCREEN_HEIGHT, gbaPairFrame, samples, frames);
+	showConsoles(pictures, sizeof(uint16_t), SCREEN_WIDTH, SCREEN_HEIGHT, gbaTogetherFrame, samples, frames);
 	for (int i = 0; i < playersHere; ++i) {
 		gbas[i]->audio.outCount = 0;
 	}
@@ -2960,7 +2960,7 @@ void retro_run(void) {
 		keptCheck = 0;
 		writeSaves(false);
 	}
-	if (gbPair) {
+	if (gbTogether) {
 		runGameBoys();
 		return;
 	}
@@ -2991,7 +2991,7 @@ void retro_run(void) {
 		audioBatch(samples, frames);
 		return;
 	}
-	if (gbaPair) {
+	if (gbaTogether) {
 		runAdvancesFrame();
 		return;
 	}
@@ -3034,8 +3034,8 @@ static size_t consolesStateSize(void) {
 	if (gameBoy) {
 		return libretroGbStateSize();
 	}
-	if (gbaPair) {
-		return playersHere * (sizeof(gbaAhead[0]) + gbaStateSize() + sizeof(transfers[0]) + sizeof(pairLinks[0].ready) + sizeof(gbaShown[0]));
+	if (gbaTogether) {
+		return playersHere * (sizeof(gbaAhead[0]) + gbaStateSize() + sizeof(transfers[0]) + sizeof(cables[0].ready) + sizeof(gbaShown[0]));
 	}
 	return gbaStateSize();
 }
@@ -3066,7 +3066,7 @@ static bool saveConsoles(void* data, size_t size) {
 	if (!gba || size < consolesStateSize()) {
 		return false;
 	}
-	if (!gbaPair) {
+	if (!gbaTogether) {
 		gbaSaveState(gba, data);
 		return true;
 	}
@@ -3082,7 +3082,7 @@ static bool saveConsoles(void* data, size_t size) {
 	memcpy(at, transfers, playersHere * sizeof(transfers[0]));
 	at += playersHere * sizeof(transfers[0]);
 	for (int i = 0; i < playersHere; ++i) {
-		*at++ = pairLinks[i].ready;
+		*at++ = cables[i].ready;
 	}
 	memcpy(at, gbaShown, playersHere * sizeof(gbaShown[0]));
 	return true;
@@ -3094,7 +3094,7 @@ static bool loadConsoles(const void* data, size_t size) {
 		checkGameBoyMemory();
 		return loaded;
 	}
-	if (!gbaPair) {
+	if (!gbaTogether) {
 		return gba && gbaLoadState(gba, data, size);
 	}
 	if (size < consolesStateSize()) {
@@ -3114,7 +3114,7 @@ static bool loadConsoles(const void* data, size_t size) {
 	memcpy(transfers, at, playersHere * sizeof(transfers[0]));
 	at += playersHere * sizeof(transfers[0]);
 	for (int i = 0; i < playersHere; ++i) {
-		pairLinks[i].ready = *at++;
+		cables[i].ready = *at++;
 	}
 	memcpy(gbaShown, at, playersHere * sizeof(gbaShown[0]));
 	return true;
@@ -3123,7 +3123,7 @@ static bool loadConsoles(const void* data, size_t size) {
 // A state: the consoles', then with the consoles of a link here, how long each player has held the
 // restart buttons, so a rollback restarts a console on the same frame, and the session's tag.
 size_t retro_serialize_size(void) {
-	return consolesStateSize() + (bothConsoles() ? sizeof(restartHeld) + sizeof(sessionTag) : 0);
+	return consolesStateSize() + (togetherRunning() ? sizeof(restartHeld) + sizeof(sessionTag) : 0);
 }
 
 bool retro_serialize(void* data, size_t size) {
@@ -3131,7 +3131,7 @@ bool retro_serialize(void* data, size_t size) {
 	if (size < retro_serialize_size() || !saveConsoles(data, consolesStateSize())) {
 		return false;
 	}
-	if (bothConsoles()) {
+	if (togetherRunning()) {
 		uint8_t* const at = (uint8_t*) data + consolesStateSize();
 		memcpy(at, restartHeld, sizeof(restartHeld));
 		memcpy(at + sizeof(restartHeld), &sessionTag, sizeof(sessionTag));
@@ -3146,7 +3146,7 @@ bool retro_unserialize(const void* data, size_t size) {
 	}
 	// A loaded state has every console's save as it was; player 1's isn't copied over them after.
 	copySaves = 0;
-	if (bothConsoles()) {
+	if (togetherRunning()) {
 		const uint8_t* const at = (const uint8_t*) data + consolesStateSize();
 		memcpy(restartHeld, at, sizeof(restartHeld));
 		uint32_t tag;
@@ -3215,7 +3215,7 @@ void* retro_get_memory_data(unsigned id) {
 	if (!retroArchSaves() && (id == RETRO_MEMORY_SAVE_RAM || id == RETRO_MEMORY_RTC)) {
 		return NULL;
 	}
-	if (gbPair && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
+	if (gbTogether && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
 		size_t size;
 		libretroGbSelect(1);
 		void* const data = id == MEMORY_SECOND_SAVE ? libretroGbSaveRam(&size) : libretroGbRtc(&size);
@@ -3232,7 +3232,7 @@ void* retro_get_memory_data(unsigned id) {
 	}
 	switch (id) {
 	case MEMORY_SECOND_SAVE:
-		return gbaPair ? gbas[1]->savedata.storage : NULL;
+		return gbaTogether ? gbas[1]->savedata.storage : NULL;
 	case RETRO_MEMORY_SAVE_RAM:
 		return gba->savedata.storage;
 	case RETRO_MEMORY_SYSTEM_RAM:
@@ -3251,7 +3251,7 @@ size_t retro_get_memory_size(unsigned id) {
 	if (!retroArchSaves() && (id == RETRO_MEMORY_SAVE_RAM || id == RETRO_MEMORY_RTC)) {
 		return 0;
 	}
-	if (gbPair && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
+	if (gbTogether && (id == MEMORY_SECOND_SAVE || id == MEMORY_SECOND_RTC)) {
 		size_t size;
 		libretroGbSelect(1);
 		id == MEMORY_SECOND_SAVE ? libretroGbSaveRam(&size) : libretroGbRtc(&size);
@@ -3274,7 +3274,7 @@ size_t retro_get_memory_size(unsigned id) {
 	}
 	switch (id) {
 	case MEMORY_SECOND_SAVE:
-		return !gbaPair ? 0 : gbas[1]->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gbas[1]);
+		return !gbaTogether ? 0 : gbas[1]->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gbas[1]);
 	case RETRO_MEMORY_SAVE_RAM:
 		return gba->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(gba);
 	case RETRO_MEMORY_SYSTEM_RAM:
