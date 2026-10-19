@@ -70,10 +70,11 @@ bool hasSystemPath;
 // The boot ROM choice from the option.
 LibretroGbBoot bootWanted = LIBRETRO_GB_BOOT_NINTENDO;
 
-// An MBC3 clock, kept by the frontend as the .rtc file. The first 8 bytes are the Unix time the
-// clock would have started from, as gambatte-libretro stores it, so either core reads the other's
-// file. Then come the registers and when they were saved, which carry more detail (in rtc.h's
-// order). A HuC3 chip's file stores the chip's whole state in place of the registers.
+// An MBC3 clock, kept by the frontend as the .rtc file:
+// - 8 bytes: the Unix time the clock would have started from, as gambatte-libretro stores it, so
+//   either core reads the other's file;
+// - the registers, in rtc.h's order, and when they were saved, which carry more detail.
+// A HuC3 chip's file stores the chip's whole state in place of the registers.
 enum {
 	RTC_BASE = 0,
 	RTC_MAGIC = 8,
@@ -342,10 +343,12 @@ bool nintendoBoot(std::vector<unsigned char> const& bytes) {
 	return std::search(bytes.begin(), bytes.end(), logo, logo + sizeof(logo)) != bytes.end();
 }
 
-// Finds the boot ROM in the system directory for the model, or none. Nintendo's is looked for under
-// every name ROCKNIX's BIOS check, Gambatte, gbdev's archive, SameBoy and Gearboy use for it;
-// failing that, a SameBoy boot ROM under one of those names. Gambatte can convert Nintendo's Game
-// Boy Color boot ROM into the Game Boy Advance's, but not SameBoy's.
+// Finds the boot ROM for the model in the system directory, or returns none. It looks for
+// Nintendo's boot ROM under every name that ROCKNIX's BIOS check, Gambatte, gbdev's archive,
+// SameBoy and Gearboy use for it, then for a SameBoy boot ROM under the same names.
+//
+// For a Game Boy Advance, a Game Boy Color boot ROM is used only if it is Nintendo's: Gambatte can
+// convert that one, but not SameBoy's.
 std::string bootRom(const char* systemDirectory, LibretroGbModel model) {
 	static const char* const names[4][5] = {
 		{ "gb_bios.bin", "dmg_boot.bin" },
@@ -406,9 +409,9 @@ bool correction;
 // Advance's.
 int built = -1;
 
-// Builds the Game Boy Color's colors as its screen shows them, as SameBoy does (Lior Halphon, MIT
-// license; its "modern balanced" correction): each channel's response curve, then green takes in
-// some blue. The Game Boy Advance's screen has its own curves and mixes less.
+// Builds the Game Boy Color's colors as its screen shows them, the way SameBoy does (Lior Halphon,
+// MIT license; its "modern balanced" correction). Each channel goes through a response curve, then
+// some blue is mixed into green. The Game Boy Advance's screen has its own curves and mixes less.
 void correctedColors(bool advance) {
 	static const unsigned char cgbCurve[32] = { 0, 6, 12, 20, 28, 36, 45, 56, 66, 76, 88, 100, 113, 125, 137, 149,
 	                                            161, 172, 182, 192, 202, 210, 218, 225, 232, 238, 243, 247, 250, 252, 254, 255 };
@@ -487,9 +490,10 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 		model = (bytes[0x151] & 0xBF) == 0x80 ? LIBRETRO_GB_CGB : LIBRETRO_GB_DMG;
 	}
 	if (model == LIBRETRO_GB_AUTO) {
-		// The header's CGB flag: 0x80 for color games that also run on a Game Boy, 0xC0 for color
-		// only. Any other value is the end of an older game's title. So is 0x80 when a title runs
-		// right up to it in an unlicensed game whose header names no known cartridge type.
+		// The header's CGB flag: 0x80 for color games that also run on a Game Boy, 0xC0 for
+		// color-only games. Any other value is part of an older game's title. So is 0x80 in an
+		// unlicensed game whose title runs right up to it and whose header names no known cartridge
+		// type.
 		const unsigned char* const header = bytes;
 		unsigned const flag = size > 0x14B ? header[0x143] : 0;
 		unsigned const type = size > 0x14B ? header[0x147] : 0;
@@ -717,9 +721,9 @@ void endFrame() {
 	}
 }
 
-// The cable between the two consoles here: when one has clocked out its eight bits, each takes the
-// other's byte. The other takes it only if its serial port is waiting for a clock or clocking too.
-// Both stop their own clocks, as the transfer is done.
+// The cable between the two consoles here. When one has clocked out its eight bits, it takes the
+// other's byte. The other takes this one's only if its serial port is waiting for a clock or
+// clocking too. Both then stop their own clocks, since the transfer is done.
 void exchange(Console& clocked, Console& other) {
 	clocked.gb->linkStatus(LINK_ACK);
 	int const out = clocked.gb->linkStatus(LINK_OUT);
@@ -798,9 +802,9 @@ void clockedExactly() {
 	s->gb->linkStatus(LINK_STOP);
 }
 
-// With exact link timing: a frame in parts that end at this Game Boy's own transfer's end and where
-// the leading console has got to. Its own transfer is told to the other as soon as it starts. A long
-// wait at a stop ends the frame early.
+// With exact link timing, a frame runs in parts. Each part ends at this Game Boy's own transfer
+// end, or where the leading console has got to. Its own transfer is told to the other as soon as it
+// starts. A long wait at a stop ends the frame early.
 void runExactlyParts() {
 	long done = 0;
 	while (done < FRAME_SAMPLES) {
@@ -858,9 +862,11 @@ void runExactly() {
 extern "C" {
 
 // Runs one frame. Gambatte runs by audio samples, so it is asked for a frame's worth at a time
-// until it has drawn a frame. Turning the screen off can delay a frame by up to three frames' worth.
-// A game that turns the screen off and on faster than a frame never finishes one; after four
-// frames' worth, the frontend gets the last picture again.
+// until it has drawn a frame.
+//
+// Turning the screen off can delay a frame by up to three frames' worth. A game that turns the
+// screen off and on faster than a frame never finishes one, so after four frames' worth the
+// frontend gets the last picture again.
 const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** out, size_t* frames) {
 	beginFrame(keys);
 	updateLink();
@@ -1083,10 +1089,12 @@ bool loadOne(const void* data, size_t size) {
 		return false;
 	}
 	// A state from another model switches the machine to that model until the next restart. The
-	// state's third byte says whether it ran as a Game Boy Color and, in states that record it
-	// (0x80), whether as a Game Boy Advance. An older Color state counts as Game Boy Advance when
-	// the option asks for one. A second instance that a frontend runs ahead with is handed each
-	// state the first one makes, so it follows along.
+	// state's third byte says whether it ran as a Game Boy Color, and in states that record it
+	// (0x80), whether it ran as a Game Boy Advance. An older Color state counts as Game Boy Advance
+	// when the option asks for one.
+	//
+	// A second instance that a frontend runs ahead with is given each state the first one makes, so
+	// it follows along.
 	bool const header = length >= 3 && static_cast<unsigned char>(state[0]) == 0xFF;
 	unsigned const flags = header ? static_cast<unsigned char>(state[2]) : 0;
 	bool const color = flags & gambatte::GB::CGB_MODE;
@@ -1151,9 +1159,12 @@ void libretroGbSetPlayers(int count, bool withAdapter) {
 	}
 }
 
-// With the consoles of a link here, a state holds how far each ran past the last frame, the adapter,
-// each console's state in its own fixed-size part, then their pictures: a frame ends partway through
-// drawing one, which a state loaded for a rollback has to carry on with.
+// With the consoles of a link here, a state holds, in order:
+// - how far each console ran past the last frame;
+// - the adapter;
+// - each console's state, in its own fixed-size part;
+// - their pictures, since a frame ends partway through drawing one and a state loaded for a
+//   rollback has to carry on with it.
 size_t libretroGbStateSize(void) {
 	if (players < 2) {
 		return stateSizeOne();
