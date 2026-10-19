@@ -38,7 +38,7 @@ only with Link Mode on.
 | --- | --- | --- | --- |
 | System | Skip BIOS Intro | Game Boy Advance | Disabled, Enabled |
 | | Game Boy Model (applies on restart) | Game Boy | Auto, Game Boy, Game Boy Pocket / Light, Game Boy Color, Game Boy Advance |
-| | Boot ROM (applies on restart) | Game Boy | On (Nintendo's, from the system directory), Off, Open-Source (SameBoy's, built in) |
+| | Boot ROM (applies on restart) | Game Boy | Nintendo's (System Folder), Off, SameBoy's (Built In) |
 | Video | Threaded Video | Game Boy Advance | Disabled, Enabled, One Frame Late |
 | | Color Correction | Both | Disabled, Enabled |
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
@@ -94,7 +94,7 @@ names in this order:
 - Game Boy Advance: `cgb_agb_boot.bin`, `cgb_agb0_boot.bin`, then the Game Boy Color's (converted),
   then `agb_boot.bin`
 
-With Boot ROM On, Nintendo's boot ROM is used under whichever of these names it has. A SameBoy boot
+With Boot ROM set to Nintendo's, the boot ROM is used under whichever of these names it has. A SameBoy boot
 ROM under one of them is used only where Nintendo's isn't there. With neither, the game starts
 without one.
 
