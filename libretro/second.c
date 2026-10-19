@@ -77,18 +77,20 @@ static bool hasExtension(const char* name, const char* const* extensions) {
 	return false;
 }
 
+enum { MAX_WORDS = 16, WORD_SIZE = 32 };
+
 // A name's words, lower case, for comparing: the part before any "(", without punctuation.
-static int words(const char* name, char out[16][32]) {
+static int words(const char* name, char out[MAX_WORDS][WORD_SIZE]) {
 	int count = 0;
 	int length = 0;
 	for (const char* c = name;; ++c) {
 		bool letter = *c && *c != '(' && *c != '[' && isalnum((unsigned char) *c);
-		if (letter && length < 31) {
+		if (letter && length < WORD_SIZE - 1) {
 			out[count][length++] = (char) tolower((unsigned char) *c);
 		} else if (!letter && length) {
 			out[count][length] = '\0';
 			length = 0;
-			if (++count == 16) {
+			if (++count == MAX_WORDS) {
 				break;
 			}
 		}
@@ -117,8 +119,8 @@ static bool filler(const char* word) {
 
 // How likely a game is to link with the loaded one: every release of the same game first, then by
 // the words their names share, filler words aside.
-static int likeness(const char* name, char loaded[16][32], int loadedCount) {
-	char theirs[16][32];
+static int likeness(const char* name, char loaded[MAX_WORDS][WORD_SIZE], int loadedCount) {
+	char theirs[MAX_WORDS][WORD_SIZE];
 	int count = words(name, theirs);
 	bool same = count == loadedCount;
 	int shared = 0;
@@ -151,7 +153,7 @@ static int byLikeness(const void* a, const void* b) {
 	return strcasecmp(x->game.label, y->game.label);
 }
 
-static void addFolder(const char* folder, const char* skip, const char* const* extensions, char loaded[16][32], int loadedCount,
+static void addFolder(const char* folder, const char* skip, const char* const* extensions, char loaded[MAX_WORDS][WORD_SIZE], int loadedCount,
                       struct Ranked** list, size_t* count, size_t* room) {
 	DIR* dir = opendir(folder);
 	if (!dir) {
@@ -194,7 +196,7 @@ size_t secondList(const char* loadedPath, bool gameBoy, struct SecondGame* out, 
 	folderOf(loadedPath, folder, sizeof(folder));
 	char name[1024];
 	baseName(loadedPath, name, sizeof(name));
-	char loaded[16][32];
+	char loaded[MAX_WORDS][WORD_SIZE];
 	int loadedCount = words(name, loaded);
 	struct Ranked* list = NULL;
 	size_t count = 0;
@@ -414,24 +416,33 @@ void secondBackupPath(const char* savePath, const char* stamp, char* out, size_t
 	snprintf(out, outSize, "%s.%s%s", stem, stamp, extension);
 }
 
+// The length of a stamp's time, "20261018-153012".
+enum { STAMP_TIME = 15 };
+
 // Whether a name is a stamp: eight digits, a dash, six digits, then maybe a dash and a count.
 static bool isStamp(const char* name, size_t length) {
-	if (length < 15 || length == 16 || length >= SECOND_STAMP || name[8] != '-' || (length > 15 && name[15] != '-')) {
+	if (length < STAMP_TIME || length == STAMP_TIME + 1 || length >= SECOND_STAMP || name[8] != '-'
+	    || (length > STAMP_TIME && name[STAMP_TIME] != '-')) {
 		return false;
 	}
 	for (size_t i = 0; i < length; ++i) {
-		if (i != 8 && i != 15 && !isdigit((unsigned char) name[i])) {
+		if (i != 8 && i != STAMP_TIME && !isdigit((unsigned char) name[i])) {
 			return false;
 		}
 	}
 	return true;
 }
 
+// A stamp's count among backups from the same second: 1 for the first, which has none.
+static int stampCount(const char* stamp) {
+	return stamp[STAMP_TIME] ? atoi(stamp + STAMP_TIME + 1) : 1;
+}
+
 static int newerFirst(const void* a, const void* b) {
 	const char* x = a;
 	const char* y = b;
-	int const time = strncmp(y, x, 15);
-	return time ? time : atoi(y[15] ? y + 16 : "1") - atoi(x[15] ? x + 16 : "1");
+	int const time = strncmp(y, x, STAMP_TIME);
+	return time ? time : stampCount(y) - stampCount(x);
 }
 
 size_t secondBackups(const char* savePath, char (*stamps)[SECOND_STAMP], size_t max) {
@@ -485,7 +496,7 @@ size_t secondBackups(const char* savePath, char (*stamps)[SECOND_STAMP], size_t 
 
 void secondNewStamp(const char* savePath, char stamp[SECOND_STAMP]) {
 	time_t const now = time(NULL);
-	char base[16];
+	char base[STAMP_TIME + 1];
 	strftime(base, sizeof(base), "%Y%m%d-%H%M%S", localtime(&now));
 	// After every backup from the same second, so it lists as the newest.
 	enum { MOST = 1000 };
@@ -493,8 +504,8 @@ void secondNewStamp(const char* savePath, char stamp[SECOND_STAMP]) {
 	size_t const count = stamps ? secondBackups(savePath, stamps, MOST) : 0;
 	int last = 0;
 	for (size_t i = 0; i < count; ++i) {
-		if (!strncmp(stamps[i], base, 15)) {
-			int const n = stamps[i][15] ? atoi(stamps[i] + 16) : 1;
+		if (!strncmp(stamps[i], base, STAMP_TIME)) {
+			int const n = stampCount(stamps[i]);
 			last = n > last ? n : last;
 		}
 	}

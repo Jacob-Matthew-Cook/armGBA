@@ -475,6 +475,28 @@ void setColors() {
 
 void restartAs(LibretroGbModel model);
 
+// Sachen's multicarts show the boot ROM their own logo through a lock that isn't emulated, and keep
+// their header where their scrambled address lines put it.
+bool isSachen(const unsigned char* bytes, size_t size) {
+	return size >= 0x200 && ((bytes[0x104] == 0xCE && bytes[0x144] == 0xED && bytes[0x114] == 0x66)
+	                         || (bytes[0x184] == 0xCE && bytes[0x1C4] == 0xED && bytes[0x194] == 0x66));
+}
+
+// The model a game's header asks for.
+LibretroGbModel headerModel(const unsigned char* header, size_t size, bool sachen) {
+	if (sachen) {
+		return (header[0x151] & 0xBF) == 0x80 ? LIBRETRO_GB_CGB : LIBRETRO_GB_DMG;
+	}
+	// The header's CGB flag: 0x80 for color games that also run on a Game Boy, 0xC0 for color-only
+	// games. Any other value is part of an older game's title. So is 0x80 in an unlicensed game
+	// whose title runs right up to it and whose header names no known cartridge type.
+	unsigned const flag = size > 0x14B ? header[0x143] : 0;
+	unsigned const type = size > 0x14B ? header[0x147] : 0;
+	bool const knownType = type <= 0x22 || type >= 0xFC;
+	bool const title = !knownType && header[0x14B] != 0x33 && header[0x142] > 0x20 && header[0x142] < 0x7F;
+	return flag == 0xC0 || (flag == 0x80 && !title) ? LIBRETRO_GB_CGB : LIBRETRO_GB_DMG;
+}
+
 // Starts the game as the chosen model, or as its header asks for, reusing the existing machine if
 // there is one.
 bool start(LibretroGbModel model, char* error, size_t errorSize) {
@@ -482,24 +504,9 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 	const unsigned char* const bytes = &s->game[0];
 	size_t const size = s->game.size();
 	const char* const systemDirectory = hasSystemPath ? systemPath.c_str() : 0;
-	// Sachen's multicarts show the boot ROM their own logo through a lock that isn't emulated, and
-	// keep their header where their scrambled address lines put it.
-	bool const sachen = size >= 0x200 && ((bytes[0x104] == 0xCE && bytes[0x144] == 0xED && bytes[0x114] == 0x66)
-	                                      || (bytes[0x184] == 0xCE && bytes[0x1C4] == 0xED && bytes[0x194] == 0x66));
-	if (model == LIBRETRO_GB_AUTO && sachen) {
-		model = (bytes[0x151] & 0xBF) == 0x80 ? LIBRETRO_GB_CGB : LIBRETRO_GB_DMG;
-	}
+	bool const sachen = isSachen(bytes, size);
 	if (model == LIBRETRO_GB_AUTO) {
-		// The header's CGB flag: 0x80 for color games that also run on a Game Boy, 0xC0 for
-		// color-only games. Any other value is part of an older game's title. So is 0x80 in an
-		// unlicensed game whose title runs right up to it and whose header names no known cartridge
-		// type.
-		const unsigned char* const header = bytes;
-		unsigned const flag = size > 0x14B ? header[0x143] : 0;
-		unsigned const type = size > 0x14B ? header[0x147] : 0;
-		bool const knownType = type <= 0x22 || type >= 0xFC;
-		bool const title = !knownType && header[0x14B] != 0x33 && header[0x142] > 0x20 && header[0x142] < 0x7F;
-		model = flag == 0xC0 || (flag == 0x80 && !title) ? LIBRETRO_GB_CGB : LIBRETRO_GB_DMG;
+		model = headerModel(bytes, size, sachen);
 	}
 	// Starts through a boot ROM when there is one; otherwise in the state the boot ROM would have
 	// left the machine.
