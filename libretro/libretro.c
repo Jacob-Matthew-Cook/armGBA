@@ -2795,13 +2795,14 @@ static uint32_t dataAt(int i, int32_t when) {
 	return value;
 }
 
-// Between rounds: the data due in the round, for each transfer under way; then the writes are
-// forgotten, and each console's data is noted as the next round begins.
+// Between rounds: the data due in the round, for each transfer under way, or a waiting console's,
+// which can't change; then the writes are forgotten, and each console's data is noted as the next
+// round begins.
 static void takeData(void) {
 	for (int i = 0; i < playersHere; ++i) {
 		struct Transfer* const t = &transfers[i];
 		for (int k = 0; t->pending && k < playersHere; ++k) {
-			if ((t->pending & 1 << k) && t->takeAt[k] <= roundDone[k]) {
+			if ((t->pending & 1 << k) && (t->takeAt[k] <= roundDone[k] || transfers[k].waiting)) {
 				t->data[k] = dataAt(k, t->takeAt[k]);
 				t->pending &= ~(1 << k);
 			}
@@ -2868,9 +2869,13 @@ static void exchange(int i) {
 }
 
 // Between rounds: the transfers ending on this cycle, answered before they end; and any that ended
-// inside a round, which waited for it to end.
+// inside a round, which waited for it to end. Consoles stop a few cycles past a round's end, so a
+// transfer can end before another console has got to where its data is taken: it waits for it.
 static void carryCable(void) {
 	for (int i = 0; i < playersHere; ++i) {
+		if (transfers[i].pending) {
+			continue;
+		}
 		if (transfers[i].waiting || (!transfers[i].answered && sioTransferLeft(gbas[i]) == 0)) {
 			transfers[i].waiting = false;
 			exchange(i);
