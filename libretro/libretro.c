@@ -75,12 +75,17 @@ static int playersHere = 1;
 // Players whose save starts as a copy of player 1's, made before the first frame.
 static uint8_t copySaves;
 
-// The consoles of a Game Boy Advance link can run here too, up to four on one cable, each on a thread
-// of its own. They run in rounds, all to the same moment; between rounds, with every console stopped,
-// what passes between them does, always in the same order, so the threads' timing never shows. A
-// round ends where a transfer does, so the consoles swap data on its last cycle as the wires would,
-// and no round is longer than the shortest transfer a console could start, so none is missed. Each
-// console starts part of a frame after the one before, as real consoles are never in step.
+// The consoles of a Game Boy Advance link can also run here: up to four on one cable, each on its
+// own thread.
+//
+// They run in rounds that all end at the same moment. Between rounds, with every console stopped,
+// the link data is passed in a fixed order, so thread timing never changes the result.
+//
+// A round ends where a transfer ends, so the consoles swap data on its last cycle, as the wires
+// would. No round is longer than the shortest transfer a console could start, so none is missed.
+//
+// Each console starts part of a frame after the one before, because real consoles are never in
+// step.
 enum {
 	GBA_FRAME_CYCLES = 280896,
 	ROUND_LONGEST = GBA_FRAME_CYCLES,
@@ -101,9 +106,10 @@ static struct Transfer {
 	bool waiting;
 	bool answered;
 	uint32_t in[3];
-	// The others' data: as the transfer starts in normal mode, where both ends shift theirs out from
-	// the first bit; as it ends in multiplayer mode, as Kirby & The Amazing Mirror needs with four
-	// players. Consoles whose data is still to be taken, by bit.
+	// The other consoles' data, and when to take it: as the transfer starts in normal mode, since
+	// both ends shift out from the first bit, or as it ends in multiplayer mode, which Kirby & The
+	// Amazing Mirror needs with four players. pending has a bit for each console whose data is
+	// still to be taken.
 	uint32_t data[MAX_PLAYERS];
 	int32_t takeAt[MAX_PLAYERS];
 	uint8_t pending;
@@ -155,16 +161,18 @@ static char pairPath[4096];
 static char otherPaths[MAX_PLAYERS][4096];
 static int pairCount;
 static bool netplaySeen;
-// In rollback netplay every device runs the session of the device hosting it. Each device tags its
-// session, and the tag goes in every state: a device that loads a state with another device's tag
-// has joined that session, and takes its tag, so the states on every device stay the same.
+// In rollback netplay every device runs the host's session. Each device tags its session, and the
+// tag goes in every state. A device that loads a state with another device's tag has joined that
+// session and takes its tag, so the states on every device stay the same.
 static uint32_t sessionTag;
 static bool netplayJoined;
 
-// Saves the core reads and writes itself: the other players', where RetroArch keeps their game's
-// save or in armGBA/Player N, and player 1's with a pair file or Player 1's Save Folder. In rollback
-// netplay the host writes them as the game closes; a device that joined keeps the session's in
-// armGBA/Remote.
+// Saves the core reads and writes itself: the other players' saves (where RetroArch keeps their
+// game's save, or in armGBA/Player N), and player 1's save with a pair file or Player 1's Save
+// Folder.
+//
+// In rollback netplay the host writes them as the game closes. A device that joined keeps the
+// session's saves in armGBA/Remote.
 static struct {
 	bool kept;
 	char file[8192];
@@ -1121,9 +1129,9 @@ static bool readPlayerSave(int player) {
 	return found;
 }
 
-// Whether RetroArch reads and writes player 1's save: not when the core keeps it (in armGBA/Player 1,
-// or with a pair file), nor on a device that joined another's netplay session, which would write the
-// host's save over its own as the game closes.
+// Whether RetroArch reads and writes player 1's save. It doesn't when the core keeps that save (in
+// armGBA/Player 1, or with a pair file), or on a device that joined another's netplay session,
+// where RetroArch would write the host's save over its own as the game closes.
 static bool retroArchSaves(void) {
 	return !keptSaves[0].kept && !netplayJoined;
 }
@@ -1275,9 +1283,10 @@ static bool fileHolds(const char* path, const void* data, size_t size) {
 	return same;
 }
 
-// Writes a save, and clock, as backups of the save file given, named for now, unless the newest
-// backup already holds that save. Returns 1 if it wrote them, 0 if the newest backup holds the save
-// (stamp is its), and -1 if the save couldn't be written.
+// Writes a save, and its clock, as backups of the given save file, stamped with the current time.
+// Skips the write if the newest backup already holds that save.
+// Returns 1 if it wrote them, 0 if the newest backup already holds the save (stamp is then that
+// backup's), or -1 if the write failed.
 static int writeBackup(const char* file, const char* rtcFile, const void* save, size_t size, const void* rtc, size_t rtcSize,
                        char stamp[SECOND_STAMP]) {
 	char out[8300];
@@ -1311,9 +1320,9 @@ static bool blankSave(const void* save, size_t size) {
 	return true;
 }
 
-// Backs up a player's save, and clock, as they are in memory, newer than the file. Returns 1 if it
-// did, 2 if the newest backup already holds the save, 0 if there was nothing to back up (no file and
-// nothing saved yet), and -1 if it couldn't be written.
+// Backs up a player's save, and its clock, as they are in memory, which is newer than the file.
+// Returns 1 if it did, 2 if the newest backup already holds the save, 0 if there was nothing to
+// back up (no file and nothing saved yet), or -1 if the write failed.
 static int backUpPlayer(int player, char stamp[SECOND_STAMP]) {
 	char file[8192], rtcFile[8192], base[8192], rtcBase[8192];
 	size_t size, rtcSize;
@@ -1378,9 +1387,11 @@ static int loadIntoPlayer(void) {
 	return player >= 0 && saveFiles(player, file, rtcFile) ? player : -1;
 }
 
-// Where a remote save goes: where Load Into says, or else to the other person: the session's player
-// 1 (the host) to player 2 here when there is one, its player 2 to player 1 here, and players 3 and
-// 4 to the same players here, or player 1.
+// Where a remote save goes. Load Into picks the player when it is set; otherwise the save goes to
+// the other person:
+// - the session's player 1 (the host) to player 2 here, if there is one, or else player 1;
+// - its player 2 to player 1 here;
+// - players 3 and 4 to the same players here, or else player 1.
 static int remoteTarget(int from) {
 	char file[8192], rtcFile[8192];
 	int const named = loadIntoPlayer();
@@ -2351,10 +2362,10 @@ static void readTilt(uint16_t keys) {
 	libretroGbSetTilt(x, y);
 }
 
-// Feeds a Game Boy Advance cartridge's sensors before each frame. The tilt sensor and the gyro
-// (whose turn is the control's left and right) are scaled as mGBA's SDL frontend scales a stick.
-// The light sensor uses mGBA's levels, and pushing the right stick up or down changes the level by
-// one step.
+// Feeds a Game Boy Advance cartridge's sensors before each frame. The tilt sensor and the gyro are
+// scaled as mGBA's SDL frontend scales a stick; the gyro's turn comes from the control's left and
+// right. The light sensor uses mGBA's levels, and pushing the right stick up or down changes the
+// level by one step.
 static void readSensors(uint16_t keys) {
 	int devices = gba->gpio.devices;
 	if (devices & (HW_TILT | HW_GYRO)) {
@@ -2647,9 +2658,10 @@ static void carryAir(void) {
 	}
 }
 
-// The cable between the Game Boy Advances here. When a transfer ends, in normal mode player 1 and 2's
-// consoles swap the data each had as it started, the other taking it if it is waiting for a
-// transfer; in multiplayer mode the parent's word and each child's go to every child.
+// The cable between the Game Boy Advances here. When a transfer ends:
+// - in normal mode, players 1 and 2 swap the data each had as it started; the console that didn't
+//   start it takes the data only if it is waiting for a transfer;
+// - in multiplayer mode, the parent's word and each child's go to every child.
 
 // Where a console is in the frame while it runs in a round.
 static int32_t roundNow(int i) {
@@ -3080,10 +3092,12 @@ static bool loadConsoles(const void* data, size_t size) {
 	return true;
 }
 
-// A state: the consoles'; with the consoles of a link here, how long each player has held the
-// restart buttons, so a rollback restarts a console on the same frame; then the session's tag, which
-// tells a device in netplay that it joined another's session. A state from before the tag, of one
-// console, still loads.
+// A state holds, in order:
+// - the consoles' states;
+// - with the consoles of a link here, how long each player has held the restart buttons, so a
+//   rollback restarts a console on the same frame;
+// - the session's tag, which tells a device in netplay that it joined another's session.
+// A single-console state from before the tag still loads.
 static size_t extraStateSize(void) {
 	return togetherRunning() ? sizeof(restartHeld) : 0;
 }
@@ -3171,9 +3185,11 @@ unsigned retro_get_region(void) {
 	return RETRO_REGION_NTSC;
 }
 
-// Memory the frontend may read or keep, and its size: the cartridge's save memory (loaded and saved
-// as the save file), a Game Boy cartridge's clock (as the .rtc file), and work RAM for achievements
-// and cheats. RetroArch gets no save memory when the core keeps player 1's save itself.
+// Memory the frontend may read or keep, and its size:
+// - the cartridge's save memory, loaded and saved as the save file;
+// - a Game Boy cartridge's clock, as the .rtc file;
+// - work RAM, for achievements and cheats.
+// RetroArch gets no save memory when the core keeps player 1's save itself.
 static void* memory(unsigned id, size_t* size) {
 	*size = 0;
 	if (pairFile && id != RETRO_MEMORY_SYSTEM_RAM) {

@@ -6,14 +6,17 @@
 #ifndef ARMGBA_LIBRETRO_DMG07_H
 #define ARMGBA_LIBRETRO_DMG07_H
 
-// The Four Player Adapter (DMG-07), as Pan Docs and GBE+ describe it. It clocks every Game Boy on it
-// itself, and a Game Boy answers each byte in the transfer after it. The adapter pings each port with
-// $FE and three status bytes (the ports answering in bits 4-7, the port's number in bits 0-2), and a
-// Game Boy answers $88, $88, the rate it wants, and with the next $FE its packet size. Four $AA from a
-// Game Boy start the game: four $CC, then packets of four times the size, in which each Game Boy's
-// bytes after the first are collected and the next packet hands every port all four players' bytes
-// in order, zeros for a port nobody answers on. $FF in the three transfers after a packet's first end
-// it: a packet of $FF, then pinging again.
+// The Four Player Adapter (DMG-07), as Pan Docs and GBE+ describe it. The adapter clocks every Game
+// Boy on it, and a Game Boy answers each byte in the transfer after it.
+// - Pinging: the adapter sends each port $FE and three status bytes (bits 4-7 the ports answering,
+//   bits 0-2 the port's number). A Game Boy answers $88, $88, the rate it wants, and with the next
+//   $FE its packet size.
+// - Starting: four $AA from a Game Boy start the game, and the adapter sends four $CC.
+// - Playing: packets are four times the packet size. The adapter collects each Game Boy's bytes
+//   after the first, and the next packet hands every port all four players' bytes in order, zeros
+//   for a port nobody answers on.
+// - Ending: $FF in the three transfers after a packet's first ends the game: a packet of $FF, then
+//   pinging again.
 //
 // Times are in Game Boy sound samples (2^21 a second), counted by whoever runs the adapter.
 

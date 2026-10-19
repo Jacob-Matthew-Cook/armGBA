@@ -12,9 +12,11 @@ static int32_t ms(double milliseconds) {
 	return (int32_t) lround(milliseconds * 2097152 / 1000);
 }
 
-// A byte takes 128 us to shift. Pinging, a byte starts every 1.55 ms and a packet every 4.71 ms plus
-// 12.2 ms and the rate's low nibble in ms (12.29 ms before a rate was asked). Playing, the rate's high
-// nibble spaces the bytes, and a packet lasts at least 17 ms plus its low nibble in ms.
+// A byte takes 128 us to shift.
+// - Pinging, a byte starts every 1.55 ms, and a packet every 4.71 ms + 12.2 ms + the rate's low
+//   nibble in ms (12.29 ms before a rate was asked for).
+// - Playing, the rate's high nibble spaces the bytes, and a packet lasts at least 17 ms + its low
+//   nibble in ms.
 static int32_t shift(void) {
 	return ms(0.128);
 }

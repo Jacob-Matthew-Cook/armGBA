@@ -16,21 +16,22 @@
 
 // The link between two players' consoles in a netplay session, each running their own game: the
 // cable, or the Game Boy Advance Wireless Adapter. Three or four players link only with all their
-// consoles on one device (libretro.c), as waiting on several devices costs too much.
+// consoles on one device (libretro.c), since waiting on several devices costs too much.
 //
-// The host keeps the cable: itself and the first player who joined with the same console. A
-// transfer's data leaves the console clocking it as the transfer starts and is answered by the
-// other's; the clocking console waits for the answer as the transfer ends, so emulated time stays
-// exact on its side. How the other console's side is timed:
+// The host keeps the cable: itself and the first player who joined with the same console.
 //
+// The console that clocks a transfer sends its data as the transfer starts and waits for the
+// other's answer as it ends, so its own emulated time stays exact. The other console's side is
+// timed one of two ways:
 // - Standard, for a Game Boy unless Game Boy Link Timing says Exact: the other console runs at its
-//   own pace and takes the transfer when it next looks.
+//   own pace and takes the transfer when it next checks.
 // - Exact, always for a Game Boy Advance, whose games link every frame: the console that clocked
-//   last leads, and the other stays just behind it, as far as the leader says it has got. A
-//   transfer names the cycles it starts and ends on: the follower answers with its data as of the
-//   start in normal mode, or of the end in multiplayer mode, and takes the leader's data at the
-//   end, as on a cable. When the lead passes to the console behind, the other moves its link clock
-//   back to meet it.
+//   last leads, and the other stays just behind it, as far as the leader says it has got.
+//
+// In Exact, a transfer names the cycles it starts and ends on. The follower answers with its data
+// as of the start in normal mode, or as of the end in multiplayer mode, and takes the leader's data
+// at the end, as on a cable. When the lead passes to the console behind, the other moves its link
+// clock back to meet it.
 
 enum {
 	MAX_PEERS = 8,
@@ -79,8 +80,8 @@ static struct GBA* gba;
 static bool wireless;
 
 // Saves passed between the players: this device's, sent a piece a frame, and the other's as it
-// arrives, the save then its clock. The libretro core is told when the other player pairs, so it can
-// send its save, and when a save has come.
+// arrives (the save, then its clock). The libretro core is told when the other player pairs, so it
+// can send its save, and when a save has arrived.
 enum { SAVE_PIECE = 4096, SAVE_MOST = 1 << 20 };
 static struct {
 	uint8_t* data;
@@ -133,9 +134,10 @@ static struct {
 } own;
 static uint16_t nextSeq;
 
-// Game Boy send-ahead, with standard timing: a Game Boy waiting for the other's clock offers the byte
-// it will send, so the other can end its transfer at once instead of waiting a round trip. An offer
-// names the last transfer its sender took from the other, so one made before a later one isn't used.
+// Game Boy send-ahead, with Standard timing. A Game Boy waiting for the other's clock offers the
+// byte it will send, so the other can end its transfer at once instead of waiting a round trip. An
+// offer names the last transfer its sender took from the other, so an offer older than a later
+// transfer isn't used.
 static struct {
 	bool sent;
 	bool ready;
@@ -469,9 +471,9 @@ static void dropRequest(void) {
 	--requestCount;
 }
 
-// Takes the transfers the other console clocked: with standard timing all of them; with exact
-// timing those due, answering each at its start and taking it at its end. A Game Boy takes one
-// transfer at a time, so its game can ready the next byte in between.
+// Takes the transfers the other console clocked. With Standard timing it takes all of them; with
+// Exact timing only those due, answering each at its start and taking it at its end. A Game Boy
+// takes one transfer at a time, so its game can ready the next byte in between.
 static void takeRequests(void) {
 	while (requestCount) {
 		if (requests[0].timed && dueAt(0) > linkTime()) {
@@ -569,11 +571,12 @@ static bool finish(void* context, uint32_t in[3]) {
 	return true;
 }
 
-// The other console's request arrives. Two consoles clocking at once swap their data, as the wires
-// would. A request naming its cycles makes its sender the leader. One starting before where this
-// console has got, as the lead passes to a console behind it, moves this console's link clock back
-// to the start: two consoles' clocks are apart by whatever their power-on times were, and this way
-// the transfer itself stays exact on both.
+// The other console's request arrives.
+// - Two consoles clocking at once swap their data, as the wires would.
+// - A request that names its cycles makes its sender the leader.
+// - A request starting before where this console has got (the lead passing to a console behind it)
+//   moves this console's link clock back to the request's start. Two consoles' clocks differ by
+//   their power-on times, so this keeps the transfer itself exact on both.
 static void heardRequest(uint16_t from, const uint8_t* message, size_t size) {
 	offered.ready = false;
 	if (own.waiting && own.mode != MODE_MULTI) {

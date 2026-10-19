@@ -18,18 +18,21 @@ struct SecondGame {
 	char* label;
 };
 
-// Lists the games in the folder the loaded game came from, the likeliest partners for it first: other
-// releases of the same game, then games sharing words with its name (Red with Blue and Yellow), not
-// counting words such as "the" and "of", then the rest by name. A Game Boy game's list takes in the gb and gbc folders beside each other. The
-// loaded game itself is left out. Returns how many, at most max; free with secondFree.
+// Lists the games in the folder the loaded game came from, the likeliest partners first:
+// - other releases of the same game;
+// - games sharing words with its name (Red with Blue and Yellow), not counting words such as "the"
+//   and "of";
+// - the rest, by name.
+// A Game Boy game's list takes in both the gb and gbc folders beside each other. The loaded game
+// itself is left out. Returns how many, at most max; free with secondFree.
 size_t secondList(const char* loadedPath, bool gameBoy, struct SecondGame* out, size_t max);
 void secondFree(struct SecondGame* games, size_t count);
 // Reads a game file, taking the game out of a .zip or .7z. Returns NULL if it can't.
 void* secondRead(const char* path, size_t* size);
-// The file where a game's save (extension "srm" or "rtc") is kept: where RetroArch keeps it, by
-// looking for it beside the game, in the save directory, and in the save directory's per-core and
-// per-folder subfolders; a new one goes where player 1's game keeps its save. A suffix such as
-// " (Player 2)" names a second save for the same game.
+// The file where a game's save (extension "srm" or "rtc") is kept. It looks where RetroArch would
+// keep it: beside the game, in the save directory, and in the save directory's per-core and
+// per-folder subfolders. A new one goes where player 1's game keeps its save. A suffix such as "
+// (Player 2)" names a second save for the same game.
 void secondSavePath(const char* gamePath, const char* suffix, const char* extension, const char* firstPath, const char* saveDirectory,
                     char* out, size_t outSize);
 // Where another player keeps their own save of player 1's game: in the save directory's
@@ -66,10 +69,14 @@ void secondBackupPath(const char* savePath, const char* stamp, char* out, size_t
 bool secondRecall(const char* memoryFile, const char* firstPath, char* out, size_t outSize);
 void secondRemember(const char* memoryFile, const char* firstPath, const char* choice);
 
-// A pair file names the games of a link, two to four, one per line, as Batocera's .gb2 files do: "gb:Game.zip"
-// for a game in the gb folder beside the pair file's folder (gbc: and gba: likewise), a path from the
-// pair file's folder, or a full path. Lines starting with # are left out. Returns how many games, or 0
-// for fewer than two or more than four.
+// A pair file names the games of a link, two to four, one per line, as Batocera's .gb2 files do.
+// Each line is one of:
+// - "gb:Game.zip" for a game in the gb folder beside the pair file's folder (gbc: and gba:
+//   likewise);
+// - a path from the pair file's folder;
+// - a full path.
+// Lines starting with # are skipped. Returns how many games, or 0 for fewer than two or more than
+// four.
 int secondPairFile(const char* path, const void* data, size_t size, char games[4][4096]);
 // The save directory for the games of a pair file: RetroArch's, unless it was sorted into a folder
 // named for the pair file's folder, when it is the one above.
