@@ -107,7 +107,7 @@ target_compile_definitions(retro-archive PRIVATE HAVE_ZLIB HAVE_7ZIP)
 target_compile_options(retro-archive PRIVATE -w -O2)
 set_target_properties(retro-archive PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-set(LIBRETRO_SOURCES libretro/libretro.c libretro/dolphin.c libretro/link.c libretro/second.c libretro/dmg07.c libretro/workers.c libretro/gb-gambatte.cpp)
+set(LIBRETRO_SOURCES libretro/libretro.c libretro/dolphin.c libretro/link.c libretro/second.c libretro/patch.c libretro/dmg07.c libretro/workers.c libretro/gb-gambatte.cpp)
 add_library(armgba_libretro SHARED ${LIBRETRO_SOURCES})
 target_link_libraries(armgba_libretro armgba gambatte retro-archive m z)
 # A toolchain file may leave C++ without an optimisation level
