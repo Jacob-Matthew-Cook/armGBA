@@ -33,15 +33,11 @@ static struct Cheat* growTo(int count) {
 	return &cheats[count - 1];
 }
 
-void cheatListLoad(void) {
-	free(cheats);
-	cheats = NULL;
-	cheatCount = 0;
-	char path[FILE_SIZE];
-	cheatPath(path);
+// Reads a .cht file's cheats into the list after the first base. Returns false if it can't be read.
+static bool readCheats(const char* path, int base) {
 	FILE* f = fopen(path, "r");
 	if (!f) {
-		return;
+		return false;
 	}
 	char line[1024];
 	while (fgets(line, sizeof(line), f)) {
@@ -53,11 +49,11 @@ void cheatListLoad(void) {
 		}
 		char* value = equals + 1 + strspn(equals + 1, " \t\"");
 		value[strcspn(value, "\"\r\n")] = '\0';
-		struct Cheat* c = growTo(index + 1);
+		struct Cheat* c = growTo(base + index + 1);
 		if (!c) {
 			break;
 		}
-		c = &cheats[index];
+		c = &cheats[base + index];
 		if (!strcmp(field, "desc")) {
 			snprintf(c->description, sizeof(c->description), "%s", value);
 		} else if (!strcmp(field, "code")) {
@@ -67,6 +63,24 @@ void cheatListLoad(void) {
 		}
 	}
 	fclose(f);
+	return true;
+}
+
+void cheatListLoad(void) {
+	free(cheats);
+	cheats = NULL;
+	cheatCount = 0;
+	char path[FILE_SIZE];
+	cheatPath(path);
+	readCheats(path, 0);
+}
+
+int cheatListImport(const char* path) {
+	int const before = cheatCount;
+	if (!readCheats(path, before)) {
+		return -1;
+	}
+	return cheatCount - before;
 }
 
 void cheatListSave(void) {
