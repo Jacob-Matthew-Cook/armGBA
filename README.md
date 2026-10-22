@@ -71,6 +71,10 @@ only with Link Mode on.
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
 set to Shown, the black around it shows too, as on that console's screen.
 
+`shaders/` holds RetroArch shader presets, `.slangp` and `.glslp`, that draw the gaps between the
+console screen's pixels as the standalone frontend's LCD Grid does, one for each screen: `gb-green`,
+`gb-gray`, `gb-pocket` and `gb-light` (with the shadow the pixels cast), `gbc` and `gba`.
+
 ## Building
 
     cmake -S . -B build -G Ninja
