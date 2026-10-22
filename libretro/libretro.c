@@ -12,6 +12,7 @@
 #include "cheats.h"
 #include "gba.h"
 #include "gb.h"
+#include "lcd.h"
 #include "dolphin.h"
 #include "link.h"
 #include "second.h"
@@ -2830,6 +2831,15 @@ static int screenKind(void) {
 		return SCREEN_TFT;
 	}
 	return gbModel == LIBRETRO_GB_MGB || gbShades == 1 || gbShades == 3 ? SCREEN_POCKET : SCREEN_DMG;
+}
+
+enum LibretroLcd libretroLcd(uint32_t* gap) {
+	if (screenKind() == SCREEN_TFT) {
+		*gap = 0;
+		return LIBRETRO_LCD_TFT;
+	}
+	*gap = libretroGbOffColor();
+	return LIBRETRO_LCD_STN;
 }
 
 static void showPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {

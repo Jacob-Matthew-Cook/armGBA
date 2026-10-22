@@ -432,6 +432,10 @@ void correctedColors(bool advance) {
 
 // Installs the colors: the chosen screen's four shades for original Game Boy games, and the table
 // that turns Game Boy Color 15-bit colors into the frontend's, corrected or not.
+// Each screen's color while the game has it off: slightly lighter than its lightest shade, not
+// white.
+const unsigned long offColors[4] = { 0xFFFFFF, 0xCFDAAC, 0xD2E6A6, 0x91EAD0 };
+
 void setColors() {
 	// The plain grays are those gambatte-libretro shows Game Boy games in; the Pocket's, the first
 	// model's and the Light's are SameBoy's.
@@ -441,10 +445,7 @@ void setColors() {
 		{ 0xC6DE8C, 0x84A563, 0x396139, 0x081810 },
 		{ 0x7FE2C3, 0x56B495, 0x357862, 0x0A1C15 },
 	};
-	// Each screen's color while the game has it off: slightly lighter than its lightest shade, not
-	// white.
-	static const unsigned long off[4] = { 0xFFFFFF, 0xCFDAAC, 0xD2E6A6, 0x91EAD0 };
-	s->gb->setDmgPaletteColor(0, 4, off[screen]);
+	s->gb->setDmgPaletteColor(0, 4, offColors[screen]);
 	// A Game Boy game started through a Game Boy Color's boot ROM keeps the colors the boot ROM
 	// gave it (a state stores them too), so they aren't replaced here.
 	if (!s->gb->isCgb() || (s->loadFlags & gambatte::GB::NO_BIOS)) {
@@ -675,6 +676,10 @@ void libretroGbSetScreen(int which) {
 	if (s->gb) {
 		setColors();
 	}
+}
+
+uint32_t libretroGbOffColor(void) {
+	return offColors[screen];
 }
 
 bool libretroGbOnAdvance(void) {
