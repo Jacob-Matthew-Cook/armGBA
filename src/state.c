@@ -99,6 +99,13 @@ static void leaveOutHost(const struct GBA* gba, struct GBA* saved) {
 	saved->jitDeferred = false;
 	saved->jitLeave = false;
 	saved->idleMark = 0;
+	saved->idleCycles = 0;
+	saved->idleRuns = 0;
+	saved->idleNext = 0;
+	saved->idleLead = 0;
+	saved->idleStable = 0;
+	saved->eventRuns = 0;
+	saved->idleHeadRuns = 0;
 	memset(saved->jitStopPenalty, 0, sizeof(saved->jitStopPenalty));
 	saved->traceFileSlot = 0;
 	saved->traceFromPc = 0;
@@ -232,6 +239,8 @@ bool gbaLoadState(struct GBA* gba, const void* state, size_t size) {
 	gba->jitDeferred = false;
 	gba->jitLeave = false;
 	gba->idleMark = 0;
+	gba->eventRuns = host->eventRuns;
+	gba->idleHeadRuns = host->idleHeadRuns;
 	memcpy(gba->jitStopPenalty, host->jitStopPenalty, sizeof(gba->jitStopPenalty));
 	gba->traceFile = host->traceFile;
 	gba->traceFromPc = host->traceFromPc;
