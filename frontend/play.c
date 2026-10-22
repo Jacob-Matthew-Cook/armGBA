@@ -1,0 +1,449 @@
+/* Copyright (c) 2026 Jacob Cook
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+// Save states, rewind, run-ahead, screenshots and recording.
+
+#include "frontend.h"
+#include "second.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+#include <zlib.h>
+
+// Save states: slot 0 is game.state, the others game.state1 to game.state9, as RetroArch names
+// them; slot -1 is game.state.auto, saved on exit and loaded on start when asked.
+
+static void statePath(char out[FILE_SIZE], int slot) {
+	if (slot < 0) {
+		snprintf(out, FILE_SIZE, "%s/%s.state.auto", stateDirectory, app.gameName);
+	} else if (slot == 0) {
+		snprintf(out, FILE_SIZE, "%s/%s.state", stateDirectory, app.gameName);
+	} else {
+		snprintf(out, FILE_SIZE, "%s/%s.state%d", stateDirectory, app.gameName, slot);
+	}
+}
+
+bool stateExists(int slot) {
+	char path[FILE_SIZE];
+	statePath(path, slot);
+	struct stat st;
+	return app.loaded && !stat(path, &st);
+}
+
+bool saveState(int slot) {
+	size_t const size = retro_serialize_size();
+	void* data = size ? malloc(size) : NULL;
+	char path[FILE_SIZE];
+	statePath(path, slot);
+	FILE* f = data && retro_serialize(data, size) ? fopen(path, "wb") : NULL;
+	bool const saved = f && fwrite(data, 1, size, f) == size;
+	if (f) {
+		fclose(f);
+	}
+	free(data);
+	return saved;
+}
+
+bool loadState(int slot) {
+	char path[FILE_SIZE];
+	statePath(path, slot);
+	size_t size;
+	void* data = secondRead(path, &size);
+	bool const loaded = data && retro_unserialize(data, size);
+	free(data);
+	if (loaded) {
+		rewindReset();
+		cheevosReset();
+	}
+	return loaded;
+}
+
+// Rewind: every frame's state is kept as how it differs from the one after it, the two XORed and
+// the zero words between the rest counted, in a ring of the size asked for; the oldest go first
+// when it fills. Going back undoes the newest difference on the state now, shows that frame and
+// goes back to its start.
+
+struct Entry {
+	size_t at, size;
+};
+
+static uint8_t* ring;
+static size_t ringSize, ringAt;
+static struct Entry* entries;
+static size_t entryRoom, entryFirst, entryCount;
+static uint32_t* stateNow;
+static uint32_t* stateNew;
+static size_t stateWords;
+static uint32_t* packed;
+
+void rewindReset(void) {
+	free(ring);
+	free(entries);
+	free(stateNow);
+	free(stateNew);
+	free(packed);
+	ring = NULL;
+	entries = NULL;
+	stateNow = stateNew = packed = NULL;
+	entryCount = entryFirst = ringAt = 0;
+	if (!settings.rewind || !app.loaded) {
+		return;
+	}
+	size_t const size = retro_serialize_size();
+	stateWords = (size + 3) / 4;
+	ringSize = (size_t) settings.rewindMegabytes << 20;
+	entryRoom = 1 << 16;
+	ring = malloc(ringSize);
+	entries = calloc(entryRoom, sizeof(*entries));
+	stateNow = calloc(stateWords, 4);
+	stateNew = calloc(stateWords, 4);
+	// At worst, every word differs: a count pair for each and the words.
+	packed = malloc(stateWords * 12 + 16);
+	if (!ring || !entries || !stateNow || !stateNew || !packed || !retro_serialize(stateNow, size)) {
+		settings.rewind = false;
+		rewindReset();
+		osd("Not enough memory to rewind");
+	}
+}
+
+// a XOR b as runs: a count of zero words, a count of words that follow, those words; then again.
+static size_t pack(const uint32_t* a, const uint32_t* b, size_t words, uint32_t* out) {
+	size_t o = 0, i = 0;
+	while (i < words) {
+		size_t zeros = 0;
+		while (i < words && a[i] == b[i]) {
+			++zeros;
+			++i;
+		}
+		size_t const start = i;
+		while (i < words && (a[i] != b[i] || (i + 1 < words && a[i + 1] != b[i + 1]))) {
+			++i;
+		}
+		out[o++] = (uint32_t) zeros;
+		out[o++] = (uint32_t) (i - start);
+		for (size_t k = start; k < i; ++k) {
+			out[o++] = a[k] ^ b[k];
+		}
+	}
+	return o * 4;
+}
+
+static void unpack(const uint32_t* in, size_t bytes, uint32_t* state, size_t words) {
+	size_t const n = bytes / 4;
+	size_t i = 0, w = 0;
+	while (i + 1 < n && w <= words) {
+		w += in[i++];
+		size_t const count = in[i++];
+		for (size_t k = 0; k < count && w < words && i < n; ++k) {
+			state[w++] ^= in[i++];
+		}
+	}
+}
+
+void rewindPush(void) {
+	if (!ring) {
+		return;
+	}
+	size_t const size = retro_serialize_size();
+	if ((size + 3) / 4 != stateWords || !retro_serialize(stateNew, size)) {
+		rewindReset();
+		return;
+	}
+	size_t const bytes = pack(stateNow, stateNew, stateWords, packed);
+	if (bytes > ringSize / 4) {
+		memcpy(stateNow, stateNew, stateWords * 4);
+		return;
+	}
+	if (ringAt + bytes > ringSize) {
+		ringAt = 0;
+	}
+	// The oldest entries that this one overwrites go, and the oldest if there's no room for another.
+	while (entryCount) {
+		struct Entry* oldest = &entries[entryFirst];
+		bool const overlaps = oldest->at < ringAt + bytes && ringAt < oldest->at + oldest->size;
+		if (!overlaps && entryCount < entryRoom) {
+			break;
+		}
+		entryFirst = (entryFirst + 1) % entryRoom;
+		--entryCount;
+	}
+	memcpy(ring + ringAt, packed, bytes);
+	entries[(entryFirst + entryCount) % entryRoom] = (struct Entry) { ringAt, bytes };
+	++entryCount;
+	ringAt += bytes;
+	uint32_t* t = stateNow;
+	stateNow = stateNew;
+	stateNew = t;
+}
+
+bool rewindStep(void) {
+	if (!ring || !entryCount) {
+		return false;
+	}
+	--entryCount;
+	struct Entry const e = entries[(entryFirst + entryCount) % entryRoom];
+	unpack((const uint32_t*) (ring + e.at), e.size, stateNow, stateWords);
+	ringAt = e.at;
+	size_t const size = retro_serialize_size();
+	retro_unserialize(stateNow, size);
+	// The frame shows, without its sound, and the game goes back to its start.
+	int const av = app.avEnable;
+	app.avEnable = RETRO_AV_ENABLE_VIDEO;
+	retro_run();
+	app.avEnable = av;
+	retro_unserialize(stateNow, size);
+	return true;
+}
+
+// Run-ahead, as RetroArch does it with one core: the frame runs with its sound and no picture and
+// its state is kept; the frames ahead run unseen and unheard, the last of them shown; then the
+// kept state comes back, so the game goes on from the real frame.
+void runAheadFrame(void) {
+	static void* kept;
+	static size_t keptSize;
+	size_t const size = retro_serialize_size();
+	if (size != keptSize) {
+		free(kept);
+		kept = malloc(size);
+		keptSize = kept ? size : 0;
+	}
+	int const av = app.avEnable;
+	app.avEnable = RETRO_AV_ENABLE_AUDIO;
+	retro_run();
+	if (!kept || !retro_serialize(kept, size)) {
+		app.avEnable = av;
+		return;
+	}
+	for (int i = 1; i < settings.runahead; ++i) {
+		app.avEnable = 0;
+		retro_run();
+	}
+	app.avEnable = RETRO_AV_ENABLE_VIDEO;
+	retro_run();
+	retro_unserialize(kept, size);
+	app.avEnable = av;
+}
+
+// The picture as 8-bit RGB, from the core's RGB565 or XRGB8888.
+static uint8_t* pictureRgb(void) {
+	int const w = app.gameWidth, h = app.gameHeight;
+	uint8_t* rgb = malloc((size_t) w * h * 3);
+	if (!rgb) {
+		return NULL;
+	}
+	for (int y = 0; y < h; ++y) {
+		const uint8_t* row = app.picture + y * app.picturePitch;
+		for (int x = 0; x < w; ++x) {
+			uint8_t* out = &rgb[(y * w + x) * 3];
+			if (app.format == RETRO_PIXEL_FORMAT_XRGB8888) {
+				uint32_t const c = ((const uint32_t*) row)[x];
+				out[0] = c >> 16;
+				out[1] = c >> 8;
+				out[2] = c;
+			} else {
+				uint16_t const c = ((const uint16_t*) row)[x];
+				out[0] = (c >> 11) << 3 | (c >> 13);
+				out[1] = ((c >> 5) & 0x3F) << 2 | ((c >> 9) & 3);
+				out[2] = (c & 0x1F) << 3 | ((c >> 2) & 7);
+			}
+		}
+	}
+	return rgb;
+}
+
+static void pngChunk(FILE* f, const char* type, const uint8_t* data, uint32_t size) {
+	uint8_t head[8] = { size >> 24, size >> 16, size >> 8, size, type[0], type[1], type[2], type[3] };
+	fwrite(head, 1, 8, f);
+	fwrite(data, 1, size, f);
+	uLong crc = crc32(crc32(0, head + 4, 4), data, size);
+	uint8_t tail[4] = { crc >> 24, crc >> 16, crc >> 8, crc };
+	fwrite(tail, 1, 4, f);
+}
+
+static void timestamp(char* out, size_t size) {
+	time_t const now = time(NULL);
+	struct tm t;
+	localtime_r(&now, &t);
+	strftime(out, size, "%Y%m%d-%H%M%S", &t);
+}
+
+void takeScreenshot(void) {
+	if (!app.picture || !app.gameWidth) {
+		return;
+	}
+	int const w = app.gameWidth, h = app.gameHeight;
+	uint8_t* rgb = pictureRgb();
+	// Each row with filter type 0 before it.
+	size_t const raw = (size_t) (w * 3 + 1) * h;
+	uint8_t* rows = malloc(raw);
+	uLongf compressedSize = compressBound(raw);
+	uint8_t* compressed = malloc(compressedSize);
+	if (!rgb || !rows || !compressed) {
+		free(rgb);
+		free(rows);
+		free(compressed);
+		return;
+	}
+	for (int y = 0; y < h; ++y) {
+		rows[y * (w * 3 + 1)] = 0;
+		memcpy(&rows[y * (w * 3 + 1) + 1], &rgb[y * w * 3], w * 3);
+	}
+	compress2(compressed, &compressedSize, rows, raw, 9);
+	char stamp[32], path[FILE_SIZE];
+	timestamp(stamp, sizeof(stamp));
+	snprintf(path, sizeof(path), "%s/%s-%s.png", shotDirectory, app.gameName, stamp);
+	FILE* f = fopen(path, "wb");
+	if (f) {
+		static const uint8_t signature[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
+		uint8_t header[13] = { w >> 24, w >> 16, w >> 8, w, h >> 24, h >> 16, h >> 8, h, 8, 2, 0, 0, 0 };
+		fwrite(signature, 1, 8, f);
+		pngChunk(f, "IHDR", header, 13);
+		pngChunk(f, "IDAT", compressed, (uint32_t) compressedSize);
+		pngChunk(f, "IEND", NULL, 0);
+		fclose(f);
+		osd("Screenshot: %s", path);
+	} else {
+		osd("Can't write the screenshot");
+	}
+	free(rgb);
+	free(rows);
+	free(compressed);
+}
+
+// Recording: the picture goes to ffmpeg as it comes, the sound to a WAV beside it; stopping, ffmpeg
+// joins them into an MP4 in the screenshots folder.
+
+static FILE* videoPipe;
+static FILE* soundFile;
+static int recordWidth, recordHeight;
+static uint32_t soundBytes;
+static char videoPath[FILE_SIZE], soundPath[FILE_SIZE], moviePath[FILE_SIZE];
+
+bool recording(void) {
+	return videoPipe != NULL;
+}
+
+static bool hasFfmpeg(void) {
+	const char* path = getenv("PATH");
+	if (!path) {
+		return false;
+	}
+	char directories[PATH_SIZE];
+	snprintf(directories, sizeof(directories), "%s", path);
+	for (char* d = strtok(directories, ":"); d; d = strtok(NULL, ":")) {
+		char candidate[FILE_SIZE];
+		snprintf(candidate, sizeof(candidate), "%s/ffmpeg", d);
+		if (!access(candidate, X_OK)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void wavHeader(FILE* f, uint32_t bytes) {
+	uint32_t const rate = AUDIO_RATE;
+	uint8_t h[44] = { 'R', 'I', 'F', 'F' };
+	uint32_t const riff = 36 + bytes;
+	memcpy(h + 4, &riff, 4);
+	memcpy(h + 8, "WAVEfmt ", 8);
+	uint32_t const fmtSize = 16;
+	uint16_t const pcm = 1, channels = 2, block = 4, bits = 16;
+	uint32_t const byteRate = rate * 4;
+	memcpy(h + 16, &fmtSize, 4);
+	memcpy(h + 20, &pcm, 2);
+	memcpy(h + 22, &channels, 2);
+	memcpy(h + 24, &rate, 4);
+	memcpy(h + 28, &byteRate, 4);
+	memcpy(h + 32, &block, 2);
+	memcpy(h + 34, &bits, 2);
+	memcpy(h + 36, "data", 4);
+	memcpy(h + 40, &bytes, 4);
+	fseek(f, 0, SEEK_SET);
+	fwrite(h, 1, 44, f);
+}
+
+bool recordToggle(void) {
+	if (recording()) {
+		recordStop();
+		return false;
+	}
+	if (!app.loaded || !app.gameWidth) {
+		return false;
+	}
+	if (!hasFfmpeg()) {
+		osd("Recording needs ffmpeg installed");
+		return false;
+	}
+	char stamp[32];
+	timestamp(stamp, sizeof(stamp));
+	snprintf(moviePath, sizeof(moviePath), "%s/%s-%s.mp4", shotDirectory, app.gameName, stamp);
+	snprintf(videoPath, sizeof(videoPath), "%s/.recording-video.mkv", shotDirectory);
+	snprintf(soundPath, sizeof(soundPath), "%s/.recording-sound.wav", shotDirectory);
+	recordWidth = app.gameWidth;
+	recordHeight = app.gameHeight;
+	char command[FILE_SIZE * 2];
+	snprintf(command, sizeof(command),
+	         "ffmpeg -loglevel error -y -f rawvideo -pixel_format %s -video_size %dx%d -framerate 59.7275 -i - "
+	         "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p \"%s\"",
+	         app.format == RETRO_PIXEL_FORMAT_XRGB8888 ? "bgra" : "rgb565le", recordWidth, recordHeight, videoPath);
+	videoPipe = popen(command, "w");
+	soundFile = fopen(soundPath, "wb");
+	if (!videoPipe || !soundFile) {
+		if (videoPipe) {
+			pclose(videoPipe);
+		}
+		if (soundFile) {
+			fclose(soundFile);
+		}
+		videoPipe = NULL;
+		soundFile = NULL;
+		osd("Can't start recording");
+		return false;
+	}
+	soundBytes = 0;
+	wavHeader(soundFile, 0);
+	osd("Recording");
+	return true;
+}
+
+void recordVideo(const void* data, unsigned width, unsigned height, size_t pitch) {
+	// A change of picture size (the linked consoles' screens) isn't recorded.
+	if ((int) width != recordWidth || (int) height != recordHeight) {
+		return;
+	}
+	size_t const row = width * (app.format == RETRO_PIXEL_FORMAT_XRGB8888 ? 4 : 2);
+	for (unsigned y = 0; y < height; ++y) {
+		fwrite((const uint8_t*) data + y * pitch, 1, row, videoPipe);
+	}
+}
+
+void recordAudio(const int16_t* data, size_t frames) {
+	if (soundFile) {
+		soundBytes += (uint32_t) fwrite(data, 4, frames, soundFile) * 4;
+	}
+}
+
+void recordStop(void) {
+	if (!recording()) {
+		return;
+	}
+	pclose(videoPipe);
+	videoPipe = NULL;
+	wavHeader(soundFile, soundBytes);
+	fclose(soundFile);
+	soundFile = NULL;
+	char command[FILE_SIZE * 4];
+	snprintf(command, sizeof(command), "ffmpeg -loglevel error -y -i \"%s\" -i \"%s\" -c:v copy -c:a aac -b:a 160k -shortest \"%s\"", videoPath,
+	         soundPath, moviePath);
+	int const result = system(command);
+	remove(videoPath);
+	remove(soundPath);
+	osd(result == 0 ? "Recorded %s" : "Recording failed: %s", moviePath);
+}
