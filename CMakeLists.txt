@@ -107,9 +107,27 @@ target_compile_definitions(retro-archive PRIVATE HAVE_ZLIB HAVE_7ZIP)
 target_compile_options(retro-archive PRIVATE -w -O2)
 set_target_properties(retro-archive PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(armgba_libretro SHARED libretro/libretro.c libretro/dolphin.c libretro/link.c libretro/second.c libretro/dmg07.c libretro/workers.c libretro/gb-gambatte.cpp)
+set(LIBRETRO_SOURCES libretro/libretro.c libretro/dolphin.c libretro/link.c libretro/second.c libretro/dmg07.c libretro/workers.c libretro/gb-gambatte.cpp)
+add_library(armgba_libretro SHARED ${LIBRETRO_SOURCES})
 target_link_libraries(armgba_libretro armgba gambatte retro-archive m z)
 # A toolchain file may leave C++ without an optimisation level
 target_compile_options(armgba_libretro PRIVATE -O2)
 set_target_properties(armgba_libretro PROPERTIES PREFIX "")
 target_link_options(armgba_libretro PRIVATE -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libretro/link.T -Wl,--no-undefined)
+
+# armgba, a standalone frontend (frontend/sdl.c): the core linked into an SDL2 program. SDL2 comes from
+# pkg-config, or SDL2_INCLUDE_DIR and SDL2_LIBRARY when given.
+option(ARMGBA_SDL "Build armgba, the standalone SDL2 frontend" OFF)
+if(ARMGBA_SDL)
+	if(NOT SDL2_LIBRARY)
+		find_package(PkgConfig REQUIRED)
+		pkg_check_modules(SDL2 REQUIRED sdl2)
+		set(SDL2_INCLUDE_DIR ${SDL2_INCLUDE_DIRS})
+		set(SDL2_LIBRARY ${SDL2_LINK_LIBRARIES})
+	endif()
+	add_executable(armgba-sdl frontend/sdl.c ${LIBRETRO_SOURCES})
+	target_include_directories(armgba-sdl PRIVATE libretro ${SDL2_INCLUDE_DIR})
+	target_link_libraries(armgba-sdl armgba gambatte retro-archive ${SDL2_LIBRARY} m z)
+	target_compile_options(armgba-sdl PRIVATE -O2)
+	set_target_properties(armgba-sdl PROPERTIES OUTPUT_NAME armgba)
+endif()

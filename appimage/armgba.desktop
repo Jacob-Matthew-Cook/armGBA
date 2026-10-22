@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=armGBA
+Comment=Game Boy Advance, Game Boy and Game Boy Color emulator
+Exec=armgba %f
+Icon=armgba
+Terminal=false
+Categories=Game;Emulator;
+MimeType=application/x-gba-rom;application/x-gameboy-rom;application/x-gameboy-color-rom;application/zip;
