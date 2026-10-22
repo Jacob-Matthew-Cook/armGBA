@@ -51,16 +51,74 @@ bool saveState(int slot) {
 	return saved;
 }
 
+// The game as it was before the last state loaded, for Undo Load State.
+static void* undoData;
+static size_t undoSize;
+
+bool canUndoLoad(void) {
+	return undoData != NULL;
+}
+
+void undoForget(void) {
+	free(undoData);
+	undoData = NULL;
+	undoSize = 0;
+}
+
+bool undoLoadState(void) {
+	if (!undoData || !retro_unserialize(undoData, undoSize)) {
+		return false;
+	}
+	undoForget();
+	rewindReset();
+	cheevosReset();
+	return true;
+}
+
+bool stateCommand(bool load) {
+	if (cheevosHardcore()) {
+		osd("Hardcore mode: save states are off");
+		return false;
+	}
+	if (netRunning()) {
+		osd(load ? "States can't be loaded during netplay" : "States can't be saved during netplay");
+		return false;
+	}
+	bool done;
+	if (!load) {
+		done = saveState(app.slot);
+		osd(done ? "Saved state %d" : "Couldn't save state %d", app.slot);
+	} else if (!stateExists(app.slot)) {
+		done = false;
+		osd("State %d is empty", app.slot);
+	} else {
+		done = loadState(app.slot);
+		osd(done ? "Loaded state %d" : "State %d didn't load", app.slot);
+	}
+	return done;
+}
+
 bool loadState(int slot) {
 	char path[FILE_SIZE];
 	statePath(path, slot);
 	size_t size;
 	void* data = secondRead(path, &size);
+	size_t const keptSize = data ? retro_serialize_size() : 0;
+	void* kept = keptSize ? malloc(keptSize) : NULL;
+	if (kept && !retro_serialize(kept, keptSize)) {
+		free(kept);
+		kept = NULL;
+	}
 	bool const loaded = data && retro_unserialize(data, size);
 	free(data);
 	if (loaded) {
+		undoForget();
+		undoData = kept;
+		undoSize = keptSize;
 		rewindReset();
 		cheevosReset();
+	} else {
+		free(kept);
 	}
 	return loaded;
 }

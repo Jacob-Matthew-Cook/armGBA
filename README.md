@@ -117,9 +117,13 @@ V turbo B and A; controllers work too, one per player. Tab fast-forwards while h
 pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its slot, F12 takes a
 screenshot, F9 starts and stops recording, F11 goes full screen. The menu changes all of these.
 
-The menu also has the core's options, cheats (RetroArch's `.cht` files work), ten state slots, the
-picture (integer scaling, Sharp, Smooth, LCD grid or scanlines, vsync), the sound's volume and
-latency, rewind, run-ahead, netplay and RetroAchievements. Netplay is armgba to armgba: Separate
+The menu also has recent games, the core's options, cheats (RetroArch's `.cht` files can be added),
+ten state slots with Undo Load State, the picture (integer scaling, Sharp, Smooth, LCD grid or
+scanlines, vsync, and the core's screen options), the sound's volume and latency, rewind, run-ahead,
+netplay and RetroAchievements. The line under the menu says what the selected item does. With a
+controller, the buttons bound to A and B choose and go back, and L and R jump by letter in the game
+list; on the keyboard, typing a name's start finds it. Restart, Close Game and Quit ask for a second
+press. Netplay is armgba to armgba: Separate
 carries the link cable between two devices each running its own game; Together runs every player's
 console on every device, kept in step with rollback. `--host`, `--host-together` and `--connect
 ADDRESS` start it from the command line. Achievements need the system's libcurl, and recording its

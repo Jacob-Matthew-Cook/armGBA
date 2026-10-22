@@ -24,6 +24,10 @@ enum {
 	FILE_SIZE = PATH_SIZE + NAME_SIZE + 16,
 	PORTS = 4,
 	BUTTONS = 16,
+	// In libretro's order: B is the first button, A the ninth.
+	BUTTON_B = 0,
+	BUTTON_A = 8,
+	RECENT_MAX = 15,
 	SLOTS = 10,
 	OPTIONS_MAX = 160,
 	AUDIO_RATE = 32768,
@@ -98,6 +102,8 @@ struct Option {
 	char* value;
 	char* defaultValue;
 	char* description;
+	// What it does, a sentence or two, shown under the menu.
+	char* info;
 	char* category;
 	char** values;
 	char** labels;
@@ -170,6 +176,9 @@ uint16_t localButtons(unsigned port);
 void settingsDefaults(void);
 void settingsRead(void);
 void settingsWrite(void);
+// The games loaded last, newest first, kept in recent.txt.
+void recentAdd(const char* path);
+int recentList(char (*out)[PATH_SIZE], int max);
 void optionsReadSaved(void);
 void optionsWrite(void);
 void optionsDefine(const struct retro_core_options_v2* definitions);
@@ -193,6 +202,12 @@ void uiCaptureBinding(int which, bool controller, bool hotkey);
 bool saveState(int slot);
 bool loadState(int slot);
 bool stateExists(int slot);
+// Saves or loads the chosen slot from a hotkey or the menu, saying how it went.
+bool stateCommand(bool load);
+// The game as it was before the last state was loaded, until the game closes.
+bool canUndoLoad(void);
+bool undoLoadState(void);
+void undoForget(void);
 void rewindReset(void);
 void rewindPush(void);
 bool rewindStep(void);
@@ -217,6 +232,8 @@ void cheatListSave(void);
 void cheatListApply(void);
 void cheatListAdd(const char* description, const char* code);
 void cheatListRemove(int index);
+// Adds a RetroArch .cht file's cheats to the game's; returns how many, or -1 if it can't be read.
+int cheatListImport(const char* path);
 
 // net.c
 enum NetMode {

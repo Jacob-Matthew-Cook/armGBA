@@ -11,6 +11,7 @@
 
 #include "frontend.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <stdarg.h>
@@ -19,6 +20,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "lcd.h"
 #include "text.h"
 
 enum {
@@ -42,6 +44,10 @@ struct Item {
 	int argument;
 	bool header;
 	bool adjustable;
+	// Asks to be chosen twice, as it ends or throws away the game's progress.
+	bool confirm;
+	// What it does, shown under the menu while it's selected.
+	const char* help;
 };
 
 struct Menu {
@@ -101,6 +107,9 @@ static struct {
 } held;
 
 static char browserPath[PATH_SIZE];
+// Recent games, read as the menu opens.
+static char recentGames[RECENT_MAX][PATH_SIZE];
+static int recentCount;
 
 void osd(const char* format, ...) {
 	for (int i = MESSAGES - 1; i > 0; --i) {
@@ -237,12 +246,32 @@ static void addChoice(const char* label, const char* value, ItemFunction functio
 	snprintf(item->value, sizeof(item->value), "%s", value);
 }
 
+static bool selectable(int i);
+
+// What the item just added does.
+static void helpFor(const char* help) {
+	if (itemCount) {
+		items[itemCount - 1].help = help;
+	}
+}
+
+// The item chosen once of those that ask twice; choosing it again does it, anything else forgets it.
+static struct {
+	ItemFunction function;
+	int argument;
+} armed;
+
+static void disarm(void) {
+	armed.function = NULL;
+}
+
 static void addInfo(const char* label, const char* value) {
 	struct Item* item = addItem(label, NULL, 0);
 	snprintf(item->value, sizeof(item->value), "%s", value ? value : "");
 }
 
 static void pushMenu(void (*build)(void), const char* title) {
+	disarm();
 	if (depth < DEPTH_MAX) {
 		stack[depth].build = build;
 		snprintf(stack[depth].title, sizeof(stack[depth].title), "%s", title);
@@ -253,6 +282,7 @@ static void pushMenu(void (*build)(void), const char* title) {
 }
 
 static void popMenu(void) {
+	disarm();
 	if (depth > 1) {
 		--depth;
 	} else {
@@ -307,16 +337,17 @@ static void stateItem(int load, int delta) {
 		app.slot = wrap(app.slot, delta, SLOTS);
 		return;
 	}
-	if (cheevosHardcore() || netRunning()) {
-		osd(cheevosHardcore() ? "Hardcore mode: no save states" : "Not in netplay");
-		return;
+	if (stateCommand(load)) {
+		uiCloseMenu();
 	}
-	if (load) {
-		osd(loadState(app.slot) ? "Loaded state %d" : "No state %d", app.slot);
-	} else {
-		osd(saveState(app.slot) ? "Saved state %d" : "State %d not saved", app.slot);
+}
+
+static void undoLoad(int argument, int delta) {
+	(void) argument;
+	if (!delta && undoLoadState()) {
+		osd("Back to before the state loaded");
+		uiCloseMenu();
 	}
-	uiCloseMenu();
 }
 
 static void restart(int argument, int delta) {
@@ -338,6 +369,18 @@ static bool gameFile(const char* name) {
 	}
 	return false;
 }
+
+static bool cheatFile(const char* name) {
+	const char* dot = strrchr(name, '.');
+	return dot && !strcasecmp(dot, ".cht");
+}
+
+// The list lists RetroArch cheat files to add to the game's instead of games; the game list's folder
+// is kept meanwhile.
+static bool browserCheats;
+static char browserGamesPath[PATH_SIZE];
+// A folder's name to select once the list shows it: the one just left by "..".
+static char browserReselect[NAME_SIZE];
 
 // The game list: the folders, then the games, in browserPath, read once as the folder is entered.
 struct BrowserEntry {
@@ -383,7 +426,7 @@ static void readBrowser(void) {
 			}
 			directory = S_ISDIR(st.st_mode);
 		}
-		if (!directory && !gameFile(e->d_name)) {
+		if (!directory && !(browserCheats ? cheatFile(e->d_name) : gameFile(e->d_name))) {
 			continue;
 		}
 		if (browserCount == browserCapacity) {
@@ -404,10 +447,31 @@ static void readBrowser(void) {
 
 static void browse(int index, int delta);
 
+// "3,753" for 3753.
+static void grouped(char* out, size_t size, int n) {
+	if (n >= 1000) {
+		snprintf(out, size, "%d,%03d", n / 1000, n % 1000);
+	} else {
+		snprintf(out, size, "%d", n);
+	}
+}
+
 static void browserMenu(void) {
-	addInfo(browserPath, "");
-	addItem("..", browse, -1);
 	readBrowser();
+	// The folder's name, and how many games and folders it holds.
+	const char* slash = strrchr(browserPath, '/');
+	const char* name = slash && slash[1] ? slash + 1 : browserPath;
+	int folders = 0;
+	for (int i = 0; i < browserCount; ++i) {
+		folders += browserEntries[i].directory;
+	}
+	char games[16], counts[64];
+	grouped(games, sizeof(games), browserCount - folders);
+	snprintf(counts, sizeof(counts), "%s %s%s", games, browserCheats ? "cheat files" : browserCount - folders == 1 ? "game" : "games",
+	         folders ? folders == 1 ? ", 1 folder" : ", folders" : "");
+	addInfo(name, counts);
+	addItem("..", browse, -1);
+	helpFor(browserPath);
 	if (!browserCount && access(browserPath, R_OK)) {
 		addInfo("Can't open this folder", "");
 		return;
@@ -417,8 +481,86 @@ static void browserMenu(void) {
 			char label[NAME_SIZE + 2];
 			snprintf(label, sizeof(label), "%s/", browserEntries[i].name);
 			addItem(label, browse, i);
+			if (browserReselect[0] && !strcmp(browserReselect, browserEntries[i].name)) {
+				stack[depth - 1].selected = itemCount - 1;
+				browserReselect[0] = '\0';
+			}
 		} else {
 			addItem(browserEntries[i].name, browse, i);
+		}
+	}
+	browserReselect[0] = '\0';
+}
+
+// The selected entry's first letter, upper case, with digits and the rest as '#'.
+static char initialOf(const char* name) {
+	char const c = (char) toupper((unsigned char) name[0]);
+	return c >= 'A' && c <= 'Z' ? c : '#';
+}
+
+static void selectEntry(int entry) {
+	for (int i = 0; i < itemCount; ++i) {
+		if (items[i].function == browse && items[i].argument == entry) {
+			stack[depth - 1].selected = i;
+			return;
+		}
+	}
+}
+
+// Folders, then games, by first letter.
+static int groupOf(int entry) {
+	return browserEntries[entry].directory * 256 + initialOf(browserEntries[entry].name);
+}
+
+// Moves to the first game or folder of the next letter, or back to the start of this one or the one
+// before.
+static void browserJump(int delta) {
+	struct Menu* m = &stack[depth - 1];
+	if (!browserCount) {
+		return;
+	}
+	int at = selectable(m->selected) && items[m->selected].function == browse ? items[m->selected].argument : -1;
+	if (at < 0) {
+		selectEntry(delta > 0 ? 0 : browserCount - 1);
+		return;
+	}
+	int const group = groupOf(at);
+	if (delta > 0) {
+		while (at < browserCount && groupOf(at) == group) {
+			++at;
+		}
+		selectEntry(at < browserCount ? at : 0);
+		return;
+	}
+	int start = at;
+	while (start > 0 && groupOf(start - 1) == group) {
+		--start;
+	}
+	if (start == at) {
+		start = at > 0 ? at - 1 : browserCount - 1;
+		int const before = groupOf(start);
+		while (start > 0 && groupOf(start - 1) == before) {
+			--start;
+		}
+	}
+	selectEntry(start);
+}
+
+// Typing a name's start selects the first game or folder that begins so; a pause starts it again.
+static void browserFind(char c) {
+	static char typed[32];
+	static Uint32 typedAt;
+	Uint32 const now = SDL_GetTicks();
+	size_t length = now - typedAt > 1000 ? 0 : strlen(typed);
+	typedAt = now;
+	if (length + 1 < sizeof(typed)) {
+		typed[length++] = c;
+		typed[length] = '\0';
+	}
+	for (int i = 0; i < browserCount; ++i) {
+		if (!strncasecmp(browserEntries[i].name, typed, length)) {
+			selectEntry(i);
+			return;
 		}
 	}
 }
@@ -429,6 +571,7 @@ static void browse(int index, int delta) {
 	}
 	if (index < 0) {
 		char* slash = strrchr(browserPath, '/');
+		snprintf(browserReselect, sizeof(browserReselect), "%s", slash ? slash + 1 : "");
 		if (slash && slash != browserPath) {
 			*slash = '\0';
 		} else {
@@ -442,6 +585,16 @@ static void browse(int index, int delta) {
 	if (browserEntries[index].directory) {
 		snprintf(browserPath, sizeof(browserPath), "%s", path);
 		stack[depth - 1].selected = -1;
+	} else if (browserCheats) {
+		int const added = cheatListImport(path);
+		if (added < 0) {
+			osd("Can't read %s", browserEntries[index].name);
+		} else {
+			cheatListApply();
+			cheatListSave();
+			osd(added == 1 ? "Added 1 cheat" : "Added %d cheats", added);
+			popMenu();
+		}
 	} else if (loadGame(path)) {
 		uiCloseMenu();
 	}
@@ -450,6 +603,10 @@ static void browse(int index, int delta) {
 static void openBrowser(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
+		if (browserCheats) {
+			browserCheats = false;
+			snprintf(browserPath, sizeof(browserPath), "%s", browserGamesPath);
+		}
 		browserListed[0] = '\0';
 		pushMenu(browserMenu, "Load Game");
 	}
@@ -461,6 +618,7 @@ static void closeGame(int argument, int delta) {
 		unloadGame();
 		SDL_SetWindowTitle(app.window, "armGBA");
 		depth = 0;
+		recentCount = recentList(recentGames, RECENT_MAX);
 		pushMenu(rootMenu, "No game loaded");
 	}
 }
@@ -552,13 +710,32 @@ static void cheatNew(int argument, int delta) {
 	}
 }
 
+static void openCheatFiles(int argument, int delta) {
+	(void) argument;
+	if (!delta) {
+		if (!browserCheats) {
+			snprintf(browserGamesPath, sizeof(browserGamesPath), "%s", browserPath);
+			browserCheats = true;
+		}
+		browserListed[0] = '\0';
+		pushMenu(browserMenu, "Load Cheat File");
+	}
+}
+
 static void cheatsMenu(void) {
+	static char fileHelp[PATH_SIZE + 128];
 	if (cheevosHardcore()) {
 		addInfo("Hardcore mode: cheats are off", "");
 		return;
 	}
 	addItem("Add Cheat...", cheatNew, 0);
-	if (cheatCount) {
+	helpFor("Type a code: Action Replay, GameShark, CodeBreaker or Game Genie.");
+	addItem("Load Cheat File...", openCheatFiles, 0);
+	snprintf(fileHelp, sizeof(fileHelp), "Adds the cheats in a RetroArch .cht file. This game's cheats are kept in %s.", cheatDirectory);
+	helpFor(fileHelp);
+	if (!cheatCount) {
+		addInfo("No cheats for this game yet", "");
+	} else {
 		addHeader("Cheats (left / right turns one on or off)");
 	}
 	for (int i = 0; i < cheatCount; ++i) {
@@ -607,7 +784,13 @@ static void addOptions(const char* category) {
 			}
 		}
 		addValue(o->description ? o->description : o->key, label, optionChange, i);
+		helpFor(o->info);
 	}
+}
+
+// The core's Video options are shown in Settings > Video, with the rest of the picture's.
+static bool shownInSettings(const char* category) {
+	return category && !strcmp(category, "video");
 }
 
 static void categoryMenu(void) {
@@ -627,6 +810,9 @@ static void coreOptionsMenu(void) {
 		return;
 	}
 	for (int c = 0; c < categoryCount; ++c) {
+		if (shownInSettings(categories[c].key)) {
+			continue;
+		}
 		bool any = false;
 		for (int i = 0; i < optionCount; ++i) {
 			any |= options[i].visible && options[i].category && !strcmp(options[i].category, categories[c].key);
@@ -665,7 +851,6 @@ enum {
 	SET_RUNAHEAD,
 	SET_AUTO_STATE,
 	SET_INPUT_DELAY,
-	SET_PORT,
 	SET_HARDCORE,
 };
 
@@ -728,9 +913,6 @@ static void changeSetting(int which, int delta) {
 	case SET_INPUT_DELAY:
 		settings.inputDelay = wrap(settings.inputDelay, d, 9);
 		break;
-	case SET_PORT:
-		settings.netPort = settings.netPort + d;
-		break;
 	case SET_HARDCORE:
 		settings.hardcore = !settings.hardcore;
 		cheevosSetHardcore(settings.hardcore);
@@ -742,18 +924,33 @@ static void changeSetting(int which, int delta) {
 static void videoMenu(void) {
 	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid", "Scanlines" };
 	char text[32];
-	snprintf(text, sizeof(text), "%dx", settings.scale);
-	addValue("Window Size", text, changeSetting, SET_SCALE);
+	addHeader("Window");
+	if (!settings.fullscreen) {
+		snprintf(text, sizeof(text), "%dx", settings.scale);
+		addValue("Window Size", text, changeSetting, SET_SCALE);
+		helpFor("The window's size, in times the console's screen.");
+	}
 	addValue("Full Screen", onOff(settings.fullscreen), changeSetting, SET_FULLSCREEN);
+	helpFor("Fills the display. On a handheld it's on from the start.");
 	addValue("Integer Scaling", onOff(settings.integerScale), changeSetting, SET_INTEGER);
+	helpFor("Scales by whole numbers only, so every pixel is the same size; leaves a border.");
 	addValue("Aspect Ratio", settings.stretch ? "Fill the Window" : "The Console's", changeSetting, SET_STRETCH);
+	helpFor("The Console's keeps the screen's shape; Fill the Window stretches it.");
+	addValue("VSync", onOff(settings.vsync), changeSetting, SET_VSYNC);
+	helpFor("Shows each frame as the display refreshes, so the picture doesn't tear.");
+	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
+	addHeader("Picture");
 	addValue("Filter", filters[settings.filter], changeSetting, SET_FILTER);
-	if (settings.filter == FILTER_LCD) {
+	helpFor("Sharp keeps pixels square; Smooth blends them; LCD Grid draws the gaps between the console screen's pixels; "
+	        "Scanlines darkens lines as a TV did.");
+	uint32_t gap;
+	enum LibretroLcd const lcd = libretroLcd(&gap);
+	if (settings.filter == FILTER_LCD && (!app.loaded || lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
 		static const char* const shadows[9] = { "Off", "Up", "Up Right", "Right", "Down Right", "Down", "Down Left", "Left", "Up Left" };
 		addValue("Game Boy Pixel Shadow", shadows[settings.shadow], changeSetting, SET_SHADOW);
+		helpFor("On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls.");
 	}
-	addValue("VSync", onOff(settings.vsync), changeSetting, SET_VSYNC);
-	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
+	addOptions("video");
 }
 
 static void audioMenu(void) {
@@ -762,16 +959,21 @@ static void audioMenu(void) {
 	addValue("Volume", text, changeSetting, SET_VOLUME);
 	snprintf(text, sizeof(text), "%d %s (%d ms)", settings.latency, frames(settings.latency), (int) (settings.latency * 1000 / FRAME_RATE));
 	addValue("Latency", text, changeSetting, SET_LATENCY);
+	helpFor("How much sound waits to play. Less answers sooner but may crackle on a slow device.");
 }
 
 static void gameplayMenu(void) {
 	char text[32];
 	addValue("Rewind", onOff(settings.rewind), changeSetting, SET_REWIND);
+	helpFor("Hold the Rewind hotkey to go back in time.");
 	snprintf(text, sizeof(text), "%d MB", settings.rewindMegabytes);
 	addValue("Rewind Buffer", text, changeSetting, SET_REWIND_SIZE);
+	helpFor("Memory kept for rewinding: more goes further back.");
 	snprintf(text, sizeof(text), settings.runahead ? "%d %s" : "Off", settings.runahead, frames(settings.runahead));
 	addValue("Run-Ahead", text, changeSetting, SET_RUNAHEAD);
+	helpFor("Runs frames ahead and shows the last, so the game answers that many frames sooner. Costs speed.");
 	addValue("Save and Load State on Exit and Start", onOff(settings.autoState), changeSetting, SET_AUTO_STATE);
+	helpFor("Saves a state as the game closes and loads it as the game starts again.");
 }
 
 static void bind(int which, int delta) {
@@ -797,32 +999,53 @@ static void resetControls(int argument, int delta) {
 	}
 }
 
-static void controlsMenu(void) {
-	addHeader("Keyboard (player 1)");
-	for (int i = 0; i < BUTTONS; ++i) {
-		addChoice(buttonNames[i], scancodeName(settings.keys[i]), bind, i);
-	}
-	addHeader("Controllers (one per player)");
-	for (int i = 0; i < BUTTONS; ++i) {
-		addChoice(buttonNames[i], padName(settings.pad[i]), bind, 1000 + i);
-	}
-	addItem("Reset Controls and Hotkeys", resetControls, 0);
-}
+// The buttons as listed: the face buttons and shoulders first, then the turbo buttons and extra
+// shoulders.
+static const int buttonOrder[BUTTONS] = { BUTTON_A, BUTTON_B, 10, 11, 3, 2, 4, 5, 6, 7, 9, 1, 12, 13, 14, 15 };
 
-static void hotkeysMenu(void) {
-	addHeader("Keyboard");
-	for (int i = 0; i < ACTIONS; ++i) {
-		addChoice(actionNames[i], scancodeName(settings.hotkeys[i]), bind, 2000 + i);
+static void padControlsMenu(void) {
+	addHeader("Buttons (a controller for each player)");
+	for (int k = 0; k < BUTTONS; ++k) {
+		int const i = buttonOrder[k];
+		addChoice(buttonNames[i], padName(settings.pad[i]), bind, 1000 + i);
+		helpFor(i == BUTTON_A ? "A also chooses in these menus." : i == BUTTON_B ? "B also goes back in these menus." : NULL);
 	}
-	addHeader("Controller");
+	addHeader("Hotkeys");
 	for (int i = 0; i < ACTIONS; ++i) {
 		addChoice(actionNames[i], padName(settings.padHotkeys[i]), bind, 3000 + i);
 	}
 }
 
+static void keyControlsMenu(void) {
+	addHeader("Buttons (player 1)");
+	for (int k = 0; k < BUTTONS; ++k) {
+		int const i = buttonOrder[k];
+		addChoice(buttonNames[i], scancodeName(settings.keys[i]), bind, i);
+	}
+	addHeader("Hotkeys");
+	for (int i = 0; i < ACTIONS; ++i) {
+		addChoice(actionNames[i], scancodeName(settings.hotkeys[i]), bind, 2000 + i);
+	}
+}
+
+static void openControlsPage(int which, int delta) {
+	if (!delta) {
+		pushMenu(which ? keyControlsMenu : padControlsMenu, which ? "Keyboard" : "Controller");
+	}
+}
+
+static void controlsMenu(void) {
+	addItem("Controller...", openControlsPage, 0);
+	helpFor("The buttons and hotkeys on a controller.");
+	addItem("Keyboard...", openControlsPage, 1);
+	helpFor("The keys and hotkeys on the keyboard.");
+	addItem("Reset Controls and Hotkeys", resetControls, 0);
+	items[itemCount - 1].confirm = true;
+}
+
 static void openSettingsPage(int which, int delta) {
-	static void (*const pages[])(void) = { videoMenu, audioMenu, controlsMenu, hotkeysMenu, gameplayMenu };
-	static const char* const titles[] = { "Video", "Audio", "Controls", "Hotkeys", "Rewind, Run-Ahead and States" };
+	static void (*const pages[])(void) = { videoMenu, audioMenu, controlsMenu, gameplayMenu };
+	static const char* const titles[] = { "Video", "Audio", "Controls", "Rewind, Run-Ahead and States" };
 	if (!delta) {
 		pushMenu(pages[which], titles[which]);
 	}
@@ -830,10 +1053,11 @@ static void openSettingsPage(int which, int delta) {
 
 static void settingsMenu(void) {
 	addItem("Video...", openSettingsPage, 0);
+	helpFor("The window, the filter and LCD grid, and the console screen's colours and ghosting.");
 	addItem("Audio...", openSettingsPage, 1);
 	addItem("Controls...", openSettingsPage, 2);
-	addItem("Hotkeys...", openSettingsPage, 3);
-	addItem("Rewind, Run-Ahead and States...", openSettingsPage, 4);
+	helpFor("Buttons and hotkeys, for controllers and the keyboard.");
+	addItem("Rewind, Run-Ahead and States...", openSettingsPage, 3);
 }
 
 static void openSettings(int argument, int delta) {
@@ -858,6 +1082,16 @@ static void joinDone(const char* text) {
 	}
 }
 
+static void portDone(const char* text) {
+	int const port = atoi(text);
+	if (port < 1 || port > 65535) {
+		osd("A port is a number from 1 to 65535");
+		return;
+	}
+	settings.netPort = port;
+	settingsWrite();
+}
+
 static void netAction(int which, int delta) {
 	if (delta) {
 		return;
@@ -880,23 +1114,35 @@ static void netAction(int which, int delta) {
 	case 4:
 		netStop();
 		break;
+	case 5: {
+		char port[16];
+		snprintf(port, sizeof(port), "%d", settings.netPort);
+		openEntry("Port (1 to 65535)", port, false, portDone);
+		break;
+	}
 	}
 }
 
 static void netplayMenu(void) {
 	addInfo("Status", netStatus[0] ? netStatus : "Not connected");
 	addChoice("Your Name", settings.nickname, netAction, 0);
+	helpFor("Shown to the other players.");
 	char text[32];
 	snprintf(text, sizeof(text), "%d", settings.netPort);
-	addValue("Port", text, changeSetting, SET_PORT);
+	addChoice("Port", text, netAction, 5);
+	helpFor("The network port the host listens on; everyone uses the same one.");
 	snprintf(text, sizeof(text), "%d %s", settings.inputDelay, frames(settings.inputDelay));
 	addValue("Input Delay (Together)", text, changeSetting, SET_INPUT_DELAY);
+	helpFor("How long each player's buttons wait in Together, so fewer corrections show. More suits a slow network.");
 	if (netMode == NET_OFF) {
 		addHeader("Host the loaded game");
 		addItem("Link Cable: each plays their own console (Separate)", netAction, 1);
+		helpFor("Each device runs its own console and game, joined by the link cable over the network. Two players.");
 		addItem("Together: every console runs on every device, with rollback", netAction, 2);
+		helpFor("Every device runs every player's console, so the link never waits on the network. Everyone needs every game.");
 		addHeader("Join");
 		addItem("Join a Host...", netAction, 3);
+		helpFor("Type the host's name or address.");
 	} else {
 		addItem("Disconnect", netAction, 4);
 	}
@@ -941,6 +1187,7 @@ static void cheevosMenu(void) {
 		addItem("Log In...", cheevosAction, 0);
 	}
 	addValue("Hardcore Mode (no states, cheats, rewind or run-ahead)", onOff(settings.hardcore), changeSetting, SET_HARDCORE);
+	helpFor("Earns achievements as hardcore: save states, cheats, rewind and run-ahead are off, and turning it on restarts the game.");
 	static char lines[400][160];
 	int const n = cheevosList(lines, 400);
 	if (n) {
@@ -972,22 +1219,83 @@ static void misc(int which, int delta) {
 	uiCloseMenu();
 }
 
+static void recentChoose(int index, int delta) {
+	if (!delta && index < recentCount && loadGame(recentGames[index])) {
+		uiCloseMenu();
+	}
+}
+
+// A recent game's row: its name without the extension, and the folder it's in.
+static void addRecent(int index) {
+	const char* path = recentGames[index];
+	const char* slash = strrchr(path, '/');
+	char name[NAME_SIZE], folder[NAME_SIZE] = "";
+	snprintf(name, sizeof(name), "%s", slash ? slash + 1 : path);
+	char* dot = strrchr(name, '.');
+	if (dot && dot != name) {
+		*dot = '\0';
+	}
+	if (slash && slash != path) {
+		int const length = (int) (slash - path);
+		const char* start = path + length;
+		while (start > path && start[-1] != '/') {
+			--start;
+		}
+		snprintf(folder, sizeof(folder), "%.*s", (int) (path + length - start), start);
+	}
+	addChoice(name, folder, recentChoose, index);
+}
+
+static void recentMenu(void) {
+	for (int i = 0; i < recentCount; ++i) {
+		addRecent(i);
+	}
+}
+
+static void openRecent(int argument, int delta) {
+	(void) argument;
+	if (!delta) {
+		pushMenu(recentMenu, "Recent Games");
+	}
+}
+
 static void rootMenu(void) {
 	char text[32];
 	if (app.loaded) {
 		addItem("Resume", resume, 0);
 		snprintf(text, sizeof(text), stateExists(app.slot) ? "Slot %d" : "Slot %d \xC2\xB7 Empty", app.slot);
 		addValue("Save State", text, stateItem, 0);
+		helpFor("Saves the game as it is now in the slot shown; left and right change the slot.");
 		addValue("Load State", text, stateItem, 1);
+		helpFor("Goes back to the state in the slot shown. Undo Load State brings back what you had.");
+		if (canUndoLoad()) {
+			addItem("Undo Load State", undoLoad, 0);
+			helpFor("Goes back to the game as it was before the last state loaded.");
+		}
 		addItem("Restart", restart, 0);
+		items[itemCount - 1].confirm = true;
+		helpFor("Starts the game again from the beginning; the game's own save is kept.");
+	} else if (recentCount) {
+		addHeader("Recent games");
+		for (int i = 0; i < recentCount && i < 5; ++i) {
+			addRecent(i);
+		}
+	}
+	if (app.loaded && recentCount) {
+		addItem("Recent Games...", openRecent, 0);
+	} else if (recentCount > 5) {
+		addItem("More Recent Games...", openRecent, 0);
 	}
 	addItem("Load Game...", openBrowser, 0);
 	if (app.loaded) {
 		addItem("Close Game", closeGame, 0);
+		items[itemCount - 1].confirm = true;
 		addItem("Cheats...", openCheats, 0);
 	}
 	addItem("Core Options...", openCoreOptions, 0);
+	helpFor("The emulator's options for the console: model, BIOS, link play, saves and sensors.");
 	addItem("Settings...", openSettings, 0);
+	helpFor("The picture, sound, controls, rewind and states.");
 	addItem("Netplay...", openNetplay, 0);
 	addItem("Achievements...", openCheevos, 0);
 	if (app.loaded) {
@@ -995,6 +1303,7 @@ static void rootMenu(void) {
 		addItem(recording() ? "Stop Recording" : "Start Recording", misc, 1);
 	}
 	addItem("Quit", misc, 2);
+	items[itemCount - 1].confirm = app.loaded;
 }
 
 void uiOpenMenu(void) {
@@ -1003,8 +1312,10 @@ void uiOpenMenu(void) {
 	}
 	app.menuOpen = true;
 	depth = 0;
+	recentCount = recentList(recentGames, RECENT_MAX);
 	pushMenu(rootMenu, app.loaded ? app.gameName : "No game loaded");
 	snprintf(browserPath, sizeof(browserPath), "%s", settings.directory);
+	browserCheats = false;
 }
 
 void uiCloseMenu(void) {
@@ -1050,6 +1361,7 @@ static bool selectable(int i) {
 }
 
 static void moveSelection(int delta) {
+	disarm();
 	struct Menu* m = &stack[depth - 1];
 	int i = m->selected;
 	for (int tries = 0; tries < itemCount; ++tries) {
@@ -1070,6 +1382,12 @@ static void activate(int delta) {
 	if (delta && !item->adjustable) {
 		return;
 	}
+	if (!delta && item->confirm && (armed.function != item->function || armed.argument != item->argument)) {
+		armed.function = item->function;
+		armed.argument = item->argument;
+		return;
+	}
+	disarm();
 	item->function(item->argument, delta);
 }
 
@@ -1136,6 +1454,20 @@ static void back(void) {
 	} else {
 		popMenu();
 	}
+}
+
+static bool inBrowser(void) {
+	return depth && stack[depth - 1].build == browserMenu;
+}
+
+// The controller button bound to the game's button: B's or A's own if it's bound to a trigger or not
+// at all.
+static int menuButton(int button) {
+	int const bound = settings.pad[button];
+	if (bound >= 0 && bound < SDL_CONTROLLER_BUTTON_MAX) {
+		return bound;
+	}
+	return button == BUTTON_A ? SDL_CONTROLLER_BUTTON_B : SDL_CONTROLLER_BUTTON_A;
 }
 
 bool uiEvent(const SDL_Event* event) {
@@ -1239,16 +1571,29 @@ bool uiEvent(const SDL_Event* event) {
 				back();
 			}
 			break;
-		default:
+		default: {
+			SDL_Keycode const key = event->key.keysym.sym;
 			if (code == settings.hotkeys[ACT_FULLSCREEN]) {
 				settings.fullscreen = !settings.fullscreen;
 				applyWindowSize();
+			} else if (inBrowser() && key < 128 && isalnum((int) key)) {
+				browserFind((char) key);
 			}
 			break;
+		}
 		}
 		return true;
 	}
 	case SDL_CONTROLLERBUTTONDOWN:
+		// The buttons bound to the game's A and B choose and go back, as in RetroArch.
+		if (event->cbutton.button == menuButton(BUTTON_A)) {
+			confirm();
+			return true;
+		}
+		if (event->cbutton.button == menuButton(BUTTON_B)) {
+			back();
+			return true;
+		}
 		switch (event->cbutton.button) {
 		case SDL_CONTROLLER_BUTTON_DPAD_UP:
 			direction(0, -1);
@@ -1262,12 +1607,6 @@ bool uiEvent(const SDL_Event* event) {
 		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
 			direction(1, 0);
 			break;
-		case SDL_CONTROLLER_BUTTON_A:
-			confirm();
-			break;
-		case SDL_CONTROLLER_BUTTON_B:
-			back();
-			break;
 		case SDL_CONTROLLER_BUTTON_X:
 			if (entry.open && entry.text[0]) {
 				entry.text[strlen(entry.text) - 1] = '\0';
@@ -1279,11 +1618,17 @@ bool uiEvent(const SDL_Event* event) {
 			}
 			break;
 		case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
-		case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
-			for (int i = 0; i < 10; ++i) {
-				moveSelection(event->cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER ? -1 : 1);
+		case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: {
+			int const way = event->cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER ? -1 : 1;
+			if (inBrowser()) {
+				browserJump(way);
+			} else {
+				for (int i = 0; i < 10; ++i) {
+					moveSelection(way);
+				}
 			}
 			break;
+		}
 		default:
 			if (event->cbutton.button == settings.padHotkeys[ACT_MENU]) {
 				uiCloseMenu();
@@ -1421,6 +1766,33 @@ static int drawPanel(SDL_Rect panel, int u, const char* where) {
 	return panel.y + headerH + u / 4;
 }
 
+// Help text in up to two lines, words wrapped, the second cut short with "..." if it runs on.
+static void drawHelp(const char* help, int x, int y, int width, int size, int line) {
+	char first[512] = "";
+	const char* rest = help;
+	const char* p = help;
+	while (*p) {
+		const char* end = p;
+		while (*end && *end != ' ') {
+			++end;
+		}
+		char trial[512];
+		snprintf(trial, sizeof(trial), "%.*s", (int) (end - help), help);
+		if (textWidth(FACE_BODY, size, trial) > width && first[0]) {
+			break;
+		}
+		snprintf(first, sizeof(first), "%s", trial);
+		rest = *end ? end + 1 : end;
+		p = rest;
+	}
+	textDraw(FACE_BODY, size, x, y, muted, first);
+	if (*rest) {
+		char second[512];
+		textFit(FACE_BODY, size, rest, width, false, second, sizeof(second));
+		textDraw(FACE_BODY, size, x, y + line, muted, second);
+	}
+}
+
 static int footerTop(SDL_Rect panel, int u) {
 	return panel.y + panel.h - u * 9 / 4;
 }
@@ -1546,7 +1918,13 @@ static void drawMenu(int width, int height, int u) {
 		moveSelection(1);
 	}
 	int const rowH = u * 7 / 4, size = u * 19 / 20, headerSize = u * 3 / 5;
-	int const chrome = u * 3 + u / 4 + u / 4 + u * 9 / 4;
+	// Two lines above the footer say what the selected item does, when this menu's items say.
+	bool anyHelp = false;
+	for (int i = 0; i < itemCount && !anyHelp; ++i) {
+		anyHelp = items[i].help != NULL;
+	}
+	int const helpSize = u * 13 / 20, helpLine = u * 9 / 10, helpH = anyHelp ? helpLine * 2 + u / 2 : 0;
+	int const chrome = u * 3 + u / 4 + u / 4 + u * 9 / 4 + helpH;
 	int const rows = SDL_max(1, SDL_min(itemCount, (height - u - chrome) / rowH));
 	SDL_Rect panel;
 	panel.w = SDL_min(width - u, u * 30);
@@ -1611,10 +1989,17 @@ static void drawMenu(int width, int height, int u) {
 		enum FaceId const face = on ? FACE_STRONG : FACE_BODY;
 		int const ty = y + (rowH - size) / 2;
 		int valueL = textR;
-		if (item->value[0]) {
+		// An item that asks twice says so once chosen.
+		char again[32];
+		const char* shownValue = item->value;
+		if (on && item->confirm && armed.function == item->function && armed.argument == item->argument) {
+			snprintf(again, sizeof(again), "Press %s again", lastInputPad ? "A" : "Enter");
+			shownValue = again;
+		}
+		if (shownValue[0]) {
 			char value[NAME_SIZE + 64];
 			int const arrows = on && item->adjustable ? textWidth(face, size, "\xE2\x80\xB9") + u / 2 : 0;
-			textFit(face, size, item->value, (textR - textL) / 2 - 2 * arrows, false, value, sizeof(value));
+			textFit(face, size, shownValue, (textR - textL) / 2 - 2 * arrows, false, value, sizeof(value));
 			int const vw = textWidth(face, size, value);
 			SDL_Color const colour = on ? white : item->function ? text : muted;
 			if (arrows) {
@@ -1640,6 +2025,9 @@ static void drawMenu(int width, int height, int u) {
 		int const barY = top + (trackH - barH) * m->scroll / SDL_max(1, itemCount - rows);
 		fillRounded((SDL_Rect) { panel.x + panel.w - u, barY, SDL_max(3, u / 6), barH }, u, faded(accent, 110));
 	}
+	if (helpH && selectable(m->selected) && items[m->selected].help) {
+		drawHelp(items[m->selected].help, textL, footerTop(panel, u) - helpH + u / 4, textR - textL, helpSize, helpLine);
+	}
 	int x = panel.x + u + u / 2;
 	int const y = drawFooter(panel, u);
 	bool const adjustable = selectable(m->selected) && items[m->selected].adjustable;
@@ -1650,7 +2038,10 @@ static void drawMenu(int width, int height, int u) {
 			x = drawHint(x, y, u, "B", true, backLabel);
 		}
 		if (adjustable) {
-			drawHint(x, y, u, "\xE2\x80\xB9 \xE2\x80\xBA", false, "Change");
+			x = drawHint(x, y, u, "\xE2\x80\xB9 \xE2\x80\xBA", false, "Change");
+		}
+		if (inBrowser()) {
+			drawHint(x, y, u, "L R", false, "Letter");
 		}
 	} else {
 		x = drawHint(x, y, u, "Enter", false, "Select");
@@ -1658,7 +2049,10 @@ static void drawMenu(int width, int height, int u) {
 			x = drawHint(x, y, u, "Esc", false, backLabel);
 		}
 		if (adjustable) {
-			drawHint(x, y, u, "\xE2\x86\x90 \xE2\x86\x92", false, "Change");
+			x = drawHint(x, y, u, "\xE2\x86\x90 \xE2\x86\x92", false, "Change");
+		}
+		if (inBrowser()) {
+			drawHint(x, y, u, "A-Z", false, "Find");
 		}
 	}
 }

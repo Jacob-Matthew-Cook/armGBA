@@ -381,6 +381,7 @@ void unloadGame(void) {
 	}
 	cheevosUnloadGame();
 	writeSaves();
+	undoForget();
 	retro_unload_game();
 	retro_deinit();
 	app.loaded = false;
@@ -454,7 +455,9 @@ bool loadGame(const char* path) {
 	cheevosLoadGame();
 	if (settings.autoState && !cheevosHardcore() && stateExists(-1)) {
 		loadState(-1);
+		undoForget();
 	}
+	recentAdd(path);
 	char title[NAME_SIZE + 16];
 	snprintf(title, sizeof(title), "armGBA - %s", app.gameName);
 	SDL_SetWindowTitle(app.window, title);
@@ -760,7 +763,6 @@ static void doAction(enum Action action) {
 	if (!app.loaded) {
 		return;
 	}
-	bool const hardcore = cheevosHardcore();
 	switch (action) {
 	case ACT_PAUSE:
 		if (!netRunning()) {
@@ -769,18 +771,8 @@ static void doAction(enum Action action) {
 		}
 		break;
 	case ACT_SAVE_STATE:
-		if (hardcore || netRunning()) {
-			osd(hardcore ? "Hardcore mode: no save states" : "Not in netplay");
-		} else {
-			osd(saveState(app.slot) ? "Saved state %d" : "State %d not saved", app.slot);
-		}
-		break;
 	case ACT_LOAD_STATE:
-		if (hardcore || netRunning()) {
-			osd(hardcore ? "Hardcore mode: no save states" : "Not in netplay");
-		} else {
-			osd(loadState(app.slot) ? "Loaded state %d" : "No state %d", app.slot);
-		}
+		stateCommand(action == ACT_LOAD_STATE);
 		break;
 	case ACT_SLOT_PREVIOUS:
 	case ACT_SLOT_NEXT:

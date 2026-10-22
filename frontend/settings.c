@@ -37,6 +37,9 @@ static int savedCount;
 void settingsDefaults(void) {
 	memset(&settings, 0, sizeof(settings));
 	settings.scale = 3;
+	// Full screen unless on a desktop, which names itself; a handheld's session doesn't.
+	settings.fullscreen = !getenv("XDG_CURRENT_DESKTOP");
+	settings.vsync = true;
 	settings.filter = FILTER_SHARP;
 	settings.shadow = 4;
 	settings.volume = 100;
@@ -285,6 +288,7 @@ void optionsDefine(const struct retro_core_options_v2* definitions) {
 		struct Option* o = &options[optionCount++];
 		o->key = strdup(d->key);
 		o->description = copyString(d->desc);
+		o->info = copyString(d->info);
 		o->category = copyString(d->category_key);
 		o->visible = true;
 		while (o->valueCount < RETRO_NUM_CORE_OPTION_VALUES_MAX && d->values[o->valueCount].value) {
@@ -316,19 +320,82 @@ void optionsDisplay(const struct retro_core_option_display* display) {
 
 const char* scancodeName(SDL_Scancode code) {
 	const char* name = code ? SDL_GetScancodeName(code) : "";
-	return *name ? name : "none";
+	return *name ? name : "None";
 }
 
+// A controller button by where it is, which every layout agrees on: the face buttons' letters differ
+// between makers.
 const char* padName(int binding) {
+	static const char* const names[SDL_CONTROLLER_BUTTON_MAX] = {
+		[SDL_CONTROLLER_BUTTON_A] = "South",
+		[SDL_CONTROLLER_BUTTON_B] = "East",
+		[SDL_CONTROLLER_BUTTON_X] = "West",
+		[SDL_CONTROLLER_BUTTON_Y] = "North",
+		[SDL_CONTROLLER_BUTTON_BACK] = "Select",
+		[SDL_CONTROLLER_BUTTON_GUIDE] = "Home",
+		[SDL_CONTROLLER_BUTTON_START] = "Start",
+		[SDL_CONTROLLER_BUTTON_LEFTSTICK] = "Left Stick Press",
+		[SDL_CONTROLLER_BUTTON_RIGHTSTICK] = "Right Stick Press",
+		[SDL_CONTROLLER_BUTTON_LEFTSHOULDER] = "Left Shoulder",
+		[SDL_CONTROLLER_BUTTON_RIGHTSHOULDER] = "Right Shoulder",
+		[SDL_CONTROLLER_BUTTON_DPAD_UP] = "D-Pad Up",
+		[SDL_CONTROLLER_BUTTON_DPAD_DOWN] = "D-Pad Down",
+		[SDL_CONTROLLER_BUTTON_DPAD_LEFT] = "D-Pad Left",
+		[SDL_CONTROLLER_BUTTON_DPAD_RIGHT] = "D-Pad Right",
+	};
 	if (binding == PAD_NONE) {
-		return "none";
+		return "None";
 	}
 	if (binding == PAD_LEFT_TRIGGER) {
-		return "left trigger";
+		return "Left Trigger";
 	}
 	if (binding == PAD_RIGHT_TRIGGER) {
-		return "right trigger";
+		return "Right Trigger";
+	}
+	if (binding >= 0 && binding < SDL_CONTROLLER_BUTTON_MAX && names[binding]) {
+		return names[binding];
 	}
 	const char* name = SDL_GameControllerGetStringForButton((SDL_GameControllerButton) binding);
 	return name ? name : "?";
+}
+
+// Recent games.
+
+static void recentPath(char out[FILE_SIZE]) {
+	snprintf(out, FILE_SIZE, "%s/recent.txt", configDirectory);
+}
+
+int recentList(char (*out)[PATH_SIZE], int max) {
+	char path[FILE_SIZE];
+	recentPath(path);
+	FILE* f = fopen(path, "r");
+	if (!f) {
+		return 0;
+	}
+	int n = 0;
+	while (n < max && fgets(out[n], PATH_SIZE, f)) {
+		out[n][strcspn(out[n], "\r\n")] = '\0';
+		n += out[n][0] != '\0';
+	}
+	fclose(f);
+	return n;
+}
+
+void recentAdd(const char* game) {
+	static char kept[RECENT_MAX][PATH_SIZE];
+	int const n = recentList(kept, RECENT_MAX);
+	char path[FILE_SIZE];
+	recentPath(path);
+	FILE* f = fopen(path, "w");
+	if (!f) {
+		return;
+	}
+	fprintf(f, "%s\n", game);
+	for (int i = 0, written = 1; i < n && written < RECENT_MAX; ++i) {
+		if (strcmp(kept[i], game)) {
+			fprintf(f, "%s\n", kept[i]);
+			++written;
+		}
+	}
+	fclose(f);
 }
