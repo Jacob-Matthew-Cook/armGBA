@@ -23,8 +23,8 @@ enum {
 	LOG_SIZE = 8 << 20,
 	// The most one entry takes: a line with all of VRAM, OAM and the palette.
 	LOG_MOST = 16 + SIZE_VRAM + SIZE_OAM + SIZE_PALETTE,
-	PAGE_SIZE = 0x800,
-	PAGES = SIZE_VRAM / PAGE_SIZE,
+	VRAM_PAGE = 0x800,
+	VRAM_PAGES = SIZE_VRAM / VRAM_PAGE,
 };
 
 enum {
@@ -117,11 +117,11 @@ static uint32_t play(struct GBA* copy, const uint8_t* entry, uint32_t* size) {
 			memcpy(copy->palette, data, SIZE_PALETTE);
 			data += SIZE_PALETTE;
 		}
-		for (int page = 0; page < PAGES; ++page) {
+		for (int page = 0; page < VRAM_PAGES; ++page) {
 			if (pages & (1ull << page)) {
-				memcpy(&copy->vram[page * PAGE_SIZE], data, PAGE_SIZE);
+				memcpy(&copy->vram[page * VRAM_PAGE], data, VRAM_PAGE);
 				copy->renderer.vramChanged[page] = 1;
-				data += PAGE_SIZE;
+				data += VRAM_PAGE;
 			}
 		}
 		copy->renderer.memoryChanged |= changed;
@@ -258,12 +258,12 @@ void renderThreadScanline(struct GBA* gba, int y) {
 		data += SIZE_PALETTE;
 	}
 	uint64_t pages = 0;
-	for (int page = 0; page < PAGES; ++page) {
+	for (int page = 0; page < VRAM_PAGES; ++page) {
 		if (renderer->vramChanged[page]) {
 			renderer->vramChanged[page] = 0;
 			pages |= 1ull << page;
-			memcpy(data, &gba->vram[page * PAGE_SIZE], PAGE_SIZE);
-			data += PAGE_SIZE;
+			memcpy(data, &gba->vram[page * VRAM_PAGE], VRAM_PAGE);
+			data += VRAM_PAGE;
 		}
 	}
 	uint32_t head[4] = { LOG_LINE, y | changed << 8, (uint32_t) pages, (uint32_t) (pages >> 32) };
@@ -360,7 +360,7 @@ void renderThreadStop(struct GBA* gba) {
 	// carry on alone, keeping its own record of changes not yet logged.
 	struct Renderer* renderer = &gba->renderer;
 	uint8_t memoryChanged = renderer->memoryChanged;
-	uint8_t vramChanged[PAGES];
+	uint8_t vramChanged[VRAM_PAGES];
 	memcpy(vramChanged, renderer->vramChanged, sizeof(vramChanged));
 	memcpy(renderer, &t->copy->renderer, sizeof(*renderer));
 	renderer->memoryChanged = memoryChanged;

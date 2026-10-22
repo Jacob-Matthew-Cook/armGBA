@@ -55,7 +55,8 @@ else()
 endif()
 
 add_library(armgba STATIC ${CORE_SOURCES})
-target_link_libraries(armgba PUBLIC pthread)
+find_package(Threads REQUIRED)
+target_link_libraries(armgba PUBLIC Threads::Threads)
 # Whatever a distribution's toolchain asks for, the core needs the loop vectorizer
 target_compile_options(armgba PRIVATE -O3)
 # The core is small: let the compiler inline across its files
