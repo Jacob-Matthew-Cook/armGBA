@@ -16,6 +16,7 @@
 #include "dolphin.h"
 #include "link.h"
 #include "second.h"
+#include "patch.h"
 #include "workers.h"
 
 #include <stdio.h>
@@ -2144,6 +2145,18 @@ static void stopOtherAdvances(void) {
 	attachPorts();
 }
 
+// A game the core reads itself, patched as RetroArch patches the games it reads (patch.h).
+static void* readPatched(const char* path, size_t* size) {
+	void* data = secondRead(path, size);
+	char name[256];
+	if (data && patchGame(path, &data, size, name, sizeof(name)) < 0) {
+		char message[320];
+		snprintf(message, sizeof(message), "armGBA: %.250s doesn't fit this game, which runs unpatched", name);
+		showMessage(message);
+	}
+	return data;
+}
+
 // The game each other player's console runs: player 2's from the frontend, the menu or a pair file,
 // players 3 and 4's from a pair file, or else player 1's. Returns false if one can't be read.
 static bool readOtherGames(const struct retro_game_info* second, const void* sameData, size_t sameSize, int count,
@@ -2160,7 +2173,7 @@ static bool readOtherGames(const struct retro_game_info* second, const void* sam
 			data[i] = sameData;
 			sizes[i] = sameSize;
 		} else {
-			data[i] = read[i] = secondRead(*path ? path : firstPath, &sizes[i]);
+			data[i] = read[i] = readPatched(*path ? path : firstPath, &sizes[i]);
 		}
 		if (!data[i]) {
 			char message[300];
@@ -2384,7 +2397,7 @@ static bool applyCartridge(void) {
 		notify("No cartridge: waiting for a game over the cable", 240);
 	} else {
 		size_t size;
-		void* data = secondRead(firstPath, &size);
+		void* data = readPatched(firstPath, &size);
 		if (!data || !gbaLoadRom(gba, data, size)) {
 			free(data);
 			showMessage("armGBA can't read the game to put it back in");
@@ -2452,7 +2465,7 @@ static bool loadPairFile(const struct retro_game_info* file) {
 		return false;
 	}
 	struct retro_game_info first = { games[0], NULL, 0, NULL };
-	void* data = secondRead(games[0], &first.size);
+	void* data = readPatched(games[0], &first.size);
 	first.data = data;
 	if (!data) {
 		char message[300];

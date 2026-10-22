@@ -11,6 +11,7 @@
 #include "frontend.h"
 #include "lcd.h"
 #include "second.h"
+#include "patch.h"
 
 #include <errno.h>
 #include <math.h>
@@ -448,6 +449,9 @@ bool loadGame(const char* path) {
 		osd("Can't read %s", path);
 		return false;
 	}
+	// A patch beside it applies, as in RetroArch.
+	char patchName[NAME_SIZE];
+	int const patches = patchGame(path, &data, &size, patchName, sizeof(patchName));
 	retro_set_environment(environment);
 	retro_init();
 	struct retro_game_info game = { named, data, size, NULL };
@@ -487,6 +491,11 @@ bool loadGame(const char* path) {
 	if (settings.autoState && !cheevosHardcore() && stateExists(-1)) {
 		loadState(-1);
 		undoForget();
+	}
+	if (patches < 0) {
+		osd("%s doesn't fit this game, which runs unpatched", patchName);
+	} else if (patches) {
+		osd(patches == 1 ? "Patched" : "Patched with %d patches", patches);
 	}
 	recentAdd(path);
 	char title[NAME_SIZE + 16];
