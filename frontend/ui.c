@@ -12,6 +12,7 @@
 #include "frontend.h"
 
 #include <dirent.h>
+#include <unistd.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,7 +51,8 @@ struct Menu {
 	int scroll;
 };
 
-static struct Item items[ITEMS_MAX];
+static struct Item* items;
+static int itemCapacity;
 static int itemCount;
 static struct Menu stack[DEPTH_MAX];
 static int depth;
@@ -201,8 +203,15 @@ static void fillBordered(SDL_Rect r, int radius, SDL_Color fill, SDL_Color edge,
 // The menus' building blocks.
 
 static struct Item* addItem(const char* label, ItemFunction function, int argument) {
-	if (itemCount >= ITEMS_MAX) {
-		return &items[ITEMS_MAX - 1];
+	static struct Item spare;
+	if (itemCount == itemCapacity) {
+		int const capacity = itemCapacity ? itemCapacity * 2 : 64;
+		struct Item* const grown = realloc(items, (size_t) capacity * sizeof(*grown));
+		if (!grown) {
+			return &spare;
+		}
+		items = grown;
+		itemCapacity = capacity;
 	}
 	struct Item* item = &items[itemCount++];
 	memset(item, 0, sizeof(*item));
@@ -330,12 +339,67 @@ static bool gameFile(const char* name) {
 	return false;
 }
 
-// The game list: the folders and games in browserPath.
-static char browserNames[ITEMS_MAX][NAME_SIZE];
-static bool browserDirectory[ITEMS_MAX];
+// The game list: the folders, then the games, in browserPath, read once as the folder is entered.
+struct BrowserEntry {
+	char name[NAME_SIZE];
+	bool directory;
+};
+static struct BrowserEntry* browserEntries;
+static int browserCount, browserCapacity;
+// The folder browserEntries lists; emptied to read it again.
+static char browserListed[PATH_SIZE];
 
-static int compareNames(const void* a, const void* b) {
-	return strcasecmp((const char*) a, (const char*) b);
+static int compareEntries(const void* a, const void* b) {
+	const struct BrowserEntry* const x = a;
+	const struct BrowserEntry* const y = b;
+	if (x->directory != y->directory) {
+		return x->directory ? -1 : 1;
+	}
+	return strcasecmp(x->name, y->name);
+}
+
+static void readBrowser(void) {
+	if (!strcmp(browserListed, browserPath)) {
+		return;
+	}
+	snprintf(browserListed, sizeof(browserListed), "%s", browserPath);
+	browserCount = 0;
+	DIR* dir = opendir(browserPath);
+	if (!dir) {
+		return;
+	}
+	struct dirent* e;
+	while ((e = readdir(dir))) {
+		if (e->d_name[0] == '.') {
+			continue;
+		}
+		bool directory = e->d_type == DT_DIR;
+		if (e->d_type == DT_UNKNOWN || e->d_type == DT_LNK) {
+			char path[FILE_SIZE];
+			snprintf(path, sizeof(path), "%s/%s", browserPath, e->d_name);
+			struct stat st;
+			if (stat(path, &st)) {
+				continue;
+			}
+			directory = S_ISDIR(st.st_mode);
+		}
+		if (!directory && !gameFile(e->d_name)) {
+			continue;
+		}
+		if (browserCount == browserCapacity) {
+			int const capacity = browserCapacity ? browserCapacity * 2 : 256;
+			struct BrowserEntry* const grown = realloc(browserEntries, (size_t) capacity * sizeof(*grown));
+			if (!grown) {
+				break;
+			}
+			browserEntries = grown;
+			browserCapacity = capacity;
+		}
+		snprintf(browserEntries[browserCount].name, NAME_SIZE, "%s", e->d_name);
+		browserEntries[browserCount++].directory = directory;
+	}
+	closedir(dir);
+	qsort(browserEntries, (size_t) browserCount, sizeof(*browserEntries), compareEntries);
 }
 
 static void browse(int index, int delta);
@@ -343,45 +407,19 @@ static void browse(int index, int delta);
 static void browserMenu(void) {
 	addInfo(browserPath, "");
 	addItem("..", browse, -1);
-	DIR* dir = opendir(browserPath);
-	if (!dir) {
+	readBrowser();
+	if (!browserCount && access(browserPath, R_OK)) {
 		addInfo("Can't open this folder", "");
 		return;
 	}
-	static char folders[ITEMS_MAX][NAME_SIZE], files[ITEMS_MAX][NAME_SIZE];
-	int folderCount = 0, fileCount = 0;
-	struct dirent* e;
-	while ((e = readdir(dir))) {
-		if (e->d_name[0] == '.') {
-			continue;
+	for (int i = 0; i < browserCount; ++i) {
+		if (browserEntries[i].directory) {
+			char label[NAME_SIZE + 2];
+			snprintf(label, sizeof(label), "%s/", browserEntries[i].name);
+			addItem(label, browse, i);
+		} else {
+			addItem(browserEntries[i].name, browse, i);
 		}
-		char path[FILE_SIZE];
-		snprintf(path, sizeof(path), "%s/%s", browserPath, e->d_name);
-		struct stat st;
-		if (stat(path, &st)) {
-			continue;
-		}
-		if (S_ISDIR(st.st_mode) && folderCount < ITEMS_MAX / 2) {
-			snprintf(folders[folderCount++], NAME_SIZE, "%s", e->d_name);
-		} else if (S_ISREG(st.st_mode) && gameFile(e->d_name) && fileCount < ITEMS_MAX / 2) {
-			snprintf(files[fileCount++], NAME_SIZE, "%s", e->d_name);
-		}
-	}
-	closedir(dir);
-	qsort(folders, folderCount, NAME_SIZE, compareNames);
-	qsort(files, fileCount, NAME_SIZE, compareNames);
-	int n = 0;
-	for (int i = 0; i < folderCount && n < ITEMS_MAX - 4; ++i, ++n) {
-		snprintf(browserNames[n], NAME_SIZE, "%s", folders[i]);
-		browserDirectory[n] = true;
-		char label[NAME_SIZE + 2];
-		snprintf(label, sizeof(label), "%s/", folders[i]);
-		addItem(label, browse, n);
-	}
-	for (int i = 0; i < fileCount && n < ITEMS_MAX - 4; ++i, ++n) {
-		snprintf(browserNames[n], NAME_SIZE, "%s", files[i]);
-		browserDirectory[n] = false;
-		addItem(files[i], browse, n);
 	}
 }
 
@@ -400,8 +438,8 @@ static void browse(int index, int delta) {
 		return;
 	}
 	char path[FILE_SIZE];
-	snprintf(path, sizeof(path), "%s%s%s", browserPath, strcmp(browserPath, "/") ? "/" : "", browserNames[index]);
-	if (browserDirectory[index]) {
+	snprintf(path, sizeof(path), "%s%s%s", browserPath, strcmp(browserPath, "/") ? "/" : "", browserEntries[index].name);
+	if (browserEntries[index].directory) {
 		snprintf(browserPath, sizeof(browserPath), "%s", path);
 		stack[depth - 1].selected = -1;
 	} else if (loadGame(path)) {
@@ -412,6 +450,7 @@ static void browse(int index, int delta) {
 static void openBrowser(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
+		browserListed[0] = '\0';
 		pushMenu(browserMenu, "Load Game");
 	}
 }
@@ -1493,9 +1532,15 @@ static void drawCapture(int width, int height, int u) {
 }
 
 static void drawMenu(int width, int height, int u) {
-	itemCount = 0;
-	stack[depth - 1].build();
+	// Menus are built again each frame, so their values stay current; the game list, which can hold
+	// thousands of games, is kept until its folder changes.
+	static void (*built)(void);
 	struct Menu* m = &stack[depth - 1];
+	if (m->build != browserMenu || built != browserMenu || strcmp(browserListed, browserPath)) {
+		itemCount = 0;
+		m->build();
+		built = m->build;
+	}
 	if (!selectable(m->selected)) {
 		m->selected = -1;
 		moveSelection(1);
