@@ -48,14 +48,21 @@ static bool linked(const struct Sio* sio) {
 
 // In multiplayer mode SIOCNT shows the cable when a link is attached: SI low on the parent, and SD
 // high while every console on it is in multiplayer mode. This console's number shows from its first
-// transfer on.
+// transfer on. RCNT's low bits show the same lines, and SC, which is high but while the parent
+// clocks a transfer; Mario Bros. waits for it before starting one.
 static void multiStatus(struct GBA* gba) {
 	struct Sio* sio = &gba->sio;
-	if (sio->mode != SIO_MULTI || !linked(sio)) {
+	if (sio->mode != SIO_MULTI) {
 		return;
 	}
-	sio->siocnt = (sio->siocnt & ~0x004C) | (sio->link->ready ? 0x0008 : 0) | (sio->link->id ? 0x0004 : 0);
+	bool const clocking = (sio->siocnt & 0x0080) && linked(sio) && sio->link->id == 0;
+	sio->rcnt = (sio->rcnt & ~0x0001) | !clocking;
+	if (linked(sio)) {
+		sio->siocnt = (sio->siocnt & ~0x004C) | (sio->link->ready ? 0x0008 : 0) | (sio->link->id ? 0x0004 : 0);
+		sio->rcnt = (sio->rcnt & ~0x0006) | (sio->link->ready ? 0x0002 : 0) | (sio->link->id ? 0x0004 : 0);
+	}
 	gba->io[IO(REG_SIOCNT)] = sio->siocnt;
+	gba->io[IO(REG_RCNT)] = sio->rcnt;
 }
 
 // Ends a transfer with the data received: the busy bit clears and the interrupt is requested if
@@ -162,8 +169,20 @@ void sioLinkChanged(struct GBA* gba) {
 	multiStatus(gba);
 }
 
-bool sioMultiplayer(const struct GBA* gba) {
-	return gba->sio.mode == SIO_MULTI;
+void sioOthersTransfer(struct GBA* gba) {
+	struct Sio* sio = &gba->sio;
+	if (sio->mode == SIO_MULTI && linked(sio) && sio->link->id) {
+		sio->siocnt |= 0x0080;
+		gba->io[IO(REG_SIOCNT)] = sio->siocnt;
+	}
+}
+
+bool sioSdHigh(const struct GBA* gba) {
+	const struct Sio* sio = &gba->sio;
+	if ((sio->rcnt & 0xC000) == 0x8000) {
+		return !(sio->rcnt & 0x0020) || (sio->rcnt & 0x0002);
+	}
+	return sio->mode == SIO_MULTI;
 }
 
 int32_t sioTransferLeft(struct GBA* gba) {
@@ -213,12 +232,13 @@ uint32_t sioOutgoing(struct GBA* gba, int* mode, bool* ready) {
 }
 
 // A transfer another console clocked arrives, with the words of all four consoles in multiplayer
-// mode or the other end's data in normal mode.
-void sioReceive(struct GBA* gba, const uint32_t values[4]) {
+// mode or the other end's data in normal mode. Only a console in the same kind of mode takes part:
+// a multiplayer transfer passes a normal-mode one by, and the other way round.
+void sioReceive(struct GBA* gba, int transferMode, const uint32_t values[4]) {
 	int mode;
 	bool ready;
 	sioOutgoing(gba, &mode, &ready);
-	if (ready) {
+	if (ready && (mode == SIO_MULTI) == (transferMode == SIO_MULTI)) {
 		finishWith(gba, values, 0);
 	}
 }
@@ -335,9 +355,18 @@ void sioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 		gba->io[IO(REG_JOYCNT)] = (joycnt & ~(value & 0x0007) & ~0x0040) | (value & 0x0040);
 		break;
 	}
+	case REG_JOY_RECV_LO:
+	case REG_JOY_RECV_HI:
+		gba->io[address >> 1] = value;
+		break;
 	case REG_JOY_TRANS_LO:
 	case REG_JOY_TRANS_HI:
+		gba->io[address >> 1] = value;
 		gba->io[IO(REG_JOYSTAT)] |= 0x0008;
+		break;
+	// Bits 4 and 5 are the game's; the rest show the transfers.
+	case REG_JOYSTAT:
+		gba->io[IO(REG_JOYSTAT)] = (gba->io[IO(REG_JOYSTAT)] & ~0x0030) | (value & 0x0030);
 		break;
 	}
 }
@@ -364,4 +393,60 @@ uint16_t sioRead(struct GBA* gba, uint32_t address) {
 	default:
 		return 0;
 	}
+}
+
+enum {
+	JOY_STATUS = 0x00,
+	JOY_READ = 0x14,
+	JOY_WRITE = 0x15,
+	JOY_RESET = 0xFF,
+};
+
+int sioJoyCommand(struct GBA* gba, uint8_t command, uint8_t data[5]) {
+	if (gba->sio.mode != SIO_JOYBUS) {
+		return 0;
+	}
+	uint16_t* const io = gba->io;
+	int length;
+	// JOYCNT: bit 0 a reset came, 1 a write, 2 a read; each requests the interrupt if bit 6 is set.
+	uint16_t flag;
+	switch (command) {
+	case JOY_RESET:
+	case JOY_STATUS:
+		// The device type, a GBA, then JOYSTAT.
+		data[0] = 0x00;
+		data[1] = 0x04;
+		data[2] = io[IO(REG_JOYSTAT)];
+		if (command == JOY_STATUS) {
+			return 3;
+		}
+		flag = 0x0001;
+		length = 3;
+		break;
+	case JOY_WRITE:
+		io[IO(REG_JOY_RECV_LO)] = data[0] | data[1] << 8;
+		io[IO(REG_JOY_RECV_HI)] = data[2] | data[3] << 8;
+		io[IO(REG_JOYSTAT)] |= 0x0002;
+		data[0] = io[IO(REG_JOYSTAT)];
+		flag = 0x0002;
+		length = 1;
+		break;
+	case JOY_READ:
+		data[0] = io[IO(REG_JOY_TRANS_LO)];
+		data[1] = io[IO(REG_JOY_TRANS_LO)] >> 8;
+		data[2] = io[IO(REG_JOY_TRANS_HI)];
+		data[3] = io[IO(REG_JOY_TRANS_HI)] >> 8;
+		data[4] = io[IO(REG_JOYSTAT)];
+		io[IO(REG_JOYSTAT)] &= ~0x0008;
+		flag = 0x0004;
+		length = 5;
+		break;
+	default:
+		return 0;
+	}
+	io[IO(REG_JOYCNT)] |= flag;
+	if (io[IO(REG_JOYCNT)] & 0x0040) {
+		gbaRaiseIrq(gba, IRQ_SIO, 0);
+	}
+	return length;
 }

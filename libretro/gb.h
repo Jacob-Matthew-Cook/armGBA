@@ -29,11 +29,11 @@ enum LibretroGbModel {
 };
 
 // How games start: as a boot ROM would have left the machine, through Nintendo's boot ROM when the
-// system directory has it, or through SameBoy's free boot ROM built into the core.
+// system directory has it (armGBA's otherwise), or through armGBA's own boot ROM built into the core.
 enum LibretroGbBoot {
 	LIBRETRO_GB_BOOT_OFF,
 	LIBRETRO_GB_BOOT_NINTENDO,
-	LIBRETRO_GB_BOOT_SAMEBOY,
+	LIBRETRO_GB_BOOT_ARMGBA,
 };
 
 // Loads a game. Returns false, with a message for the user, if it can't be loaded.

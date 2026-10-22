@@ -37,20 +37,24 @@ only with Link Mode on.
 | Category | Option | Console | Values (default first) |
 | --- | --- | --- | --- |
 | System | Skip BIOS Intro | Game Boy Advance | Disabled, Enabled |
+| | BIOS (applies on restart) | Game Boy Advance | Nintendo's (System Folder), armGBA's (Built In) |
 | | Game Boy Model (applies on restart) | Game Boy | Auto, Game Boy, Game Boy Pocket / Light, Game Boy Color, Game Boy Advance |
-| | Boot ROM (applies on restart) | Game Boy | Nintendo's (System Folder), Off, SameBoy's (Built In) |
+| | Boot ROM (applies on restart) | Game Boy | Nintendo's (System Folder), Off, armGBA's (Built In) |
 | Video | Threaded Video | Game Boy Advance | Disabled, Enabled, One Frame Late |
 | | Color Correction | Both | Disabled, Enabled |
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
 | | Game Boy Advance Border | Game Boy | Cropped, Shown |
+| | LCD Ghosting | Both | Disabled, Enabled |
+| Audio | Low-Pass Filter | Both | Disabled, 20%, 40%, 60%, 80% |
 | Input | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
 | | Restart Buttons | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
-| Link | Link Mode (applies on restart) | Both | Off, Together, Separate |
+| Link | Link Mode (applies on restart) | Both | Off, Together, Separate, GameCube (Game Boy Advance) |
 | | Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
+| | GameCube Address | Game Boy Advance | Find on the Network, This Device (GameCube) |
 | | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
 | | Game Boy Link Timing | Game Boy | Standard, Exact (Separate) |
 | | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
@@ -85,18 +89,28 @@ sets `CMAKE_SYSTEM_PROCESSOR` to `arm`, and the ARMv7 flags:
 
 On any other CPU, or with `-DARMGBA_JIT=OFF`, the exact CPU runs everything.
 
-The system directory needs `gba_bios.bin`. Game Boy boot ROMs are optional, looked for under these
-names in this order:
+Game Boy Advance games run on Nintendo's `gba_bios.bin` from the system directory when it's there
+and BIOS is set to Nintendo's, and otherwise on armGBA's own open-source BIOS, built into the core.
+Its splash lasts as long as Nintendo's logo, and a game starts on the same cycle.
+Game Boy boot ROMs are optional, looked for under these names in this order:
 
 - Game Boy: `gb_bios.bin`, `dmg_boot.bin`
 - Game Boy Pocket: `mgb_boot.bin`
 - Game Boy Color: `gbc_bios.bin`, `cgb_boot.bin`
-- Game Boy Advance: `cgb_agb_boot.bin`, `cgb_agb0_boot.bin`, then the Game Boy Color's (converted),
-  then `agb_boot.bin`
+- Game Boy Advance: `cgb_agb_boot.bin`, `cgb_agb0_boot.bin`, `agb_boot.bin`, then the Game Boy
+  Color's (converted)
 
 With Boot ROM set to Nintendo's, the boot ROM is used under whichever of these names it has. A SameBoy boot
-ROM under one of them is used only where Nintendo's isn't there. With neither, the game starts
-without one.
+ROM under one of them is used only where Nintendo's isn't there. With neither, armGBA's own starts
+the game.
+
+armGBA's own boot ROMs (`gbboot/`, built into the core) are the size of Nintendo's and run on the
+hardware: on the Game Boy and the Pocket, in 256 bytes, the cartridge's logo scrolls down as on
+Nintendo's; on the Game Boy Color and Game Boy Advance, in 2,304, "ARMGBC" comes in over the
+cartridge's logo, as Nintendo's title does. They last as long as Nintendo's, to the cycle, and leave
+the machine as Nintendo's do, and give original Game Boy games on a Game Boy Color the same colours,
+chosen the same ways. These were found from what Nintendo's boot ROMs leave and show
+(`tests/gbcheck/`), never from their code.
 
 ## Features
 
@@ -124,8 +138,8 @@ mGBA's SDL frontend scales a stick.
 
 **Game Boy and Game Boy Color.** Gambatte-Speedrun's core (`gambatte/`), plus mappers for unlicensed
 cartridges: Sachen, TAMA5, MBC6, MBC7, Vast Fame, and the BBD, Hitek, Sintax, Li Cheng, NT and Makon
-families. The screen palettes, apart from Grayscale (gambatte-libretro's), are SameBoy's. So are the
-Game Boy Color and Game Boy Advance color correction and the free boot ROMs built in.
+families. The screen palettes, apart from Grayscale (gambatte-libretro's), are SameBoy's. So is the
+Game Boy Color and Game Boy Advance color correction. The boot ROMs built in are armGBA's own.
 
 **Link play.** Link Mode picks how consoles link. Off, the default, is one console, with RetroArch's
 usual netplay.
@@ -138,6 +152,7 @@ usual netplay.
 | Trade or battle in Pokemon FireRed, LeafGreen or Emerald over Wi-Fi | Separate with the Wireless Adapter |
 | Play Kirby & The Amazing Mirror or another fast-linking game online | Together |
 | Fix a Game Boy game that errors in Separate | Game Boy Link Timing: Exact |
+| Be a Game Boy Advance plugged into a GameCube game in Dolphin | GameCube |
 
 The two ways to link:
 
@@ -185,6 +200,13 @@ The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union R
 Pokemon FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game
 Boy Four Player Adapter works with Together, and three or four Game Boys always use it: Wario Blast,
 F-1 Race, Yoshi's Cookie and other four-player games.
+
+**GameCube.** With Link Mode on GameCube, this Game Boy Advance is plugged into a controller port of
+Dolphin set to GBA (TCP), on the same device or another on the local network, and plays its part in
+the GameCube game, as Four Swords Adventures' players do. For a program the GameCube sends, set
+This Console's Cartridge to Removed; either BIOS takes it. GameCube Address finds Dolphin by itself;
+This Device looks only here. The console keeps to Dolphin's time while the game talks to it, so the
+two run in step.
 
 **Pair files.** A `.gb2` file, as Batocera writes them, or a `.gba2` file names the games of a link
 played Together, two to four, one per line, and opens like a game from RetroArch's Load Content:
@@ -323,10 +345,9 @@ Code taken from other projects, each under its own license (see License):
   compared with, through `tests/mgba-oracle.patch`.
 - **Gambatte** (sinamas) as extended by **Gambatte-Speedrun** (pokemon-speedrunning/gambatte-core,
   GPL-2.0): the whole Game Boy core in `gambatte/`, with **snes_spc** (Shay Green, LGPL) inside it.
-- **SameBoy** (Lior Halphon, MIT): the Game Boy screen palettes other than Grayscale, the Game Boy
-  Color and Game Boy Advance color correction curves, and the free boot ROMs in
-  `libretro/sameboy-boot.h`. A SameBoy-based build is also the reference the Game Boy side is tested
-  against.
+- **SameBoy** (Lior Halphon, MIT): the Game Boy screen palettes other than Grayscale, and the Game
+  Boy Color and Game Boy Advance color correction curves. A SameBoy-based build is also the
+  reference the Game Boy side is tested against.
 - **libretro** (MIT): `libretro/libretro.h`.
 
 Read for how the hardware behaves, without code taken:
@@ -361,4 +382,4 @@ Gambatte. Each part keeps its own notice:
 | `gambatte/` | GPL, version 2 (`gambatte/COPYING`) |
 | `gambatte/libgambatte/src/mem/snes_spc/` | GNU LGPL |
 | `libretro/libretro.h` | MIT |
-| The Game Boy palettes (other than Grayscale) and color curves in `libretro/gb-gambatte.cpp`, the boot ROMs in `libretro/sameboy-boot.h` | MIT, from SameBoy (Lior Halphon) |
+| The Game Boy palettes (other than Grayscale) and color curves in `libretro/gb-gambatte.cpp` | MIT, from SameBoy (Lior Halphon) |

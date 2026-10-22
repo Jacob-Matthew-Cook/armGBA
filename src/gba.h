@@ -505,8 +505,8 @@ struct SioLink {
 	// Consoles on the cable, this one included, and this one's place: 0 is the parent.
 	int players;
 	int id;
-	// Whether every other console on the cable is in multiplayer mode, which with this one's own
-	// makes the SD line high. The frontend keeps it, and calls sioLinkChanged when it changes.
+	// Whether every other console on the cable leaves the SD line high (see sioSdHigh). The frontend
+	// keeps it, and calls sioLinkChanged when it changes.
 	bool ready;
 	// A transfer this console clocks: begin sends this console's data as the transfer starts, with
 	// the cycles until it ends; finish waits for the others' and fills `in` (one value in normal mode,
@@ -845,6 +845,8 @@ void jitHelperMsr(struct GBA*, uint32_t value, uint32_t packed);
 struct GBA* gbaCreate(void);
 void gbaDestroy(struct GBA*);
 bool gbaLoadBios(struct GBA*, const void* data, size_t size);
+// armGBA's own BIOS (bios/), for when there is no gba_bios.bin.
+extern const uint8_t armgbaBios[SIZE_BIOS];
 bool gbaLoadRom(struct GBA*, const void* data, size_t size);
 void gbaReset(struct GBA*, bool skipBios);
 void gbaRunPart(struct GBA*);
@@ -1074,14 +1076,23 @@ void sioWrite(struct GBA*, uint32_t address, uint16_t value);
 uint16_t sioRead(struct GBA*, uint32_t address);
 void sioAttach(struct GBA*, const struct SioLink*);
 void sioLinkChanged(struct GBA*);
-bool sioMultiplayer(const struct GBA*);
+// Whether this console leaves the cable's SD line high: in multiplayer mode, or in general-purpose
+// mode unless it drives SD low. A program sent by MultiBoot resets the port to general-purpose mode
+// while the parent checks SD, as Super Mario Advance's does.
+bool sioSdHigh(const struct GBA*);
+// A multiplayer child shows the parent's transfer under way: its busy bit is set until it ends.
+void sioOthersTransfer(struct GBA*);
 // For linked consoles run together exactly: cycles until the transfer under way ends (-1 for none),
 // and the fewest cycles a transfer started now would take at the port's settings (INT32_MAX while it
 // isn't set up for a link).
 int32_t sioTransferLeft(struct GBA*);
 int32_t sioShortestTransfer(const struct GBA*);
 uint32_t sioOutgoing(struct GBA*, int* mode, bool* ready);
-void sioReceive(struct GBA*, const uint32_t values[4]);
+void sioReceive(struct GBA*, int transferMode, const uint32_t values[4]);
+// A GameCube's command on the JOY bus (reset 0xFF, status 0x00, read 0x14, write 0x15 with the four
+// bytes in data). Fills data with the answer and returns its length: 0 when the port isn't in JOY
+// bus mode, which a GameCube sees as nothing plugged in.
+int sioJoyCommand(struct GBA*, uint8_t command, uint8_t data[5]);
 
 // rfu.c: the Wireless Adapter. sio.c hands it each transfer the game clocks, and tells it of writes
 // to SIOCNT and RCNT.

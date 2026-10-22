@@ -11,6 +11,7 @@ add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 
 set(CORE_SOURCES
 	src/arm.c
+	src/bios-image.c
 	src/audio.c
 	src/bus.c
 	src/cart.c
@@ -105,7 +106,7 @@ target_compile_definitions(retro-archive PRIVATE HAVE_ZLIB HAVE_7ZIP)
 target_compile_options(retro-archive PRIVATE -w -O2)
 set_target_properties(retro-archive PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(armgba_libretro SHARED libretro/libretro.c libretro/link.c libretro/second.c libretro/dmg07.c libretro/workers.c libretro/gb-gambatte.cpp)
+add_library(armgba_libretro SHARED libretro/libretro.c libretro/dolphin.c libretro/link.c libretro/second.c libretro/dmg07.c libretro/workers.c libretro/gb-gambatte.cpp)
 target_link_libraries(armgba_libretro armgba gambatte retro-archive m z)
 # A toolchain file may leave C++ without an optimisation level
 target_compile_options(armgba_libretro PRIVATE -O2)
