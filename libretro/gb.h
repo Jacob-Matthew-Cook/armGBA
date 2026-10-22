@@ -48,6 +48,8 @@ void libretroGbReset(enum LibretroGbModel);
 // Restarts the selected console alone, as its power switch would.
 void libretroGbRestart(void);
 void libretroGbSetColorCorrection(bool);
+// On the Game Boy Advance model, shows the Color's panel, its colors, instead of the Advance's.
+void libretroGbSetColorPanel(bool color);
 // Sets the original Game Boy's screen: 0 plain grays, 1 the Pocket's, 2 the first model's green, 3
 // the Light's backlight.
 void libretroGbSetScreen(int);

@@ -76,6 +76,10 @@ static int gbShades;
 // On the Game Boy Advance model, a Game Boy game is shown as that console shows it: centered on its
 // screen, or stretched across it. When cropped, the black border is left out.
 static bool gbOnAdvance;
+// Game Boy Advance Panel: a Game Boy game on the Advance model shows the Color's panel. Interleaved
+// Rows: the Advance's screen drives alternate rows harder each frame.
+static bool gbColorPanel;
+static bool interleaved;
 static bool gbStretched;
 static bool gbCropped;
 static uint32_t gbAdvanceFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
@@ -379,9 +383,15 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_gb_advance_border", "Game Boy Advance Border", NULL,
 	  "On the Game Boy Advance model: Cropped shows only the game's picture, Shown the black around it as that console's screen has.", NULL, "video",
 	  { { "cropped", "Cropped" }, { "shown", "Shown" }, { NULL, NULL } }, "cropped" },
+	{ "armgba_gb_advance_panel", "Game Boy Advance Panel", NULL,
+	  "For Game Boy and Game Boy Color games on the Game Boy Advance model: whose screen is shown, the Advance's or the Color's, with its colors (with Color Correction on), LCD Grid and ghosting.",
+	  NULL, "video", { { "advance", "Game Boy Advance" }, { "color", "Game Boy Color" }, { NULL, NULL } }, "advance" },
 	{ "armgba_lcd_ghosting", "LCD Ghosting", NULL,
 	  "The console's slow screen, which some games flicker sprites on to make them see-through: each change fades in over a few frames, darkening faster than it lightens, the first Game Boy's slowest. Half fades twice as fast.",
 	  NULL, "video", { { "disabled", "Off" }, { "half", "Half" }, { "enabled", "Full" }, { NULL, NULL } }, "disabled" },
+	{ "armgba_lcd_interleave", "Interleaved Rows", NULL,
+	  "With LCD Ghosting on, the Game Boy Advance's screen: alternate rows are driven harder each frame, the others the next, so a picture that alternates each frame shows in stripes, as testers have seen on the console.",
+	  NULL, "video", { { "disabled", "Off" }, { "enabled", "On" }, { NULL, NULL } }, "disabled" },
 	{ "armgba_lcd_grid", "LCD Grid", NULL,
 	  "Draws the gaps between the console screen's pixels, as the real screen shows them, into a picture this many times larger: pick the largest that fits your screen, with integer scaling on. The armgba shader presets do the same on the GPU.",
 	  NULL, "video",
@@ -821,9 +831,12 @@ static void readOptions(void) {
 	int const shades = optionChoice("armgba_gb_screen", shadeChoices, COUNT(shadeChoices), 0);
 	gbShades = shades;
 	gbColorCorrection = optionIs("armgba_gb_color_correction", "enabled");
+	gbColorPanel = optionIs("armgba_gb_advance_panel", "color");
+	interleaved = optionIs("armgba_lcd_interleave", "enabled");
 	for (int i = gameBoy ? playersHere - 1 : 0; i >= 0; --i) {
 		libretroGbSelect(i);
 		libretroGbSetScreen(shades);
+		libretroGbSetColorPanel(gbColorPanel);
 		if (gameBoy) {
 			libretroGbSetColorCorrection(gbColorCorrection);
 		}
@@ -897,6 +910,8 @@ static bool showOptions(void) {
 		{ "armgba_gb_color_correction", !advance },
 		{ "armgba_gb_screen", !advance },
 		{ "armgba_gb_advance_border", !advance },
+		{ "armgba_gb_advance_panel", !advance },
+		{ "armgba_lcd_interleave", advance || (gbOnAdvance && !gbColorPanel) },
 		{ "armgba_gb_link_port", !advance && together },
 		{ "armgba_gb_link_timing", !advance && separateWanted() },
 		{ "armgba_link_players", together },
@@ -2846,10 +2861,10 @@ static void readScreensKeys(void) {
 // faster than it lightens, as it relaxes. Each subpixel moves in linear light from where it was
 // towards the new frame by a share each frame. The time constants, in milliseconds to darken and to
 // lighten, are estimates for each kind of panel: the first Game Boy's STN, the Pocket's and Light's
-// FSTN, and the Color's and Advance's reflective TFTs; Half halves them. The TFTs also drive alternate
-// rows harder each frame, the other rows the next, the weaker rows moving half as far, so a picture
-// that alternates each frame shows in stripes, as it does on the consoles (as SameBoy's accurate frame
-// blending also has it). Each subpixel's level is kept 8-bit, gamma encoded, and its next level read
+// FSTN, and the Color's and Advance's reflective TFTs; Half halves them. With Interleaved Rows on, the
+// Advance's also drives alternate rows harder each frame, the other rows the next, the weaker rows
+// moving half as far, so a picture that alternates each frame shows in stripes, as it does on the
+// console (as SameBoy's accurate frame blending also has it). Each subpixel's level is kept 8-bit, gamma encoded, and its next level read
 // from a table built for the screen and the picture's channel widths. A frame RetroArch runs again,
 // and doesn't show, leaves the screen as it is.
 enum { SCREEN_DMG, SCREEN_POCKET, SCREEN_TFT, SCREEN_KINDS };
@@ -2862,13 +2877,19 @@ static int screenKind(void) {
 	return gbModel == LIBRETRO_GB_MGB || gbShades == 1 || gbShades == 3 ? SCREEN_POCKET : SCREEN_DMG;
 }
 
+// Whether the picture is on the Game Boy Advance's panel: a Game Boy Advance game's, or a Game Boy
+// game's on the Advance model unless the Color's panel was chosen.
+static bool advancePanel(void) {
+	return !gameBoy || (libretroGbOnAdvance() && !gbColorPanel);
+}
+
 enum LibretroLcd libretroLcd(uint32_t* gap) {
 	int const kind = screenKind();
 	*gap = kind == SCREEN_TFT ? 0 : libretroGbOffColor();
 	if (kind != SCREEN_TFT) {
 		return kind == SCREEN_POCKET ? LIBRETRO_LCD_POCKET : LIBRETRO_LCD_DMG;
 	}
-	return gameBoy && !libretroGbOnAdvance() ? LIBRETRO_LCD_COLOR : LIBRETRO_LCD_ADVANCE;
+	return advancePanel() ? LIBRETRO_LCD_ADVANCE : LIBRETRO_LCD_COLOR;
 }
 
 // LCD Grid: the picture gridScale times larger, with the gaps between the console screen's pixels drawn
@@ -3687,7 +3708,7 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 		sendPicture(picture, width, height, pitch);
 		return;
 	}
-	bool const alternate = kind == SCREEN_TFT;
+	bool const alternate = kind == SCREEN_TFT && interleaved && advancePanel();
 	for (unsigned y = 0; y < height; ++y) {
 		const uint8_t* const in = (const uint8_t*) picture + y * pitch;
 		uint8_t* const before = last + y * pitch;

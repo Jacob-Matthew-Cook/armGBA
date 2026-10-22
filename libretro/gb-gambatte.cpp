@@ -403,6 +403,8 @@ size_t stall() {
 // the Light's with its backlight on.
 int screen;
 bool correction;
+// On the Game Boy Advance model, the Color's panel shown instead of the Advance's.
+bool colorPanel;
 // What the color table was last built for: 0 uncorrected, 1 a Game Boy Color's screen, 2 a Game Boy
 // Advance's.
 int built = -1;
@@ -455,7 +457,7 @@ void setColors() {
 	}
 	// Game Boy screen shades are shown as they are; color correction is only for a Game Boy Color's
 	// screen.
-	int const table = correction && s->gb->isCgb() ? (s->loadFlags & gambatte::GB::GBA_FLAG ? 2 : 1) : 0;
+	int const table = correction && s->gb->isCgb() ? (s->loadFlags & gambatte::GB::GBA_FLAG && !colorPanel ? 2 : 1) : 0;
 	if (table != built) {
 		built = table;
 		if (table) {
@@ -665,6 +667,13 @@ extern "C" {
 void libretroGbSetColorCorrection(bool on) {
 	correction = on;
 	setColors();
+}
+
+void libretroGbSetColorPanel(bool color) {
+	colorPanel = color;
+	if (s->gb) {
+		setColors();
+	}
 }
 
 void libretroGbSetBootRom(enum LibretroGbBoot boot) {
