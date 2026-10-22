@@ -110,8 +110,8 @@ void main() {
 		toward /= max(abs(toward.x), abs(toward.y));
 		toward *= abs(toward.x) > 0.5 && abs(toward.y) > 0.5 ? 1.0 : 1.4;
 		vec3 caster = COMPAT_TEXTURE(Texture, (at - toward) / TextureSize).rgb;
-		float lit = level(gap);
-		float dark = clamp((lit - level(caster)) / max(lit, 0.001), 0.0, 1.0);
+		float start = level(gap) * 0.9375;
+		float dark = clamp((start - level(caster)) / max(start, 0.001), 0.0, 1.0);
 		color *= 1.0 - SHADOW * dark;
 	}
 	FragColor = vec4(color, 1.0);
