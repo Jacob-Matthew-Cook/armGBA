@@ -49,6 +49,8 @@ void settingsDefaults(void) {
 	settings.rewindMegabytes = 64;
 	settings.netPort = 55437;
 	settings.inputDelay = 1;
+	settings.menuSize = 100;
+	settings.dim = 1;
 	snprintf(settings.nickname, sizeof(settings.nickname), "Player");
 	// mGBA's keys; C and V are the turbo buttons, 1 to 4 L2 to R3.
 	static const SDL_Scancode keys[BUTTONS] = {
@@ -165,6 +167,12 @@ static void takeSetting(const char* key, const char* value) {
 		copyText(settings.cheevosToken, sizeof(settings.cheevosToken), value);
 	} else if (!strcmp(key, "hardcore")) {
 		settings.hardcore = yes;
+	} else if (!strcmp(key, "ui_accent")) {
+		settings.accent = n >= 0 && n < ACCENTS ? n : 0;
+	} else if (!strcmp(key, "ui_size")) {
+		settings.menuSize = n < 70 ? 70 : n > 160 ? 160 : n;
+	} else if (!strcmp(key, "ui_dim")) {
+		settings.dim = n >= 0 && n <= 2 ? n : 1;
 	} else if (!strcmp(key, "directory")) {
 		copyText(settings.directory, sizeof(settings.directory), value);
 	} else if (!strncmp(key, "key_", 4) || !strncmp(key, "pad_", 4) || !strncmp(key, "hotkey_", 7) || !strncmp(key, "padhotkey_", 10)) {
@@ -209,6 +217,7 @@ void settingsWrite(void) {
 	        settings.netPort, settings.inputDelay);
 	fprintf(f, "cheevos_user = \"%s\"\ncheevos_token = \"%s\"\nhardcore = %s\n", settings.cheevosUser, settings.cheevosToken,
 	        no[settings.hardcore]);
+	fprintf(f, "ui_accent = %d\nui_size = %d\nui_dim = %d\n", settings.accent, settings.menuSize, settings.dim);
 	fprintf(f, "directory = \"%s\"\n", settings.directory);
 	for (int i = 0; i < BUTTONS; ++i) {
 		fprintf(f, "key_%d = %d\npad_%d = %d\n", i, settings.keys[i], i, settings.pad[i]);
