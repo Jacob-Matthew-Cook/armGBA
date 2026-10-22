@@ -506,7 +506,7 @@ static void makeOverlay(SDL_Rect to) {
 	}
 	int const w = grid ? to.w : app.gameWidth * 3, h = grid ? to.h : app.gameHeight * 3;
 	uint32_t* pixels = calloc((size_t) w * h, 4);
-	float* across = calloc((size_t) w, sizeof(float));
+	int* across = calloc((size_t) w, sizeof(int));
 	if (!pixels || !across) {
 		free(pixels);
 		free(across);
@@ -521,15 +521,16 @@ static void makeOverlay(SDL_Rect to) {
 			[LIBRETRO_LCD_COLOR] = { 0.15f, 0.6f, 0.1f },
 			[LIBRETRO_LCD_ADVANCE] = { 0.15f, 0.75f, 0.75f },
 		};
+		// Each column's and row's share of gap as an alpha, 0 to 255; a pixel takes either's.
 		float const pitchX = (float) w / app.gameWidth, pitchY = (float) h / app.gameHeight;
 		for (int x = 0; x < w; ++x) {
-			across[x] = gapCoverage(x, pitchX, screens[lcd].share * pitchX) * screens[lcd].across;
+			across[x] = (int) lroundf(gapCoverage(x, pitchX, screens[lcd].share * pitchX) * screens[lcd].across * 255);
 		}
 		for (int y = 0; y < h; ++y) {
-			float const down = gapCoverage(y, pitchY, screens[lcd].share * pitchY) * screens[lcd].down;
+			int const down = (int) lroundf(gapCoverage(y, pitchY, screens[lcd].share * pitchY) * screens[lcd].down * 255);
+			uint32_t* const row = pixels + (size_t) y * w;
 			for (int x = 0; x < w; ++x) {
-				float const covered = 1 - (1 - across[x]) * (1 - down);
-				pixels[y * w + x] = (uint32_t) lroundf(covered * 255) << 24 | (gap & 0xFFFFFF);
+				row[x] = (uint32_t) (across[x] + down - (across[x] * down + 127) / 255) << 24 | (gap & 0xFFFFFF);
 			}
 		}
 	} else {
@@ -575,25 +576,19 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 		if (SDL_LockTexture(shadow, NULL, &pixels, &pitch) != 0) {
 			return;
 		}
+		// A pixel's darkness below the unlit screen, as an alpha: a fifth (51) at black.
 		int const litLevel = 2 * (lit >> 16 & 0xFF) + 5 * (lit >> 8 & 0xFF) + (lit & 0xFF);
+		int const scale = litLevel ? (51 << 16) / litLevel : 0;
+		bool const wide = app.format == RETRO_PIXEL_FORMAT_XRGB8888;
 		for (int y = 0; y < app.gameHeight; ++y) {
 			const uint8_t* const row = app.picture + y * app.picturePitch;
 			uint32_t* const out = (uint32_t*) ((uint8_t*) pixels + y * pitch);
 			for (int x = 0; x < app.gameWidth; ++x) {
-				int r, g, b;
-				if (app.format == RETRO_PIXEL_FORMAT_XRGB8888) {
-					uint32_t const c = ((const uint32_t*) row)[x];
-					r = c >> 16 & 0xFF;
-					g = c >> 8 & 0xFF;
-					b = c & 0xFF;
-				} else {
-					uint16_t const c = ((const uint16_t*) row)[x];
-					r = (c >> 11) * 255 / 31;
-					g = (c >> 5 & 0x3F) * 255 / 63;
-					b = (c & 0x1F) * 255 / 31;
-				}
-				int const level = 2 * r + 5 * g + b;
-				int const dark = level < litLevel ? (litLevel - level) * 51 / litLevel : 0;
+				uint32_t const c = wide ? ((const uint32_t*) row)[x] : 0;
+				uint32_t const n = wide ? 0 : ((const uint16_t*) row)[x];
+				int const level = wide ? 2 * (int) (c >> 16 & 0xFF) + 5 * (int) (c >> 8 & 0xFF) + (int) (c & 0xFF)
+				                       : 2 * (int) (n >> 11 << 3) + 5 * (int) (n >> 5 & 0x3F) * 4 + (int) (n & 0x1F) * 8;
+				int const dark = level < litLevel ? (litLevel - level) * scale >> 16 : 0;
 				out[x] = (uint32_t) dark << 24;
 			}
 		}

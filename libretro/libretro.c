@@ -2816,19 +2816,13 @@ static void readScreensKeys(void) {
 // towards the new frame by a share each frame. The time constants, in milliseconds to darken and to
 // lighten, are estimates for each kind of panel: the first Game Boy's STN, the Pocket's and Light's
 // FSTN, and the Color's and Advance's reflective TFTs; Half halves them. The TFTs also drive alternate
-// rows harder each frame, the other rows the next: on a change, a row's target is two thirds of the
-// new picture and a third of the last, or the other way round, swapping each frame, as SameBoy's
-// accurate frame blending has it. A picture that alternates each frame so shows in stripes, as it
-// does on the consoles. A frame RetroArch runs again, and doesn't
-// show, leaves the screen as it is.
+// rows harder each frame, the other rows the next, the weaker rows moving half as far, so a picture
+// that alternates each frame shows in stripes, as it does on the consoles (as SameBoy's accurate frame
+// blending also has it). Each subpixel's level is kept 8-bit, gamma encoded, and its next level read
+// from a table built for the screen and the picture's channel widths. A frame RetroArch runs again,
+// and doesn't show, leaves the screen as it is.
 enum { SCREEN_DMG, SCREEN_POCKET, SCREEN_TFT, SCREEN_KINDS };
 static const float screenTimes[SCREEN_KINDS][2] = { { 50, 110 }, { 25, 50 }, { 15, 30 } };
-
-struct Cell {
-	uint32_t input;
-	uint16_t level[3];
-	bool settled;
-};
 
 static int screenKind(void) {
 	if (!gameBoy || libretroGbOnAdvance() || libretroGbIsColor()) {
@@ -2846,107 +2840,170 @@ enum LibretroLcd libretroLcd(uint32_t* gap) {
 	return gameBoy && !libretroGbOnAdvance() ? LIBRETRO_LCD_COLOR : LIBRETRO_LCD_ADVANCE;
 }
 
+// Each channel's next level, from its level now and the channel's value in the new picture: tables for
+// 5- and 6-bit channels (RGB565) and 8-bit ones (XRGB8888), for strong and weak drive.
+static uint8_t next5[2][256 * 32], next6[2][256 * 64], next8[2][256 * 256];
+static int builtFor = -1;
+
+static void buildNext(int kind, int level, int bits, uint8_t* table, float drive) {
+	// Each level in linear light, and where in linear light each level's rounding gives way to the next.
+	static float linear[256], bounds[255];
+	if (!linear[255]) {
+		for (int v = 0; v < 256; ++v) {
+			linear[v] = (float) pow(v / 255.0, 2.2);
+			if (v < 255) {
+				bounds[v] = (float) pow((v + 0.5) / 255, 2.2);
+			}
+		}
+	}
+	float const dark = (float) (1 - exp(-16.743 * 2 / (level + 1) / screenTimes[kind][0])) * drive;
+	float const light = (float) (1 - exp(-16.743 * 2 / (level + 1) / screenTimes[kind][1])) * drive;
+	int const codes = 1 << bits;
+	for (int now = 0; now < 256; ++now) {
+		for (int code = 0; code < codes; ++code) {
+			int const full = bits == 8 ? code : bits == 6 ? code << 2 | code >> 4 : code << 3 | code >> 2;
+			float const diff = linear[full] - linear[now];
+			float const moved = linear[now] + diff * (diff < 0 ? dark : light);
+			int next = 0;
+			for (int step = 128; step; step >>= 1) {
+				next += next + step <= 255 && bounds[next + step - 1] < moved ? step : 0;
+			}
+			if (next == now && now != full) {
+				next += full > now ? 1 : -1;
+			}
+			table[now * codes + code] = (uint8_t) next;
+		}
+	}
+}
+
 static void showPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {
-	static uint16_t toLinear[256];
-	static uint8_t toEncoded[4096];
-	static uint16_t shares[2][SCREEN_KINDS][2];
-	static struct Cell* cells;
-	static void* shown;
+	static uint8_t* levels;
+	static uint8_t* busy;
+	static uint16_t* rowBusy;
+	static uint8_t* last;
+	static uint8_t* shown;
 	static unsigned lastWidth, lastHeight;
 	static size_t lastPitch;
+	static unsigned shownFrames;
 	if (!ghosting || !picture || rerunning()) {
+		// Turned off, the screen starts again from the picture when it's turned on.
+		lastWidth = ghosting ? lastWidth : 0;
 		videoRefresh(picture, width, height, pitch);
 		return;
 	}
-	if (!toLinear[255]) {
-		for (int v = 0; v < 256; ++v) {
-			toLinear[v] = (uint16_t) lround(pow(v / 255.0, 2.2) * 65535);
-		}
-		for (int i = 0; i < 4096; ++i) {
-			toEncoded[i] = (uint8_t) lround(pow((i * 16 + 8) / 65535.0, 1 / 2.2) * 255);
-		}
-		// A frame is 280896 cycles of 16.78 MHz on either console.
-		for (int l = 0; l < 2; ++l) {
-			for (int k = 0; k < SCREEN_KINDS; ++k) {
-				for (int d = 0; d < 2; ++d) {
-					shares[l][k][d] = (uint16_t) lround(4096 * (1 - exp(-16.743 * 2 / (l + 1) / screenTimes[k][d])));
-				}
-			}
-		}
-	}
 	size_t const bytes = pitch / width;
-	size_t const pixels = pitch / bytes * height;
-	bool const fresh = !cells || width != lastWidth || height != lastHeight || pitch != lastPitch;
-	if (fresh) {
-		struct Cell* const newCells = realloc(cells, pixels * sizeof(*cells));
-		void* const newShown = realloc(shown, pitch * height);
-		if (!newCells || !newShown) {
-			cells = newCells ? newCells : cells;
-			shown = newShown ? newShown : shown;
-			lastWidth = 0;
-			videoRefresh(picture, width, height, pitch);
-			return;
-		}
-		cells = newCells;
-		shown = newShown;
-		lastWidth = width;
-		lastHeight = height;
-		lastPitch = pitch;
-	}
-	const uint16_t* const share = shares[ghosting - 1][screenKind()];
-	static unsigned shownFrames;
-	++shownFrames;
-	bool const alternate = screenKind() == SCREEN_TFT;
 	size_t const rowPixels = pitch / bytes;
-	// Each channel's place and width: RGB565 or XRGB8888.
-	static const int shifts[2][3] = { { 11, 5, 0 }, { 16, 8, 0 } };
-	static const int widths[2][3] = { { 5, 6, 5 }, { 8, 8, 8 } };
-	int const wide = bytes == sizeof(uint32_t);
-	for (size_t i = 0; i < pixels; ++i) {
-		uint32_t const input = wide ? ((const uint32_t*) picture)[i] : ((const uint16_t*) picture)[i];
-		struct Cell* const cell = &cells[i];
-		uint32_t output = input;
-		if (fresh || !cell->settled || input != cell->input) {
-			uint32_t const last = cell->input;
-			// Thirds of the last picture in this row's target.
-			int const pull = alternate && !fresh && last != input ? (i / rowPixels + shownFrames) % 2 + 1 : 0;
-			cell->input = input;
-			cell->settled = !pull;
-			output = wide ? input & 0xFF000000 : 0;
-			for (int c = 0; c < 3; ++c) {
-				int const bits = widths[wide][c];
-				uint32_t const value = input >> shifts[wide][c] & ((1u << bits) - 1);
-				uint32_t const full = value << (8 - bits) | value >> (2 * bits - 8);
-				int32_t target = toLinear[full];
-				if (pull) {
-					uint32_t const lastValue = last >> shifts[wide][c] & ((1u << bits) - 1);
-					uint32_t const lastFull = lastValue << (8 - bits) | lastValue >> (2 * bits - 8);
-					target = (target * (3 - pull) + toLinear[lastFull] * pull) / 3;
-				}
-				// A fresh cell's level isn't set yet: it takes the target.
-				int32_t const diff = fresh ? 0 : target - cell->level[c];
-				uint32_t out = value;
-				if (fresh) {
-					cell->level[c] = (uint16_t) target;
-				} else if (diff) {
-					int32_t step = diff < 0 ? -((-diff * share[0]) >> 12) : (diff * share[1]) >> 12;
-					step = step ? step : diff < 0 ? -1 : 1;
-					cell->level[c] = (uint16_t) (cell->level[c] + step);
-				}
-				if (cell->level[c] != target) {
-					cell->settled = false;
-				}
-				if (cell->level[c] != target || pull) {
-					out = toEncoded[cell->level[c] >> 4] >> (8 - bits);
-				}
-				output |= out << shifts[wide][c];
+	size_t const pixels = rowPixels * height;
+	int const kind = screenKind();
+	int const wanted = (kind * 2 + ghosting - 1) * 2 + (bytes == 4);
+	if (builtFor != wanted) {
+		builtFor = wanted;
+		for (int d = 0; d < (kind == SCREEN_TFT ? 2 : 1); ++d) {
+			float const drive = d ? 0.5f : 1;
+			if (bytes == 4) {
+				buildNext(kind, ghosting - 1, 8, next8[d], drive);
+			} else {
+				buildNext(kind, ghosting - 1, 5, next5[d], drive);
+				buildNext(kind, ghosting - 1, 6, next6[d], drive);
 			}
 		}
-		if (wide) {
-			((uint32_t*) shown)[i] = output;
-		} else {
-			((uint16_t*) shown)[i] = (uint16_t) output;
+	}
+	++shownFrames;
+	if (!levels || width != lastWidth || height != lastHeight || pitch != lastPitch) {
+		uint8_t* const newLevels = realloc(levels, pixels * 3);
+		levels = newLevels ? newLevels : levels;
+		uint8_t* const newBusy = realloc(busy, pixels);
+		busy = newBusy ? newBusy : busy;
+		uint16_t* const newRowBusy = realloc(rowBusy, height * sizeof(*rowBusy));
+		rowBusy = newRowBusy ? newRowBusy : rowBusy;
+		uint8_t* const newLast = realloc(last, pitch * height);
+		last = newLast ? newLast : last;
+		uint8_t* const newShown = realloc(shown, pitch * height);
+		shown = newShown ? newShown : shown;
+		lastWidth = 0;
+		if (newLevels && newBusy && newRowBusy && newLast && newShown) {
+			lastWidth = width;
+			lastHeight = height;
+			lastPitch = pitch;
+			memcpy(last, picture, pitch * height);
+			memset(busy, 0, pixels);
+			memset(rowBusy, 0, height * sizeof(*rowBusy));
+			for (size_t i = 0; i < pixels; ++i) {
+				if (bytes == 4) {
+					uint32_t const c = ((const uint32_t*) picture)[i];
+					levels[i * 3] = c >> 16 & 0xFF;
+					levels[i * 3 + 1] = c >> 8 & 0xFF;
+					levels[i * 3 + 2] = c & 0xFF;
+				} else {
+					uint16_t const c = ((const uint16_t*) picture)[i];
+					levels[i * 3] = (uint8_t) ((c >> 11) << 3 | (c >> 13));
+					levels[i * 3 + 1] = (uint8_t) ((c >> 5 & 0x3F) << 2 | (c >> 9 & 3));
+					levels[i * 3 + 2] = (uint8_t) ((c & 0x1F) << 3 | (c >> 2 & 7));
+				}
+			}
 		}
+		videoRefresh(picture, width, height, pitch);
+		return;
+	}
+	bool const alternate = kind == SCREEN_TFT;
+	for (unsigned y = 0; y < height; ++y) {
+		const uint8_t* const in = (const uint8_t*) picture + y * pitch;
+		uint8_t* const before = last + y * pitch;
+		uint8_t* const out = shown + y * pitch;
+		if (!rowBusy[y] && !memcmp(in, before, pitch)) {
+			memcpy(out, in, pitch);
+			continue;
+		}
+		int const weak = alternate && (y + shownFrames) % 2;
+		uint8_t* level = levels + y * rowPixels * 3;
+		uint8_t* moving = busy + y * rowPixels;
+		unsigned count = 0;
+		if (bytes == 4) {
+			const uint8_t* const t = next8[weak];
+			for (size_t x = 0; x < rowPixels; ++x, level += 3) {
+				uint32_t const input = ((const uint32_t*) in)[x];
+				if (input == ((const uint32_t*) before)[x] && !moving[x]) {
+					((uint32_t*) out)[x] = input;
+					continue;
+				}
+				uint32_t const r = t[level[0] << 8 | (input >> 16 & 0xFF)];
+				uint32_t const g = t[level[1] << 8 | (input >> 8 & 0xFF)];
+				uint32_t const b = t[level[2] << 8 | (input & 0xFF)];
+				level[0] = (uint8_t) r;
+				level[1] = (uint8_t) g;
+				level[2] = (uint8_t) b;
+				uint32_t const output = (input & 0xFF000000) | r << 16 | g << 8 | b;
+				bool const still = output != input;
+				moving[x] = still;
+				count += still;
+				((uint32_t*) out)[x] = output;
+			}
+			memcpy(before, in, pitch);
+		} else {
+			const uint8_t* const t5 = next5[weak];
+			const uint8_t* const t6 = next6[weak];
+			for (size_t x = 0; x < rowPixels; ++x, level += 3) {
+				uint32_t const input = ((const uint16_t*) in)[x];
+				if (input == ((const uint16_t*) before)[x] && !moving[x]) {
+					((uint16_t*) out)[x] = (uint16_t) input;
+					continue;
+				}
+				uint32_t const r = t5[level[0] << 5 | input >> 11];
+				uint32_t const g = t6[level[1] << 6 | (input >> 5 & 0x3F)];
+				uint32_t const b = t5[level[2] << 5 | (input & 0x1F)];
+				level[0] = (uint8_t) r;
+				level[1] = (uint8_t) g;
+				level[2] = (uint8_t) b;
+				// Settled when each level is its channel's value widened to 8 bits.
+				uint32_t const output = (r >> 3) << 11 | (g >> 2) << 5 | b >> 3;
+				bool const still = output != input || (r & 7) != r >> 5 || (g & 3) != g >> 6 || (b & 7) != b >> 5;
+				moving[x] = still;
+				count += still;
+				((uint16_t*) out)[x] = (uint16_t) output;
+			}
+			memcpy(before, in, pitch);
+		}
+		rowBusy[y] = (uint16_t) count;
 	}
 	videoRefresh(shown, width, height, pitch);
 }
