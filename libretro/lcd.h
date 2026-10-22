@@ -43,7 +43,9 @@ static const struct LibretroLcdLook libretroLcdLooks[] = {
 // The first Game Boy's and the Pocket's pixels' shadow on the reflector behind them: a pixel as dark
 // as the screen goes darkens it by a fifth (51 of 255), 1.4 dots away the way chosen (1 dot each way
 // on a diagonal), from a Reddit photo of a first Game Boy's screen and Brick Boy's model of it (a
-// shadow 1.35 dots away). The ways, up and on clockwise.
+// shadow 1.35 dots away). Darkness counts from a sixteenth below the unlit screen's level, so the
+// lightest shade, about a twentieth darker than the unlit screen, casts none. The ways, up and on
+// clockwise.
 enum { LIBRETRO_LCD_SHADOW = 51 };
 static const int8_t libretroLcdWays[8][2] = { { 0, -1 }, { 1, -1 }, { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 } };
 

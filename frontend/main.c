@@ -554,9 +554,9 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 		if (SDL_LockTexture(shadow, NULL, &pixels, &pitch) != 0) {
 			return;
 		}
-		// A pixel's darkness below the unlit screen, as an alpha: a fifth (51) at black.
-		int const litLevel = 2 * (lit >> 16 & 0xFF) + 5 * (lit >> 8 & 0xFF) + (lit & 0xFF);
-		int const scale = litLevel ? (LIBRETRO_LCD_SHADOW << 16) / litLevel : 0;
+		// A pixel's darkness, from a sixteenth below the unlit screen, as an alpha: a fifth (51) at black.
+		int const litLevel = 2 * (lit >> 16 & 0xFF) + 5 * (lit >> 8 & 0xFF) + (lit & 0xFF), start = litLevel - litLevel / 16;
+		int const scale = start ? (LIBRETRO_LCD_SHADOW << 16) / start : 0;
 		bool const wide = app.format == RETRO_PIXEL_FORMAT_XRGB8888;
 		for (int y = 0; y < app.gameHeight; ++y) {
 			const uint8_t* const row = app.picture + y * app.picturePitch;
@@ -566,7 +566,7 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 				uint32_t const n = wide ? 0 : ((const uint16_t*) row)[x];
 				int const level = wide ? 2 * (int) (c >> 16 & 0xFF) + 5 * (int) (c >> 8 & 0xFF) + (int) (c & 0xFF)
 				                       : 2 * (int) (n >> 11 << 3) + 5 * (int) (n >> 5 & 0x3F) * 4 + (int) (n & 0x1F) * 8;
-				int const dark = level < litLevel ? (litLevel - level) * scale >> 16 : 0;
+				int const dark = level < start ? (start - level) * scale >> 16 : 0;
 				out[x] = (uint32_t) dark << 24;
 			}
 		}
