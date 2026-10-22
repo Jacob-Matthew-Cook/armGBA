@@ -41,6 +41,8 @@ static size_t frameSoundCount;
 static SDL_Texture* overlay;
 static int overlayFilter = -1, overlayWidth, overlayHeight, overlayShownWidth, overlayShownHeight;
 static uint32_t overlayGap = 1;
+static SDL_Texture* shadow;
+static bool shadowStale;
 static uint16_t rumbleStrength[PORTS][2];
 static bool coreFastForward;
 // A save's memory as last written, to write it only when it changes.
@@ -212,6 +214,7 @@ static void videoRefresh(const void* data, unsigned width, unsigned height, size
 	SDL_UpdateTexture(app.game, NULL, data, (int) pitch);
 	memcpy(app.picture, data, pitch * height);
 	app.picturePitch = pitch;
+	shadowStale = true;
 	if (recording()) {
 		recordVideo(data, width, height, pitch);
 	}
@@ -544,6 +547,64 @@ static void makeOverlay(SDL_Rect to) {
 	free(across);
 }
 
+// The shadow the first Game Boy's and the Pocket's pixels cast on the reflector behind them, across
+// the gap between the two: each pixel darkens the screen a dot right of and below it, softly, by a
+// fifth for a pixel as dark as the screen goes, from a Reddit photo of a first Game Boy's screen and
+// Brick Boy's model of it (a shadow 1.35 dots away). A texture a dot to each of the picture's pixels,
+// remade when the picture changes, drawn scaled smoothly over the picture.
+static void drawShadow(SDL_Rect to, uint32_t lit) {
+	if (!shadow || shadowStale) {
+		int w = 0, h = 0;
+		if (shadow) {
+			SDL_QueryTexture(shadow, NULL, NULL, &w, &h);
+		}
+		if (!shadow || w != app.gameWidth || h != app.gameHeight) {
+			if (shadow) {
+				SDL_DestroyTexture(shadow);
+			}
+			shadow = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, app.gameWidth, app.gameHeight);
+			if (!shadow) {
+				return;
+			}
+			SDL_SetTextureBlendMode(shadow, SDL_BLENDMODE_BLEND);
+			SDL_SetTextureScaleMode(shadow, SDL_ScaleModeLinear);
+		}
+		void* pixels;
+		int pitch;
+		if (SDL_LockTexture(shadow, NULL, &pixels, &pitch) != 0) {
+			return;
+		}
+		int const litLevel = 2 * (lit >> 16 & 0xFF) + 5 * (lit >> 8 & 0xFF) + (lit & 0xFF);
+		for (int y = 0; y < app.gameHeight; ++y) {
+			const uint8_t* const row = app.picture + y * app.picturePitch;
+			uint32_t* const out = (uint32_t*) ((uint8_t*) pixels + y * pitch);
+			for (int x = 0; x < app.gameWidth; ++x) {
+				int r, g, b;
+				if (app.format == RETRO_PIXEL_FORMAT_XRGB8888) {
+					uint32_t const c = ((const uint32_t*) row)[x];
+					r = c >> 16 & 0xFF;
+					g = c >> 8 & 0xFF;
+					b = c & 0xFF;
+				} else {
+					uint16_t const c = ((const uint16_t*) row)[x];
+					r = (c >> 11) * 255 / 31;
+					g = (c >> 5 & 0x3F) * 255 / 63;
+					b = (c & 0x1F) * 255 / 31;
+				}
+				int const level = 2 * r + 5 * g + b;
+				int const dark = level < litLevel ? (litLevel - level) * 51 / litLevel : 0;
+				out[x] = (uint32_t) dark << 24;
+			}
+		}
+		SDL_UnlockTexture(shadow);
+		shadowStale = false;
+	}
+	SDL_Rect const cast = { to.x + to.w / app.gameWidth, to.y + to.h / app.gameHeight, to.w, to.h };
+	SDL_RenderSetClipRect(app.renderer, &to);
+	SDL_RenderCopy(app.renderer, shadow, NULL, &cast);
+	SDL_RenderSetClipRect(app.renderer, NULL);
+}
+
 static void present(void) {
 	SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 255);
 	SDL_RenderClear(app.renderer);
@@ -575,6 +636,11 @@ static void present(void) {
 		if (overlay) {
 			SDL_RenderCopy(app.renderer, overlay, NULL, &to);
 		}
+		uint32_t lit = 0;
+		enum LibretroLcd const lcd = libretroLcd(&lit);
+		if (settings.filter == FILTER_LCD && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
+			drawShadow(to, lit);
+		}
 	}
 	uiDraw();
 	SDL_RenderPresent(app.renderer);
@@ -588,6 +654,10 @@ void recreateRenderer(void) {
 	if (overlay) {
 		SDL_DestroyTexture(overlay);
 		overlay = NULL;
+	}
+	if (shadow) {
+		SDL_DestroyTexture(shadow);
+		shadow = NULL;
 	}
 	if (app.renderer) {
 		SDL_DestroyRenderer(app.renderer);
