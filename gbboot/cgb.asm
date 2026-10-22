@@ -41,20 +41,20 @@ DEF STEP EQU 2
 DEF STAGE EQU 6
 DEF CHIME EQU 83
 ; Delay's steps before each note is struck: the frames' work before it isn't the same length.
-DEF C6_WAIT EQU 804
-DEF C7_WAIT EQU 822
+DEF C6_WAIT EQU 802
+DEF C7_WAIT EQU 820
 DEF END EQU 162
 IF DEF(MODEL_AGB)
-DEF PRE_COLOUR EQU 15220
-DEF POST_COLOUR EQU 2417
+DEF PRE_COLOUR EQU 15990
+DEF POST_COLOUR EQU 2436
 ; A frame of the wait before the screen comes on moved after it, to leave room for a title's wait.
-DEF PRE_MONO EQU 17671 - 2508
-DEF POST_MONO EQU -19 + 2508
+DEF PRE_MONO EQU 18440 - 2508
+DEF POST_MONO EQU 2508
 ELSE
-DEF PRE_COLOUR EQU 15995
-DEF POST_COLOUR EQU 2439
-DEF PRE_MONO EQU 18446
-DEF POST_MONO EQU 3
+DEF PRE_COLOUR EQU 15991
+DEF POST_COLOUR EQU 2437
+DEF PRE_MONO EQU 18441
+DEF POST_MONO EQU 1
 ENDC
 
 SECTION "low", ROM0[$0000]
@@ -179,16 +179,49 @@ ENDC
 MonoRegisters:
 	db $71, $02, $4D, $01, $00, $FF, $0D, $00, $F5, $05, LAST_CALL, $00
 IF DEF(MODEL_AGB)
-	dw $0100, $0008, $007C, $1100
+	dw $0000, $0008, $007C, $1100
 ELSE
 	dw $0000, $0008, $007C, $1180
 ENDC
 ColourRegisters:
 	db $71, $02, $4D, $01, $C1, $FF, $0D, $00, $D3, $05, LAST_CALL, $00
 IF DEF(MODEL_AGB)
-	dw $0100, $FF56, $000D, $1100
+	dw $0000, $FF56, $000D, $1100
 ELSE
 	dw $0000, $FF56, $000D, $1180
+ENDC
+; The two titles (sums 67 and 88) with which Nintendo's leaves the logo on the map as the original
+; Game Boy's does, rows 8 and 9 from column 4 with (R) after the first; they hand over with hl $991A
+; and other bytes below the stack: LogoRegisters, which go in place of the registers' address on the
+; stack. Keeps a and de.
+LogoMap:
+	push af
+	ld hl, sp + 4
+	ld [hl], LOW(LogoRegisters)
+	inc hl
+	ld [hl], HIGH(LogoRegisters)
+	; A cycle, so that its time is even.
+	nop
+	ld hl, $9904
+	ld a, 1
+.tile
+	ld [hl+], a
+	inc a
+	cp 13
+	jr nz, .next
+	ld [hl], $19
+	ld l, $24
+.next
+	cp 25
+	jr nz, .tile
+	pop af
+	ret
+LogoRegisters:
+	db $71, $02, $4D, $01, $00, $FF, $0D, $00, $03, $06, LAST_CALL, $00
+IF DEF(MODEL_AGB)
+	dw $0000, $0008, $991A, $1100
+ELSE
+	dw $0000, $0008, $991A, $1180
 ENDC
 ; Two rows of the cartridge's logo at its size to every other byte from hl: c's left nibbles and
 ; b's, then their right ones.
@@ -252,35 +285,10 @@ Main:
 	jr z, .wave
 	ld a, $FC
 	ldh [$FF47], a
-	; The art into the tiles from BG_TILE, each pixel doubled: a nibble becomes a byte, written to two
-	; rows of the first plane. It's popped two bytes at a time, the first first; c's 1 marks a
-	; nibble's end as it shifts out.
-	ld sp, Art
-	ld hl, $8000 + BG_TILE * 16
+	; The art into the tiles from BG_TILE.
+	ld hl, Art
 	ld b, ART_TILES
-	ld c, 1
-.pair
-	pop de
-.bit
-	sla d
-	rl e
-	rl c
-	ld a, c
-	rra
-	rl c
-	jr nc, .bit
-	ld a, c
-	ld [hl+], a
-	inc hl
-	ld [hl+], a
-	inc hl
-	ld c, 1
-	ld a, l
-	and 15
-	jr nz, .bit
-	dec b
-	jr nz, .pair
-	ld sp, $FFFE
+	call Double
 	; The cartridge's logo in the second plane: each tile two 4x4 blocks of it side by side, a
 	; block's two bytes 2 apart, the logo's top half then its bottom half.
 	ASSERT HIGH(LOGO) == HIGH(LOGO + 7 * 16)
@@ -468,35 +476,11 @@ Frame:
 	call WaitFrame
 	ldh [$FF40], a
 	call ClearAll
-	; The cartridge's logo in the tiles from 1, each pixel doubled, in the first plane, then (R): VRAM
-	; as Nintendo's leaves it, though nothing on the map shows it. It's popped from the header, the
-	; first byte first; c's 1 marks a nibble's end as it shifts out.
-	ld sp, $0104
-	ld hl, $8000 + 16
+	; The cartridge's logo in the tiles from 1, then (R): VRAM as Nintendo's leaves it, though nothing
+	; on the map shows it.
+	ld hl, $0104
 	ld b, 24
-	ld c, 1
-.pair
-	pop de
-.bit
-	sla d
-	rl e
-	rl c
-	ld a, c
-	rra
-	rl c
-	jr nc, .bit
-	ld a, c
-	ld [hl+], a
-	inc hl
-	ld [hl+], a
-	inc hl
-	ld c, 1
-	ld a, l
-	and 15
-	jr nz, .bit
-	dec b
-	jr nz, .pair
-	ld sp, $FFFE
+	call Double
 	call Mark
 	; BG palettes white for either kind of cartridge, as Nintendo's leaves them.
 	call WhiteBG
@@ -557,11 +541,12 @@ Frame:
 	ldh [$FF53], a
 	ld a, $D0
 	ldh [$FF54], a
-	; A cycle, which the waits' steps of 7 can't make.
-	nop
 	ld bc, PRE_MONO
 	ld de, POST_MONO
 	ld hl, MonoRegisters
+	; Cycles, which the waits' steps of 7 can't make.
+	nop
+	nop
 	jr .on
 .colour
 	; A Game Boy Color game: the sprite palettes' index at 1.
@@ -573,7 +558,7 @@ Frame:
 .on
 	; Waits that set the hand-over's timer and screen timing, to the cycle: the cartridge's extra,
 	; then bc before the screen comes on, de after its first VBlank.
-	; 6 cycles, which the waits' steps can't make, and on the Advance 6 more.
+	; 6 cycles, which the waits' steps can't make, and on the Advance 7 more.
 	ld a, [hl]
 	ld a, [hl]
 	ld a, [hl]
@@ -581,6 +566,7 @@ IF DEF(MODEL_AGB)
 	ld a, [hl]
 	ld a, [hl]
 	ld a, [hl]
+	nop
 ENDC
 	push hl
 	ld hl, EXTRA_N
@@ -589,12 +575,21 @@ ENDC
 	ld a, $91
 	ldh [$FF40], a
 	call WaitFrame
+	; In its first VBlank, for the two titles, the logo on the map.
+	ldh a, [SUM]
+	cp 67
+	call z, LogoMap
+	cp 88
+	call z, LogoMap
+	; A cycle, so that the check takes 2 of Delay's steps.
+	nop
 	ld a, [$0143]
 	add a, a
 IF DEF(MODEL_AGB)
-	; A colour cartridge's a cycle later: the jump is taken. Then 5 more for both.
+	; A colour cartridge's a cycle later: the jump is taken. Then 7 more for both.
 	jr c, .cycle
 .cycle
+	ld a, [hl]
 	ld a, [hl]
 	ld a, [hl]
 	nop
@@ -637,6 +632,10 @@ ENDC
 	pop de
 	pop hl
 	pop af
+IF DEF(MODEL_AGB)
+	; The Advance's b is one more, and the flags are as that leaves them.
+	inc b
+ENDC
 	ld sp, $FFFE
 	jp Handover
 
@@ -664,6 +663,41 @@ Slide:
 	nop
 	nop
 	nop
+	ret
+
+; b tiles from 1 from the blocks at hl, each pixel doubled: a nibble becomes a byte, written to two
+; rows of the first plane. They're popped two bytes at a time, the first first; c's 1 marks a
+; nibble's end as it shifts out.
+	ASSERT BG_TILE == 1
+Double:
+	ld sp, hl
+	ld hl, $8000 + 16
+	ld c, 1
+	; 2 cycles, so that the call takes 2 of Delay's steps more than the code it replaced did.
+	nop
+	nop
+.pair
+	pop de
+.bit
+	sla d
+	rl e
+	rl c
+	ld a, c
+	rra
+	rl c
+	jr nc, .bit
+	ld a, c
+	ld [hl+], a
+	inc hl
+	ld [hl+], a
+	inc hl
+	ld c, 1
+	ld a, l
+	and 15
+	jr nz, .bit
+	dec b
+	jr nz, .pair
+	ld sp, $FFFC
 	ret
 
 ; Set a's colours to palette port e from index $80, or at .again on from the last (the index steps
@@ -708,11 +742,14 @@ SetColours:
 	call Palette.loop
 	pop bc
 	ret
+; hl += a, taking the same time whether or not it crosses a page, so a title's wait doesn't depend
+; on where the tables are.
 .at
 	add a, l
 	ld l, a
-	ret nc
-	inc h
+	adc a, h
+	sub l
+	ld h, a
 	ret
 
 ; The original Game Boy game's colours by its title: Nintendo's games by the sum of the title's
@@ -745,18 +782,48 @@ Lookup:
 	call .table
 	pop bc
 	jr nz, .extra
-	; In the table: its waits; with the newer licensee code 8 cycles more before, a step and a nop.
+	; In the table, packed by cgbdata.py: Delay's steps before; the slide's entry before in bits 0-2
+	; and the combination's bits 0-4 in 3-7; (the cycles after - 14) / 2 in bits 0-6 and the
+	; combination's bit 5 in 7. With the newer licensee code 8 cycles more before, a step and a nop.
+	push bc
+	ld a, [hl+]
+	ld d, a
 	ld a, [hl+]
 	ld e, a
-	ld a, [hl+]
+	ld c, [hl]
+	rrca
+	rrca
+	rrca
+	and 31
+	bit 7, c
+	jr z, .combo
+	or 32
+.combo
+	ldh [COMBO], a
+	; The cycles after, divided by 7: the steps, then 7 less the remainder for the entry.
+	ld a, c
+	and 127
+	add a, 7
+	ld l, a
+	ld h, 0
+	add hl, hl
+	ld bc, -7
+	ld a, -1
+.after
+	inc a
+	add hl, bc
+	jr c, .after
 	ldh [LATE_N], a
-	ld a, [hl]
+	xor a
+	sub l
 	ldh [LATE_S], a
-	swap a
+	pop bc
+	ld a, e
+	and 7
 	ld c, a
 	ld a, b
 	cp NINTENDO_33_N
-	ld b, e
+	ld b, d
 	jr nz, .extra
 	inc b
 	dec c
@@ -766,7 +833,7 @@ Lookup:
 	ld a, c
 	ldh [EXTRA_S], a
 	ret
-; Z if the title is in the table, hl at its wait.
+; Z if the title is in the table, hl at its packed colours and waits.
 .table
 	ld hl, $0134
 	ld b, 16
@@ -778,18 +845,9 @@ Lookup:
 	jr nz, .sum
 	ldh [SUM], a
 	ld c, a
-	ld hl, Plain
-	ld b, PLAIN
-.plain
-	ld a, [hl+]
-	cp c
-	ld a, [hl+]
-	jr z, .found
-	inc hl
-	inc hl
-	inc hl
-	dec b
-	jr nz, .plain
+	; Those that need the fourth letter first, then by the sum alone, where a sum whose letters
+	; don't match has its own wait too.
+	ld hl, Lettered
 	ld b, LETTERED
 .lettered
 	ld a, [hl+]
@@ -799,17 +857,25 @@ Lookup:
 	cp [hl]
 	jr z, .letter
 .skip
-	ld de, 5
+	ld de, 4
 	add hl, de
 	dec b
 	jr nz, .lettered
+	ld b, PLAIN
+.plain
+	ld a, [hl+]
+	cp c
+	jr z, .found
+	inc hl
+	inc hl
+	inc hl
+	dec b
+	jr nz, .plain
 	inc b
 	ret
 .letter
 	inc hl
-	ld a, [hl+]
 .found
-	ldh [COMBO], a
 	xor a
 	ret
 
@@ -834,3 +900,4 @@ Registered:
 	ASSERT HIGH(Registered) == HIGH(Registered + 7)
 	db $3C, $42, $B9, $A5, $B9, $A5, $42, $3C
 	INCLUDE "cgbdata-data.inc"
+	ASSERT @ <= $0900, "the boot ROM ends at $08FF"

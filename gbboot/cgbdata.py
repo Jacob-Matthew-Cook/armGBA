@@ -7,7 +7,8 @@
 # what the reference boot ROM shows, never from the reference itself. cgbwaits.json, measured the
 # same way, holds how long it takes to hand over with each of those titles, and with a few whose
 # fourth letter isn't one of those but still changes it: the cycles of the hand-over's extra wait,
-# and how many of them more than a plain cartridge's come after the screen comes on.
+# and how many of them more than a plain cartridge's come after the screen comes on. The Advance's are
+# the same.
 import json, math, os, sys
 from PIL import Image, ImageDraw, ImageFont
 
@@ -112,25 +113,27 @@ def main():
     assert order[0] not in obj_used and order[-1] not in bg_used
     index = [[order.index(v) for v in i] for i in index]
     unique = [unique[i] for i in order]
-    # The waits before and after the screen comes on, each as Delay's steps of 7 and where to enter
-    # the 7-nop slide, never at its first, so that the newer licensee code's 8 more cycles before are
-    # a step and a nop. Steps before, steps after, then both entries.
-    def wait(key):
+    # The combination and the waits before and after the screen comes on, in 3 bytes: Delay's steps
+    # of 7 before; where to enter the 7-nop slide before in bits 0-2 and the combination's bits 0-4 in
+    # 3-7; (the cycles after - 14) / 2 in bits 0-6 and the combination's bit 5 in 7, which cgb.asm
+    # turns into steps and an entry. The slide is never entered at its first, so that the newer
+    # licensee code's 8 more cycles before are a step and a nop.
+    def wait(combo, key):
         total, after = waits[key]
         before, after = total - after, LATE_STEPS * 7 + 7 - LATE_ENTRY + after
-        assert 7 <= before and 7 <= after < 256 * 7 and before + 8 < 256 * 7
-        return before // 7, after // 7, (7 - before % 7) << 4 | (7 - after % 7)
-    plain = [(s, combos.index(c)) + wait('%d-0' % s) for s, letter, c in facts['entries'] if letter is None]
-    lettered = [(s, letter, combos.index(c)) + wait('%d-%d' % (s, letter)) for s, letter, c in facts['entries'] if letter is not None]
+        assert 7 <= before and before + 8 < 256 * 7 and 14 <= after <= 14 + 2 * 127 and after % 2 == 0 and combo < 64
+        return before // 7, 7 - before % 7 | (combo & 31) << 3, (after - 14) // 2 | (combo >> 5) << 7
+    plain = [(s,) + wait(combos.index(c), '%d-0' % s) for s, letter, c in facts['entries'] if letter is None]
+    lettered = [(s, letter) + wait(combos.index(c), '%d-%d' % (s, letter)) for s, letter, c in facts['entries'] if letter is not None]
     # Titles timed as their own whose colours are the default's.
     known = {'%d-%d' % (s, letter or 0) for s, letter, c in facts['entries']}
     for key in waits:
         if key not in known:
             s, letter = (int(x) for x in key.split('-'))
             if letter:
-                lettered.append((s, letter, 0) + wait(key))
+                lettered.append((s, letter) + wait(0, key))
             else:
-                plain.append((s, 0) + wait(key))
+                plain.append((s,) + wait(0, key))
     with open(OUT, 'w') as f:
         f.write('; Written by cgbdata.py.\n')
         f.write('DEF TITLE_ROWS EQU %d\nDEF ART_TILES EQU %d\n' % (height * 2, len(art) // 2))
@@ -154,12 +157,12 @@ def main():
         for i in index:
             assert i[0] < 32 and 1 <= i[1] <= 32 and 1 <= i[2] <= 32
             f.write('\tdw $%04X\n' % (i[0] | (i[1] - 1) << 5 | (i[2] - 1) << 10))
-        f.write('; Title checksum, combination, waits; then those that also need the fourth letter.\nPlain:\n')
-        for e in plain:
-            f.write('\tdb $%02X, %d, %d, %d, $%02X\n' % e)
-        f.write('Lettered:\n')
+        f.write('; Title checksum and fourth letter, then the combination and waits; then by the checksum alone.\nLettered:\n')
         for e in lettered:
-            f.write('\tdb $%02X, $%02X, %d, %d, %d, $%02X\n' % e)
+            f.write('\tdb $%02X, $%02X, $%02X, $%02X, $%02X\n' % e)
+        f.write('Plain:\n')
+        for e in plain:
+            f.write('\tdb $%02X, $%02X, $%02X, $%02X\n' % e)
         f.write('; Per direction (right, left, up, down as the joypad bits): none, A, B, and A and B as A.\nButtonCombos:\n')
         for d in ('right', 'left', 'up', 'down'):
             f.write('\tdb %s\n' % ', '.join(str(combos.index(facts['buttons'][d + s])) for s in ('', ' a', ' b', ' a')))
