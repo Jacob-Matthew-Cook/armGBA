@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 struct Settings settings;
 struct Option options[OPTIONS_MAX];
@@ -34,6 +35,7 @@ static char* savedKeys[OPTIONS_MAX];
 static char* savedValues[OPTIONS_MAX];
 static int savedCount;
 
+// The settings before the file is read, and what Reset Controls goes back to.
 void settingsDefaults(void) {
 	memset(&settings, 0, sizeof(settings));
 	settings.scale = 3;
@@ -111,10 +113,13 @@ static void readLines(const char* path, void (*take)(const char* key, const char
 	fclose(f);
 }
 
+// A text setting, cut to fit.
 static void copyText(char* out, size_t size, const char* value) {
 	snprintf(out, size, "%s", value);
 }
 
+// One line of frontend.cfg. Numbers out of range take the nearest allowed, or the default; keys it
+// doesn't know are passed over.
 static void takeSetting(const char* key, const char* value) {
 	int const n = atoi(value);
 	bool const yes = !strcmp(value, "true");
@@ -176,12 +181,14 @@ static void takeSetting(const char* key, const char* value) {
 	}
 }
 
+// frontend.cfg, over the defaults.
 void settingsRead(void) {
 	char path[FILE_SIZE];
 	snprintf(path, sizeof(path), "%s/frontend.cfg", configDirectory);
 	readLines(path, takeSetting);
 }
 
+// Every setting to frontend.cfg, as the menu changes one.
 void settingsWrite(void) {
 	char path[FILE_SIZE];
 	snprintf(path, sizeof(path), "%s/frontend.cfg", configDirectory);
@@ -189,6 +196,8 @@ void settingsWrite(void) {
 	if (!f) {
 		return;
 	}
+	// It holds the RetroAchievements token: for this user's eyes only.
+	fchmod(fileno(f), 0600);
 	const char* const no[2] = { "false", "true" };
 	fprintf(f, "# armgba's own settings; the menu changes them. Keys and buttons are SDL's numbers.\n");
 	fprintf(f, "scale = %d\nfullscreen = %s\ninteger_scale = %s\nstretch = %s\nvsync = %s\nfilter = %d\nlcd_shadow = %d\nshow_fps = %s\n",
@@ -212,6 +221,7 @@ void settingsWrite(void) {
 
 // The core's options.
 
+// One line of armgba.cfg, kept until the core names its options.
 static void takeSaved(const char* key, const char* value) {
 	if (savedCount < OPTIONS_MAX) {
 		savedKeys[savedCount] = strdup(key);
@@ -220,12 +230,14 @@ static void takeSaved(const char* key, const char* value) {
 	}
 }
 
+// armgba.cfg's values, read before the core starts.
 void optionsReadSaved(void) {
 	char path[FILE_SIZE];
 	snprintf(path, sizeof(path), "%s/armgba.cfg", configDirectory);
 	readLines(path, takeSaved);
 }
 
+// The core's options to armgba.cfg, each with its name, values and default in a comment above it.
 void optionsWrite(void) {
 	if (!optionCount) {
 		return;
@@ -248,6 +260,7 @@ void optionsWrite(void) {
 	fclose(f);
 }
 
+// A copy of the core's text, which it may not keep; NULL stays NULL.
 static char* copyString(const char* s) {
 	return s ? strdup(s) : NULL;
 }
@@ -261,6 +274,7 @@ struct Option* optionFind(const char* key) {
 	return NULL;
 }
 
+// A core option's value; the core is told at its next frame.
 void optionSet(struct Option* option, const char* value) {
 	if (strcmp(option->value, value)) {
 		free(option->value);
@@ -274,6 +288,8 @@ static bool drawnHere(const char* key) {
 	return !strcmp(key, "armgba_lcd_grid") || !strcmp(key, "armgba_lcd_shadow");
 }
 
+// The core's options and their categories, as it defines them, each taking its value from armgba.cfg.
+// An option defined again keeps its first definition.
 void optionsDefine(const struct retro_core_options_v2* definitions) {
 	for (const struct retro_core_option_v2_category* c = definitions->categories; c && c->key && categoryCount < 32; ++c) {
 		bool known = false;
@@ -321,6 +337,7 @@ void optionsDefine(const struct retro_core_options_v2* definitions) {
 	}
 }
 
+// The core shows or hides an option as others change.
 void optionsDisplay(const struct retro_core_option_display* display) {
 	struct Option* o = display && display->key ? optionFind(display->key) : NULL;
 	if (o) {
@@ -328,6 +345,7 @@ void optionsDisplay(const struct retro_core_option_display* display) {
 	}
 }
 
+// A key's name, or None for none.
 const char* scancodeName(SDL_Scancode code) {
 	const char* name = code ? SDL_GetScancodeName(code) : "";
 	return *name ? name : "None";
@@ -375,6 +393,7 @@ static void recentPath(char out[FILE_SIZE]) {
 	snprintf(out, FILE_SIZE, "%s/recent.txt", configDirectory);
 }
 
+// The recent games, newest first, up to max.
 int recentList(char (*out)[PATH_SIZE], int max) {
 	char path[FILE_SIZE];
 	recentPath(path);
@@ -391,6 +410,7 @@ int recentList(char (*out)[PATH_SIZE], int max) {
 	return n;
 }
 
+// Puts game first in the recent games, once.
 void recentAdd(const char* game) {
 	static char kept[RECENT_MAX][PATH_SIZE];
 	int const n = recentList(kept, RECENT_MAX);

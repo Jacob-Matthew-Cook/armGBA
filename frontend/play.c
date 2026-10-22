@@ -37,6 +37,7 @@ bool stateExists(int slot) {
 	return app.loaded && !stat(path, &st);
 }
 
+// The game's state now, to slot's file.
 bool saveState(int slot) {
 	size_t const size = retro_serialize_size();
 	void* data = size ? malloc(size) : NULL;
@@ -55,6 +56,7 @@ bool saveState(int slot) {
 static void* undoData;
 static size_t undoSize;
 
+// Whether there is a game to go back to.
 bool canUndoLoad(void) {
 	return undoData != NULL;
 }
@@ -65,6 +67,7 @@ void undoForget(void) {
 	undoSize = 0;
 }
 
+// Back to the game as it was before the last state loaded; that can be undone only once.
 bool undoLoadState(void) {
 	if (!undoData || !retro_unserialize(undoData, undoSize)) {
 		return false;
@@ -75,6 +78,8 @@ bool undoLoadState(void) {
 	return true;
 }
 
+// Save State and Load State, from the menu or a hotkey, for the slot chosen. Not in hardcore mode,
+// and not during netplay, where every device must run the same game.
 bool stateCommand(bool load) {
 	if (cheevosHardcore()) {
 		osd("Hardcore mode: save states are off");
@@ -98,6 +103,7 @@ bool stateCommand(bool load) {
 	return done;
 }
 
+// Loads slot's state, keeping the game as it was for Undo Load State.
 bool loadState(int slot) {
 	char path[FILE_SIZE];
 	statePath(path, slot);
@@ -141,6 +147,8 @@ static uint32_t* stateNew;
 static size_t stateWords;
 static uint32_t* packed;
 
+// Starts rewinding afresh, with what was kept forgotten, as the game, a state or the setting changes.
+// Without the memory, rewind is turned off.
 void rewindReset(void) {
 	free(ring);
 	free(entries);
@@ -193,6 +201,7 @@ static size_t pack(const uint32_t* a, const uint32_t* b, size_t words, uint32_t*
 	return o * 4;
 }
 
+// XORs what pack made onto state, which takes it back to the state packed against.
 static void unpack(const uint32_t* in, size_t bytes, uint32_t* state, size_t words) {
 	size_t const n = bytes / 4;
 	size_t i = 0, w = 0;
@@ -205,6 +214,8 @@ static void unpack(const uint32_t* in, size_t bytes, uint32_t* state, size_t wor
 	}
 }
 
+// Keeps the frame just run: how the state before it differs. A difference larger than a quarter of
+// the ring isn't kept, so rewinding stops there.
 void rewindPush(void) {
 	if (!ring) {
 		return;
@@ -217,6 +228,7 @@ void rewindPush(void) {
 	size_t const bytes = pack(stateNow, stateNew, stateWords, packed);
 	if (bytes > ringSize / 4) {
 		memcpy(stateNow, stateNew, stateWords * 4);
+		entryCount = 0;
 		return;
 	}
 	if (ringAt + bytes > ringSize) {
@@ -241,6 +253,7 @@ void rewindPush(void) {
 	stateNew = t;
 }
 
+// Goes back one frame; false when there's nothing more to go back to.
 bool rewindStep(void) {
 	if (!ring || !entryCount) {
 		return false;
@@ -316,6 +329,7 @@ static uint8_t* pictureRgb(void) {
 	return rgb;
 }
 
+// A PNG chunk: its length, type, data and CRC.
 static void pngChunk(FILE* f, const char* type, const uint8_t* data, uint32_t size) {
 	uint8_t head[8] = { size >> 24, size >> 16, size >> 8, size, type[0], type[1], type[2], type[3] };
 	fwrite(head, 1, 8, f);
@@ -325,6 +339,7 @@ static void pngChunk(FILE* f, const char* type, const uint8_t* data, uint32_t si
 	fwrite(tail, 1, 4, f);
 }
 
+// The local time, for file names.
 static void timestamp(char* out, size_t size) {
 	time_t const now = time(NULL);
 	struct tm t;
@@ -332,6 +347,7 @@ static void timestamp(char* out, size_t size) {
 	strftime(out, size, "%Y%m%d-%H%M%S", &t);
 }
 
+// The picture as the core made it, unscaled, to a PNG in the screenshots folder.
 void takeScreenshot(void) {
 	if (!app.picture || !app.gameWidth) {
 		return;
@@ -384,10 +400,12 @@ static int recordWidth, recordHeight;
 static uint32_t soundBytes;
 static char videoPath[FILE_SIZE], soundPath[FILE_SIZE], moviePath[FILE_SIZE];
 
+// Whether recording is on.
 bool recording(void) {
 	return videoPipe != NULL;
 }
 
+// Whether ffmpeg is on the PATH.
 static bool hasFfmpeg(void) {
 	const char* path = getenv("PATH");
 	if (!path) {
@@ -405,6 +423,24 @@ static bool hasFfmpeg(void) {
 	return false;
 }
 
+// path as one word for the shell, whatever the game's name holds: in single quotes, each quote in it
+// ending them, escaped and starting them again.
+static void shellWord(char* out, size_t size, const char* path) {
+	size_t o = 0;
+	out[o++] = '\'';
+	for (const char* p = path; *p && o + 6 < size; ++p) {
+		if (*p == '\'') {
+			memcpy(out + o, "'\\''", 4);
+			o += 4;
+		} else {
+			out[o++] = *p;
+		}
+	}
+	out[o++] = '\'';
+	out[o] = '\0';
+}
+
+// The WAV file's header for bytes of 16-bit stereo, written over the first 44 bytes.
 static void wavHeader(FILE* f, uint32_t bytes) {
 	uint32_t const rate = AUDIO_RATE;
 	uint8_t h[44] = { 'R', 'I', 'F', 'F' };
@@ -427,6 +463,7 @@ static void wavHeader(FILE* f, uint32_t bytes) {
 	fwrite(h, 1, 44, f);
 }
 
+// Starts recording, or stops it; true if it started.
 bool recordToggle(void) {
 	if (recording()) {
 		recordStop();
@@ -446,11 +483,12 @@ bool recordToggle(void) {
 	snprintf(soundPath, sizeof(soundPath), "%s/.recording-sound.wav", shotDirectory);
 	recordWidth = app.gameWidth;
 	recordHeight = app.gameHeight;
-	char command[FILE_SIZE * 2];
+	static char video[FILE_SIZE * 4], command[FILE_SIZE * 5];
+	shellWord(video, sizeof(video), videoPath);
 	snprintf(command, sizeof(command),
 	         "ffmpeg -loglevel error -y -f rawvideo -pixel_format %s -video_size %dx%d -framerate 59.7275 -i - "
-	         "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p \"%s\"",
-	         app.format == RETRO_PIXEL_FORMAT_XRGB8888 ? "bgra" : "rgb565le", recordWidth, recordHeight, videoPath);
+	         "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p %s",
+	         app.format == RETRO_PIXEL_FORMAT_XRGB8888 ? "bgra" : "rgb565le", recordWidth, recordHeight, video);
 	videoPipe = popen(command, "w");
 	soundFile = fopen(soundPath, "wb");
 	if (!videoPipe || !soundFile) {
@@ -482,12 +520,14 @@ void recordVideo(const void* data, unsigned width, unsigned height, size_t pitch
 	}
 }
 
+// The frame's sound, as it's sent to be heard.
 void recordAudio(const int16_t* data, size_t frames) {
 	if (soundFile) {
 		soundBytes += (uint32_t) fwrite(data, 4, frames, soundFile) * 4;
 	}
 }
 
+// Stops recording, then joins the picture and sound into the MP4 and deletes them.
 void recordStop(void) {
 	if (!recording()) {
 		return;
@@ -497,9 +537,11 @@ void recordStop(void) {
 	wavHeader(soundFile, soundBytes);
 	fclose(soundFile);
 	soundFile = NULL;
-	char command[FILE_SIZE * 4];
-	snprintf(command, sizeof(command), "ffmpeg -loglevel error -y -i \"%s\" -i \"%s\" -c:v copy -c:a aac -b:a 160k -shortest \"%s\"", videoPath,
-	         soundPath, moviePath);
+	static char video[FILE_SIZE * 4], sound[FILE_SIZE * 4], movie[FILE_SIZE * 4], command[FILE_SIZE * 13];
+	shellWord(video, sizeof(video), videoPath);
+	shellWord(sound, sizeof(sound), soundPath);
+	shellWord(movie, sizeof(movie), moviePath);
+	snprintf(command, sizeof(command), "ffmpeg -loglevel error -y -i %s -i %s -c:v copy -c:a aac -b:a 160k -shortest %s", video, sound, movie);
 	int const result = system(command);
 	remove(videoPath);
 	remove(soundPath);

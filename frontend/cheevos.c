@@ -35,6 +35,7 @@ enum {
 	CURL_GLOBAL_DEFAULT = 3,
 };
 
+// libcurl's functions, found in the library once it's loaded.
 static struct {
 	void* library;
 	int (*globalInit)(long flags);
@@ -47,6 +48,8 @@ static struct {
 	void (*slistFree)(void* list);
 } curl;
 
+// A request to the server and, once the worker has fetched it, its answer. Jobs wait on one list for
+// the worker and on another for the main thread.
 struct Job {
 	char* url;
 	char* post;
@@ -74,6 +77,8 @@ static struct Job* done;
 
 // HTTP.
 
+// Loads libcurl, under the names distributions give it, the first time it's needed; false if it isn't
+// installed or lacks a function used here.
 static bool curlLoad(void) {
 	static bool tried;
 	if (curl.library || tried) {
@@ -104,6 +109,7 @@ static bool curlLoad(void) {
 	return true;
 }
 
+// The answer as it arrives, kept with a 0 after it; returning less than given stops the transfer.
 static size_t received(char* data, size_t size, size_t count, void* context) {
 	struct Job* job = context;
 	char* grown = realloc(job->body, job->length + size * count + 1);
@@ -117,6 +123,8 @@ static size_t received(char* data, size_t size, size_t count, void* context) {
 	return size * count;
 }
 
+// Fetches a job's URL, posting its data if it has any, within 30 seconds. The status is the HTTP
+// code, or one that has rcheevos try again.
 static void fetch(struct Job* job) {
 	void* handle = curl.init();
 	if (!handle) {
@@ -150,6 +158,7 @@ static void fetch(struct Job* job) {
 	curl.cleanup(handle);
 }
 
+// The worker thread: fetches the waiting jobs in order and hands each on to the main thread.
 static int work(void* unused) {
 	(void) unused;
 	for (;;) {
@@ -177,6 +186,8 @@ static char* copy(const char* text) {
 	return text ? strdup(text) : NULL;
 }
 
+// rcheevos's requests: queued for the worker, which starts with the first. Without libcurl the job
+// fails at once, its answer handed back on the main thread all the same.
 static void serverCall(const rc_api_request_t* request, rc_client_server_callback_t callback, void* callbackData, rc_client_t* from) {
 	(void) from;
 	struct Job* job = calloc(1, sizeof(*job));
@@ -231,16 +242,19 @@ static void deliver(void) {
 
 // The game's memory.
 
+// The core's memory regions, for rcheevos's own map of a console's memory where the core gave none.
 static void coreMemory(uint32_t id, rc_libretro_core_memory_info_t* info) {
 	info->data = retro_get_memory_data(id);
 	info->size = retro_get_memory_size(id);
 }
 
+// rcheevos reads the game's memory by the console's addresses.
 static uint32_t readMemory(uint32_t address, uint8_t* buffer, uint32_t size, rc_client_t* from) {
 	(void) from;
 	return rc_libretro_memory_read(&regions, address, buffer, size);
 }
 
+// The core's memory map, copied as it may not outlive the call.
 void cheevosSetMemoryMaps(const struct retro_memory_map* map) {
 	free(descriptors);
 	descriptors = NULL;
@@ -259,6 +273,7 @@ void cheevosSetMemoryMaps(const struct retro_memory_map* map) {
 
 // Events.
 
+// What rcheevos reports, as messages. A reset in hardcore mode restarts the game.
 static void event(const rc_client_event_t* e, rc_client_t* from) {
 	(void) from;
 	switch (e->type) {
@@ -297,6 +312,8 @@ static void event(const rc_client_event_t* e, rc_client_t* from) {
 
 // The session.
 
+// After logging in: the token is kept for the next start, or forgotten if the server refused it. A
+// game already loaded then has its achievements loaded.
 static void loggedIn(int result, const char* error, rc_client_t* from, void* userdata) {
 	(void) userdata;
 	if (result != RC_OK) {
@@ -319,6 +336,7 @@ static void loggedIn(int result, const char* error, rc_client_t* from, void* use
 	}
 }
 
+// After the game's achievements load: how many are earned.
 static void gameLoaded(int result, const char* error, rc_client_t* from, void* userdata) {
 	(void) userdata;
 	if (result == RC_NO_GAME_LOADED) {
@@ -337,6 +355,7 @@ static void gameLoaded(int result, const char* error, rc_client_t* from, void* u
 	    rc_client_get_hardcore_enabled(from) ? ", hardcore" : "");
 }
 
+// Starts rcheevos, logging in again with the token kept, if there is one.
 void cheevosInit(void) {
 	lock = SDL_CreateMutex();
 	wake = SDL_CreateCond();
@@ -366,6 +385,7 @@ void cheevosLogin(const char* user, const char* password) {
 	rc_client_begin_login_with_password(client, user, password, loggedIn, NULL);
 }
 
+// Forgets the token and the game's achievements.
 void cheevosLogout(void) {
 	if (client) {
 		rc_client_unload_game(client);
@@ -387,6 +407,7 @@ static uint32_t consoleOf(const uint8_t* data, size_t size) {
 	return RC_CONSOLE_UNKNOWN;
 }
 
+// The loaded game's achievements, found by the hash of its file, when logged in.
 void cheevosLoadGame(void) {
 	if (!client || (!rc_client_get_user_info(client) && !settings.cheevosToken[0])) {
 		return;
@@ -426,6 +447,7 @@ void cheevosSetHardcore(bool on) {
 	}
 }
 
+// Each frame the game runs: the answers come in, and the achievements are checked.
 void cheevosFrame(void) {
 	if (client) {
 		deliver();
@@ -433,6 +455,7 @@ void cheevosFrame(void) {
 	}
 }
 
+// Each pass of the main loop, the game running or not: the answers come in, and the session is kept up.
 void cheevosIdle(void) {
 	if (client) {
 		deliver();
@@ -440,10 +463,12 @@ void cheevosIdle(void) {
 	}
 }
 
+// Hardcore mode is only in force while a game with achievements is loaded.
 bool cheevosHardcore(void) {
 	return client && rc_client_get_hardcore_enabled(client) && rc_client_is_game_loaded(client);
 }
 
+// The game's achievements, one line each: those earned ticked, with any progress shown.
 int cheevosList(char lines[][160], int most) {
 	if (!client || !rc_client_is_game_loaded(client)) {
 		return 0;

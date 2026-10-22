@@ -48,10 +48,12 @@ struct Atlas {
 	unsigned used;
 };
 
+// The faces, and the atlases made, the least recently used made again first when all are taken.
 static struct Face faces[FACES];
 static struct Atlas atlases[CACHED];
 static unsigned useCounter;
 
+// The built-in fonts; false if one of them is damaged.
 bool textInit(void) {
 	static const unsigned char* const data[FACES] = { fontInterMedium, fontInterSemiBold, fontChakraPetchBold };
 	for (int i = 0; i < FACES; ++i) {
@@ -63,6 +65,7 @@ bool textInit(void) {
 	return true;
 }
 
+// Forgets the atlases, as their textures went with the renderer or the sizes changed.
 void textReset(void) {
 	for (int i = 0; i < CACHED; ++i) {
 		if (atlases[i].texture) {
@@ -72,6 +75,8 @@ void textReset(void) {
 	}
 }
 
+// The atlas for a face and size: printable ASCII and the extra glyphs packed into one texture, white
+// with the glyphs' coverage as alpha, so it takes any colour.
 static struct Atlas* atlasFor(enum FaceId face, int size) {
 	struct Atlas* oldest = &atlases[0];
 	for (int i = 0; i < CACHED; ++i) {
@@ -136,6 +141,7 @@ static int nextCode(const char** text) {
 	return code;
 }
 
+// A code point's glyph; ? for one the atlas doesn't have.
 static const stbtt_packedchar* glyphFor(const struct Atlas* atlas, int code) {
 	if (code >= 32 && code < 127) {
 		return &atlas->ascii[code - 32];
@@ -148,6 +154,7 @@ static const stbtt_packedchar* glyphFor(const struct Atlas* atlas, int code) {
 	return &atlas->ascii['?' - 32];
 }
 
+// How wide text draws, in pixels.
 int textWidth(enum FaceId face, int size, const char* text) {
 	struct Atlas* atlas = atlasFor(face, size);
 	if (!atlas) {
@@ -160,6 +167,7 @@ int textWidth(enum FaceId face, int size, const char* text) {
 	return (int) (width + 0.5f);
 }
 
+// Draws text with its top at y; returns how wide it was.
 int textDraw(enum FaceId face, int size, int x, int y, SDL_Color colour, const char* text) {
 	struct Atlas* atlas = atlasFor(face, size);
 	if (!atlas) {

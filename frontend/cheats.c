@@ -16,10 +16,12 @@
 struct Cheat* cheats;
 int cheatCount;
 
+// The game's cheat file, by its name, as RetroArch names it.
 static void cheatPath(char out[FILE_SIZE]) {
 	snprintf(out, FILE_SIZE, "%s/%s.cht", cheatDirectory, app.gameName);
 }
 
+// Room for count cheats, the new ones empty; returns the last, or NULL without the memory.
 static struct Cheat* growTo(int count) {
 	if (count > cheatCount) {
 		struct Cheat* grown = realloc(cheats, count * sizeof(*cheats));
@@ -49,11 +51,10 @@ static bool readCheats(const char* path, int base) {
 		}
 		char* value = equals + 1 + strspn(equals + 1, " \t\"");
 		value[strcspn(value, "\"\r\n")] = '\0';
-		struct Cheat* c = growTo(base + index + 1);
+		struct Cheat* const c = growTo(base + index + 1);
 		if (!c) {
 			break;
 		}
-		c = &cheats[base + index];
 		if (!strcmp(field, "desc")) {
 			snprintf(c->description, sizeof(c->description), "%s", value);
 		} else if (!strcmp(field, "code")) {
@@ -66,6 +67,7 @@ static bool readCheats(const char* path, int base) {
 	return true;
 }
 
+// The game's cheats, from its file, as it loads.
 void cheatListLoad(void) {
 	free(cheats);
 	cheats = NULL;
@@ -75,6 +77,7 @@ void cheatListLoad(void) {
 	readCheats(path, 0);
 }
 
+// A .cht file's cheats added after the game's; how many, or -1 if it can't be read.
 int cheatListImport(const char* path) {
 	int const before = cheatCount;
 	if (!readCheats(path, before)) {
@@ -83,6 +86,7 @@ int cheatListImport(const char* path) {
 	return cheatCount - before;
 }
 
+// The game's cheats to its file; with none, the file goes.
 void cheatListSave(void) {
 	char path[FILE_SIZE];
 	cheatPath(path);
@@ -116,6 +120,7 @@ void cheatListApply(void) {
 	}
 }
 
+// A new cheat, turned on.
 void cheatListAdd(const char* description, const char* code) {
 	struct Cheat* c = growTo(cheatCount + 1);
 	if (c) {
