@@ -735,30 +735,6 @@ static bool actionHeld(enum Action action) {
 	return held;
 }
 
-// Systems such as ROCKNIX keep their controllers' mappings in a file, named in
-// SDL_GAMECONTROLLERCONFIG_FILE, that this SDL doesn't read by itself. Newer SDLs put a checksum of
-// the controller's name in a GUID's bytes 2 and 3, where this one has zeros, so each mapping that has
-// one is added again without it.
-static void addSystemMappings(void) {
-	const char* path = getenv("SDL_GAMECONTROLLERCONFIG_FILE");
-	FILE* f = path ? fopen(path, "r") : NULL;
-	if (!f) {
-		return;
-	}
-	char line[1024];
-	while (fgets(line, sizeof(line), f)) {
-		if (line[0] == '#' || strlen(line) < 33 || line[32] != ',') {
-			continue;
-		}
-		SDL_GameControllerAddMapping(line);
-		if (memcmp(line + 4, "0000", 4)) {
-			memcpy(line + 4, "0000", 4);
-			SDL_GameControllerAddMapping(line);
-		}
-	}
-	fclose(f);
-}
-
 int main(int argc, char** argv) {
 	const char* game = NULL;
 	const char* connectTo = NULL;
@@ -802,7 +778,6 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "armgba: %s\n", SDL_GetError());
 		return 1;
 	}
-	addSystemMappings();
 	if (listControllers) {
 		// Each joystick SDL sees: its GUID, whether a mapping makes it a controller, its name.
 		for (int i = 0; i < SDL_NumJoysticks(); ++i) {
