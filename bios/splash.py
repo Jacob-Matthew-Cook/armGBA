@@ -7,10 +7,10 @@
 # splash.py font.ttf: writes splash-data.inc, the power-on splash's picture and colours, from Chakra
 # Petch Bold (SIL Open Font License, Cadson Demak). Needs Pillow.
 #
-# "ARMGBA" over "Open BIOS", spaced by ink: each pair of letters sits so that the narrowest gap
-# between them, row by row and against the rows either side, is exactly 3 pixels (2 in "Open BIOS").
-# Coverage is kept at 4 levels, 2 bits a pixel, each row XORed with the one above, in the GBA's LZ77
-# format. Each title letter rises from the bottom of the screen at three times its size, easing in
+# "ARMGBA" over "Open BIOS". ARMGBA is spaced by ink: each pair of letters sits so that the narrowest
+# gap between them, row by row and against the rows either side, is exactly 3 pixels. "Open BIOS" is
+# drawn on the pixel grid below. Coverage is kept at 4 levels, 2 bits a pixel, each row XORed with the
+# one above, in the GBA's LZ77 format. Each title letter rises from the bottom of the screen at three times its size, easing in
 # and out and shrinking as it goes, magenta, then turning through the colour wheel at the rate the
 # reference's logo does: red, orange, yellow, green, cyan, and blue as it goes a little past its place
 # and settles back; "Open BIOS" goes from white to black in 4-pixel bands.
@@ -20,8 +20,31 @@
 import sys
 from PIL import Image, ImageDraw, ImageFont
 
-TITLE, SUBTITLE = 'ARMGBA', 'Open BIOS'
-TITLE_GAP, SUBTITLE_GAP, LINE_GAP, BAND = 3, 2, 10, 4
+TITLE = 'ARMGBA'
+# "Open BIOS", drawn on the pixel grid, every pixel on or off.
+SUBTITLE = """
+..#######..............................................########.....###....#######......#######..
+.#########.............................................#########....###...#########....#########.
+###########............................................##########...###..###########..###########
+###.....###............................................###....###...###..###.....###..###.....###
+###.....###..###.####......######....###.####..........###....###...###..###.....###..###.....###
+###.....###..#########....########...#########.........###....###...###..###.....###..###........
+###.....###..##########..##########..##########........#########....###..###.....###..#########..
+###.....###..###....###..###....###..###....###........##########...###..###.....###...#########.
+###.....###..###....###..##########..###....###........###########..###..###.....###....#########
+###.....###..###....###..##########..###....###........###.....###..###..###.....###..........###
+###.....###..###....###..##########..###....###........###.....###..###..###.....###..###.....###
+###.....###..###....###..###.........###....###........###.....###..###..###.....###..###.....###
+###########..##########..##########..###....###........###########..###..###########..###########
+.#########...#########....#########..###....###........##########...###...#########....#########.
+..#######....###.####......########..###....###........#########....###....#######......#######..
+.............###.................................................................................
+.............###.................................................................................
+.............###.................................................................................
+.............###.................................................................................
+.............###.................................................................................
+"""
+TITLE_GAP, LINE_GAP, BAND = 3, 10, 4
 RISE, BOUNCE = 30, 10  # frames rising and settling
 START, START_SIZE, OVERSHOOT = 96, 3, 4  # pixels below its place it starts, at what size; how far past
 CELL = 64
@@ -136,11 +159,11 @@ def main():
         if width <= 196:
             break
         size -= 1
-    small = ImageFont.truetype(path, round(size * 0.42))
-    subtitle, swidth = layout(small, SUBTITLE, SUBTITLE_GAP, round(size * 0.16))
+    s = [[3 if c == '#' else 0 for c in row] for row in SUBTITLE.strip('\n').split('\n')]
+    swidth = len(s[0])
     w = max(width, swidth)
     w += w & 1
-    t, s = raster(title, width), raster(subtitle, swidth)
+    t = raster(title, width)
     tx, sx = (w - width) // 2 & ~1, (w - swidth) // 2 & ~1
     sy = len(t) + LINE_GAP
     h = sy + len(s)
@@ -190,8 +213,7 @@ def main():
         fade = 1 if f < SPARK_FRAMES // 2 else (SPARK_FRAMES - 1 - f) / (SPARK_FRAMES // 2 - 1)
         spark_colour.append(rgb555(*blend(GOLD, fade)))
     # Its double-size box centred on the top right of the last letter of "Open BIOS".
-    last = subtitle[-1]
-    cx = x + sx + last[2] + last[1].width - 2
+    cx = x + sx + swidth - 2
     cy = TITLE_TOP + sy + 2
     spark_x, spark_y = (cx - 32) & 0x1FF, (cy - 32) & 0xFF
 
