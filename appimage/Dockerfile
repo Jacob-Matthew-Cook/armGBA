@@ -1,5 +1,11 @@
-# The machine armGBA's AppImages are built on: Debian 11 (glibc 2.31), so they run on distributions as
-# old as that. Debian 11's packages are now on Debian's archive.
+# Copyright (c) 2026 Magnominus
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# The machine armGBA's AppImages are built on: Debian 11, whose glibc is old enough that they run on
+# glibc 2.29 or later. Debian 11's packages are now on Debian's archive.
 FROM debian:bullseye
 RUN printf 'deb http://archive.debian.org/debian bullseye main\ndeb-src http://archive.debian.org/debian bullseye main\ndeb http://archive.debian.org/debian-security bullseye-security main\n' > /etc/apt/sources.list \
 	&& dpkg --add-architecture arm64 && apt-get -o Acquire::Check-Valid-Until=false update && apt-get install -y --no-install-recommends \

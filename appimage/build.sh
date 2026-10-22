@@ -1,4 +1,11 @@
 #!/bin/sh
+
+# Copyright (c) 2026 Magnominus
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 # Builds armgba, the standalone frontend, for x86-64 and 64-bit ARM in the Debian 11 container
 # (Dockerfile), into appimage/out/<arch>/armgba. package.sh then makes the AppImages.
 set -e

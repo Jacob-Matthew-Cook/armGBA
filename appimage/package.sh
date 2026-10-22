@@ -1,4 +1,11 @@
 #!/bin/sh
+
+# Copyright (c) 2026 Magnominus
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 # Makes appimage/out/armGBA-x86_64.AppImage and armGBA-aarch64.AppImage from what build.sh built.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
