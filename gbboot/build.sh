@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds armGBA's Game Boy boot ROMs with RGBDS (rgbasm, rgblink) and writes libretro/armgba-boot.h:
 # the original Game Boy's and the Pocket's from dmg.asm, the Game Boy Color's and the Game Boy
-# Advance's from cgb.asm. The Color's art and tables are written by cgbdata.py, which needs the font;
+# Advance's from cgb.asm. The Color's art and tables are written by cgbdata.py;
 # its output is kept here.
 set -e
 cd "$(dirname "$0")"

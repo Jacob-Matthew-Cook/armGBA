@@ -29,7 +29,7 @@ DEF NINTENDO_33_S EQU 7
 DEF BG_TILE EQU 1
 DEF TITLE_MAP EQU $9800 + TITLE_Y / 8 * 32 + TITLE_X / 8
 ; The cartridge's logo at its own size, then (R), where Nintendo's shows it.
-DEF LOGO_TILE EQU BG_TILE + ART_TILES
+DEF LOGO_TILE EQU BG_TILE + TITLE_COLUMNS * TITLE_ROWS / 8
 DEF LOGO EQU $8000 + LOGO_TILE * 16
 DEF LOGO_MAP EQU $9800 + 13 * 32 + 7
 DEF LOGO_FRAME EQU 27
@@ -45,15 +45,15 @@ DEF C6_WAIT EQU 802
 DEF C7_WAIT EQU 820
 DEF END EQU 162
 IF DEF(MODEL_AGB)
-DEF PRE_COLOUR EQU 15990
-DEF POST_COLOUR EQU 2436
-; A frame of the wait before the screen comes on moved after it, to leave room for a title's wait.
-DEF PRE_MONO EQU 18440 - 2508
-DEF POST_MONO EQU 2508
-ELSE
-DEF PRE_COLOUR EQU 15991
+DEF PRE_COLOUR EQU 16083
 DEF POST_COLOUR EQU 2437
-DEF PRE_MONO EQU 18441
+; A frame of the wait before the screen comes on moved after it, to leave room for a title's wait.
+DEF PRE_MONO EQU 18536 - 2509
+DEF POST_MONO EQU 2509
+ELSE
+DEF PRE_COLOUR EQU 16083
+DEF POST_COLOUR EQU 2437
+DEF PRE_MONO EQU 18535
 DEF POST_MONO EQU 1
 ENDC
 
@@ -62,53 +62,63 @@ Boot:
 	ld sp, $FFFE
 	jp Main
 
-; A frame, or b at WaitFrames, waiting on VBlank with interrupts off. Leaves a 0.
+; Routines called from more than one place sit on the rst addresses, where a call is a byte.
+	ds $08 - @, 0
+; hl += a, taking the same time whether or not it crosses a page, so a title's wait doesn't depend
+; on where the tables are.
+At:
+	add a, l
+	ld l, a
+	adc a, h
+	sub l
+	ld h, a
+	ret
+
+	ds $10 - @, 0
+; A frame, waiting on VBlank with interrupts off. Leaves a 0.
 WaitFrame:
 	ld b, 1
-WaitFrames:
+.wait
 	xor a
 	ldh [$FF0F], a
 	halt
 	dec b
-	jr nz, WaitFrames
+	jr nz, .wait
 	ret
 
-; Both VRAM banks and OAM cleared. Leaves a 0, VRAM bank 0.
-ClearAll:
-	ld a, 1
-	ldh [$FF4F], a
-	call .vram
-	ldh [$FF4F], a
-	call .vram
-	ld hl, $FE00
-.oam
-	ld [hl+], a
-	ld a, l
-	cp $A0
-	ld a, 0
-	jr nz, .oam
-	ret
-.vram
-	ld hl, $8000
-	xor a
-.loop
-	ld [hl+], a
-	bit 5, h
-	jr z, .loop
+; bc times 4 cycles and a few. Leaves a 0.
+Delay:
+	dec bc
+	ld a, b
+	or c
+	jr nz, Delay
 	ret
 
-; b bytes from hl to palette port c (BCPD or OCPD), from index a.
-Palette:
-	dec c
-	ldh [c], a
-	inc c
+	ASSERT @ <= $20
+	ds $20 - @, 0
+; (R) to the tile at hl, in the first plane.
+Mark:
+	ld de, Registered
 .loop
-	ld a, [hl+]
-	ldh [c], a
-	dec b
+	ld a, [de]
+	ld [hl+], a
+	inc hl
+	inc e
+	ld a, e
+	cp LOW(Registered + 8)
 	jr nz, .loop
 	ret
 
+	ds $30 - @, 0
+; b bytes from hl to palette port c (BCPD or OCPD).
+Palette:
+	ld a, [hl+]
+	ldh [c], a
+	dec b
+	jr nz, Palette
+	ret
+
+	ds $38 - @, 0
 ; All BG palettes white; WRAM's bank register as Nintendo's leaves it.
 WhiteBG:
 	ld a, $F8
@@ -125,12 +135,27 @@ WhiteBG:
 	jr nz, .loop
 	ret
 
-; bc times 4 cycles and a few. Leaves a 0.
-Delay:
-	dec bc
-	ld a, b
-	or c
-	jr nz, Delay
+; Both VRAM banks and OAM cleared. Leaves a 0, VRAM bank 0.
+ClearAll:
+	ld a, 1
+	ldh [$FF4F], a
+	call .vram
+	ldh [$FF4F], a
+	call .vram
+	ld hl, $FE00
+	ld b, $A0
+.oam
+	ld [hl+], a
+	dec b
+	jr nz, .oam
+	ret
+.vram
+	ld hl, $8000
+	xor a
+.loop
+	ld [hl+], a
+	bit 5, h
+	jr z, .loop
 	ret
 
 ; One direction alone, with or without A or B, picks one of 12 colour sets.
@@ -223,25 +248,6 @@ IF DEF(MODEL_AGB)
 ELSE
 	dw $0000, $0008, $991A, $1180
 ENDC
-; Two rows of the cartridge's logo at its size to every other byte from hl: c's left nibbles and
-; b's, then their right ones.
-LogoRows:
-	ld a, b
-	swap a
-	xor c
-	and $0F
-	xor c
-	ld [hl+], a
-	inc hl
-	ld a, c
-	swap a
-	xor b
-	and $F0
-	xor b
-	ld [hl+], a
-	inc hl
-	ret
-
 	ds $FE - @, 0
 Handover:
 	ldh [$FF50], a
@@ -285,10 +291,13 @@ Main:
 	jr z, .wave
 	ld a, $FC
 	ldh [$FF47], a
-	; The art into the tiles from BG_TILE.
-	ld hl, Art
+	; The art into the tiles from BG_TILE, doubled, then the patches at full size. hl is past the
+	; variables, on the art's page.
+	ASSERT HIGH(Variables + 7) == HIGH(Art)
+	ld l, LOW(Art)
 	ld b, ART_TILES
 	call Double
+	call Patch
 	; The cartridge's logo in the second plane: each tile two 4x4 blocks of it side by side, a
 	; block's two bytes 2 apart, the logo's top half then its bottom half.
 	ASSERT HIGH(LOGO) == HIGH(LOGO + 7 * 16)
@@ -320,8 +329,8 @@ Main:
 .half
 	cp LOW(LOGO + 1 + 6 * 16 + 8)
 	jr nz, .logo
-	ld hl, LOGO + 1 + 6 * 16
-	call Mark
+	ld l, LOW(LOGO + 1 + 6 * 16)
+	rst Mark
 	ld hl, LOGO_MAP
 	ld a, LOGO_TILE
 	ld b, 7
@@ -331,7 +340,7 @@ Main:
 	dec b
 	jr nz, .logoMap
 	; BG palettes white, then colour 1 of 1 to 5: the columns' colours, then the title's blue.
-	call WhiteBG
+	rst WhiteBG
 	ld hl, TitleColours
 	ld a, $80 | (8 + 2)
 .colours
@@ -345,29 +354,39 @@ Main:
 	add a, 8
 	cp $80 | (48 + 2)
 	jr nz, .colours
-	; The title's tiles in place, in BG palette 0 (all white) until they come in.
+	; The title's tiles in place, in BG palette 0 (all white) until they come in: down each column,
+	; from the fourth, the first three last.
+	DEF FIRST_TILE EQU BG_TILE + (TITLE_COLUMNS - SKIPPED) * TITLE_ROWS / 8
 	ld hl, TITLE_MAP
-	ld a, BG_TILE
-	ld c, TITLE_ROWS / 8
+	ld c, FIRST_TILE
 .titleRow
+	ld a, c
 	ld b, TITLE_COLUMNS
 .titleColumn
 	ld [hl+], a
-	inc a
+	add a, TITLE_ROWS / 8
+	cp LOGO_TILE
+	jr c, .tile
+	sub LOGO_TILE - BG_TILE
+.tile
 	dec b
 	jr nz, .titleColumn
 	ld de, 32 - TITLE_COLUMNS
 	add hl, de
-	dec c
+	inc c
+	ld a, c
+	cp FIRST_TILE + TITLE_ROWS / 8
 	jr nz, .titleRow
-	; Screen on: BG, tiles from $8000.
+	; Screen on on the cycle the frames are timed from: BG, tiles from $8000.
+	ld bc, 149
+	call Delay
 	ld a, $91
 	ldh [$FF40], a
 	ld a, 1
 	ldh [$FFFF], a
 
 Frame:
-	call WaitFrame
+	rst WaitFrame
 	; The cartridge's logo from when Nintendo's shows it: palette 0's colour 2 black.
 	ldh a, [FRAME]
 	cp LOGO_FRAME
@@ -473,7 +492,7 @@ Frame:
 
 	; Buttons held now choose an original Game Boy game's colours instead.
 	call Buttons
-	call WaitFrame
+	rst WaitFrame
 	ldh [$FF40], a
 	call ClearAll
 	; The cartridge's logo in the tiles from 1, then (R): VRAM as Nintendo's leaves it, though nothing
@@ -481,9 +500,9 @@ Frame:
 	ld hl, $0104
 	ld b, 24
 	call Double
-	call Mark
+	rst Mark
 	; BG palettes white for either kind of cartridge, as Nintendo's leaves them.
-	call WhiteBG
+	rst WhiteBG
 	; KEY0 from the cartridge's colour flag, and with it the joypad's select lines low.
 	ld a, [$0143]
 	ldh [$FF4C], a
@@ -544,9 +563,6 @@ Frame:
 	ld bc, PRE_MONO
 	ld de, POST_MONO
 	ld hl, MonoRegisters
-	; Cycles, which the waits' steps of 7 can't make.
-	nop
-	nop
 	jr .on
 .colour
 	; A Game Boy Color game: the sprite palettes' index at 1.
@@ -557,24 +573,17 @@ Frame:
 	ld hl, ColourRegisters
 .on
 	; Waits that set the hand-over's timer and screen timing, to the cycle: the cartridge's extra,
-	; then bc before the screen comes on, de after its first VBlank.
-	; 6 cycles, which the waits' steps can't make, and on the Advance 7 more.
+	; then bc before the screen comes on, de after its first VBlank; and 4 cycles, which their steps
+	; can't make.
 	ld a, [hl]
 	ld a, [hl]
-	ld a, [hl]
-IF DEF(MODEL_AGB)
-	ld a, [hl]
-	ld a, [hl]
-	ld a, [hl]
-	nop
-ENDC
 	push hl
 	ld hl, EXTRA_N
 	call Extra
 	call Delay
 	ld a, $91
 	ldh [$FF40], a
-	call WaitFrame
+	rst WaitFrame
 	; In its first VBlank, for the two titles, the logo on the map.
 	ldh a, [SUM]
 	cp 67
@@ -586,13 +595,9 @@ ENDC
 	ld a, [$0143]
 	add a, a
 IF DEF(MODEL_AGB)
-	; A colour cartridge's a cycle later: the jump is taken. Then 7 more for both.
+	; A colour cartridge's a cycle later: the jump is taken.
 	jr c, .cycle
 .cycle
-	ld a, [hl]
-	ld a, [hl]
-	ld a, [hl]
-	nop
 ELSE
 	; A colour cartridge's a cycle later: the jump is taken.
 	jr c, .cycle
@@ -665,6 +670,67 @@ Slide:
 	nop
 	ret
 
+; Two rows of the cartridge's logo at its size to every other byte from hl: c's left nibbles and
+; b's, then their right ones.
+LogoRows:
+	ld a, b
+	swap a
+	xor c
+	and $0F
+	xor c
+	ld [hl+], a
+	inc hl
+	ld a, c
+	swap a
+	xor b
+	and $F0
+	xor b
+	ld [hl+], a
+	inc hl
+	ret
+
+; The title's patches (cgbdata.py): each the address of its top left byte, high byte first, then runs
+; of rows, a count and 3 bytes, one in each of 3 tile columns, a 0 ending them; a 0 ends the patches.
+Patch:
+	ld hl, Patches
+.patch
+	ld a, [hl+]
+	or a
+	ret z
+	ld d, a
+	ld a, [hl+]
+	ld e, a
+.run
+	ld a, [hl+]
+	or a
+	jr z, .patch
+	ld b, a
+.row
+	push hl
+	push de
+	ld c, 3
+.byte
+	ld a, [hl+]
+	ld [de], a
+	ld a, e
+	add a, TITLE_ROWS * 2
+	ld e, a
+	jr nc, .next
+	inc d
+.next
+	dec c
+	jr nz, .byte
+	pop de
+	inc de
+	inc de
+	dec b
+	jr z, .done
+	pop hl
+	jr .row
+.done
+	pop af
+	jr .run
+
 ; b tiles from 1 from the blocks at hl, each pixel doubled: a nibble becomes a byte, written to two
 ; rows of the first plane. They're popped two bytes at a time, the first first; c's 1 marks a
 ; nibble's end as it shifts out.
@@ -720,13 +786,13 @@ SetColours:
 	add a, a
 	add a, a
 	ld hl, StandardSets
-	call .at
+	rst At
 	ld a, $FF
 	ldh [c], a
 	ld a, $7F
 	ldh [c], a
 	ld b, 4
-	call Palette.loop
+	rst Palette
 	xor a
 	ldh [c], a
 	ldh [c], a
@@ -737,21 +803,11 @@ SetColours:
 	add a, a
 	add a, a
 	ld hl, OtherSets
-	call .at
+	rst At
 	ld b, 8
-	call Palette.loop
+	rst Palette
 	pop bc
 	ret
-; hl += a, taking the same time whether or not it crosses a page, so a title's wait doesn't depend
-; on where the tables are.
-.at
-	add a, l
-	ld l, a
-	adc a, h
-	sub l
-	ld h, a
-	ret
-
 ; The original Game Boy game's colours by its title: Nintendo's games by the sum of the title's
 ; bytes, and for some sums the fourth letter too; anything else the default. And the hand-over's
 ; extra wait for the way Nintendo's takes: by the licensee, and for Nintendo's original Game Boy
@@ -861,35 +917,37 @@ Lookup:
 	add hl, de
 	dec b
 	jr nz, .lettered
-	ld b, PLAIN
-.plain
-	ld a, [hl+]
-	cp c
-	jr z, .found
+	; Then by the sum alone: its bit in PlainSums, and the entries of the sums before it with theirs
+	; counted. c shifts the bits out, a 1 after them marking its end.
+	ld hl, PlainSums
+	ld de, PlainPacks - 3
+	ld b, c
+	inc b
+	ld c, $80
+.bit
+	sla c
+	jr nz, .counted
+	ld c, [hl]
 	inc hl
-	inc hl
-	inc hl
+	scf
+	rl c
+.counted
+	jr nc, .without
+	inc de
+	inc de
+	inc de
+.without
 	dec b
-	jr nz, .plain
+	jr nz, .bit
+	ld h, d
+	ld l, e
+	jr c, .found
 	inc b
 	ret
 .letter
 	inc hl
 .found
 	xor a
-	ret
-
-; (R) to the tile at hl, in the first plane.
-Mark:
-	ld de, Registered
-.loop
-	ld a, [de]
-	ld [hl+], a
-	inc hl
-	inc e
-	ld a, e
-	cp LOW(Registered + 8)
-	jr nz, .loop
 	ret
 
 ; FRAME, COMBO and SUM, then the plain cartridge's extra waits.

@@ -1,8 +1,10 @@
-# cgbdata.py font.ttf out.inc: the data for armGBA's Game Boy Color boot ROM (cgb.asm).
-# The art: "ARMGBC" in the font's own hinted 1-bit rendering at half size, centred in a picture of
-# TITLE_COLUMNS 4x4 blocks by 3, stored as the cartridge's logo is: a block's 4 rows a nibble each, 2
-# bytes, the blocks left to right then top to bottom. The boot ROM doubles each pixel, so a block is a
-# tile.
+# cgbdata.py out.inc: the data for armGBA's Game Boy Color boot ROM (cgb.asm).
+# The art: "ARMGBC" at full size in a picture of TITLE_COLUMNS tile columns by 3 tile rows, made of
+# two layers. Most letters are drawn at half size and doubled by the boot ROM, stored as the
+# cartridge's logo is: a block of 4x4 of their pixels, a tile on screen, is its 4 rows a nibble each,
+# 2 bytes. The tiles go down each column, the columns in order from the fourth, so that the first
+# three, the A's, come last and aren't stored. The A, and the rows of the M that doubling can't draw,
+# are patched in at full size: runs of rows, a count and the row's 3 bytes, over 3 tile columns.
 # The compatibility palettes for original Game Boy games come from cgbpalettes.json, measured from
 # what the reference boot ROM shows, never from the reference itself. cgbwaits.json, measured the
 # same way, holds how long it takes to hand over with each of those titles, and with a few whose
@@ -10,12 +12,130 @@
 # and how many of them more than a plain cartridge's come after the screen comes on. The Advance's are
 # the same.
 import json, math, os, sys
-from PIL import Image, ImageDraw, ImageFont
 
-FONT, OUT = sys.argv[1], sys.argv[2]
+OUT = sys.argv[1]
 TITLE = 'ARMGBC'
-SIZE, TITLE_GAP = 15, 1
+# The title's letters at full size, where they're patched in.
+FULL = {
+    'A': """
+......#####......
+......#####......
+......#####......
+.....#######.....
+.....#######.....
+.....#######.....
+....####.####....
+....####.####....
+....####.####....
+...####...####...
+...####...####...
+...####...####...
+..####.....####..
+..####.....####..
+..#############..
+.###############.
+.###############.
+.###############.
+####.........####
+####.........####
+####.........####
+####.........####
+""",
+    'M': """
+####............####
+####............####
+#####..........#####
+#####..........#####
+######........######
+######........######
+#######......#######
+#######......#######
+########....########
+########....########
+####.####..####.####
+####.####..####.####
+####..########..####
+####..########..####
+####...######...####
+####...######...####
+####....####....####
+####....####....####
+####............####
+####............####
+####............####
+####............####
+""",
+}
+# The others at half size, which the boot ROM doubles.
+LETTERS = {
+    'R': """
+#######.
+########
+##....##
+##....##
+########
+#######.
+##...##.
+##....##
+##....##
+##....##
+##....##""",
+    'M': """
+##......##
+###....###
+###....###
+####..####
+####..####
+##.####.##
+##.####.##
+##..##..##
+##..##..##
+##......##
+##......##""",
+    'G': """
+.#######.
+#########
+##.....##
+##.......
+##...####
+##...####
+##.....##
+##.....##
+##.....##
+#########
+.#######.""",
+    'B': """
+#######..
+########.
+##....##.
+##....##.
+########.
+#########
+##.....##
+##.....##
+##.....##
+#########
+########.""",
+    'C': """
+.#######.
+#########
+##.....##
+##.....##
+##.......
+##.......
+##.......
+##.....##
+##.....##
+#########
+.#######.""",
+}
+# Where each letter starts in the picture, in pixels.
+PLACES = dict(A=6, R=24, M=42, G=64, B=84, C=104)
+# The patches: a letter's rows, at full size, over the tile columns from one.
+PATCHES = [('A', 0, range(22)), ('M', 5, range(10, 12))]
 TITLE_COLUMNS, BLOCK_ROWS = 16, 3
+# Tile columns at the left the doubled layer leaves out: the A's.
+SKIP = 3
 # The title's top line, on the reference's title's.
 TITLE_TOP = 48
 # The extra wait after the screen comes on: Delay's steps of 7, then the slide's 7 nops.
@@ -27,54 +147,52 @@ TITLE_BLUE = (0, 0, 31)
 WAVE = len(WAVE_COLOURS)
 
 
-def render(text, size, gap):
-    font = ImageFont.truetype(FONT, size)
-    marks = []
-    for ch in text:
-        if ch == ' ':
-            marks.append(None)
-            continue
-        m = Image.new('1', (size * 3, size * 3), 0)
-        d = ImageDraw.Draw(m)
-        d.fontmode = '1'
-        d.text((size, size), ch, font=font, fill=1)
-        marks.append(m)
-    boxes = [m.getbbox() for m in marks if m]
-    top, bottom = min(b[1] for b in boxes), max(b[3] for b in boxes)
-    places, x = [], 0
-    for m in marks:
-        if m is None:
-            x += size // 4
-            continue
-        b = m.getbbox()
-        places.append((m.crop((b[0], top, b[2], bottom)), x))
-        x += b[2] - b[0] + gap
-    width = x - gap
-    image = Image.new('1', (width, bottom - top), 0)
-    for m, x in places:
-        image.paste(m, (x, 0))
-    return image, [(x, m.width) for m, x in places]
-
-
 def main():
-    title, _ = render(TITLE, SIZE, TITLE_GAP)
-    width, height = TITLE_COLUMNS * 4, BLOCK_ROWS * 4
-    assert title.width <= width and title.height <= height
-    px, py = (width - title.width) // 2, (height - title.height) // 2
-    def pixel(x, y):
-        x, y = x - px, y - py
-        return 0 <= x < title.width and 0 <= y < title.height and title.getpixel((x, y))
+    width, height = TITLE_COLUMNS * 8, BLOCK_ROWS * 8
+    full = [[False] * width for _ in range(height)]
+    half = [[False] * (width // 2) for _ in range(height // 2)]
+    for ch, x0 in PLACES.items():
+        rows = FULL.get(ch, '').strip('\n').split('\n') if ch in FULL else None
+        if rows:
+            for y, row in enumerate(rows):
+                for x, c in enumerate(row):
+                    full[y][x0 + x] = c == '#'
+        if ch in LETTERS:
+            assert x0 % 2 == 0
+            for y, row in enumerate(LETTERS[ch].strip('\n').split('\n')):
+                for x, c in enumerate(row):
+                    half[y][x0 // 2 + x] = c == '#'
+    # The doubled layer, the A's columns left out.
+    order = list(range(SKIP, TITLE_COLUMNS)) + list(range(SKIP))
     art = bytearray()
-    for by in range(BLOCK_ROWS):
-        for bx in range(TITLE_COLUMNS):
+    for bx in order[:TITLE_COLUMNS - SKIP]:
+        for by in range(BLOCK_ROWS):
             for pair in range(2):
                 b = 0
                 for r in range(2):
                     for c in range(4):
-                        if pixel(bx * 4 + c, by * 4 + pair * 2 + r):
+                        if half[by * 4 + pair * 2 + r][bx * 4 + c]:
                             b |= 0x80 >> (r * 4 + c)
                 art.append(b)
-    tx, ty = (160 - width * 2) // 2, TITLE_TOP
+    # The patches: the address of a column's top row in the tiles from 1, then runs of rows.
+    def column_address(column):
+        return 0x8010 + order.index(column) * 48
+    patches = bytearray()
+    for ch, column, rows in PATCHES:
+        address = column_address(column) + rows[0] * 2
+        patches += bytes([address >> 8, address & 0xFF])
+        lines = [bytes(sum(full[y][column * 8 + i * 8 + k] << (7 - k) for k in range(8)) for i in range(3)) for y in rows]
+        i = 0
+        while i < len(lines):
+            n = 1
+            while i + n < len(lines) and lines[i + n] == lines[i]:
+                n += 1
+            patches += bytes([n]) + lines[i]
+            i += n
+        patches.append(0)
+    patches.append(0)
+    tw, th = width, 22
+    tx, ty = (160 - width) // 2, TITLE_TOP
     assert ty % 8 == 0
     colours = [r | g << 5 | b << 10 for r, g, b in WAVE_COLOURS + [TITLE_BLUE]]
     # Compatibility palettes.
@@ -136,7 +254,7 @@ def main():
                 plain.append((s,) + wait(0, key))
     with open(OUT, 'w') as f:
         f.write('; Written by cgbdata.py.\n')
-        f.write('DEF TITLE_ROWS EQU %d\nDEF ART_TILES EQU %d\n' % (height * 2, len(art) // 2))
+        f.write('DEF TITLE_ROWS EQU %d\nDEF ART_TILES EQU %d\nDEF SKIPPED EQU %d\n' % (height, len(art) // 2, SKIP))
         f.write('DEF TITLE_X EQU %d\nDEF TITLE_Y EQU %d\n' % (tx, ty))
         f.write('DEF TITLE_COLUMNS EQU %d\nDEF WAVE EQU %d\n' % (TITLE_COLUMNS, WAVE))
         f.write('DEF LATE_STEPS EQU %d\nDEF LATE_ENTRY EQU %d\n' % (LATE_STEPS, LATE_ENTRY))
@@ -145,6 +263,9 @@ def main():
         f.write('; Written by cgbdata.py.\nArt:\n')
         for i in range(0, len(art), 16):
             f.write('\tdb %s\n' % ', '.join('$%02X' % b for b in art[i:i + 16]))
+        f.write('Patches:\n')
+        for i in range(0, len(patches), 16):
+            f.write('\tdb %s\n' % ', '.join('$%02X' % b for b in patches[i:i + 16]))
         f.write('; BG palettes 1 to %d, colour 3: the colours the columns come in through, then the title\'s blue.\nTitleColours:\n\tdw %s\n'
                 % (len(colours), ', '.join('$%04X' % c for c in colours)))
         f.write('; Colour sets: white, two colours and black as just the two; then the others whole.\nStandardSets:\n')
@@ -160,12 +281,19 @@ def main():
         f.write('; Title checksum and fourth letter, then the combination and waits; then by the checksum alone.\nLettered:\n')
         for e in lettered:
             f.write('\tdb $%02X, $%02X, $%02X, $%02X, $%02X\n' % e)
-        f.write('Plain:\n')
+        plain.sort()
+        bits = [0] * 32
         for e in plain:
-            f.write('\tdb $%02X, $%02X, $%02X, $%02X\n' % e)
+            bits[e[0] >> 3] |= 0x80 >> (e[0] & 7)
+        f.write('; A bit per checksum, the first the highest: whether it has its own entry, which follow in order.\nPlainSums:\n')
+        for i in range(0, 32, 16):
+            f.write('\tdb %s\n' % ', '.join('$%02X' % b for b in bits[i:i + 16]))
+        f.write('PlainPacks:\n')
+        for e in plain:
+            f.write('\tdb $%02X, $%02X, $%02X\n' % e[1:])
         f.write('; Per direction (right, left, up, down as the joypad bits): none, A, B, and A and B as A.\nButtonCombos:\n')
         for d in ('right', 'left', 'up', 'down'):
             f.write('\tdb %s\n' % ', '.join(str(combos.index(facts['buttons'][d + s])) for s in ('', ' a', ' b', ' a')))
-    print('art %d bytes, title %dx%d doubled at %d,%d (%d columns)' % (len(art), title.width, title.height, tx, ty, TITLE_COLUMNS))
+    print('art %d bytes, patches %d bytes, title at %d,%d (%d columns)' % (len(art), len(patches), tx, ty, TITLE_COLUMNS))
 
 main()
