@@ -61,6 +61,11 @@ static bool colorCorrection;
 static uint16_t* correctedColors;
 static uint16_t correctedFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
 static int ghosting;
+// LCD Grid: the picture's scale (1 when off), the shadow's way (0 none, then up and on clockwise), and
+// whether RetroArch is to hear of a new size.
+static int gridScale = 1;
+static int gridWay;
+static bool gridAnnounce;
 static int32_t lowPass;
 static bool gameBoy;
 static enum LibretroGbModel gbModel;
@@ -377,6 +382,17 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_lcd_ghosting", "LCD Ghosting", NULL,
 	  "The console's slow screen, which some games flicker sprites on to make them see-through: each change fades in over a few frames, darkening faster than it lightens, the first Game Boy's slowest. Half fades twice as fast.",
 	  NULL, "video", { { "disabled", "Off" }, { "half", "Half" }, { "enabled", "Full" }, { NULL, NULL } }, "disabled" },
+	{ "armgba_lcd_grid", "LCD Grid", NULL,
+	  "Draws the gaps between the console screen's pixels, as the real screen shows them, into a picture this many times larger: pick the largest that fits your screen, with integer scaling on. The armgba shader presets do the same on the GPU.",
+	  NULL, "video",
+	  { { "disabled", "Off" }, { "2", "2x" }, { "3", "3x" }, { "4", "4x" }, { "5", "5x" }, { "6", "6x" }, { "7", "7x" }, { "8", "8x" }, { NULL, NULL } },
+	  "disabled" },
+	{ "armgba_lcd_shadow", "Game Boy Pixel Shadow", NULL,
+	  "With LCD Grid on, the first Game Boy's and the Pocket's pixels cast a soft shadow on the screen behind them: where it falls.",
+	  NULL, "video",
+	  { { "off", "Off" }, { "up", "Up" }, { "up right", "Up Right" }, { "right", "Right" }, { "down right", "Down Right" }, { "down", "Down" },
+	    { "down left", "Down Left" }, { "left", "Left" }, { "up left", "Up Left" }, { NULL, NULL } },
+	  "down right" },
 	{ "armgba_low_pass_filter", "Low-Pass Filter", NULL,
 	  "Softens the sound's high notes, as the consoles' small speakers did. Higher is softer.", NULL, "audio",
 	  { { "disabled", "Disabled" }, { "20", "20%" }, { "40", "40%" }, { "60", "60%" }, { "80", "80%" }, { NULL, NULL } }, "disabled" },
@@ -581,6 +597,11 @@ static void geometry(struct retro_game_geometry* geometry) {
 		geometry->base_height *= screens == SCREENS_STACKED || grid ? 2 : 1;
 		geometry->aspect_ratio = (float) geometry->base_width / geometry->base_height;
 	}
+	// The LCD Grid's larger picture.
+	geometry->base_width *= gridScale;
+	geometry->base_height *= gridScale;
+	geometry->max_width *= gridScale;
+	geometry->max_height *= gridScale;
 }
 
 static void announceGeometry(void) {
@@ -591,6 +612,7 @@ static void announceGeometry(void) {
 
 void retro_get_system_av_info(struct retro_system_av_info* info) {
 	memset(info, 0, sizeof(*info));
+	gridAnnounce = false;
 	gbOnAdvance = gameBoy && !gbTogether && libretroGbOnAdvance();
 	geometry(&info->geometry);
 	// A Game Boy frame lasts as long as a Game Boy Advance frame.
@@ -784,6 +806,14 @@ static void readOptions(void) {
 	colorCorrection = optionIs("armgba_color_correction", "enabled") && buildCorrectedColors();
 	static const struct Choice ghostingChoices[] = { { "half", 1 }, { "enabled", 2 } };
 	ghosting = optionChoice("armgba_lcd_ghosting", ghostingChoices, COUNT(ghostingChoices), 0);
+	static const struct Choice gridChoices[] = { { "2", 2 }, { "3", 3 }, { "4", 4 }, { "5", 5 }, { "6", 6 }, { "7", 7 }, { "8", 8 } };
+	int const scale = optionChoice("armgba_lcd_grid", gridChoices, COUNT(gridChoices), 1);
+	gridAnnounce |= scale != gridScale;
+	gridScale = scale;
+	static const struct Choice wayChoices[] = {
+		{ "up", 1 }, { "up right", 2 }, { "right", 3 }, { "down right", 4 }, { "down", 5 }, { "down left", 6 }, { "left", 7 }, { "up left", 8 },
+	};
+	gridWay = optionChoice("armgba_lcd_shadow", wayChoices, COUNT(wayChoices), 0);
 	const char* const filter = option("armgba_low_pass_filter");
 	lowPass = filter ? atoi(filter) * 0x10000 / 100 : 0;
 	gbModel = optionChoice("armgba_gb_model", modelChoices, COUNT(modelChoices), LIBRETRO_GB_AUTO);
@@ -857,6 +887,7 @@ static bool showOptions(void) {
 		{ "armgba_skip_bios", !gameBoy },
 		{ "armgba_bios", !gameBoy },
 		{ "armgba_threaded_video", !gameBoy },
+		{ "armgba_lcd_shadow", gameBoy },
 		{ "armgba_color_correction", !gameBoy },
 		{ "armgba_solar_sensor", !gameBoy && (!advance || devices & HW_LIGHT_SENSOR) },
 		{ "armgba_gb_tilt", (!gameBoy && !advance) || devices & (HW_TILT | HW_GYRO) || (gameBoy && tiltCartridge) },
@@ -2840,6 +2871,367 @@ enum LibretroLcd libretroLcd(uint32_t* gap) {
 	return gameBoy && !libretroGbOnAdvance() ? LIBRETRO_LCD_COLOR : LIBRETRO_LCD_ADVANCE;
 }
 
+// LCD Grid: the picture gridScale times larger, with the gaps between the console screen's pixels drawn
+// in and, on the first Game Boy and the Pocket, the shadow its pixels cast, as the standalone frontend
+// draws them on the GPU (lcd.h has the values), for RetroArch without its shader presets. The scale
+// is whole, so every pixel's square has the same gaps: each source row is blended toward the gap color
+// once for each share of gap the square uses, those rows spread out into the larger one, and rows
+// alike copied. The shadow is the picture's darkness below the unlit screen, spread as a smooth scale
+// spreads it, across then down, and moved; it darkens the rows it reaches. The loops work on whole
+// rows in vectors, NEON on ARM, SSE or AVX on x86.
+
+#if defined(__AVX2__)
+#define GRID_VECTOR 32
+#else
+#define GRID_VECTOR 16
+#endif
+typedef uint16_t GridU16 __attribute__((vector_size(GRID_VECTOR)));
+typedef uint32_t GridU32 __attribute__((vector_size(GRID_VECTOR)));
+enum { GRID_LANES16 = GRID_VECTOR / 2, GRID_LANES32 = GRID_VECTOR / 4 };
+// Bytes, as many as a vector's 16- or 32-bit lanes, to widen into them.
+typedef uint8_t GridBytes16 __attribute__((vector_size(GRID_LANES16)));
+// 16-bit values, as many as a vector's 32-bit lanes.
+typedef uint16_t GridHalves __attribute__((vector_size(GRID_VECTOR / 2)));
+
+// x / 255, rounded, for x up to 255 * 255.
+#define GRID_DIV255(x) (((x) + 128 + (((x) + 128) >> 8)) >> 8)
+
+// A row of RGB565 pixels blended toward the gap color by a of 255.
+static void gridBlend565(const uint16_t* from, uint16_t* to, unsigned count, unsigned a, unsigned gapR, unsigned gapG, unsigned gapB) {
+	unsigned const keep = 255 - a;
+	uint16_t const keep16 = (uint16_t) keep, addR = (uint16_t) (gapR * a), addG = (uint16_t) (gapG * a), addB = (uint16_t) (gapB * a);
+	unsigned i = 0;
+	for (; i + GRID_LANES16 <= count; i += GRID_LANES16) {
+		GridU16 c;
+		memcpy(&c, from + i, sizeof(c));
+		GridU16 r = c >> 11, g = c >> 5 & 0x3F, b = c & 0x1F;
+		r = (GridU16) (r << 3 | r >> 2);
+		g = (GridU16) (g << 2 | g >> 4);
+		b = (GridU16) (b << 3 | b >> 2);
+		r = GRID_DIV255(r * keep16 + addR);
+		g = GRID_DIV255(g * keep16 + addG);
+		b = GRID_DIV255(b * keep16 + addB);
+		GridU16 const out = (GridU16) ((r >> 3) << 11 | (g >> 2) << 5 | b >> 3);
+		memcpy(to + i, &out, sizeof(out));
+	}
+	for (; i < count; ++i) {
+		unsigned const c = from[i];
+		unsigned r = (c >> 11) << 3 | c >> 13, g = (c >> 5 & 0x3F) << 2 | (c >> 9 & 3), b = (c & 0x1F) << 3 | (c >> 2 & 7);
+		r = GRID_DIV255(r * keep + gapR * a);
+		g = GRID_DIV255(g * keep + gapG * a);
+		b = GRID_DIV255(b * keep + gapB * a);
+		to[i] = (uint16_t) ((r >> 3) << 11 | (g >> 2) << 5 | b >> 3);
+	}
+}
+
+// Each 8-bit channel of XRGB8888 pixels times k, a share of 256 for each pixel, in 16-bit multiplies,
+// which SSE2 and NEON have: red and blue together in one lane pair, green in another.
+static inline GridU32 gridScale8888(GridU32 c, GridU32 k) {
+	GridU16 const both = (GridU16) (k | k << 16);
+	GridU16 const rb = (GridU16) (c & 0xFF00FF) * both >> 8;
+	GridU16 const g = (GridU16) (c >> 8 & 0xFF) * both >> 8;
+	return (c & 0xFF000000) | (GridU32) rb | (GridU32) g << 8;
+}
+
+static inline uint32_t gridScale8888One(uint32_t c, uint32_t k) {
+	return (c & 0xFF000000) | ((c & 0xFF00FF) * k >> 8 & 0xFF00FF) | ((c & 0xFF00) * k >> 8 & 0xFF00);
+}
+
+static void gridBlend8888(const uint32_t* from, uint32_t* to, unsigned count, unsigned a, unsigned gapR, unsigned gapG, unsigned gapB) {
+	// Shares of 256: a of 255 rounds to within one level.
+	uint32_t const toward = a + (a >> 7), keep = 256 - toward;
+	uint32_t const gap = gridScale8888One(gapR << 16 | gapG << 8 | gapB, toward) & 0xFFFFFF;
+	GridU32 const keeps = (GridU32) { 0 } + keep;
+	unsigned i = 0;
+	for (; i + GRID_LANES32 <= count; i += GRID_LANES32) {
+		GridU32 c;
+		memcpy(&c, from + i, sizeof(c));
+		GridU32 const out = gridScale8888(c, keeps) + gap;
+		memcpy(to + i, &out, sizeof(out));
+	}
+	for (; i < count; ++i) {
+		to[i] = gridScale8888One(from[i], keep) + gap;
+	}
+}
+
+// The shadow's share kept, of 256, along a larger row, lerped from two spread rows by w of 256: 256 -
+// (top * (256 - w) + bottom * w) / 256. Returns false if it's all 256, no shadow.
+static bool gridKeeps(uint16_t* keep, const uint8_t* top, const uint8_t* bottom, unsigned w, unsigned count) {
+	uint16_t const above = (uint16_t) (256 - w), below = (uint16_t) w;
+	GridU16 any = { 0 };
+	unsigned i = 0;
+	for (; i + GRID_LANES16 <= count; i += GRID_LANES16) {
+		GridBytes16 t8, u8;
+		memcpy(&t8, top + i, sizeof(t8));
+		memcpy(&u8, bottom + i, sizeof(u8));
+		GridU16 const shade = (__builtin_convertvector(t8, GridU16) * above + __builtin_convertvector(u8, GridU16) * below) >> 8;
+		any |= shade;
+		GridU16 const kept = 256 - shade;
+		memcpy(keep + i, &kept, sizeof(kept));
+	}
+	bool shaded = false;
+	for (int k = 0; k < GRID_LANES16; ++k) {
+		shaded |= any[k] != 0;
+	}
+	for (; i < count; ++i) {
+		unsigned const shade = (top[i] * above + bottom[i] * below) >> 8;
+		shaded |= shade != 0;
+		keep[i] = (uint16_t) (256 - shade);
+	}
+	return shaded;
+}
+
+// A larger row times the shadow's shares kept.
+static void gridShade565(uint16_t* row, const uint16_t* keep, unsigned count) {
+	unsigned i = 0;
+	for (; i + GRID_LANES16 <= count; i += GRID_LANES16) {
+		GridU16 c, k;
+		memcpy(&c, row + i, sizeof(c));
+		memcpy(&k, keep + i, sizeof(k));
+		GridU16 const out = ((c >> 11) * k >> 8) << 11 | ((c >> 5 & 0x3F) * k >> 8) << 5 | (c & 0x1F) * k >> 8;
+		memcpy(row + i, &out, sizeof(out));
+	}
+	for (; i < count; ++i) {
+		unsigned const c = row[i], k = keep[i];
+		row[i] = (uint16_t) (((c >> 11) * k >> 8) << 11 | ((c >> 5 & 0x3F) * k >> 8) << 5 | (c & 0x1F) * k >> 8);
+	}
+}
+
+static void gridShade8888(uint32_t* row, const uint16_t* keep, unsigned count) {
+	unsigned i = 0;
+	for (; i + GRID_LANES32 <= count; i += GRID_LANES32) {
+		GridU32 c;
+		GridHalves k;
+		memcpy(&c, row + i, sizeof(c));
+		memcpy(&k, keep + i, sizeof(k));
+		GridU32 const out = gridScale8888(c, __builtin_convertvector(k, GridU32));
+		memcpy(row + i, &out, sizeof(out));
+	}
+	for (; i < count; ++i) {
+		row[i] = gridScale8888One(row[i], keep[i]);
+	}
+}
+
+static void* gridGrow(void* buffer, size_t* size, size_t wanted) {
+	if (wanted <= *size) {
+		return buffer;
+	}
+	void* const grown = realloc(buffer, wanted);
+	if (grown) {
+		*size = wanted;
+	}
+	return grown;
+}
+
+static void sendPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {
+	int const s = gridScale;
+	if (s <= 1) {
+		videoRefresh(picture, width, height, pitch);
+		return;
+	}
+	// A frame RetroArch runs again and doesn't show isn't drawn.
+	if (!picture || rerunning()) {
+		videoRefresh(NULL, width * s, height * s, pitch * s);
+		return;
+	}
+	size_t const bytes = pitch / width;
+	bool const wide = bytes == sizeof(uint32_t);
+	unsigned const outWidth = width * s, outHeight = height * s;
+	size_t const outPitch = (size_t) outWidth * bytes;
+	// The larger picture; the source row blended for each share of gap; the shadow's darkness, at the
+	// source's size and spread across the larger rows.
+	static uint8_t *out, *blends, *dark, *spread, *templates;
+	static uint16_t* keeps;
+	static size_t outSize, blendsSize, darkSize, spreadSize, templatesSize, keepsSize;
+	enum { SHARES_MAX = 64 };
+	uint8_t* const newOut = gridGrow(out, &outSize, outPitch * outHeight);
+	out = newOut ? newOut : out;
+	uint8_t* const newBlends = gridGrow(blends, &blendsSize, (size_t) SHARES_MAX * width * bytes);
+	blends = newBlends ? newBlends : blends;
+	uint8_t* const newTemplates = gridGrow(templates, &templatesSize, (size_t) 8 * outPitch);
+	templates = newTemplates ? newTemplates : templates;
+	if (!newOut || !newBlends || !newTemplates) {
+		videoRefresh(picture, width, height, pitch);
+		return;
+	}
+	uint32_t gap;
+	enum LibretroLcd const lcd = libretroLcd(&gap);
+	unsigned const gapR = gap >> 16 & 0xFF, gapG = gap >> 8 & 0xFF, gapB = gap & 0xFF;
+	// Each pixel of a square's share of gap, 0 to 255, and the different shares, each with its blended
+	// row: share[sy][sx] indexes shares.
+	static int builtScale, builtLcd = -1, shareCount;
+	static uint8_t share[8][8], shares[SHARES_MAX];
+	// Each row of a square, the first row with the same shares: rows alike are one template.
+	static int kind[8];
+	if (builtScale != s || builtLcd != (int) lcd) {
+		const struct LibretroLcdLook* const look = &libretroLcdLooks[lcd];
+		int across[8], down[8];
+		for (int i = 0; i < s; ++i) {
+			float const covered = libretroLcdGapCoverage(i, (float) s, look->share * s);
+			across[i] = (int) lroundf(covered * look->across * 255);
+			down[i] = (int) lroundf(covered * look->down * 255);
+		}
+		shareCount = 0;
+		for (int y = 0; y < s; ++y) {
+			for (int x = 0; x < s; ++x) {
+				int const a = across[x] + down[y] - (across[x] * down[y] + 127) / 255;
+				int k = 0;
+				while (k < shareCount && shares[k] != a) {
+					++k;
+				}
+				if (k == shareCount) {
+					shares[shareCount++] = (uint8_t) a;
+				}
+				share[y][x] = (uint8_t) k;
+			}
+		}
+		for (int y = 0; y < s; ++y) {
+			kind[y] = y;
+			for (int k = 0; k < y && kind[y] == y; ++k) {
+				kind[y] = !memcmp(share[k], share[y], (size_t) s) ? k : y;
+			}
+		}
+		builtScale = s;
+		builtLcd = lcd;
+	}
+	// The shadow: each source pixel's darkness, then each source row spread across the larger width,
+	// as a smooth scale samples it after moving it the shadow's way.
+	bool const shadow = gridWay && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET);
+	static bool* rowDark;
+	static size_t rowDarkSize;
+	int moveX = 0, moveY = 0;
+	if (shadow) {
+		uint8_t* const newDark = gridGrow(dark, &darkSize, (size_t) width * height);
+		dark = newDark ? newDark : dark;
+		uint8_t* const newSpread = gridGrow(spread, &spreadSize, (size_t) outWidth * height);
+		spread = newSpread ? newSpread : spread;
+		bool* const newRowDark = gridGrow(rowDark, &rowDarkSize, height * sizeof(bool));
+		rowDark = newRowDark ? newRowDark : rowDark;
+		uint16_t* const newKeeps = gridGrow(keeps, &keepsSize, outWidth * sizeof(uint16_t));
+		keeps = newKeeps ? newKeeps : keeps;
+		if (!newDark || !newSpread || !newRowDark || !newKeeps) {
+			videoRefresh(picture, width, height, pitch);
+			return;
+		}
+		int const lit = 2 * gapR + 5 * gapG + gapB;
+		int const scaleDark = lit ? (LIBRETRO_LCD_SHADOW << 16) / lit : 0;
+		int const way = gridWay - 1;
+		float const reach = libretroLcdReach(way);
+		moveX = (int) lroundf(libretroLcdWays[way][0] * reach * s);
+		moveY = (int) lroundf(libretroLcdWays[way][1] * reach * s);
+		// Where each larger column reads: the source column to its left and the next one's weight of 256.
+		static int16_t leftOf[8 * 2048];
+		static uint8_t weightOf[8 * 2048];
+		for (unsigned x = 0; x < outWidth && x < 8 * 2048; ++x) {
+			int const at = (int) x - moveX;
+			float const u = (at + 0.5f) / s - 0.5f;
+			int const left = (int) floorf(u);
+			leftOf[x] = (int16_t) (at < 0 || at >= (int) outWidth ? -1 : left < 0 ? 0 : left > (int) width - 1 ? (int) width - 1 : left);
+			int const w = (int) lroundf((u - left) * 256);
+			weightOf[x] = (uint8_t) (left < 0 || left >= (int) width - 1 ? 0 : w > 255 ? 255 : w);
+		}
+		for (unsigned y = 0; y < height; ++y) {
+			const uint8_t* const row = (const uint8_t*) picture + y * pitch;
+			uint8_t* const d = dark + y * width;
+			bool any = false;
+			for (unsigned x = 0; x < width; ++x) {
+				int level;
+				if (wide) {
+					uint32_t const c = ((const uint32_t*) row)[x];
+					level = 2 * (int) (c >> 16 & 0xFF) + 5 * (int) (c >> 8 & 0xFF) + (int) (c & 0xFF);
+				} else {
+					uint32_t const c = ((const uint16_t*) row)[x];
+					level = 2 * (int) (c >> 11 << 3) + 5 * (int) (c >> 5 & 0x3F) * 4 + (int) (c & 0x1F) * 8;
+				}
+				d[x] = (uint8_t) (level < lit ? (lit - level) * scaleDark >> 16 : 0);
+				any |= d[x] != 0;
+			}
+			rowDark[y] = any;
+			uint8_t* const wideRow = spread + (size_t) y * outWidth;
+			if (!any) {
+				memset(wideRow, 0, outWidth);
+				continue;
+			}
+			for (unsigned x = 0; x < outWidth; ++x) {
+				int const left = leftOf[x];
+				if (left < 0) {
+					wideRow[x] = 0;
+					continue;
+				}
+				int const right = left + 1 < (int) width ? left + 1 : left;
+				wideRow[x] = (uint8_t) ((d[left] * (256 - weightOf[x]) + d[right] * weightOf[x]) >> 8);
+			}
+		}
+	}
+	for (unsigned y = 0; y < height; ++y) {
+		const uint8_t* const row = (const uint8_t*) picture + y * pitch;
+		for (int k = 0; k < shareCount; ++k) {
+			void* const blended = blends + (size_t) k * width * bytes;
+			if (!shares[k]) {
+				memcpy(blended, row, width * bytes);
+			} else if (wide) {
+				gridBlend8888((const uint32_t*) row, blended, width, shares[k], gapR, gapG, gapB);
+			} else {
+				gridBlend565((const uint16_t*) row, blended, width, shares[k], gapR, gapG, gapB);
+			}
+		}
+		// Each kind of row, spread: each column of the square from its share's blended row.
+		for (int sy = 0; sy < s; ++sy) {
+			if (kind[sy] != sy) {
+				continue;
+			}
+			uint8_t* const line = templates + (size_t) sy * outPitch;
+			for (int sx = 0; sx < s; ++sx) {
+				const uint8_t* const from = blends + (size_t) share[sy][sx] * width * bytes;
+				if (wide) {
+					const uint32_t* const f = (const uint32_t*) from;
+					uint32_t* const t = (uint32_t*) line + sx;
+					for (unsigned x = 0; x < width; ++x) {
+						t[x * s] = f[x];
+					}
+				} else {
+					const uint16_t* const f = (const uint16_t*) from;
+					uint16_t* const t = (uint16_t*) line + sx;
+					for (unsigned x = 0; x < width; ++x) {
+						t[x * s] = f[x];
+					}
+				}
+			}
+		}
+		for (int sy = 0; sy < s; ++sy) {
+			unsigned const outY = y * s + sy;
+			uint8_t* const line = out + (size_t) outY * outPitch;
+			memcpy(line, templates + (size_t) kind[sy] * outPitch, outPitch);
+			if (!shadow) {
+				continue;
+			}
+			// The shadow here: two source rows and the lower one's weight.
+			int const at = (int) outY - moveY;
+			if (at < 0 || at >= (int) outHeight) {
+				continue;
+			}
+			float const u = (at + 0.5f) / s - 0.5f;
+			int const left = (int) floorf(u);
+			int const top = left < 0 ? 0 : left > (int) height - 1 ? (int) height - 1 : left;
+			int const bottom = left + 1 < (int) height && left >= 0 ? left + 1 : top;
+			if (!rowDark[top] && !rowDark[bottom]) {
+				continue;
+			}
+			int const w = (int) lroundf((u - left) * 256);
+			unsigned const weight = left < 0 || left >= (int) height - 1 ? 0 : (unsigned) (w > 255 ? 255 : w);
+			if (!gridKeeps(keeps, spread + (size_t) top * outWidth, spread + (size_t) bottom * outWidth, weight, outWidth)) {
+				continue;
+			}
+			if (wide) {
+				gridShade8888((uint32_t*) line, keeps, outWidth);
+			} else {
+				gridShade565((uint16_t*) line, keeps, outWidth);
+			}
+		}
+	}
+	videoRefresh(out, outWidth, outHeight, outPitch);
+}
+
 // Each channel's next level, from its level now and the channel's value in the new picture: tables for
 // 5- and 6-bit channels (RGB565) and 8-bit ones (XRGB8888), for strong and weak drive.
 static uint8_t next5[2][256 * 32], next6[2][256 * 64], next8[2][256 * 256];
@@ -2888,7 +3280,7 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 	if (!ghosting || !picture || rerunning()) {
 		// Turned off, the screen starts again from the picture when it's turned on.
 		lastWidth = ghosting ? lastWidth : 0;
-		videoRefresh(picture, width, height, pitch);
+		sendPicture(picture, width, height, pitch);
 		return;
 	}
 	size_t const bytes = pitch / width;
@@ -2942,7 +3334,7 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 				}
 			}
 		}
-		videoRefresh(picture, width, height, pitch);
+		sendPicture(picture, width, height, pitch);
 		return;
 	}
 	bool const alternate = kind == SCREEN_TFT;
@@ -3005,7 +3397,7 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 		}
 		rowBusy[y] = (uint16_t) count;
 	}
-	videoRefresh(shown, width, height, pitch);
+	sendPicture(shown, width, height, pitch);
 }
 
 // The low-pass filter: each sample out, per side, is the last one out weighted by lowPass, out of
@@ -3475,7 +3867,7 @@ static void runOneAdvance(void) {
 	} while (gba->video.frameCounter == frame && !linkGbaHeld());
 	if (gba->video.frameCounter == frame) {
 		// Held for the link: the picture is half drawn, so the last one shows again.
-		videoRefresh(NULL, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t));
+		sendPicture(NULL, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t));
 		sendOneAdvanceSound();
 		return;
 	}
@@ -3505,6 +3897,12 @@ void retro_run(void) {
 		if ((listed && atoi(listed) != backupsListed) || loadIntoPlayer() != listedInto) {
 			offerSaveChoices();
 		}
+	}
+	// A new LCD Grid size changes the picture's largest size too, which only a new AV info can say.
+	if (gridAnnounce) {
+		struct retro_system_av_info av;
+		retro_get_system_av_info(&av);
+		environment(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av);
 	}
 	inputPoll();
 	readFastForward();

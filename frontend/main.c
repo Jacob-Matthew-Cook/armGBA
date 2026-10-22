@@ -466,26 +466,11 @@ bool loadGame(const char* path) {
 
 // The picture.
 
-// How much of output pixel at, from 0 to 1, falls in the gaps along one direction: each gap is gap
-// wide, centered on the edge between two source pixels, which are pitch apart.
-static float gapCoverage(int at, float pitch, float gap) {
-	float covered = 0;
-	for (int edge = (int) ceilf((at - gap / 2) / pitch); edge * pitch - gap / 2 < at + 1; ++edge) {
-		float const from = fmaxf(edge * pitch - gap / 2, (float) at), to = fminf(edge * pitch + gap / 2, (float) at + 1);
-		covered += to > from ? to - from : 0;
-	}
-	return fminf(covered, 1);
-}
-
 // A pattern over the picture. Scanlines: a CRT's dark line under each row, a source pixel to each 3x3
 // of it. LCD Grid: the gaps between the console screen's pixels, drawn at the size the picture is
 // shown, a gap that falls between output pixels shading each by how much of it is in the gap. The
 // first Game Boy's and the Pocket's show the screen's color while off there, the Color's and
-// Advance's a black matrix. Each screen's gaps, as a share of the pixel pitch, and how much of the gap
-// color shows across (between columns) and down (between rows), are from photos of the consoles: the
-// first Game Boy's are a quarter of the pitch and brighter than its lightest shade; the Advance's
-// darken as much as a black line a ninth of the pitch would; the Color's do so between columns, but
-// hardly between rows. The Pocket's are thinner than the first Game Boy's, by an estimate.
+// Advance's a black matrix; lcd.h has each screen's values.
 static void makeOverlay(SDL_Rect to) {
 	uint32_t gap = 0;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
@@ -516,21 +501,14 @@ static void makeOverlay(SDL_Rect to) {
 		return;
 	}
 	if (grid) {
-		static const struct {
-			float share, across, down;
-		} screens[] = {
-			[LIBRETRO_LCD_DMG] = { 0.25f, 1, 1 },
-			[LIBRETRO_LCD_POCKET] = { 0.15f, 1, 1 },
-			[LIBRETRO_LCD_COLOR] = { 0.15f, 0.6f, 0.1f },
-			[LIBRETRO_LCD_ADVANCE] = { 0.15f, 0.75f, 0.75f },
-		};
+		const struct LibretroLcdLook* const look = &libretroLcdLooks[lcd];
 		// Each column's and row's share of gap as an alpha, 0 to 255; a pixel takes either's.
 		float const pitchX = (float) w / app.gameWidth, pitchY = (float) h / app.gameHeight;
 		for (int x = 0; x < w; ++x) {
-			across[x] = (int) lroundf(gapCoverage(x, pitchX, screens[lcd].share * pitchX) * screens[lcd].across * 255);
+			across[x] = (int) lroundf(libretroLcdGapCoverage(x, pitchX, look->share * pitchX) * look->across * 255);
 		}
 		for (int y = 0; y < h; ++y) {
-			int const down = (int) lroundf(gapCoverage(y, pitchY, screens[lcd].share * pitchY) * screens[lcd].down * 255);
+			int const down = (int) lroundf(libretroLcdGapCoverage(y, pitchY, look->share * pitchY) * look->down * 255);
 			uint32_t* const row = pixels + (size_t) y * w;
 			for (int x = 0; x < w; ++x) {
 				row[x] = (uint32_t) (across[x] + down - (across[x] * down + 127) / 255) << 24 | (gap & 0xFFFFFF);
@@ -551,12 +529,9 @@ static void makeOverlay(SDL_Rect to) {
 	free(across);
 }
 
-// The shadow the first Game Boy's and the Pocket's pixels cast on the reflector behind them, across
-// the gap between the two: each pixel darkens the screen 1.4 dots from it the way the setting points
-// (down and right by default, from light above and to the left), softly, by a fifth for a pixel as
-// dark as the screen goes, from a Reddit photo of a first Game Boy's screen and Brick Boy's model of it
-// (a shadow 1.35 dots away). A texture a dot to each of the picture's pixels,
-// remade when the picture changes, drawn scaled smoothly over the picture.
+// The shadow the first Game Boy's and the Pocket's pixels cast on the reflector behind them, the way
+// the setting points (lcd.h has how far and how dark): a texture a dot to each of the picture's
+// pixels, remade when the picture changes, drawn scaled smoothly over the picture.
 static void drawShadow(SDL_Rect to, uint32_t lit) {
 	if (!shadow || shadowStale) {
 		int w = 0, h = 0;
@@ -581,7 +556,7 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 		}
 		// A pixel's darkness below the unlit screen, as an alpha: a fifth (51) at black.
 		int const litLevel = 2 * (lit >> 16 & 0xFF) + 5 * (lit >> 8 & 0xFF) + (lit & 0xFF);
-		int const scale = litLevel ? (51 << 16) / litLevel : 0;
+		int const scale = litLevel ? (LIBRETRO_LCD_SHADOW << 16) / litLevel : 0;
 		bool const wide = app.format == RETRO_PIXEL_FORMAT_XRGB8888;
 		for (int y = 0; y < app.gameHeight; ++y) {
 			const uint8_t* const row = app.picture + y * app.picturePitch;
@@ -599,9 +574,8 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 		shadowStale = false;
 	}
 	// Up, then on clockwise.
-	static const int8_t ways[8][2] = { { 0, -1 }, { 1, -1 }, { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 } };
-	int const dx = ways[settings.shadow - 1][0], dy = ways[settings.shadow - 1][1];
-	float const reach = dx && dy ? 1.0f : 1.4f;
+	int const dx = libretroLcdWays[settings.shadow - 1][0], dy = libretroLcdWays[settings.shadow - 1][1];
+	float const reach = libretroLcdReach(settings.shadow - 1);
 	SDL_Rect const cast = { to.x + (int) lroundf(dx * reach * to.w / app.gameWidth), to.y + (int) lroundf(dy * reach * to.h / app.gameHeight),
 		                    to.w, to.h };
 	SDL_RenderSetClipRect(app.renderer, &to);

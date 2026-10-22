@@ -45,6 +45,8 @@ only with Link Mode on.
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
 | | Game Boy Advance Border | Game Boy | Cropped, Shown |
 | | LCD Ghosting | Both | Off, Half, Full |
+| | LCD Grid | Both | Off, 2x to 8x |
+| | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left |
 | Audio | Low-Pass Filter | Both | Disabled, 20%, 40%, 60%, 80% |
 | Input | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
@@ -71,9 +73,13 @@ only with Link Mode on.
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
 set to Shown, the black around it shows too, as on that console's screen.
 
-`shaders/` holds RetroArch shader presets, `.slangp` and `.glslp`, that draw the gaps between the
-console screen's pixels as the standalone frontend's LCD Grid does, one for each screen: `gb-green`,
-`gb-gray`, `gb-pocket` and `gb-light` (with the shadow the pixels cast), `gbc` and `gba`.
+LCD Grid draws the gaps between the console screen's pixels into a picture as many times larger, with
+the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen, with
+RetroArch's integer scaling on. It works on the CPU, in vectors (NEON, SSE or AVX); at 6x it takes
+about 0.2 ms a frame for a Game Boy Advance game on a Ryzen 7 8745H, 0.6 ms for a Game Boy game
+with its shadow. `shaders/` holds RetroArch shader presets, `.slangp` and `.glslp`, that draw the same
+on the GPU at any size instead, one for each screen: `gb-green`, `gb-gray`, `gb-pocket` and `gb-light`
+(with the shadow), `gbc` and `gba`. The standalone frontend draws its own on the GPU.
 
 ## Building
 
