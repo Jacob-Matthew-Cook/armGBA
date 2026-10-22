@@ -844,7 +844,6 @@ static void readOptions(void) {
 // Hides the options that do nothing for the game and Link Mode. RetroArch calls it when an option
 // changes; returns whether that changed which are shown.
 static bool showOptions(void) {
-	bool const gameBoy = gameBoy;
 	bool const advance = gba && !gameBoy;
 	int const devices = advance ? gba->gpio.devices : 0;
 	bool const together = togetherWanted();
