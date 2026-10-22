@@ -2815,7 +2815,11 @@ static void readScreensKeys(void) {
 // faster than it lightens, as it relaxes. Each subpixel moves in linear light from where it was
 // towards the new frame by a share each frame. The time constants, in milliseconds to darken and to
 // lighten, are estimates for each kind of panel: the first Game Boy's STN, the Pocket's and Light's
-// FSTN, and the Color's and Advance's reflective TFTs; Half halves them. A frame RetroArch runs again, and doesn't
+// FSTN, and the Color's and Advance's reflective TFTs; Half halves them. The TFTs also drive alternate
+// rows harder each frame, the other rows the next: on a change, a row's target is two thirds of the
+// new picture and a third of the last, or the other way round, swapping each frame, as SameBoy's
+// accurate frame blending has it. A picture that alternates each frame so shows in stripes, as it
+// does on the consoles. A frame RetroArch runs again, and doesn't
 // show, leaves the screen as it is.
 enum { SCREEN_DMG, SCREEN_POCKET, SCREEN_TFT, SCREEN_KINDS };
 static const float screenTimes[SCREEN_KINDS][2] = { { 50, 110 }, { 25, 50 }, { 15, 30 } };
@@ -2890,6 +2894,10 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 		lastPitch = pitch;
 	}
 	const uint16_t* const share = shares[ghosting - 1][screenKind()];
+	static unsigned shownFrames;
+	++shownFrames;
+	bool const alternate = screenKind() == SCREEN_TFT;
+	size_t const rowPixels = pitch / bytes;
 	// Each channel's place and width: RGB565 or XRGB8888.
 	static const int shifts[2][3] = { { 11, 5, 0 }, { 16, 8, 0 } };
 	static const int widths[2][3] = { { 5, 6, 5 }, { 8, 8, 8 } };
@@ -2899,14 +2907,22 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 		struct Cell* const cell = &cells[i];
 		uint32_t output = input;
 		if (fresh || !cell->settled || input != cell->input) {
+			uint32_t const last = cell->input;
+			// Thirds of the last picture in this row's target.
+			int const pull = alternate && !fresh && last != input ? (i / rowPixels + shownFrames) % 2 + 1 : 0;
 			cell->input = input;
-			cell->settled = true;
+			cell->settled = !pull;
 			output = wide ? input & 0xFF000000 : 0;
 			for (int c = 0; c < 3; ++c) {
 				int const bits = widths[wide][c];
 				uint32_t const value = input >> shifts[wide][c] & ((1u << bits) - 1);
 				uint32_t const full = value << (8 - bits) | value >> (2 * bits - 8);
-				int32_t const target = toLinear[full];
+				int32_t target = toLinear[full];
+				if (pull) {
+					uint32_t const lastValue = last >> shifts[wide][c] & ((1u << bits) - 1);
+					uint32_t const lastFull = lastValue << (8 - bits) | lastValue >> (2 * bits - 8);
+					target = (target * (3 - pull) + toLinear[lastFull] * pull) / 3;
+				}
 				// A fresh cell's level isn't set yet: it takes the target.
 				int32_t const diff = fresh ? 0 : target - cell->level[c];
 				uint32_t out = value;
@@ -2916,10 +2932,12 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 					int32_t step = diff < 0 ? -((-diff * share[0]) >> 12) : (diff * share[1]) >> 12;
 					step = step ? step : diff < 0 ? -1 : 1;
 					cell->level[c] = (uint16_t) (cell->level[c] + step);
-					if (cell->level[c] != target) {
-						cell->settled = false;
-						out = toEncoded[cell->level[c] >> 4] >> (8 - bits);
-					}
+				}
+				if (cell->level[c] != target) {
+					cell->settled = false;
+				}
+				if (cell->level[c] != target || pull) {
+					out = toEncoded[cell->level[c] >> 4] >> (8 - bits);
 				}
 				output |= out << shifts[wide][c];
 			}
