@@ -302,6 +302,9 @@ void setPadForPort(void) {
 			if (!app.pads[port]) {
 				app.pads[port] = SDL_GameControllerOpen(i);
 				open = true;
+				if (app.pads[port]) {
+					osd("Controller %d: %s", port + 1, SDL_GameControllerName(app.pads[port]));
+				}
 			}
 		}
 	}
@@ -732,9 +735,34 @@ static bool actionHeld(enum Action action) {
 	return held;
 }
 
+// Systems such as ROCKNIX keep their controllers' mappings in a file, named in
+// SDL_GAMECONTROLLERCONFIG_FILE, that this SDL doesn't read by itself. Newer SDLs put a checksum of
+// the controller's name in a GUID's bytes 2 and 3, where this one has zeros, so each mapping that has
+// one is added again without it.
+static void addSystemMappings(void) {
+	const char* path = getenv("SDL_GAMECONTROLLERCONFIG_FILE");
+	FILE* f = path ? fopen(path, "r") : NULL;
+	if (!f) {
+		return;
+	}
+	char line[1024];
+	while (fgets(line, sizeof(line), f)) {
+		if (line[0] == '#' || strlen(line) < 33 || line[32] != ',') {
+			continue;
+		}
+		SDL_GameControllerAddMapping(line);
+		if (memcmp(line + 4, "0000", 4)) {
+			memcpy(line + 4, "0000", 4);
+			SDL_GameControllerAddMapping(line);
+		}
+	}
+	fclose(f);
+}
+
 int main(int argc, char** argv) {
 	const char* game = NULL;
 	const char* connectTo = NULL;
+	bool listControllers = false;
 	int hostMode = 0;
 	settingsDefaults();
 	dataDirectory(configDirectory, "XDG_CONFIG_HOME", ".config", "");
@@ -758,8 +786,10 @@ int main(int argc, char** argv) {
 			connectTo = argv[++i];
 		} else if (!strcmp(argv[i], "--port") && i + 1 < argc) {
 			settings.netPort = atoi(argv[++i]);
+		} else if (!strcmp(argv[i], "--controllers")) {
+			listControllers = true;
 		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-together | --connect ADDRESS] [--port N] [game]\n\n"
+			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-together | --connect ADDRESS] [--port N] [--controllers] [game]\n\n"
 			       "Esc, the controller's Guide button or a right-click opens the menu, where everything else is.\n"
 			       "Settings: ~/.config/armgba; saves, states, screenshots and cheats: ~/.local/share/armgba.\n");
 			return 0;
@@ -771,6 +801,16 @@ int main(int argc, char** argv) {
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
 		fprintf(stderr, "armgba: %s\n", SDL_GetError());
 		return 1;
+	}
+	addSystemMappings();
+	if (listControllers) {
+		// Each joystick SDL sees: its GUID, whether a mapping makes it a controller, its name.
+		for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+			char guid[33];
+			SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(i), guid, sizeof(guid));
+			printf("%s %s %s\n", guid, SDL_IsGameController(i) ? "mapped  " : "unmapped", SDL_JoystickNameForIndex(i));
+		}
+		return 0;
 	}
 	app.window = SDL_CreateWindow("armGBA", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 240 * settings.scale, 160 * settings.scale,
 	                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (settings.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
