@@ -338,6 +338,27 @@ static int wrap(int value, int delta, int count) {
 	return ((value + delta) % count + count) % count;
 }
 
+// The menus' look: each accent colour for titles and headers, the selection's fill and a held key;
+// the sizes, in percent; how dark the game is behind the menus.
+static const struct {
+	const char* name;
+	SDL_Color accent, fill, held;
+} accents[ACCENTS] = {
+	{ "Blue", { 111, 168, 255, 255 }, { 58, 120, 232, 255 }, { 47, 74, 122, 255 } },
+	{ "Purple", { 182, 146, 255, 255 }, { 120, 84, 220, 255 }, { 76, 58, 124, 255 } },
+	{ "Pink", { 255, 136, 196, 255 }, { 206, 62, 138, 255 }, { 118, 46, 86, 255 } },
+	{ "Red", { 255, 128, 118, 255 }, { 200, 58, 52, 255 }, { 116, 44, 42, 255 } },
+	{ "Orange", { 255, 180, 96, 255 }, { 204, 106, 28, 255 }, { 118, 72, 34, 255 } },
+	{ "Green", { 116, 222, 152, 255 }, { 36, 146, 88, 255 }, { 40, 94, 66, 255 } },
+	{ "Teal", { 96, 214, 222, 255 }, { 22, 136, 148, 255 }, { 30, 90, 100, 255 } },
+};
+static const struct {
+	const char* name;
+	int percent;
+} menuSizes[] = { { "Small", 85 }, { "Normal", 100 }, { "Large", 120 }, { "Larger", 140 } };
+static const char* const dims[3] = { "Light", "Medium", "Dark" };
+static const Uint8 dimAlphas[3] = { 110, 165, 215 };
+
 // The menus.
 
 static void rootMenu(void);
@@ -893,6 +914,9 @@ enum {
 	SET_AUTO_STATE,
 	SET_INPUT_DELAY,
 	SET_HARDCORE,
+	SET_ACCENT,
+	SET_MENU_SIZE,
+	SET_DIM,
 };
 
 // A setting's row (SET_*): left and right step a value or turn it over, as choosing it does. The
@@ -961,6 +985,21 @@ static void changeSetting(int which, int delta) {
 	case SET_HARDCORE:
 		settings.hardcore = !settings.hardcore;
 		cheevosSetHardcore(settings.hardcore);
+		break;
+	case SET_ACCENT:
+		settings.accent = wrap(settings.accent, d, ACCENTS);
+		break;
+	case SET_MENU_SIZE: {
+		int const count = (int) (sizeof(menuSizes) / sizeof(*menuSizes));
+		int at = 1;
+		for (int i = 0; i < count; ++i) {
+			at = menuSizes[i].percent == settings.menuSize ? i : at;
+		}
+		settings.menuSize = menuSizes[wrap(at, d, count)].percent;
+		break;
+	}
+	case SET_DIM:
+		settings.dim = wrap(settings.dim, d, 3);
 		break;
 	}
 	settingsWrite();
@@ -1092,9 +1131,22 @@ static void controlsMenu(void) {
 	items[itemCount - 1].confirm = true;
 }
 
+static void appearanceMenu(void) {
+	addValue("Accent Colour", accents[settings.accent].name, changeSetting, SET_ACCENT);
+	helpFor("The colour of the title, the headers and the selection.");
+	const char* size = "Normal";
+	for (size_t i = 0; i < sizeof(menuSizes) / sizeof(*menuSizes); ++i) {
+		size = menuSizes[i].percent == settings.menuSize ? menuSizes[i].name : size;
+	}
+	addValue("Menu Size", size, changeSetting, SET_MENU_SIZE);
+	helpFor("The menus' text and rows, larger for a TV across the room or smaller for more rows.");
+	addValue("Game Behind the Menus", dims[settings.dim], changeSetting, SET_DIM);
+	helpFor("How far the game is dimmed while the menus are open.");
+}
+
 static void openSettingsPage(int which, int delta) {
-	static void (*const pages[])(void) = { videoMenu, audioMenu, controlsMenu, gameplayMenu };
-	static const char* const titles[] = { "Video", "Audio", "Controls", "Rewind, Run-Ahead and States" };
+	static void (*const pages[])(void) = { videoMenu, audioMenu, controlsMenu, gameplayMenu, appearanceMenu };
+	static const char* const titles[] = { "Video", "Audio", "Controls", "Rewind, Run-Ahead and States", "Appearance" };
 	if (!delta) {
 		pushMenu(pages[which], titles[which]);
 	}
@@ -1107,6 +1159,8 @@ static void settingsMenu(void) {
 	addItem("Controls...", openSettingsPage, 2);
 	helpFor("Buttons and hotkeys, for controllers and the keyboard.");
 	addItem("Rewind, Run-Ahead and States...", openSettingsPage, 3);
+	addItem("Appearance...", openSettingsPage, 4);
+	helpFor("The menus' colour and size, and how dark the game is behind them.");
 }
 
 static void openSettings(int argument, int delta) {
@@ -1784,17 +1838,18 @@ bool uiEvent(const SDL_Event* event) {
 // that grows with the window.
 
 static const SDL_Color white = { 255, 255, 255, 255 }, text = { 214, 220, 234, 255 }, muted = { 143, 155, 181, 255 },
-                       accent = { 111, 168, 255, 255 }, pillFill = { 58, 120, 232, 255 }, panelFill = { 20, 26, 38, 240 }, edge = { 42, 53, 80, 255 },
-                       keyFill = { 34, 43, 63, 255 };
+                       panelFill = { 20, 26, 38, 240 }, edge = { 42, 53, 80, 255 }, keyFill = { 34, 43, 63, 255 };
+// The accent colour chosen, set as each frame is drawn.
+static SDL_Color accent, pillFill, keyHeld;
 
 static SDL_Color faded(SDL_Color c, int alpha) {
 	c.a = (Uint8) (c.a * alpha / 255);
 	return c;
 }
 
-// A 24th of the height or a 40th of the width, whichever is less.
+// A 24th of the height or a 40th of the width, whichever is less, times the menu size.
 static int unitFor(int width, int height) {
-	return SDL_max(12, SDL_min(height / 24, width / 40));
+	return SDL_max(10, SDL_min(height / 24, width / 40) * settings.menuSize / 100);
 }
 
 // Section headers: small capitals, spaced out.
@@ -1829,7 +1884,7 @@ static int drawHint(int x, int y, int u, const char* badge, bool round, const ch
 static int drawPanel(SDL_Rect panel, int u, const char* where) {
 	fillBordered(panel, u * 3 / 4, panelFill, edge, 1);
 	int const headerH = u * 3, inset = u + u / 2;
-	int const titleSize = u + u / 6, whereSize = u * 4 / 5;
+	int const titleSize = u * 3 / 2, whereSize = u * 4 / 5;
 	int const brand = textDraw(FACE_TITLE, titleSize, panel.x + inset, panel.y + (headerH - titleSize) / 2, accent, "ARMGBA");
 	char fitted[512];
 	textFit(FACE_BODY, whereSize, where, panel.w - 2 * inset - brand - u, true, fitted, sizeof(fitted));
@@ -1938,7 +1993,7 @@ static void drawEntry(int width, int height, int u) {
 			}
 			bool const on = entry.row == r && (r < 4 ? entry.column == c : entry.column / 3 == c / 3);
 			bool const shiftOn = r == 4 && c / 3 == 0 && entry.shift;
-			fillRounded(*rect, u / 4, on ? pillFill : shiftOn ? (SDL_Color) { 47, 74, 122, 255 } : keyFill);
+			fillRounded(*rect, u / 4, on ? pillFill : shiftOn ? keyHeld : keyFill);
 			char label[16];
 			if (r < 4) {
 				snprintf(label, sizeof(label), "%c", keyRows[entry.shift][r][c]);
@@ -2153,13 +2208,16 @@ void uiDraw(void) {
 	int width, height;
 	SDL_GetRendererOutputSize(app.renderer, &width, &height);
 	int const u = unitFor(width, height);
+	accent = accents[settings.accent].accent;
+	pillFill = accents[settings.accent].fill;
+	keyHeld = accents[settings.accent].held;
 	// A held controller direction repeats.
 	if ((held.dx || held.dy) && SDL_TICKS_PASSED(SDL_GetTicks(), held.next) && app.menuOpen) {
 		direction(held.dx, held.dy);
 		held.next = SDL_GetTicks() + REPEAT_MS;
 	}
 	if (app.menuOpen && depth) {
-		fillRect(0, 0, width, height, app.loaded ? (SDL_Color) { 4, 6, 12, 165 } : (SDL_Color) { 11, 15, 24, 255 });
+		fillRect(0, 0, width, height, app.loaded ? (SDL_Color) { 4, 6, 12, dimAlphas[settings.dim] } : (SDL_Color) { 11, 15, 24, 255 });
 		if (entry.open) {
 			drawEntry(width, height, u);
 		} else {

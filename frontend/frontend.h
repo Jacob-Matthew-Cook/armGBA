@@ -60,6 +60,9 @@ enum Filter {
 	FILTERS,
 };
 
+// The menus' accent colours.
+enum { ACCENTS = 7 };
+
 // A controller binding: a button, or a trigger past half way.
 enum {
 	PAD_NONE = -1,
@@ -95,6 +98,11 @@ struct Settings {
 	char cheevosToken[64];
 	bool hardcore;
 	char directory[PATH_SIZE];
+	// The menus' look: the accent colour, their size as a percentage, and how far the game behind them
+	// is dimmed (0 to 2).
+	int accent;
+	int menuSize;
+	int dim;
 };
 
 struct Option {
