@@ -25,6 +25,7 @@
 #include <strings.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #if defined(__aarch64__)
 #include <arm_neon.h>
 #elif defined(__AVX2__)
@@ -61,6 +62,8 @@ static retro_set_rumble_state_t setRumble;
 static bool rumbling;
 enum { THREADED_OFF, THREADED_ON, THREADED_LATE };
 static int threadedVideo;
+// The threads LCD Ghosting and LCD Grid share their rows among; 0 chooses.
+static int lcdThreads;
 // Color correction: each RGB565 color, green's low bit ignored, to its corrected color.
 static bool colorCorrection;
 static uint16_t* correctedColors;
@@ -408,6 +411,9 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  { { "off", "Off" }, { "up", "Up" }, { "up right", "Up Right" }, { "right", "Right" }, { "down right", "Down Right" }, { "down", "Down" },
 	    { "down left", "Down Left" }, { "left", "Left" }, { "up left", "Up Left" }, { NULL, NULL } },
 	  "down right" },
+	{ "armgba_lcd_threads", "LCD Effect Threads", NULL,
+	  "How many CPU cores share LCD Ghosting's and LCD Grid's work each frame. Auto leaves one core for the rest, two with Threaded Video; 1 keeps it on the emulator's own.",
+	  NULL, "video", { { "auto", "Auto" }, { "1", "1" }, { "2", "2" }, { "3", "3" }, { "4", "4" }, { NULL, NULL } }, "auto" },
 	{ "armgba_low_pass_filter", "Low-Pass Filter", NULL,
 	  "Softens the sound's high notes, as the consoles' small speakers did. Higher is softer.", NULL, "audio",
 	  { { "disabled", "Disabled" }, { "20", "20%" }, { "40", "40%" }, { "60", "60%" }, { "80", "80%" }, { NULL, NULL } }, "disabled" },
@@ -829,6 +835,8 @@ static void readOptions(void) {
 		{ "up", 1 }, { "up right", 2 }, { "right", 3 }, { "down right", 4 }, { "down", 5 }, { "down left", 6 }, { "left", 7 }, { "up left", 8 },
 	};
 	gridWay = optionChoice("armgba_lcd_shadow", wayChoices, COUNT(wayChoices), 0);
+	static const struct Choice threadChoices[] = { { "1", 1 }, { "2", 2 }, { "3", 3 }, { "4", 4 } };
+	lcdThreads = optionChoice("armgba_lcd_threads", threadChoices, COUNT(threadChoices), 0);
 	const char* const filter = option("armgba_low_pass_filter");
 	lowPass = filter ? atoi(filter) * 0x10000 / 100 : 0;
 	gbModel = optionChoice("armgba_gb_model", modelChoices, COUNT(modelChoices), LIBRETRO_GB_AUTO);
@@ -917,6 +925,7 @@ static bool showOptions(void) {
 		{ "armgba_gb_advance_border", !advance },
 		{ "armgba_gb_advance_panel", !advance },
 		{ "armgba_lcd_interleave", advance || (gbOnAdvance && !gbColorPanel) },
+		{ "armgba_lcd_threads", ghosting || gridScale > 1 },
 		{ "armgba_gb_link_port", !advance && together },
 		{ "armgba_gb_link_timing", !advance && separateWanted() },
 		{ "armgba_link_players", together },
@@ -3279,9 +3288,12 @@ struct GridBuffer {
 	size_t size;
 };
 
-// The rows are shared out among this many threads, the core's own and workers (workers.h) started
-// for the grid unless linked consoles have them already; each has its own scratch rows.
+// The rows are shared out among up to this many threads, the core's own and workers (workers.h)
+// started for them unless linked consoles have them already; each has its own scratch rows. Auto
+// leaves a core for the frontend's own threads, and another with Threaded Video, whose render thread
+// waits on a core of its own as the frame ends: on an RK3566, 3 threads, or 2, were the fastest.
 enum { GRID_JOBS = 4 };
+static int postJobs = 1;
 
 // The larger picture; for each thread, the source row blended for each share of gap and each row of a
 // square unlike those above it; the shadow's darkness at the source's size, with 8 more on each side;
@@ -3360,14 +3372,34 @@ static struct GridFrame {
 
 // The rows of height a thread draws: an even share of them.
 static void rowsOf(int job, unsigned height, unsigned* from, unsigned* to) {
-	*from = height * (unsigned) job / GRID_JOBS;
-	*to = height * (unsigned) (job + 1) / GRID_JOBS;
+	*from = height * (unsigned) job / (unsigned) postJobs;
+	*to = height * (unsigned) (job + 1) / (unsigned) postJobs;
 }
 
-// Workers for the post-processing threads, unless they're running already.
+// The threads for this frame's post-processing, and workers for them unless linked consoles' are
+// running.
 static void startJobs(void) {
-	if (workersAsked() < GRID_JOBS) {
-		workersStart(GRID_JOBS);
+	static long cores;
+	if (!cores) {
+		cores = sysconf(_SC_NPROCESSORS_ONLN);
+	}
+	int const spare = (int) cores - 1 - (threadedVideo != 0);
+	postJobs = lcdThreads ? lcdThreads : spare > GRID_JOBS ? GRID_JOBS : spare < 1 ? 1 : spare;
+	if (!gbaTogether && workersAsked() != (postJobs > 1 ? postJobs : 0)) {
+		if (postJobs > 1) {
+			workersStart(postJobs);
+		} else {
+			workersStop();
+		}
+	}
+}
+
+// Runs job for each post-processing thread.
+static void runJobs(void (*job)(int index)) {
+	if (postJobs > 1) {
+		workersRun(job, postJobs);
+	} else {
+		job(0);
 	}
 }
 
@@ -3552,9 +3584,9 @@ static void sendPicture(const void* picture, unsigned width, unsigned height, si
 		float const reach = libretroLcdReach(way);
 		gridFrame.moveX = (int) lroundf(libretroLcdWays[way][0] * reach * s);
 		gridFrame.moveY = (int) lroundf(libretroLcdWays[way][1] * reach * s);
-		workersRun(gridShadowJob, GRID_JOBS);
+		runJobs(gridShadowJob);
 	}
-	workersRun(gridDrawJob, GRID_JOBS);
+	runJobs(gridDrawJob);
 	videoRefresh(gridOut.data, outWidth, outHeight, outPitch);
 }
 
@@ -3740,7 +3772,7 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 	ghost.bytes = bytes;
 	ghost.alternate = kind == SCREEN_TFT && interleaved && advancePanel();
 	startJobs();
-	workersRun(ghostJob, GRID_JOBS);
+	runJobs(ghostJob);
 	sendPicture(ghost.shown, width, height, pitch);
 }
 
