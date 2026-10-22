@@ -25,6 +25,11 @@
 #include <strings.h>
 #include <time.h>
 #include <sys/stat.h>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#elif defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 enum {
 	AUDIO_RATE = 32768,
@@ -2864,9 +2869,9 @@ static void readScreensKeys(void) {
 // FSTN, and the Color's and Advance's reflective TFTs; Half halves them. With Interleaved Rows on, the
 // Advance's also drives alternate rows harder each frame, the other rows the next, the weaker rows
 // moving half as far, so a picture that alternates each frame shows in stripes, as it does on the
-// console (as SameBoy's accurate frame blending also has it). Each subpixel's level is kept 8-bit, gamma encoded, and its next level read
-// from a table built for the screen and the picture's channel widths. A frame RetroArch runs again,
-// and doesn't show, leaves the screen as it is.
+// console (as SameBoy's accurate frame blending also has it). Each subpixel's level is kept 8-bit,
+// gamma encoded, and its next level read from a table built for the screen and the picture's channel
+// widths. A frame RetroArch runs again, and doesn't show, leaves the screen as it is.
 enum { SCREEN_DMG, SCREEN_POCKET, SCREEN_TFT, SCREEN_KINDS };
 static const float screenTimes[SCREEN_KINDS][2] = { { 50, 110 }, { 25, 50 }, { 15, 30 } };
 
@@ -2896,16 +2901,11 @@ enum LibretroLcd libretroLcd(uint32_t* gap) {
 // in and, on the first Game Boy and the Pocket, the shadow its pixels cast, as the standalone frontend
 // draws them on the GPU (lcd.h has the values), for RetroArch without its shader presets. The scale
 // is whole, so every pixel's square has the same gaps: each source row is blended toward the gap color
-// once for each share of gap the square uses, those rows spread out into the larger one, and rows
-// alike copied. The shadow is the picture's darkness below the unlit screen, spread as a smooth scale
+// once for each share of gap the square uses, those rows woven into the larger one, and rows alike
+// copied. The shadow is the picture's darkness below the unlit screen, spread as a smooth scale
 // spreads it, across then down, and moved; it darkens the rows it reaches. The loops work on whole
 // rows in vectors, NEON on ARM, SSE or AVX on x86.
 
-#if defined(__aarch64__)
-#include <arm_neon.h>
-#elif defined(__AVX2__)
-#include <immintrin.h>
-#endif
 #if defined(__AVX2__)
 #define GRID_VECTOR 32
 #else
@@ -2981,47 +2981,14 @@ static void gridBlend8888(const uint32_t* from, uint32_t* to, unsigned count, un
 	}
 }
 
-// A larger row from its template, darkened by the shadow: of each pixel, 256 less the shadow's share,
-// lerped from two spread rows by w of 256, is kept. In one pass, as the memory is the slow part.
-// Whether count bytes, 16 at most, are all 0.
-static inline bool gridClear(const uint8_t* p, unsigned count) {
-	uint64_t a = 0, b = 0;
-	memcpy(&a, p, count < 8 ? count : 8);
-	if (count > 8) {
-		memcpy(&b, p + 8, count - 8);
-	}
-	return !(a | b);
-}
-
-static void gridShade565(uint16_t* to, const uint16_t* from, const uint8_t* top, const uint8_t* bottom, unsigned w, unsigned count) {
-	uint16_t const above = (uint16_t) (256 - w), below = (uint16_t) w;
-	unsigned i = 0;
-	for (; i + GRID_LANES16 <= count; i += GRID_LANES16) {
-		GridU16 c;
-		GridBytes16 t8, u8;
-		memcpy(&c, from + i, sizeof(c));
-		if (gridClear(top + i, GRID_LANES16) && gridClear(bottom + i, GRID_LANES16)) {
-			memcpy(to + i, &c, sizeof(c));
-			continue;
-		}
-		memcpy(&t8, top + i, sizeof(t8));
-		memcpy(&u8, bottom + i, sizeof(u8));
-		GridU16 const k = 256 - ((__builtin_convertvector(t8, GridU16) * above + __builtin_convertvector(u8, GridU16) * below) >> 8);
-		GridU16 const out = ((c >> 11) * k >> 8) << 11 | ((c >> 5 & 0x3F) * k >> 8) << 5 | (c & 0x1F) * k >> 8;
-		memcpy(to + i, &out, sizeof(out));
-	}
-	for (; i < count; ++i) {
-		unsigned const c = from[i], k = 256 - ((top[i] * above + bottom[i] * below) >> 8);
-		to[i] = (uint16_t) (((c >> 11) * k >> 8) << 11 | ((c >> 5 & 0x3F) * k >> 8) << 5 | (c & 0x1F) * k >> 8);
-	}
-}
-
+// A larger row from its template, darkened by the shadow lerped from two spread rows, the lower by w
+// of 255: each pixel keeps 256 less the shadow, of 256. In one pass, as the memory is the slow part.
+// The shadow is only on Game Boy screens, whose pictures are XRGB8888.
 #if defined(__aarch64__)
 // On 64-bit ARM, 16 pixels at a time in bytes: each byte times its pixel's share kept, by 8-bit
 // multiplies that widen to 16 bits, the share copied to the pixel's four bytes by a table lookup.
 static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top, const uint8_t* bottom, unsigned w, unsigned count) {
-	uint8_t const lower = (uint8_t) (w > 255 ? 255 : w);
-	uint8x8_t const below = vdup_n_u8(lower), above = vdup_n_u8((uint8_t) (255 - lower));
+	uint8x8_t const below = vdup_n_u8((uint8_t) w), above = vdup_n_u8((uint8_t) (255 - w));
 	static const uint8_t spreads[4][16] = {
 		{ 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3 },
 		{ 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7 },
@@ -3050,7 +3017,7 @@ static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top
 		}
 	}
 	for (; i < count; ++i) {
-		to[i] = gridScale8888One(from[i], 256 - ((top[i] * (255u - lower) + bottom[i] * lower) >> 8));
+		to[i] = gridScale8888One(from[i], 256 - ((top[i] * (255 - w) + bottom[i] * w) >> 8));
 	}
 }
 #elif defined(__AVX2__)
@@ -3058,8 +3025,7 @@ static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top
 // copied to each pixel's four bytes by a byte shuffle, then each byte times its share, 8 pixels to a
 // register.
 static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top, const uint8_t* bottom, unsigned w, unsigned count) {
-	uint8_t const lower = (uint8_t) (w > 255 ? 255 : w);
-	__m256i const below = _mm256_set1_epi16(lower), above = _mm256_set1_epi16((short) (255 - lower)), full = _mm256_set1_epi16(255);
+	__m256i const below = _mm256_set1_epi16((short) w), above = _mm256_set1_epi16((short) (255 - w)), full = _mm256_set1_epi16(255);
 	__m256i const zero = _mm256_setzero_si256();
 	// Pixels 0-3 of the 8 in each 128-bit half, then 4-7, for the first 8 pixels and the next 8.
 	__m256i const spread[2] = {
@@ -3089,12 +3055,22 @@ static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top
 		}
 	}
 	for (; i < count; ++i) {
-		to[i] = gridScale8888One(from[i], 256 - ((top[i] * (255u - lower) + bottom[i] * lower) >> 8));
+		to[i] = gridScale8888One(from[i], 256 - ((top[i] * (255 - w) + bottom[i] * w) >> 8));
 	}
 }
 #else
+// Whether count bytes, 16 at most, are all 0.
+static inline bool gridClear(const uint8_t* p, unsigned count) {
+	uint64_t a = 0, b = 0;
+	memcpy(&a, p, count < 8 ? count : 8);
+	if (count > 8) {
+		memcpy(&b, p + 8, count - 8);
+	}
+	return !(a | b);
+}
+
 static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top, const uint8_t* bottom, unsigned w, unsigned count) {
-	uint16_t const above = (uint16_t) (256 - w), below = (uint16_t) w;
+	uint16_t const above = (uint16_t) (255 - w), below = (uint16_t) w;
 	unsigned i = 0;
 	for (; i + GRID_LANES32 <= count; i += GRID_LANES32) {
 		GridU32 c;
@@ -3115,19 +3091,6 @@ static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top
 	}
 }
 #endif
-
-// Rows woven together: to[x * s + k] = from[k][x], for s rows of count elements of 1, 2 or 4 bytes. On
-// 64-bit ARM the interleaving stores do it, two to four rows at once, and six or eight as pairs.
-#define GRID_WEAVE_SCALAR(type)                                                                                        \
-	do {                                                                                                               \
-		for (int k = 0; k < s; ++k) {                                                                                  \
-			const type* const f = (const type*) from[k];                                                               \
-			type* const t = (type*) to + k;                                                                            \
-			for (unsigned x = done; x < count; ++x) {                                                                  \
-				t[x * s] = f[x];                                                                                       \
-			}                                                                                                          \
-		}                                                                                                              \
-	} while (0)
 
 #if defined(__AVX2__) && !defined(__aarch64__)
 // Rows woven with AVX2, 32 bytes of each at a time. Elements of 1, 2, 4 or 8 bytes are interleaved
@@ -3252,129 +3215,247 @@ static unsigned gridWeaveAvx2(uint8_t* to, const uint8_t* const* from, int s, un
 }
 #endif
 
-static void gridWeave8(uint8_t* to, const uint8_t* const* from, int s, unsigned count) {
-	unsigned done = 0;
+// gridWeave8, 16 and 32: rows woven together, to[x * s + k] = from[k][x], for s rows of count
+// elements of that many bits. On 64-bit ARM the interleaving stores do it, two to four rows at once,
+// and six or eight as three or four rows of pairs zipped into elements twice as wide; with AVX2,
+// gridWeaveAvx2; what is left, one element at a time. bits, lanes: the element and how many fill a
+// NEON register; wide, wideLanes: the same for a pair.
 #if defined(__aarch64__)
-	if (s == 2 || s == 3 || s == 4) {
-		for (; done + 16 <= count; done += 16) {
-			uint8x16_t const a = vld1q_u8(from[0] + done), b = vld1q_u8(from[1] + done);
-			if (s == 2) {
-				vst2q_u8(to + done * 2, ((uint8x16x2_t) { { a, b } }));
-			} else if (s == 3) {
-				vst3q_u8(to + done * 3, ((uint8x16x3_t) { { a, b, vld1q_u8(from[2] + done) } }));
-			} else {
-				vst4q_u8(to + done * 4, ((uint8x16x4_t) { { a, b, vld1q_u8(from[2] + done), vld1q_u8(from[3] + done) } }));
-			}
-		}
-	} else if (s == 6 || s == 8) {
-		for (; done + 16 <= count; done += 16) {
-			uint16x8_t lows[4], highs[4];
-			for (int k = 0; k < s / 2; ++k) {
-				uint8x16_t const a = vld1q_u8(from[k * 2] + done), b = vld1q_u8(from[k * 2 + 1] + done);
-				lows[k] = vreinterpretq_u16_u8(vzip1q_u8(a, b));
-				highs[k] = vreinterpretq_u16_u8(vzip2q_u8(a, b));
-			}
-			uint16_t* const t = (uint16_t*) (to + done * s);
-			if (s == 6) {
-				vst3q_u16(t, ((uint16x8x3_t) { { lows[0], lows[1], lows[2] } }));
-				vst3q_u16(t + 24, ((uint16x8x3_t) { { highs[0], highs[1], highs[2] } }));
-			} else {
-				vst4q_u16(t, ((uint16x8x4_t) { { lows[0], lows[1], lows[2], lows[3] } }));
-				vst4q_u16(t + 32, ((uint16x8x4_t) { { highs[0], highs[1], highs[2], highs[3] } }));
-			}
-		}
+#define GRID_WEAVE_VECTOR(bits, lanes, wide, wideLanes)                                                                       \
+	if (s == 2 || s == 3 || s == 4) {                                                                                         \
+		for (; done + lanes <= count; done += lanes) {                                                                        \
+			uint##bits##x##lanes##_t const a = vld1q_u##bits(from[0] + done), b = vld1q_u##bits(from[1] + done);             \
+			if (s == 2) {                                                                                                     \
+				vst2q_u##bits(to + done * 2, ((uint##bits##x##lanes##x2_t) { { a, b } }));                                    \
+			} else if (s == 3) {                                                                                              \
+				vst3q_u##bits(to + done * 3, ((uint##bits##x##lanes##x3_t) { { a, b, vld1q_u##bits(from[2] + done) } }));     \
+			} else {                                                                                                          \
+				vst4q_u##bits(to + done * 4,                                                                                  \
+				              ((uint##bits##x##lanes##x4_t) { { a, b, vld1q_u##bits(from[2] + done), vld1q_u##bits(from[3] + done) } })); \
+			}                                                                                                                 \
+		}                                                                                                                     \
+	} else if (s == 6 || s == 8) {                                                                                            \
+		for (; done + lanes <= count; done += lanes) {                                                                        \
+			uint##wide##x##wideLanes##_t lows[4], highs[4];                                                                   \
+			for (int k = 0; k < s / 2; ++k) {                                                                                 \
+				uint##bits##x##lanes##_t const a = vld1q_u##bits(from[k * 2] + done), b = vld1q_u##bits(from[k * 2 + 1] + done); \
+				lows[k] = vreinterpretq_u##wide##_u##bits(vzip1q_u##bits(a, b));                                              \
+				highs[k] = vreinterpretq_u##wide##_u##bits(vzip2q_u##bits(a, b));                                             \
+			}                                                                                                                 \
+			uint##wide##_t* const t = (uint##wide##_t*) (to + done * s);                                                      \
+			if (s == 6) {                                                                                                     \
+				vst3q_u##wide(t, ((uint##wide##x##wideLanes##x3_t) { { lows[0], lows[1], lows[2] } }));                       \
+				vst3q_u##wide(t + 3 * wideLanes, ((uint##wide##x##wideLanes##x3_t) { { highs[0], highs[1], highs[2] } }));    \
+			} else {                                                                                                          \
+				vst4q_u##wide(t, ((uint##wide##x##wideLanes##x4_t) { { lows[0], lows[1], lows[2], lows[3] } }));              \
+				vst4q_u##wide(t + 4 * wideLanes, ((uint##wide##x##wideLanes##x4_t) { { highs[0], highs[1], highs[2], highs[3] } })); \
+			}                                                                                                                 \
+		}                                                                                                                     \
 	}
 #elif defined(__AVX2__)
-	done = gridWeaveAvx2((uint8_t*) to, (const uint8_t* const*) from, s, count, 1);
+#define GRID_WEAVE_VECTOR(bits, lanes, wide, wideLanes) done = gridWeaveAvx2((uint8_t*) to, (const uint8_t* const*) from, s, count, bits / 8)
+#else
+#define GRID_WEAVE_VECTOR(bits, lanes, wide, wideLanes)
 #endif
-	GRID_WEAVE_SCALAR(uint8_t);
+
+#define GRID_WEAVE(bits, lanes, wide, wideLanes)                                                                     \
+	static void gridWeave##bits(uint##bits##_t* to, const uint##bits##_t* const* from, int s, unsigned count) { \
+		unsigned done = 0;                                                                                       \
+		GRID_WEAVE_VECTOR(bits, lanes, wide, wideLanes);                                                         \
+		for (int k = 0; k < s; ++k) {                                                                            \
+			for (unsigned x = done; x < count; ++x) {                                                            \
+				to[x * s + k] = from[k][x];                                                                      \
+			}                                                                                                    \
+		}                                                                                                        \
+	}
+GRID_WEAVE(8, 16, 16, 8)
+GRID_WEAVE(16, 8, 32, 4)
+GRID_WEAVE(32, 4, 64, 2)
+
+// A buffer kept from frame to frame, grown when a frame needs more.
+struct GridBuffer {
+	uint8_t* data;
+	size_t size;
+};
+
+// The larger picture; the source row blended for each share of gap; each row of a square unlike those
+// above it; the shadow's darkness at the source's size, with 8 more on each side; that spread across
+// the larger rows; whether each source row has any; a darkness row lerped for each column of a square.
+static struct GridBuffer gridOut, gridBlends, gridTemplates, gridDark, gridSpread, gridRowDark, gridLerped;
+
+// Whether b holds wanted bytes, growing it if it didn't.
+static bool gridReserve(struct GridBuffer* b, size_t wanted) {
+	if (wanted > b->size) {
+		uint8_t* const grown = realloc(b->data, wanted);
+		if (!grown) {
+			return false;
+		}
+		b->data = grown;
+		b->size = wanted;
+	}
+	return true;
 }
 
-static void gridWeave16(uint16_t* to, const uint16_t* const* from, int s, unsigned count) {
-	unsigned done = 0;
-#if defined(__aarch64__)
-	if (s == 2 || s == 3 || s == 4) {
-		for (; done + 8 <= count; done += 8) {
-			uint16x8_t const a = vld1q_u16(from[0] + done), b = vld1q_u16(from[1] + done);
-			if (s == 2) {
-				vst2q_u16(to + done * 2, ((uint16x8x2_t) { { a, b } }));
-			} else if (s == 3) {
-				vst3q_u16(to + done * 3, ((uint16x8x3_t) { { a, b, vld1q_u16(from[2] + done) } }));
-			} else {
-				vst4q_u16(to + done * 4, ((uint16x8x4_t) { { a, b, vld1q_u16(from[2] + done), vld1q_u16(from[3] + done) } }));
+enum { GRID_SHARES_MAX = 64 };
+
+// A square's layout for a scale and screen: the different shares of gap, 0 to 255, its pixels have;
+// each pixel's, as an index into them; and each row's first row alike, as rows alike share a template.
+static struct {
+	int scale, lcd, shareCount;
+	uint8_t shares[GRID_SHARES_MAX];
+	uint8_t shareOf[8][8];
+	int firstAlike[8];
+} gridLayout = { .lcd = -1 };
+
+static void gridLay(int s, enum LibretroLcd lcd) {
+	if (gridLayout.scale == s && gridLayout.lcd == (int) lcd) {
+		return;
+	}
+	const struct LibretroLcdLook* const look = &libretroLcdLooks[lcd];
+	int across[8], down[8];
+	for (int i = 0; i < s; ++i) {
+		float const covered = libretroLcdGapCoverage(i, (float) s, look->share * s);
+		across[i] = (int) lroundf(covered * look->across * 255);
+		down[i] = (int) lroundf(covered * look->down * 255);
+	}
+	gridLayout.shareCount = 0;
+	for (int y = 0; y < s; ++y) {
+		for (int x = 0; x < s; ++x) {
+			int const a = across[x] + down[y] - (across[x] * down[y] + 127) / 255;
+			int k = 0;
+			while (k < gridLayout.shareCount && gridLayout.shares[k] != a) {
+				++k;
 			}
-		}
-	} else if (s == 6 || s == 8) {
-		for (; done + 8 <= count; done += 8) {
-			uint32x4_t lows[4], highs[4];
-			for (int k = 0; k < s / 2; ++k) {
-				uint16x8_t const a = vld1q_u16(from[k * 2] + done), b = vld1q_u16(from[k * 2 + 1] + done);
-				lows[k] = vreinterpretq_u32_u16(vzip1q_u16(a, b));
-				highs[k] = vreinterpretq_u32_u16(vzip2q_u16(a, b));
+			if (k == gridLayout.shareCount) {
+				gridLayout.shares[gridLayout.shareCount++] = (uint8_t) a;
 			}
-			uint32_t* const t = (uint32_t*) (to + done * s);
-			if (s == 6) {
-				vst3q_u32(t, ((uint32x4x3_t) { { lows[0], lows[1], lows[2] } }));
-				vst3q_u32(t + 12, ((uint32x4x3_t) { { highs[0], highs[1], highs[2] } }));
-			} else {
-				vst4q_u32(t, ((uint32x4x4_t) { { lows[0], lows[1], lows[2], lows[3] } }));
-				vst4q_u32(t + 16, ((uint32x4x4_t) { { highs[0], highs[1], highs[2], highs[3] } }));
-			}
+			gridLayout.shareOf[y][x] = (uint8_t) k;
 		}
 	}
-#elif defined(__AVX2__)
-	done = gridWeaveAvx2((uint8_t*) to, (const uint8_t* const*) from, s, count, 2);
-#endif
-	GRID_WEAVE_SCALAR(uint16_t);
+	for (int y = 0; y < s; ++y) {
+		gridLayout.firstAlike[y] = y;
+		for (int k = 0; k < y && gridLayout.firstAlike[y] == y; ++k) {
+			gridLayout.firstAlike[y] = !memcmp(gridLayout.shareOf[k], gridLayout.shareOf[y], (size_t) s) ? k : y;
+		}
+	}
+	gridLayout.scale = s;
+	gridLayout.lcd = lcd;
 }
 
-static void gridWeave32(uint32_t* to, const uint32_t* const* from, int s, unsigned count) {
-	unsigned done = 0;
-#if defined(__aarch64__)
-	if (s == 2 || s == 3 || s == 4) {
-		for (; done + 4 <= count; done += 4) {
-			uint32x4_t const a = vld1q_u32(from[0] + done), b = vld1q_u32(from[1] + done);
-			if (s == 2) {
-				vst2q_u32(to + done * 2, ((uint32x4x2_t) { { a, b } }));
-			} else if (s == 3) {
-				vst3q_u32(to + done * 3, ((uint32x4x3_t) { { a, b, vld1q_u32(from[2] + done) } }));
-			} else {
-				vst4q_u32(to + done * 4, ((uint32x4x4_t) { { a, b, vld1q_u32(from[2] + done), vld1q_u32(from[3] + done) } }));
-			}
+// The shadow of an XRGB8888 picture, from the unlit screen's color lit: each pixel's darkness, then
+// each row spread across the larger width, as a smooth scale samples it after moving it moveX across.
+static void gridSpreadShadow(const uint8_t* picture, unsigned width, unsigned height, size_t pitch, int s, uint32_t lit, int moveX) {
+	unsigned const outWidth = width * s;
+	// Darkness counts from a sixteenth below the unlit screen; it is a fifth (51 of 255) at black.
+	int const litLevel = 2 * (int) (lit >> 16 & 0xFF) + 5 * (int) (lit >> 8 & 0xFF) + (int) (lit & 0xFF), start = litLevel - litLevel / 16;
+	int const scaleDark = start ? (LIBRETRO_LCD_SHADOW << 16) / start : 0;
+	// Where each column of a square reads, the same in every square: the source column to its left,
+	// counted from the square's own, and the next one's weight of 256.
+	int left[8], weight[8];
+	for (int sx = 0; sx < s; ++sx) {
+		float const u = (sx - moveX + 0.5f) / s - 0.5f;
+		left[sx] = (int) floorf(u);
+		int const w = (int) lroundf((u - left[sx]) * 256);
+		weight[sx] = w > 255 ? 255 : w;
+	}
+	for (unsigned y = 0; y < height; ++y) {
+		const uint32_t* const row = (const uint32_t*) (picture + y * pitch);
+		uint8_t* const d = gridDark.data + (size_t) y * (width + 16) + 8;
+		bool any = false;
+		for (unsigned x = 0; x < width; ++x) {
+			uint32_t const c = row[x];
+			int const level = 2 * (int) (c >> 16 & 0xFF) + 5 * (int) (c >> 8 & 0xFF) + (int) (c & 0xFF);
+			d[x] = (uint8_t) (level < start ? (start - level) * scaleDark >> 16 : 0);
+			any |= d[x] != 0;
 		}
-	} else if (s == 6 || s == 8) {
-		for (; done + 4 <= count; done += 4) {
-			uint64x2_t lows[4], highs[4];
-			for (int k = 0; k < s / 2; ++k) {
-				uint32x4_t const a = vld1q_u32(from[k * 2] + done), b = vld1q_u32(from[k * 2 + 1] + done);
-				lows[k] = vreinterpretq_u64_u32(vzip1q_u32(a, b));
-				highs[k] = vreinterpretq_u64_u32(vzip2q_u32(a, b));
+		// The ends copied out, as a smooth scale clamps.
+		memset(d - 8, d[0], 8);
+		memset(d + width, d[width - 1], 8);
+		gridRowDark.data[y] = any;
+		uint8_t* const wideRow = gridSpread.data + (size_t) y * outWidth;
+		if (!any) {
+			memset(wideRow, 0, outWidth);
+			continue;
+		}
+		// Each column of the squares, lerped along the row in vectors, then woven together.
+		const uint8_t* columns[8];
+		for (int sx = 0; sx < s; ++sx) {
+			const uint8_t* const p = d + left[sx];
+			uint16_t const w = (uint16_t) weight[sx], keep = (uint16_t) (256 - w);
+			uint8_t* const o = gridLerped.data + (size_t) sx * width;
+			unsigned x = 0;
+			for (; x + GRID_LANES16 <= width; x += GRID_LANES16) {
+				GridBytes16 a, b;
+				memcpy(&a, p + x, sizeof(a));
+				memcpy(&b, p + x + 1, sizeof(b));
+				GridBytes16 const v = __builtin_convertvector(
+					(__builtin_convertvector(a, GridU16) * keep + __builtin_convertvector(b, GridU16) * w) >> 8, GridBytes16);
+				memcpy(o + x, &v, sizeof(v));
 			}
-			uint64_t* const t = (uint64_t*) (to + done * s);
-			if (s == 6) {
-				vst3q_u64(t, ((uint64x2x3_t) { { lows[0], lows[1], lows[2] } }));
-				vst3q_u64(t + 6, ((uint64x2x3_t) { { highs[0], highs[1], highs[2] } }));
-			} else {
-				vst4q_u64(t, ((uint64x2x4_t) { { lows[0], lows[1], lows[2], lows[3] } }));
-				vst4q_u64(t + 8, ((uint64x2x4_t) { { highs[0], highs[1], highs[2], highs[3] } }));
+			for (; x < width; ++x) {
+				o[x] = (uint8_t) ((p[x] * keep + p[x + 1] * w) >> 8);
 			}
+			columns[sx] = o;
+		}
+		gridWeave8(wideRow, columns, s, width);
+		// None beyond where the moved shadow reaches.
+		if (moveX > 0) {
+			memset(wideRow, 0, (size_t) moveX < outWidth ? (size_t) moveX : outWidth);
+		} else if (moveX < 0) {
+			size_t const cut = (size_t) -moveX < outWidth ? (size_t) -moveX : outWidth;
+			memset(wideRow + outWidth - cut, 0, cut);
 		}
 	}
-#elif defined(__AVX2__)
-	done = gridWeaveAvx2((uint8_t*) to, (const uint8_t* const*) from, s, count, 4);
-#endif
-	GRID_WEAVE_SCALAR(uint32_t);
 }
 
-static void* gridGrow(void* buffer, size_t* size, size_t wanted) {
-	if (wanted <= *size) {
-		return buffer;
+// One source row's templates: the row blended for each share of gap, then each row of a square unlike
+// those above it woven from the blends its columns use.
+static void gridMakeTemplates(const uint8_t* row, unsigned width, size_t bytes, int s, uint32_t gap) {
+	unsigned const gapR = gap >> 16 & 0xFF, gapG = gap >> 8 & 0xFF, gapB = gap & 0xFF;
+	size_t const rowBytes = width * bytes, outPitch = rowBytes * s;
+	for (int k = 0; k < gridLayout.shareCount; ++k) {
+		void* const blended = gridBlends.data + k * rowBytes;
+		if (!gridLayout.shares[k]) {
+			memcpy(blended, row, rowBytes);
+		} else if (bytes == 4) {
+			gridBlend8888((const uint32_t*) row, blended, width, gridLayout.shares[k], gapR, gapG, gapB);
+		} else {
+			gridBlend565((const uint16_t*) row, blended, width, gridLayout.shares[k], gapR, gapG, gapB);
+		}
 	}
-	void* const grown = realloc(buffer, wanted);
-	if (grown) {
-		*size = wanted;
+	for (int sy = 0; sy < s; ++sy) {
+		if (gridLayout.firstAlike[sy] != sy) {
+			continue;
+		}
+		uint8_t* const line = gridTemplates.data + sy * outPitch;
+		const void* from[8];
+		for (int sx = 0; sx < s; ++sx) {
+			from[sx] = gridBlends.data + gridLayout.shareOf[sy][sx] * rowBytes;
+		}
+		if (bytes == 4) {
+			gridWeave32((uint32_t*) line, (const uint32_t* const*) from, s, width);
+		} else {
+			gridWeave16((uint16_t*) line, (const uint16_t* const*) from, s, width);
+		}
 	}
-	return grown;
+}
+
+// Larger row outY from its template, darkened where the shadow, moved moveY down, reaches: a smooth
+// scale lerps the two source rows around it.
+static void gridShadeRow(uint32_t* line, const uint32_t* pattern, unsigned outY, int moveY, unsigned width, unsigned height, int s) {
+	unsigned const outWidth = width * s;
+	int const at = (int) outY - moveY;
+	float const u = (at + 0.5f) / s - 0.5f;
+	int const above = (int) floorf(u);
+	int const top = above < 0 ? 0 : above > (int) height - 1 ? (int) height - 1 : above;
+	int const bottom = above + 1 < (int) height && above >= 0 ? above + 1 : top;
+	if (at < 0 || at >= (int) (height * s) || (!gridRowDark.data[top] && !gridRowDark.data[bottom])) {
+		memcpy(line, pattern, outWidth * sizeof(uint32_t));
+		return;
+	}
+	int const w = (int) lroundf((u - above) * 256);
+	unsigned const weight = above < 0 || above >= (int) height - 1 ? 0 : (unsigned) (w > 255 ? 255 : w);
+	gridShade8888(line, pattern, gridSpread.data + (size_t) top * outWidth, gridSpread.data + (size_t) bottom * outWidth, weight, outWidth);
 }
 
 static void sendPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {
@@ -3389,218 +3470,42 @@ static void sendPicture(const void* picture, unsigned width, unsigned height, si
 		return;
 	}
 	size_t const bytes = pitch / width;
-	bool const wide = bytes == sizeof(uint32_t);
 	unsigned const outWidth = width * s, outHeight = height * s;
 	size_t const outPitch = (size_t) outWidth * bytes;
-	// The larger picture; the source row blended for each share of gap; the shadow's darkness, at the
-	// source's size and spread across the larger rows.
-	static uint8_t *out, *blends, *dark, *spread, *templates;
-	static size_t outSize, blendsSize, darkSize, spreadSize, templatesSize;
-	enum { SHARES_MAX = 64 };
-	uint8_t* const newOut = gridGrow(out, &outSize, outPitch * outHeight);
-	out = newOut ? newOut : out;
-	uint8_t* const newBlends = gridGrow(blends, &blendsSize, (size_t) SHARES_MAX * width * bytes);
-	blends = newBlends ? newBlends : blends;
-	uint8_t* const newTemplates = gridGrow(templates, &templatesSize, (size_t) 8 * outPitch);
-	templates = newTemplates ? newTemplates : templates;
-	if (!newOut || !newBlends || !newTemplates) {
-		videoRefresh(picture, width, height, pitch);
-		return;
-	}
 	uint32_t gap;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
-	unsigned const gapR = gap >> 16 & 0xFF, gapG = gap >> 8 & 0xFF, gapB = gap & 0xFF;
-	// Each pixel of a square's share of gap, 0 to 255, and the different shares, each with its blended
-	// row: share[sy][sx] indexes shares.
-	static int builtScale, builtLcd = -1, shareCount;
-	static uint8_t share[8][8], shares[SHARES_MAX];
-	// Each row of a square, the first row with the same shares: rows alike are one template.
-	static int kind[8];
-	if (builtScale != s || builtLcd != (int) lcd) {
-		const struct LibretroLcdLook* const look = &libretroLcdLooks[lcd];
-		int across[8], down[8];
-		for (int i = 0; i < s; ++i) {
-			float const covered = libretroLcdGapCoverage(i, (float) s, look->share * s);
-			across[i] = (int) lroundf(covered * look->across * 255);
-			down[i] = (int) lroundf(covered * look->down * 255);
-		}
-		shareCount = 0;
-		for (int y = 0; y < s; ++y) {
-			for (int x = 0; x < s; ++x) {
-				int const a = across[x] + down[y] - (across[x] * down[y] + 127) / 255;
-				int k = 0;
-				while (k < shareCount && shares[k] != a) {
-					++k;
-				}
-				if (k == shareCount) {
-					shares[shareCount++] = (uint8_t) a;
-				}
-				share[y][x] = (uint8_t) k;
-			}
-		}
-		for (int y = 0; y < s; ++y) {
-			kind[y] = y;
-			for (int k = 0; k < y && kind[y] == y; ++k) {
-				kind[y] = !memcmp(share[k], share[y], (size_t) s) ? k : y;
-			}
-		}
-		builtScale = s;
-		builtLcd = lcd;
+	bool const shadow = gridWay && bytes == 4 && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET);
+	bool const room = gridReserve(&gridOut, outPitch * outHeight) && gridReserve(&gridBlends, GRID_SHARES_MAX * width * bytes) &&
+	                  gridReserve(&gridTemplates, 8 * outPitch) &&
+	                  (!shadow || (gridReserve(&gridDark, (size_t) (width + 16) * height) && gridReserve(&gridSpread, (size_t) outWidth * height) &&
+	                               gridReserve(&gridRowDark, height) && gridReserve(&gridLerped, (size_t) 8 * width)));
+	// Without the memory, the last picture stays.
+	if (!room) {
+		videoRefresh(NULL, outWidth, outHeight, outPitch);
+		return;
 	}
-	// The shadow: each source pixel's darkness, then each source row spread across the larger width,
-	// as a smooth scale samples it after moving it the shadow's way.
-	bool const shadow = gridWay && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET);
-	static bool* rowDark;
-	static size_t rowDarkSize;
-	// A darkness row lerped for each column of the squares.
-	static uint8_t* lerped;
-	static size_t lerpedSize;
-	int moveX = 0, moveY = 0;
+	gridLay(s, lcd);
+	int moveY = 0;
 	if (shadow) {
-		// Each darkness row has 8 more on each side, copies of its ends, as a smooth scale clamps.
-		uint8_t* const newDark = gridGrow(dark, &darkSize, (size_t) (width + 16) * height);
-		dark = newDark ? newDark : dark;
-		uint8_t* const newSpread = gridGrow(spread, &spreadSize, (size_t) outWidth * height);
-		spread = newSpread ? newSpread : spread;
-		bool* const newRowDark = gridGrow(rowDark, &rowDarkSize, height * sizeof(bool));
-		rowDark = newRowDark ? newRowDark : rowDark;
-		uint8_t* const newLerped = gridGrow(lerped, &lerpedSize, (size_t) 8 * width);
-		lerped = newLerped ? newLerped : lerped;
-		if (!newDark || !newSpread || !newRowDark || !newLerped) {
-			videoRefresh(picture, width, height, pitch);
-			return;
-		}
-		int const lit = 2 * gapR + 5 * gapG + gapB, start = lit - lit / 16;
-		int const scaleDark = start ? (LIBRETRO_LCD_SHADOW << 16) / start : 0;
 		int const way = gridWay - 1;
 		float const reach = libretroLcdReach(way);
-		moveX = (int) lroundf(libretroLcdWays[way][0] * reach * s);
 		moveY = (int) lroundf(libretroLcdWays[way][1] * reach * s);
-		// Where each column of a square reads, the same in every square: the source column to its left,
-		// counted from the square's own, and the next one's weight of 256.
-		int left[8], weight[8];
-		for (int sx = 0; sx < s; ++sx) {
-			float const u = (sx - moveX + 0.5f) / s - 0.5f;
-			left[sx] = (int) floorf(u);
-			int const w = (int) lroundf((u - left[sx]) * 256);
-			weight[sx] = w > 255 ? 255 : w;
-		}
-		for (unsigned y = 0; y < height; ++y) {
-			const uint8_t* const row = (const uint8_t*) picture + y * pitch;
-			uint8_t* const d = dark + (size_t) y * (width + 16) + 8;
-			bool any = false;
-			for (unsigned x = 0; x < width; ++x) {
-				int level;
-				if (wide) {
-					uint32_t const c = ((const uint32_t*) row)[x];
-					level = 2 * (int) (c >> 16 & 0xFF) + 5 * (int) (c >> 8 & 0xFF) + (int) (c & 0xFF);
-				} else {
-					uint32_t const c = ((const uint16_t*) row)[x];
-					level = 2 * (int) (c >> 11 << 3) + 5 * (int) (c >> 5 & 0x3F) * 4 + (int) (c & 0x1F) * 8;
-				}
-				d[x] = (uint8_t) (level < start ? (start - level) * scaleDark >> 16 : 0);
-				any |= d[x] != 0;
-			}
-			memset(d - 8, d[0], 8);
-			memset(d + width, d[width - 1], 8);
-			rowDark[y] = any;
-			uint8_t* const wideRow = spread + (size_t) y * outWidth;
-			if (!any) {
-				memset(wideRow, 0, outWidth);
-				continue;
-			}
-			// Each column of the squares, lerped along the row in vectors, then woven together.
-			const uint8_t* columns[8];
-			for (int sx = 0; sx < s; ++sx) {
-				const uint8_t* const p = d + left[sx];
-				uint16_t const w = (uint16_t) weight[sx], keep = (uint16_t) (256 - w);
-				uint8_t* const o = lerped + (size_t) sx * width;
-				unsigned x = 0;
-				for (; x + GRID_LANES16 <= width; x += GRID_LANES16) {
-					GridBytes16 a, b;
-					memcpy(&a, p + x, sizeof(a));
-					memcpy(&b, p + x + 1, sizeof(b));
-					GridBytes16 const v = __builtin_convertvector(
-						(__builtin_convertvector(a, GridU16) * keep + __builtin_convertvector(b, GridU16) * w) >> 8, GridBytes16);
-					memcpy(o + x, &v, sizeof(v));
-				}
-				for (; x < width; ++x) {
-					o[x] = (uint8_t) ((p[x] * keep + p[x + 1] * w) >> 8);
-				}
-				columns[sx] = o;
-			}
-			gridWeave8(wideRow, columns, s, width);
-			// None beyond where the moved shadow reaches.
-			if (moveX > 0) {
-				memset(wideRow, 0, (size_t) moveX < outWidth ? (size_t) moveX : outWidth);
-			} else if (moveX < 0) {
-				size_t const cut = (size_t) -moveX < outWidth ? (size_t) -moveX : outWidth;
-				memset(wideRow + outWidth - cut, 0, cut);
-			}
-		}
+		gridSpreadShadow(picture, width, height, pitch, s, gap, (int) lroundf(libretroLcdWays[way][0] * reach * s));
 	}
 	for (unsigned y = 0; y < height; ++y) {
-		const uint8_t* const row = (const uint8_t*) picture + y * pitch;
-		for (int k = 0; k < shareCount; ++k) {
-			void* const blended = blends + (size_t) k * width * bytes;
-			if (!shares[k]) {
-				memcpy(blended, row, width * bytes);
-			} else if (wide) {
-				gridBlend8888((const uint32_t*) row, blended, width, shares[k], gapR, gapG, gapB);
-			} else {
-				gridBlend565((const uint16_t*) row, blended, width, shares[k], gapR, gapG, gapB);
-			}
-		}
-		// Each kind of row, spread: each column of the square from its share's blended row.
-		for (int sy = 0; sy < s; ++sy) {
-			if (kind[sy] != sy) {
-				continue;
-			}
-			uint8_t* const line = templates + (size_t) sy * outPitch;
-			const void* from[8];
-			for (int sx = 0; sx < s; ++sx) {
-				from[sx] = blends + (size_t) share[sy][sx] * width * bytes;
-			}
-			if (wide) {
-				gridWeave32((uint32_t*) line, (const uint32_t* const*) from, s, width);
-			} else {
-				gridWeave16((uint16_t*) line, (const uint16_t* const*) from, s, width);
-			}
-		}
+		gridMakeTemplates((const uint8_t*) picture + y * pitch, width, bytes, s, gap);
 		for (int sy = 0; sy < s; ++sy) {
 			unsigned const outY = y * s + sy;
-			uint8_t* const line = out + (size_t) outY * outPitch;
-			const uint8_t* const pattern = templates + (size_t) kind[sy] * outPitch;
-			if (!shadow) {
-				memcpy(line, pattern, outPitch);
-				continue;
-			}
-			// The shadow here: two source rows and the lower one's weight.
-			int const at = (int) outY - moveY;
-			if (at < 0 || at >= (int) outHeight) {
-				memcpy(line, pattern, outPitch);
-				continue;
-			}
-			float const u = (at + 0.5f) / s - 0.5f;
-			int const left = (int) floorf(u);
-			int const top = left < 0 ? 0 : left > (int) height - 1 ? (int) height - 1 : left;
-			int const bottom = left + 1 < (int) height && left >= 0 ? left + 1 : top;
-			if (!rowDark[top] && !rowDark[bottom]) {
-				memcpy(line, pattern, outPitch);
-				continue;
-			}
-			int const w = (int) lroundf((u - left) * 256);
-			unsigned const weight = left < 0 || left >= (int) height - 1 ? 0 : (unsigned) (w > 255 ? 255 : w);
-			const uint8_t* const upper = spread + (size_t) top * outWidth;
-			const uint8_t* const lower = spread + (size_t) bottom * outWidth;
-			if (wide) {
-				gridShade8888((uint32_t*) line, (const uint32_t*) pattern, upper, lower, weight, outWidth);
+			uint8_t* const line = gridOut.data + (size_t) outY * outPitch;
+			const uint8_t* const pattern = gridTemplates.data + (size_t) gridLayout.firstAlike[sy] * outPitch;
+			if (shadow) {
+				gridShadeRow((uint32_t*) line, (const uint32_t*) pattern, outY, moveY, width, height, s);
 			} else {
-				gridShade565((uint16_t*) line, (const uint16_t*) pattern, upper, lower, weight, outWidth);
+				memcpy(line, pattern, outPitch);
 			}
 		}
 	}
-	videoRefresh(out, outWidth, outHeight, outPitch);
+	videoRefresh(gridOut.data, outWidth, outHeight, outPitch);
 }
 
 // Each channel's next level, from its level now and the channel's value in the new picture: tables for
