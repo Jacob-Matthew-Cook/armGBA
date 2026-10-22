@@ -84,12 +84,13 @@ LCD Grid draws the gaps between the console screen's pixels into a picture as ma
 with the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen,
 with RetroArch's integer scaling on. It works on the CPU, in vectors (NEON, SSE or AVX), its rows
 shared out among the cores, as LCD Ghosting's are: LCD Effect Threads says how many, Auto leaving
-one core for the rest, or two with Threaded Video. On an RG353M, at 6x with LCD Ghosting on too,
-they add about 1.5 ms a frame for a Game Boy Advance game and 2.5 ms for a Game Boy game with its
-shadow; on a Core i7-9700F, the grid alone adds 0.08 ms and 0.24 ms. `shaders/` holds RetroArch
-shader presets, `.slangp` and `.glslp`, that draw the same on the GPU at any size instead, one for
-each screen: `gb-green`, `gb-gray`, `gb-pocket` and `gb-light` (with the shadow), `gbc` and `gba`.
-The standalone frontend draws its own on the GPU.
+one core for the rest, or two with Threaded Video. Its shadow is one shade for each pixel's square,
+a close likeness of the smooth one the shaders and the standalone frontend draw, at a fraction of
+the cost. At 6x, a Game Boy game's grid adds about 1.5 ms a frame on an RG353M and its shadow 0.1 ms
+more; on a Core i7-9700F, 0.07 ms and 0.02 ms. `shaders/` holds RetroArch shader presets, `.slangp`
+and `.glslp`, that draw the same on the GPU at any size instead, one for each screen: `gb-green`,
+`gb-gray`, `gb-pocket` and `gb-light` (with the shadow), `gbc` and `gba`. The standalone frontend
+draws its own on the GPU.
 
 ## Building
 
