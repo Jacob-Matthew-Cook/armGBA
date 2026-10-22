@@ -59,7 +59,7 @@ static int threadedVideo;
 static bool colorCorrection;
 static uint16_t* correctedColors;
 static uint16_t correctedFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
-static bool ghosting;
+static int ghosting;
 static int32_t lowPass;
 static bool gameBoy;
 static enum LibretroGbModel gbModel;
@@ -374,8 +374,8 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  "On the Game Boy Advance model: Cropped shows only the game's picture, Shown the black around it as that console's screen has.", NULL, "video",
 	  { { "cropped", "Cropped" }, { "shown", "Shown" }, { NULL, NULL } }, "cropped" },
 	{ "armgba_lcd_ghosting", "LCD Ghosting", NULL,
-	  "The console's slow screen, which some games flicker sprites on to make them see-through: each change fades in over a few frames, darkening faster than it lightens, the first Game Boy's slowest.",
-	  NULL, "video", { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
+	  "The console's slow screen, which some games flicker sprites on to make them see-through: each change fades in over a few frames, darkening faster than it lightens, the first Game Boy's slowest. Half fades twice as fast.",
+	  NULL, "video", { { "disabled", "Off" }, { "half", "Half" }, { "enabled", "Full" }, { NULL, NULL } }, "disabled" },
 	{ "armgba_low_pass_filter", "Low-Pass Filter", NULL,
 	  "Softens the sound's high notes, as the consoles' small speakers did. Higher is softer.", NULL, "audio",
 	  { { "disabled", "Disabled" }, { "20", "20%" }, { "40", "40%" }, { "60", "60%" }, { "80", "80%" }, { NULL, NULL } }, "disabled" },
@@ -781,7 +781,8 @@ static void readOptions(void) {
 	}
 	threadedVideo = threaded;
 	colorCorrection = optionIs("armgba_color_correction", "enabled") && buildCorrectedColors();
-	ghosting = optionIs("armgba_lcd_ghosting", "enabled");
+	static const struct Choice ghostingChoices[] = { { "half", 1 }, { "enabled", 2 } };
+	ghosting = optionChoice("armgba_lcd_ghosting", ghostingChoices, COUNT(ghostingChoices), 0);
 	const char* const filter = option("armgba_low_pass_filter");
 	lowPass = filter ? atoi(filter) * 0x10000 / 100 : 0;
 	gbModel = optionChoice("armgba_gb_model", modelChoices, COUNT(modelChoices), LIBRETRO_GB_AUTO);
@@ -2813,7 +2814,7 @@ static void readScreensKeys(void) {
 // faster than it lightens, as it relaxes. Each subpixel moves in linear light from where it was
 // towards the new frame by a share each frame. The time constants, in milliseconds to darken and to
 // lighten, are estimates for each kind of panel: the first Game Boy's STN, the Pocket's and Light's
-// FSTN, and the Color's and Advance's reflective TFTs. A frame RetroArch runs again, and doesn't
+// FSTN, and the Color's and Advance's reflective TFTs; Half halves them. A frame RetroArch runs again, and doesn't
 // show, leaves the screen as it is.
 enum { SCREEN_DMG, SCREEN_POCKET, SCREEN_TFT, SCREEN_KINDS };
 static const float screenTimes[SCREEN_KINDS][2] = { { 50, 110 }, { 25, 50 }, { 15, 30 } };
@@ -2834,7 +2835,7 @@ static int screenKind(void) {
 static void showPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {
 	static uint16_t toLinear[256];
 	static uint8_t toEncoded[4096];
-	static uint16_t shares[SCREEN_KINDS][2];
+	static uint16_t shares[2][SCREEN_KINDS][2];
 	static struct Cell* cells;
 	static void* shown;
 	static unsigned lastWidth, lastHeight;
@@ -2851,9 +2852,11 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 			toEncoded[i] = (uint8_t) lround(pow((i * 16 + 8) / 65535.0, 1 / 2.2) * 255);
 		}
 		// A frame is 280896 cycles of 16.78 MHz on either console.
-		for (int k = 0; k < SCREEN_KINDS; ++k) {
-			for (int d = 0; d < 2; ++d) {
-				shares[k][d] = (uint16_t) lround(4096 * (1 - exp(-16.743 / screenTimes[k][d])));
+		for (int l = 0; l < 2; ++l) {
+			for (int k = 0; k < SCREEN_KINDS; ++k) {
+				for (int d = 0; d < 2; ++d) {
+					shares[l][k][d] = (uint16_t) lround(4096 * (1 - exp(-16.743 * 2 / (l + 1) / screenTimes[k][d])));
+				}
 			}
 		}
 	}
@@ -2876,7 +2879,7 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 		lastHeight = height;
 		lastPitch = pitch;
 	}
-	const uint16_t* const share = shares[screenKind()];
+	const uint16_t* const share = shares[ghosting - 1][screenKind()];
 	// Each channel's place and width: RGB565 or XRGB8888.
 	static const int shifts[2][3] = { { 11, 5, 0 }, { 16, 8, 0 } };
 	static const int widths[2][3] = { { 5, 6, 5 }, { 8, 8, 8 } };
