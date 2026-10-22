@@ -44,7 +44,9 @@ only with Link Mode on.
 | | Color Correction | Both | Disabled, Enabled |
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
 | | Game Boy Advance Border | Game Boy | Cropped, Shown |
+| | Game Boy Advance Panel | Game Boy | Game Boy Advance, Game Boy Color |
 | | LCD Ghosting | Both | Off, Half, Full |
+| | Interleaved Rows | Game Boy Advance | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left |
 | Audio | Low-Pass Filter | Both | Disabled, 20%, 40%, 60%, 80% |
@@ -71,7 +73,10 @@ only with Link Mode on.
 | | Backups Listed | Both | 10, 20, 40, 80, 126 |
 
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
-set to Shown, the black around it shows too, as on that console's screen.
+set to Shown, the black around it shows too, as on that console's screen. Game Boy Advance Panel shows its screen as
+the Advance's panel or the Color's: their colors with Color Correction on, their LCD Grid and their
+ghosting. Interleaved Rows, on the Advance's panel with LCD Ghosting on, drives alternate rows harder
+each frame, so pictures that alternate each frame show in stripes, as on the console.
 
 LCD Grid draws the gaps between the console screen's pixels into a picture as many times larger, with
 the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen, with
