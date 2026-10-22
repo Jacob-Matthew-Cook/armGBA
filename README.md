@@ -44,7 +44,7 @@ only with Link Mode on.
 | | Color Correction | Both | Disabled, Enabled |
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
 | | Game Boy Advance Border | Game Boy | Cropped, Shown |
-| | LCD Ghosting | Both | Disabled, Enabled |
+| | LCD Ghosting | Both | Off, Half, Full |
 | Audio | Low-Pass Filter | Both | Disabled, 20%, 40%, 60%, 80% |
 | Input | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
