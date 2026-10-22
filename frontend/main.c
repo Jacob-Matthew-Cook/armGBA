@@ -9,6 +9,7 @@
 // from the menu.
 
 #include "frontend.h"
+#include "lcd.h"
 #include "second.h"
 
 #include <errno.h>
@@ -38,7 +39,8 @@ static unsigned bytesPerFrame;
 static int16_t frameSound[2 * 4096];
 static size_t frameSoundCount;
 static SDL_Texture* overlay;
-static int overlayFilter = -1, overlayWidth, overlayHeight;
+static int overlayFilter = -1, overlayWidth, overlayHeight, overlayShownWidth, overlayShownHeight;
+static uint32_t overlayGap = 1;
 static uint16_t rumbleStrength[PORTS][2];
 static bool coreFastForward;
 // A save's memory as last written, to write it only when it changes.
@@ -458,10 +460,28 @@ bool loadGame(const char* path) {
 
 // The picture.
 
-// A pattern over the picture, a source pixel to each 3x3 of it: an LCD's dark gaps between its pixels,
-// or a CRT's dark line under each row.
-static void makeOverlay(void) {
-	if (overlay && overlayFilter == settings.filter && overlayWidth == app.gameWidth && overlayHeight == app.gameHeight) {
+// How much of output pixel at, from 0 to 1, falls in the gaps along one direction: each gap is gap
+// wide, centered on the edge between two source pixels, which are pitch apart.
+static float gapCoverage(int at, float pitch, float gap) {
+	float covered = 0;
+	for (int edge = (int) ceilf((at - gap / 2) / pitch); edge * pitch - gap / 2 < at + 1; ++edge) {
+		float const from = fmaxf(edge * pitch - gap / 2, (float) at), to = fminf(edge * pitch + gap / 2, (float) at + 1);
+		covered += to > from ? to - from : 0;
+	}
+	return fminf(covered, 1);
+}
+
+// A pattern over the picture. Scanlines: a CRT's dark line under each row, a source pixel to each 3x3
+// of it. LCD Grid: the gaps between the console screen's pixels, drawn at the size the picture is
+// shown, a gap that falls between output pixels shading each by how much of it is in the gap. A
+// Game Boy Color's or Advance's screen has a black matrix there; the first Game Boy's and the Pocket's
+// show the screen's unlit color. The gaps' widths, as shares of a pixel, and strengths are estimates.
+static void makeOverlay(SDL_Rect to) {
+	uint32_t gap = 0;
+	enum LibretroLcd const lcd = libretroLcd(&gap);
+	bool const grid = settings.filter == FILTER_LCD;
+	if (overlay && overlayFilter == settings.filter && overlayWidth == app.gameWidth && overlayHeight == app.gameHeight &&
+	    (!grid || (overlayShownWidth == to.w && overlayShownHeight == to.h && overlayGap == gap))) {
 		return;
 	}
 	if (overlay) {
@@ -471,22 +491,46 @@ static void makeOverlay(void) {
 	overlayFilter = settings.filter;
 	overlayWidth = app.gameWidth;
 	overlayHeight = app.gameHeight;
-	if ((settings.filter != FILTER_LCD && settings.filter != FILTER_SCANLINES) || !app.gameWidth) {
+	overlayShownWidth = to.w;
+	overlayShownHeight = to.h;
+	overlayGap = gap;
+	if ((!grid && settings.filter != FILTER_SCANLINES) || !app.gameWidth || to.w <= 0 || to.h <= 0) {
 		return;
 	}
-	int const w = app.gameWidth * 3, h = app.gameHeight * 3;
+	int const w = grid ? to.w : app.gameWidth * 3, h = grid ? to.h : app.gameHeight * 3;
 	uint32_t* pixels = calloc((size_t) w * h, 4);
-	for (int y = 0; y < h; ++y) {
+	float* across = calloc((size_t) w, sizeof(float));
+	if (!pixels || !across) {
+		free(pixels);
+		free(across);
+		return;
+	}
+	if (grid) {
+		float const share = lcd == LIBRETRO_LCD_TFT ? 0.15f : 0.10f, strength = lcd == LIBRETRO_LCD_TFT ? 0.6f : 0.8f;
+		float const pitchX = (float) w / app.gameWidth, pitchY = (float) h / app.gameHeight;
 		for (int x = 0; x < w; ++x) {
-			bool dark = settings.filter == FILTER_LCD ? x % 3 == 2 || y % 3 == 2 : y % 3 == 2;
-			pixels[y * w + x] = dark ? (settings.filter == FILTER_LCD ? 0x60000000u : 0x80000000u) : 0;
+			across[x] = gapCoverage(x, pitchX, share * pitchX);
+		}
+		for (int y = 0; y < h; ++y) {
+			float const down = gapCoverage(y, pitchY, share * pitchY);
+			for (int x = 0; x < w; ++x) {
+				float const covered = 1 - (1 - across[x]) * (1 - down);
+				pixels[y * w + x] = (uint32_t) lroundf(covered * strength * 255) << 24 | (gap & 0xFFFFFF);
+			}
+		}
+	} else {
+		for (int y = 0; y < h; ++y) {
+			for (int x = 0; x < w; ++x) {
+				pixels[y * w + x] = y % 3 == 2 ? 0x80000000u : 0;
+			}
 		}
 	}
 	overlay = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
 	SDL_UpdateTexture(overlay, NULL, pixels, w * 4);
 	SDL_SetTextureBlendMode(overlay, SDL_BLENDMODE_BLEND);
-	SDL_SetTextureScaleMode(overlay, SDL_ScaleModeLinear);
+	SDL_SetTextureScaleMode(overlay, grid ? SDL_ScaleModeNearest : SDL_ScaleModeLinear);
 	free(pixels);
+	free(across);
 }
 
 static void present(void) {
@@ -516,7 +560,7 @@ static void present(void) {
 		to.x = (width - to.w) / 2;
 		to.y = (height - to.h) / 2;
 		SDL_RenderCopy(app.renderer, app.game, NULL, &to);
-		makeOverlay();
+		makeOverlay(to);
 		if (overlay) {
 			SDL_RenderCopy(app.renderer, overlay, NULL, &to);
 		}
