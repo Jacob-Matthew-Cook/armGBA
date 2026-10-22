@@ -1560,7 +1560,6 @@ resetBase:
 4:
 	subs   r2, r2, #1
 	bne    4b
-	wait   2
 	mov    r0, #0
 	msr    cpsr_fsxc, #0x1F
 	bx     lr
