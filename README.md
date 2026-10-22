@@ -49,6 +49,7 @@ only with Link Mode on.
 | | Interleaved Rows | Both | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left |
+| | LCD Effect Threads | Both | Auto, 1, 2, 3, 4 |
 | Audio | Low-Pass Filter | Both | Disabled, 20%, 40%, 60%, 80% |
 | Input | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
@@ -82,11 +83,13 @@ on the console.
 LCD Grid draws the gaps between the console screen's pixels into a picture as many times larger,
 with the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen,
 with RetroArch's integer scaling on. It works on the CPU, in vectors (NEON, SSE or AVX), its rows
-shared out among the cores, as LCD Ghosting's are. At 6x a frame takes about 1.8 ms for a Game Boy
-Advance game and 2.4 ms for a Game Boy game with its shadow on an RG353M, and 0.08 ms and 0.24 ms on
-a Core i7-9700F. `shaders/` holds RetroArch shader presets, `.slangp` and `.glslp`, that draw the
-same on the GPU at any size instead, one for each screen: `gb-green`, `gb-gray`, `gb-pocket` and
-`gb-light` (with the shadow), `gbc` and `gba`. The standalone frontend draws its own on the GPU.
+shared out among the cores, as LCD Ghosting's are: LCD Effect Threads says how many, Auto leaving
+one core for the rest, or two with Threaded Video. On an RG353M, at 6x with LCD Ghosting on too,
+they add about 1.5 ms a frame for a Game Boy Advance game and 2.5 ms for a Game Boy game with its
+shadow; on a Core i7-9700F, the grid alone adds 0.08 ms and 0.24 ms. `shaders/` holds RetroArch
+shader presets, `.slangp` and `.glslp`, that draw the same on the GPU at any size instead, one for
+each screen: `gb-green`, `gb-gray`, `gb-pocket` and `gb-light` (with the shadow), `gbc` and `gba`.
+The standalone frontend draws its own on the GPU.
 
 ## Building
 
