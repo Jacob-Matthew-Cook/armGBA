@@ -13,7 +13,7 @@ extern "C" {
 }
 #include "dmg07.h"
 #include "link.h"
-#include "sameboy-boot.h"
+#include "armgba-boot.h"
 
 #include "gambatte.h"
 
@@ -347,14 +347,16 @@ bool nintendoBoot(std::vector<unsigned char> const& bytes) {
 // Nintendo's boot ROM under every name that ROCKNIX's BIOS check, Gambatte, gbdev's archive,
 // SameBoy and Gearboy use for it, then for a SameBoy boot ROM under the same names.
 //
-// For a Game Boy Advance, a Game Boy Color boot ROM is used only if it is Nintendo's: Gambatte can
-// convert that one, but not SameBoy's.
+// For a Game Boy Advance, the Advance's own comes first; a Game Boy Color boot ROM is used only if
+// it is Nintendo's: Gambatte can convert that one, but not SameBoy's, and the conversion's timing
+// is not quite the Advance's.
 std::string bootRom(const char* systemDirectory, LibretroGbModel model) {
 	static const char* const names[4][5] = {
 		{ "gb_bios.bin", "dmg_boot.bin" },
 		{ "gbc_bios.bin", "cgb_boot.bin" },
-		// The later Game Boy Advances', the first ones', the Game Boy Color's, then SameBoy's name.
-		{ "cgb_agb_boot.bin", "cgb_agb0_boot.bin", "gbc_bios.bin", "cgb_boot.bin", "agb_boot.bin" },
+		// The later Game Boy Advances', the first ones', the name SameBoy also uses, then the Game Boy
+		// Color's.
+		{ "cgb_agb_boot.bin", "cgb_agb0_boot.bin", "agb_boot.bin", "gbc_bios.bin", "cgb_boot.bin" },
 		// The Game Boy's boot ROM would leave the wrong value in A for a Pocket, so without the
 		// Pocket's there is none.
 		{ "mgb_boot.bin" },
@@ -366,7 +368,7 @@ std::string bootRom(const char* systemDirectory, LibretroGbModel model) {
 		if (bytes.empty()) {
 			continue;
 		}
-		bool const converted = model == LIBRETRO_GB_AGB && (i == 2 || i == 3);
+		bool const converted = model == LIBRETRO_GB_AGB && (i == 3 || i == 4);
 		if (converted ? bytes.size() == 2304 && gambatte::crc32(0, &bytes[0], bytes.size()) == 0x41884E46
 		              : nintendoBoot(bytes)) {
 			return path;
@@ -378,21 +380,17 @@ std::string bootRom(const char* systemDirectory, LibretroGbModel model) {
 	return other;
 }
 
-// Returns SameBoy's boot ROM for the model. The Pocket's is the Game Boy's with 0xFF left in A:
-// that byte is the high byte of its "ld hl, $01B0" before "push hl; pop af".
-std::vector<unsigned char> sameboyBoot(LibretroGbModel model) {
+// Returns armGBA's boot ROM for the model (gbboot/).
+std::vector<unsigned char> armgbaBoot(LibretroGbModel model) {
 	switch (model) {
 	case LIBRETRO_GB_CGB:
-		return std::vector<unsigned char>(sameboy_cgb_boot, sameboy_cgb_boot + sizeof(sameboy_cgb_boot));
+		return std::vector<unsigned char>(armgba_cgb_boot, armgba_cgb_boot + sizeof(armgba_cgb_boot));
 	case LIBRETRO_GB_AGB:
-		return std::vector<unsigned char>(sameboy_agb_boot, sameboy_agb_boot + sizeof(sameboy_agb_boot));
-	default: {
-		std::vector<unsigned char> boot(sameboy_dmg_boot, sameboy_dmg_boot + sizeof(sameboy_dmg_boot));
-		if (model == LIBRETRO_GB_MGB) {
-			boot[0x93] = 0xFF;
-		}
-		return boot;
-	}
+		return std::vector<unsigned char>(armgba_agb_boot, armgba_agb_boot + sizeof(armgba_agb_boot));
+	case LIBRETRO_GB_MGB:
+		return std::vector<unsigned char>(armgba_mgb_boot, armgba_mgb_boot + sizeof(armgba_mgb_boot));
+	default:
+		return std::vector<unsigned char>(armgba_dmg_boot, armgba_dmg_boot + sizeof(armgba_dmg_boot));
 	}
 }
 
@@ -508,11 +506,11 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 	if (model == LIBRETRO_GB_AUTO) {
 		model = headerModel(bytes, size, sachen);
 	}
-	// Starts through a boot ROM when there is one; otherwise in the state the boot ROM would have
-	// left the machine.
+	// Starts through Nintendo's boot ROM when the system directory has it, else armGBA's; with Boot
+	// ROM off, in the state a boot ROM would have left the machine.
 	std::string const boot = !sachen && bootWanted == LIBRETRO_GB_BOOT_NINTENDO ? bootRom(systemDirectory, model) : std::string();
-	std::vector<unsigned char> const builtIn = !sachen && bootWanted == LIBRETRO_GB_BOOT_SAMEBOY ? sameboyBoot(model)
-	                                                                                             : std::vector<unsigned char>();
+	std::vector<unsigned char> const builtIn = !sachen && bootWanted != LIBRETRO_GB_BOOT_OFF && boot.empty() ? armgbaBoot(model)
+	                                                                                                       : std::vector<unsigned char>();
 	s->bootUsed = bootWanted;
 	s->loadFlags = gambatte::GB::READONLY_SAV;
 	if (model == LIBRETRO_GB_MGB) {

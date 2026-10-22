@@ -12,6 +12,7 @@
 #include "cheats.h"
 #include "gba.h"
 #include "gb.h"
+#include "dolphin.h"
 #include "link.h"
 #include "second.h"
 #include "workers.h"
@@ -58,9 +59,14 @@ static int threadedVideo;
 static bool colorCorrection;
 static uint16_t* correctedColors;
 static uint16_t correctedFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
+static bool ghosting;
+static int32_t lowPass;
 static bool gameBoy;
 static enum LibretroGbModel gbModel;
 static bool gbColorCorrection;
+// The original Game Boy's screen colors: 0 plain grays, 1 the Pocket's, 2 the first model's, 3 the
+// Light's.
+static int gbShades;
 // On the Game Boy Advance model, a Game Boy game is shown as that console shows it: centered on its
 // screen, or stretched across it. When cropped, the black border is left out.
 static bool gbOnAdvance;
@@ -164,7 +170,7 @@ static bool l2FastForward = true;
 static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game: the choices offered, and the game running (empty for player 1's).
-enum { SECOND_CHOICES = 126 };
+enum { SECOND_CHOICES = 125 };
 static struct retro_core_options_v2* coreOptions;
 static struct retro_core_option_v2_definition* secondOption;
 static struct SecondGame secondGames[SECOND_CHOICES];
@@ -172,12 +178,18 @@ static size_t secondCount;
 static char firstPath[PATH_SIZE];
 static char secondPath[PATH_SIZE];
 static bool secondFromFrontend;
+static bool othersBare;
 static bool pairFile;
 static char pairPath[PATH_SIZE];
 // Players 3 and 4's games, empty for player 1's: from a pair file.
 static char otherPaths[MAX_PLAYERS][PATH_SIZE];
 static int pairCount;
 static bool netplaySeen;
+// The Switch Controller buttons move controller 1 to the next console here; controllerFocus is the
+// console it plays, the other controllers moving along with it.
+enum { SWITCH_OFF, SWITCH_L_R_A_B, SWITCH_START_L2_R2 };
+static int switchController = SWITCH_L_R_A_B;
+static int controllerFocus;
 // In rollback netplay every device runs the host's session. Each device tags its session, and the
 // tag goes in every state. A device that loads a state with another device's tag has joined that
 // session and takes its tag, so the states on every device stay the same.
@@ -221,10 +233,13 @@ static int listedInto = -1;
 static bool optionsShown[32];
 static bool optionsShownSet;
 static bool tiltCartridge;
+// Whether the GameCube link was last shown as connected.
+static bool gamecubeShown;
 
 static bool showOptions(void);
 static bool togetherWanted(void);
 static bool separateWanted(void);
+static bool gamecubeWanted(void);
 static void fillSaveChoices(void);
 static void offerSaveChoices(void);
 static void keepSession(void);
@@ -331,16 +346,20 @@ static void setVariables(retro_environment_t callback, const struct retro_core_o
 // Keys and values match saved configurations; labels are what the menu shows. showOptions hides
 // the options that do nothing for the game and Link Mode.
 static struct retro_core_option_v2_definition optionDefinitions[] = {
-	{ "armgba_skip_bios", "Skip BIOS Intro", NULL, "Start games without the Game Boy Advance logo.", NULL, "system",
+	{ "armgba_skip_bios", "Skip BIOS Intro", NULL, "Start games without the BIOS's intro: the Game Boy Advance logo, or armGBA's splash.", NULL, "system",
 	  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
+	{ "armgba_bios", "BIOS", NULL,
+	  "Nintendo's gba_bios.bin from the system folder, or armGBA's open-source BIOS built into the core. Nintendo's falls back to armGBA's when the file isn't there. Applies on Restart.",
+	  NULL, "system",
+	  { { "nintendo", "Nintendo's (System Folder)" }, { "open-source", "armGBA's (Built In)" }, { NULL, NULL } }, "nintendo" },
 	{ "armgba_gb_model", "Game Boy Model", NULL,
 	  "The console Game Boy and Game Boy Color games run on. On the Game Boy Advance, L or R stretches the picture. Applies on Restart.",
 	  NULL, "system",
 	  { { "Auto", NULL }, { "Game Boy", NULL }, { "Game Boy Pocket", "Game Boy Pocket / Light" }, { "Game Boy Color", NULL }, { "Game Boy Advance", NULL }, { NULL, NULL } }, "Auto" },
 	{ "armgba_gb_boot_rom", "Boot ROM", NULL,
-	  "Start with the console's logo: Nintendo's boot ROM from the system folder, or SameBoy's free one built into the core. Applies on Restart.",
+	  "Start with the console's logo: Nintendo's boot ROM from the system folder (armGBA's when it isn't there), or armGBA's open-source one built into the core. Applies on Restart.",
 	  NULL, "system",
-	  { { "enabled", "Nintendo's (System Folder)" }, { "disabled", "Off" }, { "open-source", "SameBoy's (Built In)" }, { NULL, NULL } }, "enabled" },
+	  { { "enabled", "Nintendo's (System Folder)" }, { "disabled", "Off" }, { "open-source", "armGBA's (Built In)" }, { NULL, NULL } }, "enabled" },
 	{ "armgba_threaded_video", "Threaded Video", NULL,
 	  "Draw the picture on a second CPU core, which helps fast-forward and runahead on slower devices. One Frame Late is faster still, but shows each frame a frame late.", NULL, "video",
 	  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { "one frame late", "One Frame Late" }, { NULL, NULL } }, "disabled" },
@@ -354,6 +373,12 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_gb_advance_border", "Game Boy Advance Border", NULL,
 	  "On the Game Boy Advance model: Cropped shows only the game's picture, Shown the black around it as that console's screen has.", NULL, "video",
 	  { { "cropped", "Cropped" }, { "shown", "Shown" }, { NULL, NULL } }, "cropped" },
+	{ "armgba_lcd_ghosting", "LCD Ghosting", NULL,
+	  "The console's slow screen, which some games flicker sprites on to make them see-through: each change fades in over a few frames, darkening faster than it lightens, the first Game Boy's slowest.",
+	  NULL, "video", { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
+	{ "armgba_low_pass_filter", "Low-Pass Filter", NULL,
+	  "Softens the sound's high notes, as the consoles' small speakers did. Higher is softer.", NULL, "audio",
+	  { { "disabled", "Disabled" }, { "20", "20%" }, { "40", "40%" }, { "60", "60%" }, { "80", "80%" }, { NULL, NULL } }, "disabled" },
 	{ "armgba_turbo_period", "Turbo Button Period", NULL,
 	  "Frames per press while a turbo button is held: X and Y for A and B, and L3 and R3 for L and R on the Game Boy Advance.", NULL, "input",
 	  { { NULL, NULL } }, "4" },
@@ -370,19 +395,25 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  { { "l r start", "L + R + Start" }, { "l r a b", "L + R + A + B" }, { "l3 r3", "L3 + R3" }, { "select start a b", "Select + Start + A + B" }, { "off", "Off" }, { NULL, NULL } },
 	  "l r start" },
 	{ "armgba_link_mode", "Link Mode", NULL,
-	  "Together: two to four consoles run on each device, for multiplayer on one device (a controller each) or smooth rollback netplay. Separate: two players in netplay, each device running only its own player's console and game. Applies on Restart.",
+	  "Together: two to four consoles run on each device, for multiplayer on one device (a controller each) or smooth rollback netplay. Separate: two players in netplay, each device running only its own player's console and game. GameCube: this Game Boy Advance is plugged into a GameCube in Dolphin. Applies on Restart.",
 	  NULL, "link",
-	  { { "off", "Off" }, { "together", "Together (one device, or smooth netplay)" }, { "separate", "Separate (each device its own console)" }, { NULL, NULL } },
+	  { { "off", "Off" }, { "together", "Together (one device, or smooth netplay)" }, { "separate", "Separate (each device its own console)" }, { "gamecube", "GameCube (Dolphin)" }, { NULL, NULL } },
 	  "off" },
 	{ "armgba_link_players", "Players", NULL,
 	  "How many consoles run. Four Game Boy Advances need a fast device. Applies on Restart.",
 	  NULL, "link", { { "2", NULL }, { "3", NULL }, { "4", NULL }, { NULL, NULL } }, "2" },
 	{ "armgba_player2_game", "Player 2's Game", NULL,
-	  "The game on player 2's console, from the games beside player 1's, likeliest partners first. Players 3 and 4 play player 1's. Applies on Restart.",
+	  "The game on player 2's console, from the games beside player 1's, likeliest partners first. Players 3 and 4 play player 1's. No Cartridge leaves the other consoles empty, for games that send themselves over the cable. Applies on Restart.",
 	  NULL, "link", { { "same", "Same Game" }, { NULL, NULL } }, "same" },
+	{ "armgba_link_cartridge", "This Console's Cartridge", NULL,
+	  "Removed starts this console with no cartridge, waiting for a game the other player's console sends over the cable, as single-pak games do. The game's save is left as it is. Applies on Restart.",
+	  NULL, "link", { { "inserted", "Inserted" }, { "removed", "Removed" }, { NULL, NULL } }, "inserted" },
 	{ "armgba_link_port", "Link Port", NULL,
 	  "What is plugged in: the Link Cable, or the Wireless Adapter that Pokemon FireRed, LeafGreen and Emerald and other games use. Applies on Restart.",
 	  NULL, "link", { { "cable", "Link Cable" }, { "wireless", "Wireless Adapter (smoothest over Wi-Fi)" }, { NULL, NULL } }, "cable" },
+	{ "armgba_gamecube_address", "GameCube Address", NULL,
+	  "Where Dolphin runs, with a controller port set to GBA (TCP): found on this device or the local network, or this device only.",
+	  NULL, "link", { { "auto", "Find on the Network" }, { "127.0.0.1", "This Device" }, { NULL, NULL } }, "auto" },
 	{ "armgba_gb_link_port", "Link Port", NULL,
 	  "What joins the Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race and other four-player games use. Three or four always use the adapter. Applies on Restart.",
 	  NULL, "link", { { "cable", "Link Cable" }, { "adapter", "Four Player Adapter" }, { NULL, NULL } }, "cable" },
@@ -396,6 +427,9 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_link_l2", "L2 Button", NULL,
 	  "What L2 does outside netplay: fast-forward while held, or go back to the previous screens. In netplay it always goes back.",
 	  NULL, "link", { { "fast forward", "Fast Forward" }, { "previous screens", "Previous Screens" }, { NULL, NULL } }, "fast forward" },
+	{ "armgba_switch_controller", "Switch Controller", NULL,
+	  "Pressed on controller 1, moves it to the next console, the other controllers moving along with it: one controller can play every console. Not in netplay.",
+	  NULL, "link", { { "l r a b", "L + R + A + B" }, { "start l2 r2", "Start + L2 + R2" }, { "off", "Off" }, { NULL, NULL } }, "l r a b" },
 	{ "armgba_back_up_save", "Back Up Save", NULL,
 	  "Copies a player's save, as it is now, to a file beside it named for the time: Game.20261018-153012.srm. The game carries on.",
 	  NULL, "saves", { { "off", "Off" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "off" },
@@ -425,6 +459,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 static struct retro_core_option_v2_category optionCategories[] = {
 	{ "system", "System", "The console the game runs on and how it starts." },
 	{ "video", "Video", "Colors, the picture and how it is drawn." },
+	{ "audio", "Audio", "How the sound is filtered." },
 	{ "input", "Input", "Turbo, restart buttons and cartridge sensors." },
 	{ "link", "Link", "Playing together: the link cable, the Wireless Adapter and the Four Player Adapter." },
 	{ "saves", "Saves", "Backing up, loading and sending saves." },
@@ -715,7 +750,7 @@ static void readOptions(void) {
 		{ "Game Boy Color", LIBRETRO_GB_CGB },
 		{ "Game Boy Advance", LIBRETRO_GB_AGB },
 	};
-	static const struct Choice bootChoices[] = { { "disabled", LIBRETRO_GB_BOOT_OFF }, { "open-source", LIBRETRO_GB_BOOT_SAMEBOY } };
+	static const struct Choice bootChoices[] = { { "disabled", LIBRETRO_GB_BOOT_OFF }, { "open-source", LIBRETRO_GB_BOOT_ARMGBA } };
 	static const struct Choice shadeChoices[] = { { "pocket", 1 }, { "original", 2 }, { "light", 3 } };
 	static const struct Choice screensChoices[] = {
 		{ "top and bottom", SCREENS_STACKED },
@@ -733,6 +768,8 @@ static void readOptions(void) {
 	static const struct Choice tiltChoices[] = { { "right stick", TILT_RIGHT_STICK }, { "d-pad", TILT_DPAD } };
 
 	skipBios = optionIs("armgba_skip_bios", "enabled");
+	const char* address = option("armgba_gamecube_address");
+	dolphinSetHost(gamecubeWanted() && !gameBoy ? (address ? address : "auto") : NULL);
 	int threaded = optionChoice("armgba_threaded_video", threadedChoices, COUNT(threadedChoices), THREADED_OFF);
 	// Linked consoles run in turns, which a render thread would only slow.
 	threaded = gbaTogether ? THREADED_OFF : threaded;
@@ -744,9 +781,13 @@ static void readOptions(void) {
 	}
 	threadedVideo = threaded;
 	colorCorrection = optionIs("armgba_color_correction", "enabled") && buildCorrectedColors();
+	ghosting = optionIs("armgba_lcd_ghosting", "enabled");
+	const char* const filter = option("armgba_low_pass_filter");
+	lowPass = filter ? atoi(filter) * 0x10000 / 100 : 0;
 	gbModel = optionChoice("armgba_gb_model", modelChoices, COUNT(modelChoices), LIBRETRO_GB_AUTO);
 	libretroGbSetBootRom(optionChoice("armgba_gb_boot_rom", bootChoices, COUNT(bootChoices), LIBRETRO_GB_BOOT_NINTENDO));
 	int const shades = optionChoice("armgba_gb_screen", shadeChoices, COUNT(shadeChoices), 0);
+	gbShades = shades;
 	gbColorCorrection = optionIs("armgba_gb_color_correction", "enabled");
 	for (int i = gameBoy ? playersHere - 1 : 0; i >= 0; --i) {
 		libretroGbSelect(i);
@@ -763,6 +804,11 @@ static void readOptions(void) {
 			announceGeometry();
 		}
 	}
+	static const struct Choice switchChoices[] = {
+		{ "start l2 r2", SWITCH_START_L2_R2 },
+		{ "off", SWITCH_OFF },
+	};
+	switchController = optionChoice("armgba_switch_controller", switchChoices, COUNT(switchChoices), SWITCH_L_R_A_B);
 	bool const fastForward = !optionIs("armgba_link_l2", "previous screens");
 	if (fastForward != l2FastForward) {
 		l2FastForward = fastForward;
@@ -808,6 +854,7 @@ static bool showOptions(void) {
 		bool shown;
 	} options[] = {
 		{ "armgba_skip_bios", !gameBoy },
+		{ "armgba_bios", !gameBoy },
 		{ "armgba_threaded_video", !gameBoy },
 		{ "armgba_color_correction", !gameBoy },
 		{ "armgba_solar_sensor", !gameBoy && (!advance || devices & HW_LIGHT_SENSOR) },
@@ -827,6 +874,8 @@ static bool showOptions(void) {
 		{ "armgba_new_save", together },
 		{ "armgba_load_into", together },
 		{ "armgba_send_save", separateWanted() },
+		{ "armgba_link_cartridge", advance && (separateWanted() || gamecubeWanted()) },
+		{ "armgba_gamecube_address", advance && gamecubeWanted() },
 	};
 	enum { OPTIONS = COUNT(options) };
 	bool changed = false;
@@ -860,6 +909,11 @@ static bool separateWanted(void) {
 	return value && !strcmp(value, "separate");
 }
 
+static bool gamecubeWanted(void) {
+	const char* value = option("armgba_link_mode");
+	return value && !strcmp(value, "gamecube");
+}
+
 static int playersWanted(void) {
 	const char* value = option("armgba_link_players");
 	return clampInt(value ? atoi(value) : 2, 2, MAX_PLAYERS);
@@ -883,11 +937,15 @@ static void offerSecondGames(const char* path, bool forGameBoy) {
 	if (!coreOptions || !secondOption) {
 		return;
 	}
-	secondOption->values[0] = (struct retro_core_option_value) { "same", "Same Game" };
-	for (size_t i = 0; i < secondCount; ++i) {
-		secondOption->values[i + 1] = (struct retro_core_option_value) { secondGames[i].path, secondGames[i].label };
+	size_t n = 0;
+	secondOption->values[n++] = (struct retro_core_option_value) { "same", "Same Game" };
+	if (!forGameBoy) {
+		secondOption->values[n++] = (struct retro_core_option_value) { "none", "No Cartridge" };
 	}
-	secondOption->values[secondCount + 1] = (struct retro_core_option_value) { NULL, NULL };
+	for (size_t i = 0; i < secondCount; ++i) {
+		secondOption->values[n++] = (struct retro_core_option_value) { secondGames[i].path, secondGames[i].label };
+	}
+	secondOption->values[n] = (struct retro_core_option_value) { NULL, NULL };
 	fillSaveChoices();
 	setOptions();
 }
@@ -912,7 +970,14 @@ static bool offered(const char* value) {
 			return true;
 		}
 	}
-	return value && !strcmp(value, "same");
+	return value && (!strcmp(value, "same") || (!gameBoy && !strcmp(value, "none")));
+}
+
+// Whether the other consoles are to start with no cartridge, waiting for player 1's game to send
+// itself over the cable.
+static bool bareWanted(void) {
+	const char* value = option("armgba_player2_game");
+	return !pairFile && !gameBoy && value && !strcmp(value, "none");
 }
 
 static void recallSecondChoice(void) {
@@ -1235,7 +1300,7 @@ static void readNewerPlayerOne(void) {
 static void readOtherSaves(void) {
 	const char* value = option("armgba_new_save");
 	bool const copy = value && !strcmp(value, "copy");
-	for (int player = 1; player < playersHere; ++player) {
+	for (int player = 1; player < playersHere && !othersBare; ++player) {
 		const char* chosen = player == 1 ? secondPath : otherPaths[player];
 		if (*chosen) {
 			readSave(player, chosen);
@@ -1867,23 +1932,23 @@ static void readSaveActions(bool act) {
 
 // Starting and stopping the consoles: loading a game, the other players' consoles, Restart.
 
+// Nintendo's gba_bios.bin from the system directory, or else armGBA's own BIOS, as BIOS picks.
 static bool loadBios(struct GBA* machine) {
 	const char* directory = NULL;
-	if (!environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory) || !directory) {
-		showMessage("armGBA: no system directory for gba_bios.bin");
-		return false;
-	}
-	char path[PATH_SIZE];
-	snprintf(path, sizeof(path), "%s/gba_bios.bin", directory);
-	FILE* f = fopen(path, "rb");
 	uint8_t bios[SIZE_BIOS];
-	bool read = f && fread(bios, 1, sizeof(bios), f) == sizeof(bios);
-	if (f) {
-		fclose(f);
+	bool read = false;
+	if (!optionIs("armgba_bios", "open-source") && environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory) && directory) {
+		char path[PATH_SIZE];
+		snprintf(path, sizeof(path), "%s/gba_bios.bin", directory);
+		FILE* f = fopen(path, "rb");
+		read = f && fread(bios, 1, sizeof(bios), f) == sizeof(bios);
+		if (f) {
+			fclose(f);
+		}
 	}
 	if (!read) {
-		showMessage("armGBA needs gba_bios.bin in the system directory");
-		return false;
+		logMessage(RETRO_LOG_INFO, "armGBA: using armGBA's BIOS");
+		return gbaLoadBios(machine, armgbaBios, SIZE_BIOS);
 	}
 	return gbaLoadBios(machine, bios, sizeof(bios));
 }
@@ -2027,6 +2092,9 @@ static bool readOtherGames(const struct retro_game_info* second, const void* sam
 		if (i == 1 && second) {
 			data[i] = second->data;
 			sizes[i] = second->size;
+		} else if (othersBare) {
+			data[i] = "";
+			sizes[i] = 0;
 		} else if (!*path && sameData) {
 			data[i] = sameData;
 			sizes[i] = sameSize;
@@ -2046,7 +2114,9 @@ static bool readOtherGames(const struct retro_game_info* second, const void* sam
 static void announcePlayers(void) {
 	char message[300];
 	const char* name = strrchr(secondPath, '/');
-	if (playersHere > 2) {
+	if (othersBare) {
+		snprintf(message, sizeof(message), "%d players, %s with no cartridge", playersHere, playersHere > 2 ? "the others" : "player 2");
+	} else if (playersHere > 2) {
 		snprintf(message, sizeof(message), "%d players", playersHere);
 	} else {
 		snprintf(message, sizeof(message), "Player 2: %.240s", *secondPath ? (name ? name + 1 : secondPath) : "the same game, with its own save");
@@ -2058,6 +2128,7 @@ static void announcePlayers(void) {
 // many as a pair file names, or two with the game the frontend loaded for player 2.
 static void startOthers(const struct retro_game_info* second, const void* sameData, size_t sameSize) {
 	secondFromFrontend = second && !pairFile;
+	othersBare = !second && bareWanted();
 	int const count = pairFile ? pairCount : second ? 2 : playersWanted();
 	if (!pairFile) {
 		const char* choice = second ? NULL : chosenSecond();
@@ -2097,6 +2168,7 @@ static void stopOthers(void) {
 	}
 	secondPath[0] = '\0';
 	secondFromFrontend = false;
+	othersBare = false;
 }
 
 // Offers RetroArch the netplay that carries the cable when Link Mode is Separate, and its usual
@@ -2116,6 +2188,7 @@ static bool runningAsWanted(void) {
 	const char* choice = chosenSecond();
 	bool same = !strcmp(choice ? choice : "", secondPath) && playersHere == playersWanted();
 	same &= !gameBoy || gbAdapter == adapterWanted(playersHere);
+	same &= othersBare == bareWanted();
 	return same;
 }
 
@@ -2232,6 +2305,48 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	return true;
 }
 
+// This Console's Cartridge: with Separate, player 1's console may start with its cartridge out,
+// waiting for a game sent over the cable. The game comes back from its file when put back in, its
+// save memory as it was; if it was out from the start, RetroArch read no save into it, so the save
+// comes from RetroArch's save file once the console has been reset. Returns whether it went back in.
+static bool cartridgeOut;
+static bool cartridgeSaveUnread;
+
+static bool applyCartridge(void) {
+	const char* value = option("armgba_link_cartridge");
+	bool const out = !gameBoy && (separateWanted() || gamecubeWanted()) && value && !strcmp(value, "removed");
+	if (out == cartridgeOut || !gba) {
+		return false;
+	}
+	if (out) {
+		gbaLoadRom(gba, "", 0);
+		notify("No cartridge: waiting for a game over the cable", 240);
+	} else {
+		size_t size;
+		void* data = secondRead(firstPath, &size);
+		if (!data || !gbaLoadRom(gba, data, size)) {
+			free(data);
+			showMessage("armGBA can't read the game to put it back in");
+			return false;
+		}
+		free(data);
+		savedataForceType(gba, SAVEDATA_AUTODETECT);
+	}
+	cartridgeOut = out;
+	return !out;
+}
+
+static void readCartridgeSave(void) {
+	if (!cartridgeSaveUnread) {
+		return;
+	}
+	cartridgeSaveUnread = false;
+	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE];
+	retroArchFiles(file, rtcFile);
+	size_t size;
+	readFileInto(file, saveMemory(0, &size), size);
+}
+
 static bool loadAdvance(const struct retro_game_info* game, const struct retro_game_info* second) {
 	enum retro_pixel_format format = RETRO_PIXEL_FORMAT_RGB565;
 	if (!environment(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format)) {
@@ -2249,6 +2364,9 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	showButtons();
 	threadedVideo = 0;
 	readOptions();
+	cartridgeOut = false;
+	applyCartridge();
+	cartridgeSaveUnread = cartridgeOut;
 	gbaReset(gba, skipBios);
 	readPlayerOneSave();
 	linkSetGba(gba);
@@ -2366,6 +2484,8 @@ void retro_unload_game(void) {
 		otherPaths[i][0] = '\0';
 	}
 	linkSetGba(NULL);
+	dolphinSetHost(NULL);
+	gamecubeShown = false;
 	workersStop();
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
 		if (gbas[i]) {
@@ -2393,8 +2513,13 @@ void retro_reset(void) {
 		return;
 	}
 	attachPorts();
+	bool const putBack = applyCartridge();
 	for (int i = 0; i < playersHere; ++i) {
+		loadBios(gbas[i]);
 		gbaReset(gbas[i], skipBios);
+	}
+	if (putBack) {
+		readCartridgeSave();
 	}
 	setAdvanceOffsets();
 }
@@ -2535,13 +2660,68 @@ static void readStretch(uint16_t keys) {
 	held = now;
 }
 
+// Whether RetroArch is running this frame again, for a netplay rollback or runahead, rather than
+// for the first time.
+static bool rerunning(void) {
+	int enabled = RETRO_AV_ENABLE_VIDEO;
+	return environment(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &enabled) && !(enabled & RETRO_AV_ENABLE_VIDEO);
+}
+
+// Whether controller 1 holds the Switch Controller buttons.
+static bool switchHeld(int port) {
+	static unsigned const lrab[] = { RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B };
+	static unsigned const startL2R2[] = { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_L2, RETRO_DEVICE_ID_JOYPAD_R2 };
+	if (switchController == SWITCH_OFF || port != 0 || !togetherRunning() || netplaySeen || playersHere < 2) {
+		return false;
+	}
+	bool const isLrab = switchController == SWITCH_L_R_A_B;
+	for (size_t k = 0; k < (isLrab ? COUNT(lrab) : COUNT(startL2R2)); ++k) {
+		if (!inputState(0, RETRO_DEVICE_JOYPAD, 0, isLrab ? lrab[k] : startL2R2[k])) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// The controller that plays console i: controller 1 plays controllerFocus's.
+static int portFor(int i) {
+	if (netplaySeen || controllerFocus >= playersHere) {
+		controllerFocus = 0;
+	}
+	return (i - controllerFocus + playersHere) % playersHere;
+}
+
+// Whether controller 1 holds Start with Switch Controller on Start + L2 + R2, so its L2 and R2 only switch.
+static bool switchStart(int port) {
+	return switchController == SWITCH_START_L2_R2 && port == 0 && togetherRunning() && !netplaySeen && playersHere > 1 &&
+	       inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START);
+}
+
+// The Switch Controller buttons on controller 1 move it to the next console.
+static void readControllerSwitch(void) {
+	static bool held;
+	if (rerunning()) {
+		return;
+	}
+	bool const now = switchHeld(0);
+	bool const pressed = now && !held;
+	held = now;
+	if (!pressed) {
+		return;
+	}
+	controllerFocus = (controllerFocus + 1) % playersHere;
+	char name[48];
+	snprintf(name, sizeof(name), "Controller 1: Player %d's Console", controllerFocus + 1);
+	notify(name, 120);
+}
+
 // L2 or R2 held fast-forwards at RetroArch's maximum run speed; with the consoles here only L2, as
 // the L2 Button option says. Not in netplay, where the other consoles would wait.
 static void readFastForward(void) {
 	static bool held;
 	bool now = false;
 	for (int port = 0; port < (togetherRunning() ? playersHere : 1); ++port) {
-		now |= (!togetherRunning() || l2FastForward) && inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2);
+		now |= (!togetherRunning() || l2FastForward) && !switchStart(port) && inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2);
 		now |= !togetherRunning() && inputState(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2);
 	}
 	now &= !linkSession() && !netplaySeen;
@@ -2571,19 +2751,12 @@ static bool restartHeldDown(int port, uint16_t keys) {
 
 static void readRestarts(const uint16_t keys[]) {
 	for (int i = 0; i < playersHere; ++i) {
-		if (!restartHeldDown(i, keys[i])) {
+		if (!restartHeldDown(portFor(i), keys[i]) || switchHeld(portFor(i))) {
 			restartHeld[i] = 0;
 		} else if (restartHeld[i] < RESTART_FRAMES && ++restartHeld[i] == RESTART_FRAMES) {
 			restartConsole(i);
 		}
 	}
-}
-
-// Whether RetroArch is running this frame again, for a netplay rollback or runahead, rather than
-// for the first time.
-static bool rerunning(void) {
-	int enabled = RETRO_AV_ENABLE_VIDEO;
-	return environment(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &enabled) && !(enabled & RETRO_AV_ENABLE_VIDEO);
 }
 
 // R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. Each device
@@ -2614,7 +2787,7 @@ static void readScreensKeys(void) {
 			continue;
 		}
 		for (int k = netplaySeen || !l2FastForward ? 0 : 1; k < 2; ++k) {
-			bool const now = inputState(port, RETRO_DEVICE_JOYPAD, 0, k ? RETRO_DEVICE_ID_JOYPAD_R2 : RETRO_DEVICE_ID_JOYPAD_L2);
+			bool const now = !switchStart(port) && inputState(port, RETRO_DEVICE_JOYPAD, 0, k ? RETRO_DEVICE_ID_JOYPAD_R2 : RETRO_DEVICE_ID_JOYPAD_L2);
 			if (now && !held[port][k]) {
 				step += k ? 1 : -1;
 			}
@@ -2636,6 +2809,137 @@ static void readScreensKeys(void) {
 }
 
 // Running a frame.
+
+// LCD Ghosting: the screens' liquid crystal takes time to change, darkening, as it is driven,
+// faster than it lightens, as it relaxes. Each subpixel moves in linear light from where it was
+// towards the new frame by a share each frame. The time constants, in milliseconds to darken and to
+// lighten, are estimates for each kind of panel: the first Game Boy's STN, the Pocket's and Light's
+// FSTN, and the Color's and Advance's reflective TFTs. A frame RetroArch runs again, and doesn't
+// show, leaves the screen as it is.
+enum { SCREEN_DMG, SCREEN_POCKET, SCREEN_TFT, SCREEN_KINDS };
+static const float screenTimes[SCREEN_KINDS][2] = { { 50, 110 }, { 25, 50 }, { 15, 30 } };
+
+struct Cell {
+	uint32_t input;
+	uint16_t level[3];
+	bool settled;
+};
+
+static int screenKind(void) {
+	if (!gameBoy || libretroGbOnAdvance() || libretroGbIsColor()) {
+		return SCREEN_TFT;
+	}
+	return gbModel == LIBRETRO_GB_MGB || gbShades == 1 || gbShades == 3 ? SCREEN_POCKET : SCREEN_DMG;
+}
+
+static void showPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {
+	static uint16_t toLinear[256];
+	static uint8_t toEncoded[4096];
+	static uint16_t shares[SCREEN_KINDS][2];
+	static struct Cell* cells;
+	static void* shown;
+	static unsigned lastWidth, lastHeight;
+	static size_t lastPitch;
+	if (!ghosting || !picture || rerunning()) {
+		videoRefresh(picture, width, height, pitch);
+		return;
+	}
+	if (!toLinear[255]) {
+		for (int v = 0; v < 256; ++v) {
+			toLinear[v] = (uint16_t) lround(pow(v / 255.0, 2.2) * 65535);
+		}
+		for (int i = 0; i < 4096; ++i) {
+			toEncoded[i] = (uint8_t) lround(pow((i * 16 + 8) / 65535.0, 1 / 2.2) * 255);
+		}
+		// A frame is 280896 cycles of 16.78 MHz on either console.
+		for (int k = 0; k < SCREEN_KINDS; ++k) {
+			for (int d = 0; d < 2; ++d) {
+				shares[k][d] = (uint16_t) lround(4096 * (1 - exp(-16.743 / screenTimes[k][d])));
+			}
+		}
+	}
+	size_t const bytes = pitch / width;
+	size_t const pixels = pitch / bytes * height;
+	bool const fresh = !cells || width != lastWidth || height != lastHeight || pitch != lastPitch;
+	if (fresh) {
+		struct Cell* const newCells = realloc(cells, pixels * sizeof(*cells));
+		void* const newShown = realloc(shown, pitch * height);
+		if (!newCells || !newShown) {
+			cells = newCells ? newCells : cells;
+			shown = newShown ? newShown : shown;
+			lastWidth = 0;
+			videoRefresh(picture, width, height, pitch);
+			return;
+		}
+		cells = newCells;
+		shown = newShown;
+		lastWidth = width;
+		lastHeight = height;
+		lastPitch = pitch;
+	}
+	const uint16_t* const share = shares[screenKind()];
+	// Each channel's place and width: RGB565 or XRGB8888.
+	static const int shifts[2][3] = { { 11, 5, 0 }, { 16, 8, 0 } };
+	static const int widths[2][3] = { { 5, 6, 5 }, { 8, 8, 8 } };
+	int const wide = bytes == sizeof(uint32_t);
+	for (size_t i = 0; i < pixels; ++i) {
+		uint32_t const input = wide ? ((const uint32_t*) picture)[i] : ((const uint16_t*) picture)[i];
+		struct Cell* const cell = &cells[i];
+		uint32_t output = input;
+		if (fresh || !cell->settled || input != cell->input) {
+			cell->input = input;
+			cell->settled = true;
+			output = wide ? input & 0xFF000000 : 0;
+			for (int c = 0; c < 3; ++c) {
+				int const bits = widths[wide][c];
+				uint32_t const value = input >> shifts[wide][c] & ((1u << bits) - 1);
+				uint32_t const full = value << (8 - bits) | value >> (2 * bits - 8);
+				int32_t const target = toLinear[full];
+				int32_t const diff = target - cell->level[c];
+				uint32_t out = value;
+				if (fresh) {
+					cell->level[c] = (uint16_t) target;
+				} else if (diff) {
+					int32_t step = diff < 0 ? -((-diff * share[0]) >> 12) : (diff * share[1]) >> 12;
+					step = step ? step : diff < 0 ? -1 : 1;
+					cell->level[c] = (uint16_t) (cell->level[c] + step);
+					if (cell->level[c] != target) {
+						cell->settled = false;
+						out = toEncoded[cell->level[c] >> 4] >> (8 - bits);
+					}
+				}
+				output |= out << shifts[wide][c];
+			}
+		}
+		if (wide) {
+			((uint32_t*) shown)[i] = output;
+		} else {
+			((uint16_t*) shown)[i] = (uint16_t) output;
+		}
+	}
+	videoRefresh(shown, width, height, pitch);
+}
+
+// The low-pass filter: each sample out, per side, is the last one out weighted by lowPass, out of
+// 0x10000, and the new one by the rest.
+static void sendSound(const int16_t* samples, size_t frames) {
+	static int16_t filtered[2 * 4096];
+	static int32_t last[2];
+	if (!lowPass || rerunning()) {
+		audioBatch(samples, frames);
+		return;
+	}
+	while (frames) {
+		size_t const n = frames < COUNT(filtered) / 2 ? frames : COUNT(filtered) / 2;
+		for (size_t k = 0; k < n * 2; ++k) {
+			last[k & 1] = (last[k & 1] * lowPass + samples[k] * (0x10000 - lowPass)) >> 16;
+			filtered[k] = (int16_t) last[k & 1];
+		}
+		audioBatch(filtered, n);
+		samples += n * 2;
+		frames -= n;
+	}
+}
 
 // Returns the picture as a Game Boy Advance shows it, on black: centered on its 240x160 screen, or
 // stretched to 240x144 by doubling every other column.
@@ -2662,8 +2966,8 @@ static void showConsoles(const void* const pictures[], size_t pixelBytes, int wi
                          const size_t frames[]) {
 	if (screens >= SCREENS_ONE) {
 		int const shown = screens - SCREENS_ONE < playersHere ? screens - SCREENS_ONE : 0;
-		videoRefresh(pictures[shown], width, height, width * pixelBytes);
-		audioBatch(samples[shown], frames[shown]);
+		showPicture(pictures[shown], width, height, width * pixelBytes);
+		sendSound(samples[shown], frames[shown]);
 		return;
 	}
 	int const columns = playersHere == 2 && screens == SCREENS_STACKED ? 1 : 2;
@@ -2677,7 +2981,7 @@ static void showConsoles(const void* const pictures[], size_t pixelBytes, int wi
 			memcpy(corner + y * row * columns, (const uint8_t*) pictures[i] + y * row, row);
 		}
 	}
-	videoRefresh(frame, width * columns, height * rows, row * columns);
+	showPicture(frame, width * columns, height * rows, row * columns);
 	size_t count = COUNT(mixedSamples) / 2;
 	for (int i = 0; i < playersHere; ++i) {
 		count = frames[i] < count ? frames[i] : count;
@@ -2689,13 +2993,14 @@ static void showConsoles(const void* const pictures[], size_t pixelBytes, int wi
 		}
 		mixedSamples[k] = sum / playersHere;
 	}
-	audioBatch(mixedSamples, count);
+	sendSound(mixedSamples, count);
 }
 
 static void runGameBoys(void) {
 	uint16_t keys[MAX_PLAYERS];
+	readControllerSwitch();
 	for (int i = 0; i < playersHere; ++i) {
-		keys[i] = readKeys(i);
+		keys[i] = readKeys(portFor(i));
 	}
 	readTilt(keys[0]);
 	readScreensKeys();
@@ -2747,7 +3052,8 @@ static void carryAir(void) {
 
 // The cable between the Game Boy Advances here. When a transfer ends:
 // - in normal mode, players 1 and 2 swap the data each had as it started; the console that didn't
-//   start it takes the data only if it is waiting for a transfer;
+//   start it takes the data only if it is waiting for a transfer. With three or four, the parent's
+//   data shifts along the cable instead (see exchange);
 // - in multiplayer mode, the parent's word and each child's go to every child.
 
 // Where a console is in the frame while it runs in a round.
@@ -2828,12 +3134,26 @@ static bool cableFinish(void* context, uint32_t in[3]) {
 	return true;
 }
 
-// Between rounds: each console's SD line is high while every other console is in multiplayer mode.
+// Between rounds: the children see a multiplayer transfer the parent has under way.
+static void carryBusy(void) {
+	for (int i = 0; i < playersHere; ++i) {
+		if (transfers[i].mode != MULTIPLAYER || sioTransferLeft(gbas[i]) <= 0) {
+			continue;
+		}
+		for (int k = 0; k < playersHere; ++k) {
+			if (k != i) {
+				sioOthersTransfer(gbas[k]);
+			}
+		}
+	}
+}
+
+// Between rounds: each console's SD line is high while every other console leaves it high.
 static void carryReady(void) {
 	for (int i = 0; i < playersHere; ++i) {
 		bool ready = true;
 		for (int k = 0; k < playersHere; ++k) {
-			ready &= k == i || sioMultiplayer(gbas[k]);
+			ready &= k == i || sioSdHigh(gbas[k]);
 		}
 		if (ready != cables[i].ready) {
 			cables[i].ready = ready;
@@ -2857,14 +3177,22 @@ static void exchange(int i) {
 			values[k] = t->in[k - 1] = mode == MULTIPLAYER ? t->data[k] & 0xFFFF : 0xFFFF;
 		}
 		for (int k = 1; k < playersHere; ++k) {
-			sioReceive(gbas[k], values);
+			sioReceive(gbas[k], t->mode, values);
+		}
+	} else if (i == 0 && playersHere > 2) {
+		// Normal mode with three or four on the cable: the data shifts along from the parent, each
+		// console taking the one before's as the transfer started, and the parent takes zero.
+		t->in[0] = 0;
+		for (int k = 1; k < playersHere; ++k) {
+			uint32_t const values[4] = { k == 1 ? t->out : t->data[k - 1], 0xFFFF, 0xFFFF, 0xFFFF };
+			sioReceive(gbas[k], t->mode, values);
 		}
 	} else if (i < 2) {
 		struct GBA* const other = gbas[1 - i];
 		sioOutgoing(other, &mode, &ready);
-		t->in[0] = ready ? t->data[1 - i] : 0xFFFFFFFF;
+		t->in[0] = ready && mode != MULTIPLAYER ? t->data[1 - i] : 0xFFFFFFFF;
 		uint32_t const values[4] = { t->out, 0xFFFF, 0xFFFF, 0xFFFF };
-		sioReceive(other, values);
+		sioReceive(other, t->mode, values);
 	}
 }
 
@@ -2955,6 +3283,7 @@ static void runAdvances(void) {
 		workersRun(runRound, playersHere);
 		takeData();
 		carryCable();
+		carryBusy();
 		carryAir();
 		carryReady();
 	}
@@ -2968,8 +3297,10 @@ static void runAdvances(void) {
 
 static void runAdvancesFrame(void) {
 	uint16_t keys[MAX_PLAYERS];
+	readControllerSwitch();
 	for (int i = 0; i < playersHere; ++i) {
-		keys[i] = readKeys(i) | (i ? 0 : readTurboShoulders());
+		int const port = portFor(i);
+		keys[i] = readKeys(port) | (port ? 0 : readTurboShoulders());
 		gbaSetKeys(gbas[i], keys[i]);
 	}
 	readScreensKeys();
@@ -3019,19 +3350,19 @@ static void runOneGameBoy(void) {
 		readStretch(keys);
 	}
 	if (gbOnAdvance && !gbCropped) {
-		videoRefresh(advanceFrame(picture), SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint32_t));
+		showPicture(advanceFrame(picture), SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint32_t));
 	} else if (gbOnAdvance && gbStretched) {
 		// The stretched picture, without the black above and below it.
-		videoRefresh(advanceFrame(picture) + (SCREEN_HEIGHT - LIBRETRO_GB_HEIGHT) / 2 * SCREEN_WIDTH, SCREEN_WIDTH, LIBRETRO_GB_HEIGHT,
+		showPicture(advanceFrame(picture) + (SCREEN_HEIGHT - LIBRETRO_GB_HEIGHT) / 2 * SCREEN_WIDTH, SCREEN_WIDTH, LIBRETRO_GB_HEIGHT,
 		             SCREEN_WIDTH * sizeof(uint32_t));
 	} else {
-		videoRefresh(picture, LIBRETRO_GB_WIDTH, LIBRETRO_GB_HEIGHT, LIBRETRO_GB_WIDTH * sizeof(uint32_t));
+		showPicture(picture, LIBRETRO_GB_WIDTH, LIBRETRO_GB_HEIGHT, LIBRETRO_GB_WIDTH * sizeof(uint32_t));
 	}
-	audioBatch(samples, frames);
+	sendSound(samples, frames);
 }
 
 static void sendOneAdvanceSound(void) {
-	audioBatch((const int16_t*) gba->audio.out, gba->audio.outCount);
+	sendSound((const int16_t*) gba->audio.out, gba->audio.outCount);
 	gba->audio.outCount = 0;
 }
 
@@ -3041,6 +3372,15 @@ static void runOneAdvance(void) {
 	gbaSetKeys(gba, keys);
 	readSensors(keys);
 	linkGbaFrame(gba);
+	dolphinGbaFrame(gba);
+	if (dolphinConnected() != gamecubeShown) {
+		gamecubeShown = dolphinConnected();
+		char message[64] = "GameCube: Dolphin has gone";
+		if (gamecubeShown) {
+			snprintf(message, sizeof(message), "GameCube: Dolphin at %s", dolphinAddress());
+		}
+		notify(message, 180);
+	}
 	uint32_t const frame = gba->video.frameCounter;
 	do {
 		gbaRunPart(gba);
@@ -3060,9 +3400,9 @@ static void runOneAdvance(void) {
 		for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; ++i) {
 			correctedFrame[i] = corrected(frame[i]);
 		}
-		videoRefresh(correctedFrame, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t));
+		showPicture(correctedFrame, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t));
 	} else {
-		videoRefresh(gba->renderer.frame, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t));
+		showPicture(gba->renderer.frame, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t));
 	}
 	sendOneAdvanceSound();
 }

@@ -180,6 +180,10 @@ static void detectSaveLibrary(struct GBA* gba) {
 int overridesApply(struct GBA* gba) {
 	const char* rom = (const char*) gba->rom;
 	if (!rom || gba->romSize < 0xC0) {
+		// No cartridge, so no save memory either.
+		if (!gba->multiboot) {
+			savedataForceType(gba, SAVEDATA_FORCE_NONE);
+		}
 		return HW_NONE;
 	}
 	if (gba->cart.multi) {

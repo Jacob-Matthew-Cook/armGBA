@@ -116,8 +116,9 @@ static struct Request {
 	bool answered;
 	// This console's data, as it answered.
 	uint32_t mine;
-	// With exact timing: when this console answers (as the transfer starts in normal mode, as it ends
-	// in multiplayer mode, as the consoles here take the data) and when the transfer ends.
+	// With exact timing: when the transfer starts, when this console answers (as it starts in normal
+	// mode, as it ends in multiplayer mode, as the consoles here take the data) and when it ends.
+	uint64_t start;
 	uint64_t answerAt;
 	uint64_t end;
 } requests[QUEUE];
@@ -162,7 +163,7 @@ static struct {
 	bool held;
 } exact;
 
-// The SD line, high while the other console is in multiplayer mode.
+// The SD line, high while the other console leaves it high.
 static bool otherMulti;
 static bool ownMulti;
 static bool ownMultiTold;
@@ -317,10 +318,10 @@ static void hello(void) {
 	}
 }
 
-// The SD line: each console tells the other when it goes in or out of multiplayer mode, and again
+// The SD line: each console tells the other when it starts or stops leaving it high, and again
 // every so often for a player who joined since.
 static void tellMode(bool again) {
-	bool const multi = gba && sioMultiplayer(gba);
+	bool const multi = gba && sioSdHigh(gba);
 	if (session && (multi != ownMulti || !ownMultiTold || again)) {
 		ownMulti = multi;
 		ownMultiTold = true;
@@ -438,15 +439,17 @@ static void reply(uint16_t seq, uint32_t data, bool ready) {
 }
 
 // This console's data for the other's transfer, and whether it takes part (waiting on the external
-// clock, or a multiplayer child).
-static uint32_t ownData(bool* ready) {
+// clock for a normal-mode transfer, or a multiplayer child for a multiplayer one).
+static uint32_t ownData(bool* ready, uint8_t transferMode) {
 	if (console == CONSOLE_GB) {
 		*ready = true;
 		return libretroGbLinkOut();
 	}
-	int mode;
+	int mode = -1;
 	*ready = false;
-	return gba ? sioOutgoing(gba, &mode, ready) : 0xFFFFFFFF;
+	uint32_t const data = gba ? sioOutgoing(gba, &mode, ready) : 0xFFFFFFFF;
+	*ready = *ready && (mode == MODE_MULTI) == (transferMode == MODE_MULTI);
+	return data;
 }
 
 // The other console's transfer ends here with its data, and this console's own as sent.
@@ -463,7 +466,7 @@ static void receiveData(uint8_t mode, uint32_t data, uint32_t mine) {
 		values[0] = data & 0xFFFF;
 		values[1] = mine & 0xFFFF;
 	}
-	sioReceive(gba, values);
+	sioReceive(gba, mode == MODE_MULTI ? 2 : 1, values);
 }
 
 static void dropRequest(void) {
@@ -474,20 +477,30 @@ static void dropRequest(void) {
 // Takes the transfers the other console clocked. With Standard timing it takes all of them; with
 // Exact timing only those due, answering each at its start and taking it at its end. A Game Boy
 // takes one transfer at a time, so its game can ready the next byte in between.
+// A multiplayer child shows the parent's transfer as busy until it takes the data: with exact timing
+// from the transfer's start, and with Standard timing from the stop it answers at to the next.
 static void takeRequests(void) {
 	while (requestCount) {
+		bool const multiChild = gba && requests[0].mode == MODE_MULTI;
 		if (requests[0].timed && dueAt(0) > linkTime()) {
+			if (multiChild && requests[0].start <= linkTime()) {
+				sioOthersTransfer(gba);
+			}
 			return;
 		}
 		if (!requests[0].answered) {
 			bool ready;
-			requests[0].mine = ownData(&ready);
+			requests[0].mine = ownData(&ready, requests[0].mode);
 			if (!(requests[0].mode & MODE_TOOK_OFFER)) {
 				reply(requests[0].seq, requests[0].mine, ready);
 			}
 			requests[0].answered = true;
 			if (requests[0].timed && requests[0].end > linkTime()) {
 				continue;
+			}
+			if (!requests[0].timed && multiChild) {
+				sioOthersTransfer(gba);
+				return;
 			}
 		}
 		receiveData(requests[0].mode, requests[0].data, requests[0].mine);
@@ -593,6 +606,7 @@ static void heardRequest(uint16_t from, const uint8_t* message, size_t size) {
 	*request = (struct Request) { .seq = get16(message + 2), .mode = message[1], .data = get32(message + 4) };
 	if (size >= 24 && exactOn()) {
 		uint64_t const start = get64(message + 8);
+		request->start = start;
 		request->end = get64(message + 16);
 		request->answerAt = request->mode == MODE_MULTI ? request->end : start;
 		exact.leader = from;

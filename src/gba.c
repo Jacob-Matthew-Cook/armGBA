@@ -224,6 +224,10 @@ bool gbaLoadRom(struct GBA* gba, const void* data, size_t size) {
 		gba->multibootSize = size;
 		size = 0;
 	}
+	// Less than a header is no cartridge: the BIOS waits for a multiboot transfer.
+	if (size < 0xC0) {
+		size = 0;
+	}
 	// The full 32 MiB is mapped, so out-of-range reads can't leave the buffer.
 	gba->rom = calloc(1, SIZE_ROM);
 	if (!gba->rom) {
@@ -251,7 +255,10 @@ void gbaReset(struct GBA* gba, bool skipBios) {
 	cartReset(gba);
 	cpuReset(gba);
 	// The BIOS hangs on a cartridge whose logo is wrong, so, as in mGBA, start it straight away.
-	if (!overridesLogoValid(gba)) {
+	// With no cartridge at all, it always starts, and waits for a multiboot transfer.
+	if (!gba->romSize && !gba->multiboot) {
+		skipBios = false;
+	} else if (!overridesLogoValid(gba)) {
 		skipBios = true;
 	}
 
@@ -288,6 +295,15 @@ void gbaReset(struct GBA* gba, bool skipBios) {
 		cpu->r[15] = gba->multiboot ? 0x02000000 : 0x08000000;
 		videoStartAt(gba, 0x7E, 117);
 		gba->io[IO(REG_POSTFLG)] = 1;
+		// As the BIOS leaves things: lr at the entry, the interrupt and supervisor modes' SPSRs at
+		// User mode, and JOYSTAT's bit 3 set by its write to JOY_TRANS.
+		cpu->r[14] = cpu->r[15];
+		cpuSetPrivilegeMode(gba, MODE_IRQ);
+		cpu->spsr = MODE_USER;
+		cpuSetPrivilegeMode(gba, MODE_SUPERVISOR);
+		cpu->spsr = MODE_USER;
+		cpuSetPrivilegeMode(gba, MODE_SYSTEM);
+		gba->io[IO(REG_JOYSTAT)] |= 8;
 		cpuWritePc(gba);
 	}
 	stepReset(gba);
