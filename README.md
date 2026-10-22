@@ -89,6 +89,31 @@ sets `CMAKE_SYSTEM_PROCESSOR` to `arm`, and the ARMv7 flags:
 
 On any other CPU, or with `-DARMGBA_JIT=OFF`, the exact CPU runs everything.
 
+For RetroArch on Android, with the NDK, for `arm64-v8a`, `armeabi-v7a` or `x86_64`; the core is
+then named `armgba_libretro_android.so`:
+
+    cmake -S . -B build-android -DCMAKE_TOOLCHAIN_FILE=<NDK>/build/cmake/android.toolchain.cmake \
+        -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24
+    cmake --build build-android
+
+### Standalone
+
+`armgba`, armGBA's own frontend (`frontend/sdl.c`), runs a game in a window with SDL2, without
+RetroArch:
+
+    cmake -S . -B build -G Ninja -DARMGBA_SDL=ON
+    ninja -C build armgba-sdl
+
+`appimage/build.sh`, then `appimage/package.sh`, make AppImages for x86-64 and 64-bit ARM in a
+Debian 11 container (Docker), with SDL2 built in; they need only glibc 2.29 or later.
+
+Run `armgba game.gba` (or a `.gb`, `.gbc` or `.zip`), or drop a game on the window. Arrow keys, X = A,
+Z = B, A = L, S = R, Enter = Start, Backspace = Select, C and V turbo B and A; controllers work too,
+one per player. Tab fast-forwards while held, P pauses, F2 restarts, F5 and F7 save and load a state,
+F11 goes full screen, F1 shows the keys. The options are in `~/.config/armgba/armgba.cfg`, written
+with every choice listed; BIOS and boot ROM files go in `~/.config/armgba/system`, saves and states
+in `~/.local/share/armgba`.
+
 Game Boy Advance games run on Nintendo's `gba_bios.bin` from the system directory when it's there
 and BIOS is set to Nintendo's, and otherwise on armGBA's own open-source BIOS, built into the core.
 Its splash lasts as long as Nintendo's logo, and a game starts on the same cycle.
