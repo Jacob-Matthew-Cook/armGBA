@@ -98,8 +98,7 @@ then named `armgba_libretro_android.so`:
 
 ### Standalone
 
-`armgba`, armGBA's own frontend (`frontend/sdl.c`), runs a game in a window with SDL2, without
-RetroArch:
+`armgba`, armGBA's own frontend (`frontend/`), runs a game in a window with SDL2, without RetroArch:
 
     cmake -S . -B build -G Ninja -DARMGBA_SDL=ON
     ninja -C build armgba-sdl
@@ -107,12 +106,24 @@ RetroArch:
 `appimage/build.sh`, then `appimage/package.sh`, make AppImages for x86-64 and 64-bit ARM in a
 Debian 11 container (Docker), with SDL2 built in; they need only glibc 2.29 or later.
 
-Run `armgba game.gba` (or a `.gb`, `.gbc` or `.zip`), or drop a game on the window. Arrow keys, X = A,
-Z = B, A = L, S = R, Enter = Start, Backspace = Select, C and V turbo B and A; controllers work too,
-one per player. Tab fast-forwards while held, P pauses, F2 restarts, F5 and F7 save and load a state,
-F11 goes full screen, F1 shows the keys. The options are in `~/.config/armgba/armgba.cfg`, written
-with every choice listed; BIOS and boot ROM files go in `~/.config/armgba/system`, saves and states
-in `~/.local/share/armgba`.
+Run `armgba game.gba` (or a `.gb`, `.gbc` or `.zip`), or drop a game on the window. Esc, a
+controller's Guide button or a right-click opens the menu, which the keyboard, a controller or the
+mouse moves through. Arrow keys, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select, C and
+V turbo B and A; controllers work too, one per player. Tab fast-forwards while held, R rewinds, P
+pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its slot, F12 takes a
+screenshot, F9 starts and stops recording, F11 goes full screen. The menu changes all of these.
+
+The menu also has the core's options, cheats (RetroArch's `.cht` files work), ten state slots, the
+picture (integer scaling, Sharp, Smooth, LCD grid or scanlines, vsync), the sound's volume and
+latency, rewind, run-ahead, netplay and RetroAchievements. Netplay is armgba to armgba: Separate
+carries the link cable between two devices each running its own game; Together runs every player's
+console on every device, kept in step with rollback. `--host`, `--host-together` and `--connect
+ADDRESS` start it from the command line. Achievements need the system's libcurl, and recording its
+ffmpeg.
+
+The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
+`~/.config/armgba/armgba.cfg`; BIOS and boot ROM files go in `~/.config/armgba/system`, saves,
+states, screenshots and cheats in `~/.local/share/armgba`.
 
 Game Boy Advance games run on Nintendo's `gba_bios.bin` from the system directory when it's there
 and BIOS is set to Nintendo's, and otherwise on armGBA's own open-source BIOS, built into the core.
@@ -356,6 +367,7 @@ The test tools also need an mGBA source tree with `tests/mgba-oracle.patch` appl
 - A few unlicensed Game Boy Color cartridges with undocumented protection chips do not boot.
 - Four Game Boy Advances on one device need a fast one with four cores: each runs on a core of its
   own, and while they link they wait for each other often.
+- The frontend's netplay connects only to another armgba, not to RetroArch.
 - Cheat codes mGBA can't run either (Action Replay's slowdown and disabling codes) are left out. A
   code that hooks a routine of the game runs as the frame ends instead.
 
@@ -374,6 +386,11 @@ Code taken from other projects, each under its own license (see License):
   Boy Color and Game Boy Advance color correction curves. A SameBoy-based build is also the
   reference the Game Boy side is tested against.
 - **libretro** (MIT): `libretro/libretro.h`.
+- **RetroArch** (MIT, public domain): libretro-common, the LZMA SDK and rcheevos as RetroArch
+  carries them, in `libretro/deps/` (see its README).
+- **stb_truetype** (Sean Barrett, public domain or MIT): the frontend's text.
+- **Inter** (The Inter Project Authors) and **Chakra Petch** (The Chakra Petch Project Authors),
+  OFL-1.1: the frontend's fonts.
 
 Read for how the hardware behaves, without code taken:
 
@@ -407,4 +424,8 @@ Gambatte. Each part keeps its own notice:
 | `gambatte/` | GPL, version 2 (`gambatte/COPYING`) |
 | `gambatte/libgambatte/src/mem/snes_spc/` | GNU LGPL |
 | `libretro/libretro.h` | MIT |
+| `libretro/deps/` | MIT and public domain, as each file states |
+| `frontend/` | Mozilla Public License 2.0 |
+| `frontend/stb_truetype.h` | public domain or MIT |
+| `frontend/fonts/` | SIL Open Font License 1.1 (`LICENSES/OFL-1.1.txt`) |
 | The Game Boy palettes (other than Grayscale) and color curves in `libretro/gb-gambatte.cpp` | MIT, from SameBoy (Lior Halphon) |
