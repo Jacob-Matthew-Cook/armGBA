@@ -38,6 +38,7 @@ void settingsDefaults(void) {
 	memset(&settings, 0, sizeof(settings));
 	settings.scale = 3;
 	settings.filter = FILTER_SHARP;
+	settings.shadow = 4;
 	settings.volume = 100;
 	settings.latency = 3;
 	settings.rewindMegabytes = 64;
@@ -126,6 +127,8 @@ static void takeSetting(const char* key, const char* value) {
 		settings.vsync = yes;
 	} else if (!strcmp(key, "filter")) {
 		settings.filter = n >= 0 && n < FILTERS ? n : 0;
+	} else if (!strcmp(key, "lcd_shadow")) {
+		settings.shadow = n >= 0 && n <= 8 ? n : 4;
 	} else if (!strcmp(key, "show_fps")) {
 		settings.showFps = yes;
 	} else if (!strcmp(key, "volume")) {
@@ -185,8 +188,9 @@ void settingsWrite(void) {
 	}
 	const char* const no[2] = { "false", "true" };
 	fprintf(f, "# armgba's own settings; the menu changes them. Keys and buttons are SDL's numbers.\n");
-	fprintf(f, "scale = %d\nfullscreen = %s\ninteger_scale = %s\nstretch = %s\nvsync = %s\nfilter = %d\nshow_fps = %s\n", settings.scale,
-	        no[settings.fullscreen], no[settings.integerScale], no[settings.stretch], no[settings.vsync], settings.filter, no[settings.showFps]);
+	fprintf(f, "scale = %d\nfullscreen = %s\ninteger_scale = %s\nstretch = %s\nvsync = %s\nfilter = %d\nlcd_shadow = %d\nshow_fps = %s\n",
+	        settings.scale, no[settings.fullscreen], no[settings.integerScale], no[settings.stretch], no[settings.vsync], settings.filter,
+	        settings.shadow, no[settings.showFps]);
 	fprintf(f, "volume = %d\nlatency = %d\nrunahead = %d\nrewind = %s\nrewind_megabytes = %d\nauto_state = %s\n", settings.volume,
 	        settings.latency, settings.runahead, no[settings.rewind], settings.rewindMegabytes, no[settings.autoState]);
 	fprintf(f, "nickname = \"%s\"\nnetplay_host = \"%s\"\nnetplay_port = %d\ninput_delay = %d\n", settings.nickname, settings.host,

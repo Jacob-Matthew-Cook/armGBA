@@ -70,6 +70,8 @@ struct Settings {
 	bool stretch;
 	bool vsync;
 	int filter;
+	// Where the LCD Grid's Game Boy pixels cast their shadow: 0 nowhere, then up and on clockwise.
+	int shadow;
 	bool showFps;
 	int volume;
 	int latency;

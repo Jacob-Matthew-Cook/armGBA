@@ -616,6 +616,7 @@ enum {
 	SET_INTEGER,
 	SET_STRETCH,
 	SET_FILTER,
+	SET_SHADOW,
 	SET_VSYNC,
 	SET_FPS,
 	SET_VOLUME,
@@ -648,6 +649,9 @@ static void changeSetting(int which, int delta) {
 		break;
 	case SET_FILTER:
 		settings.filter = wrap(settings.filter, d, FILTERS);
+		break;
+	case SET_SHADOW:
+		settings.shadow = wrap(settings.shadow, d, 9);
 		break;
 	case SET_VSYNC:
 		settings.vsync = !settings.vsync;
@@ -705,6 +709,10 @@ static void videoMenu(void) {
 	addValue("Integer Scaling", onOff(settings.integerScale), changeSetting, SET_INTEGER);
 	addValue("Aspect Ratio", settings.stretch ? "Fill the Window" : "The Console's", changeSetting, SET_STRETCH);
 	addValue("Filter", filters[settings.filter], changeSetting, SET_FILTER);
+	if (settings.filter == FILTER_LCD) {
+		static const char* const shadows[9] = { "Off", "Up", "Up Right", "Right", "Down Right", "Down", "Down Left", "Left", "Up Left" };
+		addValue("Game Boy Pixel Shadow", shadows[settings.shadow], changeSetting, SET_SHADOW);
+	}
 	addValue("VSync", onOff(settings.vsync), changeSetting, SET_VSYNC);
 	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
 }

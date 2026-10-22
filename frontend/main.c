@@ -548,9 +548,10 @@ static void makeOverlay(SDL_Rect to) {
 }
 
 // The shadow the first Game Boy's and the Pocket's pixels cast on the reflector behind them, across
-// the gap between the two: each pixel darkens the screen a dot right of and below it, softly, by a
-// fifth for a pixel as dark as the screen goes, from a Reddit photo of a first Game Boy's screen and
-// Brick Boy's model of it (a shadow 1.35 dots away). A texture a dot to each of the picture's pixels,
+// the gap between the two: each pixel darkens the screen 1.4 dots from it the way the setting points
+// (down and right by default, from light above and to the left), softly, by a fifth for a pixel as
+// dark as the screen goes, from a Reddit photo of a first Game Boy's screen and Brick Boy's model of it
+// (a shadow 1.35 dots away). A texture a dot to each of the picture's pixels,
 // remade when the picture changes, drawn scaled smoothly over the picture.
 static void drawShadow(SDL_Rect to, uint32_t lit) {
 	if (!shadow || shadowStale) {
@@ -599,7 +600,12 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 		SDL_UnlockTexture(shadow);
 		shadowStale = false;
 	}
-	SDL_Rect const cast = { to.x + to.w / app.gameWidth, to.y + to.h / app.gameHeight, to.w, to.h };
+	// Up, then on clockwise.
+	static const int8_t ways[8][2] = { { 0, -1 }, { 1, -1 }, { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 } };
+	int const dx = ways[settings.shadow - 1][0], dy = ways[settings.shadow - 1][1];
+	float const reach = dx && dy ? 1.0f : 1.4f;
+	SDL_Rect const cast = { to.x + (int) lroundf(dx * reach * to.w / app.gameWidth), to.y + (int) lroundf(dy * reach * to.h / app.gameHeight),
+		                    to.w, to.h };
 	SDL_RenderSetClipRect(app.renderer, &to);
 	SDL_RenderCopy(app.renderer, shadow, NULL, &cast);
 	SDL_RenderSetClipRect(app.renderer, NULL);
@@ -638,7 +644,7 @@ static void present(void) {
 		}
 		uint32_t lit = 0;
 		enum LibretroLcd const lcd = libretroLcd(&lit);
-		if (settings.filter == FILTER_LCD && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
+		if (settings.filter == FILTER_LCD && settings.shadow && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
 			drawShadow(to, lit);
 		}
 	}
