@@ -2894,7 +2894,8 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 				uint32_t const value = input >> shifts[wide][c] & ((1u << bits) - 1);
 				uint32_t const full = value << (8 - bits) | value >> (2 * bits - 8);
 				int32_t const target = toLinear[full];
-				int32_t const diff = target - cell->level[c];
+				// A fresh cell's level isn't set yet: it takes the target.
+				int32_t const diff = fresh ? 0 : target - cell->level[c];
 				uint32_t out = value;
 				if (fresh) {
 					cell->level[c] = (uint16_t) target;
