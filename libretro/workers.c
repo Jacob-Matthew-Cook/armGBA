@@ -26,6 +26,8 @@ static struct Worker {
 	atomic_uint done;
 } workers[MAX_WORKERS];
 static int started;
+// The count the last workersStart was asked for.
+static int asked;
 static atomic_uint generation;
 static void (*volatile currentJob)(int);
 static volatile int currentCount;
@@ -82,6 +84,7 @@ void workersStart(int count) {
 	long const cores = sysconf(_SC_NPROCESSORS_ONLN);
 	int const wanted = count < MAX_WORKERS ? count : MAX_WORKERS;
 	atomic_store(&stopping, false);
+	asked = count;
 	for (int i = 1; i < wanted && i < cores; ++i) {
 		workers[i].index = i;
 		atomic_store(&workers[i].done, atomic_load(&generation));
@@ -93,6 +96,7 @@ void workersStart(int count) {
 }
 
 void workersStop(void) {
+	asked = 0;
 	if (!started) {
 		return;
 	}
@@ -104,6 +108,10 @@ void workersStop(void) {
 		pthread_join(workers[i].thread, NULL);
 	}
 	started = 0;
+}
+
+int workersAsked(void) {
+	return asked;
 }
 
 void workersRun(void (*job)(int index), int count) {

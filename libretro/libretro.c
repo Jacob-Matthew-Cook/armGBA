@@ -2871,7 +2871,8 @@ static void readScreensKeys(void) {
 // moving half as far, so a picture that alternates each frame shows in stripes, as it does on the
 // console (as SameBoy's accurate frame blending also has it). Each subpixel's level is kept 8-bit,
 // gamma encoded, and its next level read from a table built for the screen and the picture's channel
-// widths. A frame RetroArch runs again, and doesn't show, leaves the screen as it is.
+// widths, the rows shared out among the CPU's cores. A frame RetroArch runs again, and doesn't show,
+// leaves the screen as it is.
 enum { SCREEN_DMG, SCREEN_POCKET, SCREEN_TFT, SCREEN_KINDS };
 static const float screenTimes[SCREEN_KINDS][2] = { { 50, 110 }, { 25, 50 }, { 15, 30 } };
 
@@ -2904,7 +2905,7 @@ enum LibretroLcd libretroLcd(uint32_t* gap) {
 // once for each share of gap the square uses, those rows woven into the larger one, and rows alike
 // copied. The shadow is the picture's darkness below the unlit screen, spread as a smooth scale
 // spreads it, across then down, and moved; it darkens the rows it reaches. The loops work on whole
-// rows in vectors, NEON on ARM, SSE or AVX on x86.
+// rows in vectors, NEON on ARM, SSE or AVX on x86, the rows shared out among the CPU's cores.
 
 #if defined(__AVX2__)
 #define GRID_VECTOR 32
@@ -3278,9 +3279,14 @@ struct GridBuffer {
 	size_t size;
 };
 
-// The larger picture; the source row blended for each share of gap; each row of a square unlike those
-// above it; the shadow's darkness at the source's size, with 8 more on each side; that spread across
-// the larger rows; whether each source row has any; a darkness row lerped for each column of a square.
+// The rows are shared out among this many threads, the core's own and workers (workers.h) started
+// for the grid unless linked consoles have them already; each has its own scratch rows.
+enum { GRID_JOBS = 4 };
+
+// The larger picture; for each thread, the source row blended for each share of gap and each row of a
+// square unlike those above it; the shadow's darkness at the source's size, with 8 more on each side;
+// that spread across the larger rows; whether each source row has any; for each thread, a darkness
+// row lerped for each column of a square.
 static struct GridBuffer gridOut, gridBlends, gridTemplates, gridDark, gridSpread, gridRowDark, gridLerped;
 
 // Whether b holds wanted bytes, growing it if it didn't.
@@ -3342,10 +3348,39 @@ static void gridLay(int s, enum LibretroLcd lcd) {
 	gridLayout.lcd = lcd;
 }
 
-// The shadow of an XRGB8888 picture, from the unlit screen's color lit: each pixel's darkness, then
-// each row spread across the larger width, as a smooth scale samples it after moving it moveX across.
-static void gridSpreadShadow(const uint8_t* picture, unsigned width, unsigned height, size_t pitch, int s, uint32_t lit, int moveX) {
-	unsigned const outWidth = width * s;
+// The frame the threads draw.
+static struct GridFrame {
+	const uint8_t* picture;
+	unsigned width, height;
+	size_t pitch, bytes;
+	int s, moveX, moveY;
+	uint32_t gap;
+	bool shadow;
+} gridFrame;
+
+// The rows of height a thread draws: an even share of them.
+static void rowsOf(int job, unsigned height, unsigned* from, unsigned* to) {
+	*from = height * (unsigned) job / GRID_JOBS;
+	*to = height * (unsigned) (job + 1) / GRID_JOBS;
+}
+
+// Workers for the post-processing threads, unless they're running already.
+static void startJobs(void) {
+	if (workersAsked() < GRID_JOBS) {
+		workersStart(GRID_JOBS);
+	}
+}
+
+// The shadow of a thread's rows of the XRGB8888 picture: each pixel's darkness below the unlit
+// screen, then each row spread across the larger width, as a smooth scale samples it after moving it
+// moveX across.
+static void gridShadowJob(int job) {
+	unsigned from, to;
+	rowsOf(job, gridFrame.height, &from, &to);
+	unsigned const width = gridFrame.width, outWidth = width * gridFrame.s;
+	int const s = gridFrame.s, moveX = gridFrame.moveX;
+	uint32_t const lit = gridFrame.gap;
+	uint8_t* const lerped = gridLerped.data + (size_t) job * 8 * width;
 	// Darkness counts from a sixteenth below the unlit screen; it is a fifth (51 of 255) at black.
 	int const litLevel = 2 * (int) (lit >> 16 & 0xFF) + 5 * (int) (lit >> 8 & 0xFF) + (int) (lit & 0xFF), start = litLevel - litLevel / 16;
 	int const scaleDark = start ? (LIBRETRO_LCD_SHADOW << 16) / start : 0;
@@ -3358,8 +3393,8 @@ static void gridSpreadShadow(const uint8_t* picture, unsigned width, unsigned he
 		int const w = (int) lroundf((u - left[sx]) * 256);
 		weight[sx] = w > 255 ? 255 : w;
 	}
-	for (unsigned y = 0; y < height; ++y) {
-		const uint32_t* const row = (const uint32_t*) (picture + y * pitch);
+	for (unsigned y = from; y < to; ++y) {
+		const uint32_t* const row = (const uint32_t*) (gridFrame.picture + y * gridFrame.pitch);
 		uint8_t* const d = gridDark.data + (size_t) y * (width + 16) + 8;
 		bool any = false;
 		for (unsigned x = 0; x < width; ++x) {
@@ -3382,7 +3417,7 @@ static void gridSpreadShadow(const uint8_t* picture, unsigned width, unsigned he
 		for (int sx = 0; sx < s; ++sx) {
 			const uint8_t* const p = d + left[sx];
 			uint16_t const w = (uint16_t) weight[sx], keep = (uint16_t) (256 - w);
-			uint8_t* const o = gridLerped.data + (size_t) sx * width;
+			uint8_t* const o = lerped + (size_t) sx * width;
 			unsigned x = 0;
 			for (; x + GRID_LANES16 <= width; x += GRID_LANES16) {
 				GridBytes16 a, b;
@@ -3410,11 +3445,12 @@ static void gridSpreadShadow(const uint8_t* picture, unsigned width, unsigned he
 
 // One source row's templates: the row blended for each share of gap, then each row of a square unlike
 // those above it woven from the blends its columns use.
-static void gridMakeTemplates(const uint8_t* row, unsigned width, size_t bytes, int s, uint32_t gap) {
+static void gridMakeTemplates(const uint8_t* row, uint8_t* blends, uint8_t* templates) {
+	unsigned const width = gridFrame.width, gap = gridFrame.gap;
 	unsigned const gapR = gap >> 16 & 0xFF, gapG = gap >> 8 & 0xFF, gapB = gap & 0xFF;
-	size_t const rowBytes = width * bytes, outPitch = rowBytes * s;
+	size_t const bytes = gridFrame.bytes, rowBytes = width * bytes, outPitch = rowBytes * gridFrame.s;
 	for (int k = 0; k < gridLayout.shareCount; ++k) {
-		void* const blended = gridBlends.data + k * rowBytes;
+		void* const blended = blends + k * rowBytes;
 		if (!gridLayout.shares[k]) {
 			memcpy(blended, row, rowBytes);
 		} else if (bytes == 4) {
@@ -3423,39 +3459,63 @@ static void gridMakeTemplates(const uint8_t* row, unsigned width, size_t bytes, 
 			gridBlend565((const uint16_t*) row, blended, width, gridLayout.shares[k], gapR, gapG, gapB);
 		}
 	}
-	for (int sy = 0; sy < s; ++sy) {
+	for (int sy = 0; sy < gridFrame.s; ++sy) {
 		if (gridLayout.firstAlike[sy] != sy) {
 			continue;
 		}
-		uint8_t* const line = gridTemplates.data + sy * outPitch;
+		uint8_t* const line = templates + sy * outPitch;
 		const void* from[8];
-		for (int sx = 0; sx < s; ++sx) {
-			from[sx] = gridBlends.data + gridLayout.shareOf[sy][sx] * rowBytes;
+		for (int sx = 0; sx < gridFrame.s; ++sx) {
+			from[sx] = blends + gridLayout.shareOf[sy][sx] * rowBytes;
 		}
 		if (bytes == 4) {
-			gridWeave32((uint32_t*) line, (const uint32_t* const*) from, s, width);
+			gridWeave32((uint32_t*) line, (const uint32_t* const*) from, gridFrame.s, width);
 		} else {
-			gridWeave16((uint16_t*) line, (const uint16_t* const*) from, s, width);
+			gridWeave16((uint16_t*) line, (const uint16_t* const*) from, gridFrame.s, width);
 		}
 	}
 }
 
 // Larger row outY from its template, darkened where the shadow, moved moveY down, reaches: a smooth
 // scale lerps the two source rows around it.
-static void gridShadeRow(uint32_t* line, const uint32_t* pattern, unsigned outY, int moveY, unsigned width, unsigned height, int s) {
-	unsigned const outWidth = width * s;
-	int const at = (int) outY - moveY;
+static void gridShadeRow(uint32_t* line, const uint32_t* pattern, unsigned outY) {
+	int const s = gridFrame.s, height = (int) gridFrame.height;
+	unsigned const outWidth = gridFrame.width * s;
+	int const at = (int) outY - gridFrame.moveY;
 	float const u = (at + 0.5f) / s - 0.5f;
 	int const above = (int) floorf(u);
-	int const top = above < 0 ? 0 : above > (int) height - 1 ? (int) height - 1 : above;
-	int const bottom = above + 1 < (int) height && above >= 0 ? above + 1 : top;
-	if (at < 0 || at >= (int) (height * s) || (!gridRowDark.data[top] && !gridRowDark.data[bottom])) {
+	int const top = above < 0 ? 0 : above > height - 1 ? height - 1 : above;
+	int const bottom = above + 1 < height && above >= 0 ? above + 1 : top;
+	if (at < 0 || at >= height * s || (!gridRowDark.data[top] && !gridRowDark.data[bottom])) {
 		memcpy(line, pattern, outWidth * sizeof(uint32_t));
 		return;
 	}
 	int const w = (int) lroundf((u - above) * 256);
-	unsigned const weight = above < 0 || above >= (int) height - 1 ? 0 : (unsigned) (w > 255 ? 255 : w);
+	unsigned const weight = above < 0 || above >= height - 1 ? 0 : (unsigned) (w > 255 ? 255 : w);
 	gridShade8888(line, pattern, gridSpread.data + (size_t) top * outWidth, gridSpread.data + (size_t) bottom * outWidth, weight, outWidth);
+}
+
+// A thread's rows of the larger picture, each from its template, shaded when there's a shadow.
+static void gridDrawJob(int job) {
+	unsigned from, to;
+	rowsOf(job, gridFrame.height, &from, &to);
+	int const s = gridFrame.s;
+	size_t const rowBytes = gridFrame.width * gridFrame.bytes, outPitch = rowBytes * s;
+	uint8_t* const blends = gridBlends.data + (size_t) job * GRID_SHARES_MAX * rowBytes;
+	uint8_t* const templates = gridTemplates.data + (size_t) job * 8 * outPitch;
+	for (unsigned y = from; y < to; ++y) {
+		gridMakeTemplates(gridFrame.picture + y * gridFrame.pitch, blends, templates);
+		for (int sy = 0; sy < s; ++sy) {
+			unsigned const outY = y * s + sy;
+			uint8_t* const line = gridOut.data + (size_t) outY * outPitch;
+			const uint8_t* const pattern = templates + (size_t) gridLayout.firstAlike[sy] * outPitch;
+			if (gridFrame.shadow) {
+				gridShadeRow((uint32_t*) line, (const uint32_t*) pattern, outY);
+			} else {
+				memcpy(line, pattern, outPitch);
+			}
+		}
+	}
 }
 
 static void sendPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {
@@ -3475,36 +3535,26 @@ static void sendPicture(const void* picture, unsigned width, unsigned height, si
 	uint32_t gap;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
 	bool const shadow = gridWay && bytes == 4 && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET);
-	bool const room = gridReserve(&gridOut, outPitch * outHeight) && gridReserve(&gridBlends, GRID_SHARES_MAX * width * bytes) &&
-	                  gridReserve(&gridTemplates, 8 * outPitch) &&
+	bool const room = gridReserve(&gridOut, outPitch * outHeight) && gridReserve(&gridBlends, (size_t) GRID_JOBS * GRID_SHARES_MAX * width * bytes) &&
+	                  gridReserve(&gridTemplates, (size_t) GRID_JOBS * 8 * outPitch) &&
 	                  (!shadow || (gridReserve(&gridDark, (size_t) (width + 16) * height) && gridReserve(&gridSpread, (size_t) outWidth * height) &&
-	                               gridReserve(&gridRowDark, height) && gridReserve(&gridLerped, (size_t) 8 * width)));
+	                               gridReserve(&gridRowDark, height) && gridReserve(&gridLerped, (size_t) GRID_JOBS * 8 * width)));
 	// Without the memory, the last picture stays.
 	if (!room) {
 		videoRefresh(NULL, outWidth, outHeight, outPitch);
 		return;
 	}
 	gridLay(s, lcd);
-	int moveY = 0;
+	startJobs();
+	gridFrame = (struct GridFrame) { .picture = picture, .width = width, .height = height, .pitch = pitch, .bytes = bytes, .s = s, .gap = gap, .shadow = shadow };
 	if (shadow) {
 		int const way = gridWay - 1;
 		float const reach = libretroLcdReach(way);
-		moveY = (int) lroundf(libretroLcdWays[way][1] * reach * s);
-		gridSpreadShadow(picture, width, height, pitch, s, gap, (int) lroundf(libretroLcdWays[way][0] * reach * s));
+		gridFrame.moveX = (int) lroundf(libretroLcdWays[way][0] * reach * s);
+		gridFrame.moveY = (int) lroundf(libretroLcdWays[way][1] * reach * s);
+		workersRun(gridShadowJob, GRID_JOBS);
 	}
-	for (unsigned y = 0; y < height; ++y) {
-		gridMakeTemplates((const uint8_t*) picture + y * pitch, width, bytes, s, gap);
-		for (int sy = 0; sy < s; ++sy) {
-			unsigned const outY = y * s + sy;
-			uint8_t* const line = gridOut.data + (size_t) outY * outPitch;
-			const uint8_t* const pattern = gridTemplates.data + (size_t) gridLayout.firstAlike[sy] * outPitch;
-			if (shadow) {
-				gridShadeRow((uint32_t*) line, (const uint32_t*) pattern, outY, moveY, width, height, s);
-			} else {
-				memcpy(line, pattern, outPitch);
-			}
-		}
-	}
+	workersRun(gridDrawJob, GRID_JOBS);
 	videoRefresh(gridOut.data, outWidth, outHeight, outPitch);
 }
 
@@ -3544,89 +3594,41 @@ static void buildNext(int kind, int level, int bits, uint8_t* table, float drive
 	}
 }
 
-static void showPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {
-	static uint8_t* levels;
-	static uint8_t* busy;
-	static uint16_t* rowBusy;
-	static uint8_t* last;
-	static uint8_t* shown;
-	static unsigned lastWidth, lastHeight;
-	static size_t lastPitch;
-	static unsigned shownFrames;
-	if (!ghosting || !picture || rerunning()) {
-		// Turned off, the screen starts again from the picture when it's turned on.
-		lastWidth = ghosting ? lastWidth : 0;
-		sendPicture(picture, width, height, pitch);
-		return;
-	}
-	size_t const bytes = pitch / width;
-	size_t const rowPixels = pitch / bytes;
-	size_t const pixels = rowPixels * height;
-	int const kind = screenKind();
-	int const wanted = (kind * 2 + ghosting - 1) * 2 + (bytes == 4);
-	if (builtFor != wanted) {
-		builtFor = wanted;
-		for (int d = 0; d < (kind == SCREEN_TFT ? 2 : 1); ++d) {
-			float const drive = d ? 0.5f : 1;
-			if (bytes == 4) {
-				buildNext(kind, ghosting - 1, 8, next8[d], drive);
-			} else {
-				buildNext(kind, ghosting - 1, 5, next5[d], drive);
-				buildNext(kind, ghosting - 1, 6, next6[d], drive);
-			}
-		}
-	}
-	++shownFrames;
-	if (!levels || width != lastWidth || height != lastHeight || pitch != lastPitch) {
-		uint8_t* const newLevels = realloc(levels, pixels * 3);
-		levels = newLevels ? newLevels : levels;
-		uint8_t* const newBusy = realloc(busy, pixels);
-		busy = newBusy ? newBusy : busy;
-		uint16_t* const newRowBusy = realloc(rowBusy, height * sizeof(*rowBusy));
-		rowBusy = newRowBusy ? newRowBusy : rowBusy;
-		uint8_t* const newLast = realloc(last, pitch * height);
-		last = newLast ? newLast : last;
-		uint8_t* const newShown = realloc(shown, pitch * height);
-		shown = newShown ? newShown : shown;
-		lastWidth = 0;
-		if (newLevels && newBusy && newRowBusy && newLast && newShown) {
-			lastWidth = width;
-			lastHeight = height;
-			lastPitch = pitch;
-			memcpy(last, picture, pitch * height);
-			memset(busy, 0, pixels);
-			memset(rowBusy, 0, height * sizeof(*rowBusy));
-			for (size_t i = 0; i < pixels; ++i) {
-				if (bytes == 4) {
-					uint32_t const c = ((const uint32_t*) picture)[i];
-					levels[i * 3] = c >> 16 & 0xFF;
-					levels[i * 3 + 1] = c >> 8 & 0xFF;
-					levels[i * 3 + 2] = c & 0xFF;
-				} else {
-					uint16_t const c = ((const uint16_t*) picture)[i];
-					levels[i * 3] = (uint8_t) ((c >> 11) << 3 | (c >> 13));
-					levels[i * 3 + 1] = (uint8_t) ((c >> 5 & 0x3F) << 2 | (c >> 9 & 3));
-					levels[i * 3 + 2] = (uint8_t) ((c & 0x1F) << 3 | (c >> 2 & 7));
-				}
-			}
-		}
-		sendPicture(picture, width, height, pitch);
-		return;
-	}
-	bool const alternate = kind == SCREEN_TFT && interleaved && advancePanel();
-	for (unsigned y = 0; y < height; ++y) {
-		const uint8_t* const in = (const uint8_t*) picture + y * pitch;
-		uint8_t* const before = last + y * pitch;
-		uint8_t* const out = shown + y * pitch;
-		if (!rowBusy[y] && !memcmp(in, before, pitch)) {
+// The screen between frames: each subpixel's level, whether each pixel is still moving and how many
+// of each row's are, the last picture in and the picture shown; and this frame's picture in, its
+// pixels' size and whether its rows alternate.
+static struct {
+	uint8_t* levels;
+	uint8_t* busy;
+	uint16_t* rowBusy;
+	uint8_t* last;
+	uint8_t* shown;
+	unsigned width, height;
+	size_t pitch;
+	unsigned frames;
+	const uint8_t* picture;
+	size_t bytes;
+	bool alternate;
+} ghost;
+
+// A thread's rows of the screen, a frame on. A row as it was, settled, is copied.
+static void ghostJob(int job) {
+	unsigned from, to;
+	rowsOf(job, ghost.height, &from, &to);
+	size_t const pitch = ghost.pitch, rowPixels = pitch / ghost.bytes;
+	for (unsigned y = from; y < to; ++y) {
+		const uint8_t* const in = ghost.picture + y * pitch;
+		uint8_t* const before = ghost.last + y * pitch;
+		uint8_t* const out = ghost.shown + y * pitch;
+		if (!ghost.rowBusy[y] && !memcmp(in, before, pitch)) {
 			memcpy(out, in, pitch);
 			continue;
 		}
-		int const weak = alternate && (y + shownFrames) % 2;
-		uint8_t* level = levels + y * rowPixels * 3;
-		uint8_t* moving = busy + y * rowPixels;
+		int const weak = ghost.alternate && (y + ghost.frames) % 2;
+		uint8_t* level = ghost.levels + y * rowPixels * 3;
+		uint8_t* moving = ghost.busy + y * rowPixels;
 		unsigned count = 0;
-		if (bytes == 4) {
+		if (ghost.bytes == 4) {
 			const uint8_t* const t = next8[weak];
 			for (size_t x = 0; x < rowPixels; ++x, level += 3) {
 				uint32_t const input = ((const uint32_t*) in)[x];
@@ -3646,7 +3648,6 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 				count += still;
 				((uint32_t*) out)[x] = output;
 			}
-			memcpy(before, in, pitch);
 		} else {
 			const uint8_t* const t5 = next5[weak];
 			const uint8_t* const t6 = next6[weak];
@@ -3669,11 +3670,78 @@ static void showPicture(const void* picture, unsigned width, unsigned height, si
 				count += still;
 				((uint16_t*) out)[x] = (uint16_t) output;
 			}
-			memcpy(before, in, pitch);
 		}
-		rowBusy[y] = (uint16_t) count;
+		memcpy(before, in, pitch);
+		ghost.rowBusy[y] = (uint16_t) count;
 	}
-	sendPicture(shown, width, height, pitch);
+}
+
+static void showPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {
+	if (!ghosting || !picture || rerunning()) {
+		// Turned off, the screen starts again from the picture when it's turned on.
+		ghost.width = ghosting ? ghost.width : 0;
+		sendPicture(picture, width, height, pitch);
+		return;
+	}
+	size_t const bytes = pitch / width;
+	size_t const pixels = pitch / bytes * height;
+	int const kind = screenKind();
+	int const wanted = (kind * 2 + ghosting - 1) * 2 + (bytes == 4);
+	if (builtFor != wanted) {
+		builtFor = wanted;
+		for (int d = 0; d < (kind == SCREEN_TFT ? 2 : 1); ++d) {
+			float const drive = d ? 0.5f : 1;
+			if (bytes == 4) {
+				buildNext(kind, ghosting - 1, 8, next8[d], drive);
+			} else {
+				buildNext(kind, ghosting - 1, 5, next5[d], drive);
+				buildNext(kind, ghosting - 1, 6, next6[d], drive);
+			}
+		}
+	}
+	++ghost.frames;
+	if (!ghost.levels || width != ghost.width || height != ghost.height || pitch != ghost.pitch) {
+		uint8_t* const newLevels = realloc(ghost.levels, pixels * 3);
+		ghost.levels = newLevels ? newLevels : ghost.levels;
+		uint8_t* const newBusy = realloc(ghost.busy, pixels);
+		ghost.busy = newBusy ? newBusy : ghost.busy;
+		uint16_t* const newRowBusy = realloc(ghost.rowBusy, height * sizeof(*ghost.rowBusy));
+		ghost.rowBusy = newRowBusy ? newRowBusy : ghost.rowBusy;
+		uint8_t* const newLast = realloc(ghost.last, pitch * height);
+		ghost.last = newLast ? newLast : ghost.last;
+		uint8_t* const newShown = realloc(ghost.shown, pitch * height);
+		ghost.shown = newShown ? newShown : ghost.shown;
+		ghost.width = 0;
+		if (newLevels && newBusy && newRowBusy && newLast && newShown) {
+			ghost.width = width;
+			ghost.height = height;
+			ghost.pitch = pitch;
+			memcpy(ghost.last, picture, pitch * height);
+			memset(ghost.busy, 0, pixels);
+			memset(ghost.rowBusy, 0, height * sizeof(*ghost.rowBusy));
+			for (size_t i = 0; i < pixels; ++i) {
+				if (bytes == 4) {
+					uint32_t const c = ((const uint32_t*) picture)[i];
+					ghost.levels[i * 3] = c >> 16 & 0xFF;
+					ghost.levels[i * 3 + 1] = c >> 8 & 0xFF;
+					ghost.levels[i * 3 + 2] = c & 0xFF;
+				} else {
+					uint16_t const c = ((const uint16_t*) picture)[i];
+					ghost.levels[i * 3] = (uint8_t) ((c >> 11) << 3 | (c >> 13));
+					ghost.levels[i * 3 + 1] = (uint8_t) ((c >> 5 & 0x3F) << 2 | (c >> 9 & 3));
+					ghost.levels[i * 3 + 2] = (uint8_t) ((c & 0x1F) << 3 | (c >> 2 & 7));
+				}
+			}
+		}
+		sendPicture(picture, width, height, pitch);
+		return;
+	}
+	ghost.picture = picture;
+	ghost.bytes = bytes;
+	ghost.alternate = kind == SCREEN_TFT && interleaved && advancePanel();
+	startJobs();
+	workersRun(ghostJob, GRID_JOBS);
+	sendPicture(ghost.shown, width, height, pitch);
 }
 
 // The low-pass filter: each sample out, per side, is the last one out weighted by lowPass, out of

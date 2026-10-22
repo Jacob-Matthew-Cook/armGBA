@@ -16,6 +16,8 @@ extern "C" {
 // Starts threads for indices 1 to count - 1, as many as there are other CPU cores for.
 void workersStart(int count);
 void workersStop(void);
+// The count workersStart was last asked for, 0 once stopped.
+int workersAsked(void);
 // Runs job(i) for each index below count, and returns when all have finished.
 void workersRun(void (*job)(int index), int count);
 
