@@ -2834,12 +2834,12 @@ static int screenKind(void) {
 }
 
 enum LibretroLcd libretroLcd(uint32_t* gap) {
-	if (screenKind() == SCREEN_TFT) {
-		*gap = 0;
-		return LIBRETRO_LCD_TFT;
+	int const kind = screenKind();
+	*gap = kind == SCREEN_TFT ? 0 : libretroGbOffColor();
+	if (kind != SCREEN_TFT) {
+		return kind == SCREEN_POCKET ? LIBRETRO_LCD_POCKET : LIBRETRO_LCD_DMG;
 	}
-	*gap = libretroGbOffColor();
-	return LIBRETRO_LCD_STN;
+	return gameBoy && !libretroGbOnAdvance() ? LIBRETRO_LCD_COLOR : LIBRETRO_LCD_ADVANCE;
 }
 
 static void showPicture(const void* picture, unsigned width, unsigned height, size_t pitch) {
