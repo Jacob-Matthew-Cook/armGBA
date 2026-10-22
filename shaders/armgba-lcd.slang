@@ -1,5 +1,11 @@
 #version 450
 
+// Copyright (c) 2026 Jacob Cook
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 // armGBA's LCD Grid for RetroArch, as the standalone frontend draws it: the gaps between the
 // console screen's pixels, and the shadow the first Game Boy's and the Pocket's pixels cast on the
 // reflector behind them. A gap is centered on the edge between two pixels; an output pixel takes the
@@ -7,7 +13,7 @@
 // first Game Boy's and the Pocket's show the screen's color while off there, the Color's and
 // Advance's black. The shadow darkens the screen 1.4 dots from each pixel the chosen way, softly, by
 // up to Shadow at a pixel as dark as the screen goes. The presets beside this hold each screen's
-// values, measured from photos of the consoles (see the standalone frontend's main.c).
+// values, measured from photos of the consoles (see libretro/lcd.h).
 
 layout(push_constant) uniform Push {
 	vec4 SourceSize;

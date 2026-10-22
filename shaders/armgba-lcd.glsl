@@ -1,3 +1,9 @@
+// Copyright (c) 2026 Jacob Cook
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 // armGBA's LCD Grid for RetroArch's gl driver; armgba-lcd.slang says what it draws.
 
 #pragma parameter GAP_SHARE "Gap Width (Share of a Pixel)" 0.15 0.0 0.5 0.01

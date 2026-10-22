@@ -46,7 +46,7 @@ only with Link Mode on.
 | | Game Boy Advance Border | Game Boy | Cropped, Shown |
 | | Game Boy Advance Panel | Game Boy | Game Boy Advance, Game Boy Color |
 | | LCD Ghosting | Both | Off, Half, Full |
-| | Interleaved Rows | Game Boy Advance | Off, On |
+| | Interleaved Rows | Both | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left |
 | Audio | Low-Pass Filter | Both | Disabled, 20%, 40%, 60%, 80% |
@@ -72,19 +72,21 @@ only with Link Mode on.
 | | Backups Kept | Both | 10, 5, 20, All |
 | | Backups Listed | Both | 10, 20, 40, 80, 126 |
 
-On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance Border
-set to Shown, the black around it shows too, as on that console's screen. Game Boy Advance Panel shows its screen as
-the Advance's panel or the Color's: their colors with Color Correction on, their LCD Grid and their
-ghosting. Interleaved Rows, on the Advance's panel with LCD Ghosting on, drives alternate rows harder
-each frame, so pictures that alternate each frame show in stripes, as on the console.
+On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance
+Border set to Shown, the black around it shows too, as on that console's screen. Game Boy Advance
+Panel shows its screen as the Advance's panel or the Color's: their colors with Color Correction on,
+their LCD Grid and their ghosting. Interleaved Rows, on the Advance's panel with LCD Ghosting on,
+drives alternate rows harder each frame, so pictures that alternate each frame show in stripes, as
+on the console.
 
-LCD Grid draws the gaps between the console screen's pixels into a picture as many times larger, with
-the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen, with
-RetroArch's integer scaling on. It works on the CPU, in vectors (NEON, SSE or AVX); at 6x it takes
-about 0.2 ms a frame for a Game Boy Advance game on a Ryzen 7 8745H, 0.6 ms for a Game Boy game
-with its shadow. `shaders/` holds RetroArch shader presets, `.slangp` and `.glslp`, that draw the same
-on the GPU at any size instead, one for each screen: `gb-green`, `gb-gray`, `gb-pocket` and `gb-light`
-(with the shadow), `gbc` and `gba`. The standalone frontend draws its own on the GPU.
+LCD Grid draws the gaps between the console screen's pixels into a picture as many times larger,
+with the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen,
+with RetroArch's integer scaling on. It works on the CPU, in vectors (NEON, SSE or AVX). At 6x a
+frame takes about 0.13 ms for a Game Boy Advance game and 0.31 ms for a Game Boy game with its
+shadow on a Ryzen 7 8745H, and 1.7 ms and 5 ms on an RG353M's Cortex-A55. `shaders/` holds RetroArch
+shader presets, `.slangp` and `.glslp`, that draw the same on the GPU at any size instead, one for
+each screen: `gb-green`, `gb-gray`, `gb-pocket` and `gb-light` (with the shadow), `gbc` and `gba`.
+The standalone frontend draws its own on the GPU.
 
 ## Building
 
@@ -133,20 +135,21 @@ ten state slots with Undo Load State, the picture (integer scaling, Sharp, Smoot
 scanlines, vsync, and the core's screen options), the sound's volume and latency, rewind, run-ahead,
 netplay and RetroAchievements. The line under the menu says what the selected item does. With a
 controller, the buttons bound to A and B choose and go back, and L and R jump by letter in the game
-list; on the keyboard, typing a name's start finds it. Restart, Close Game and Quit ask for a second
-press. Netplay is armgba to armgba: Separate
-carries the link cable between two devices each running its own game; Together runs every player's
-console on every device, kept in step with rollback. `--host`, `--host-together` and `--connect
-ADDRESS` start it from the command line. Achievements need the system's libcurl, and recording its
-ffmpeg.
+list; on the keyboard, typing a name's start finds it. Restart, Close Game, Quit and Reset Controls
+and Hotkeys ask for a second press. Netplay is armgba to armgba: Separate carries the link cable
+between two devices each running its own game; Together runs every player's console on every device,
+kept in step with rollback. `--host`, `--host-together` and `--connect ADDRESS` start it from the
+command line. Achievements need the system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
-`~/.config/armgba/armgba.cfg`; BIOS and boot ROM files go in `~/.config/armgba/system`, saves,
-states, screenshots and cheats in `~/.local/share/armgba`.
+`~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`; BIOS and boot
+ROM files go in `~/.config/armgba/system`, saves, states, screenshots and cheats in
+`~/.local/share/armgba`.
 
 Game Boy Advance games run on Nintendo's `gba_bios.bin` from the system directory when it's there
 and BIOS is set to Nintendo's, and otherwise on armGBA's own open-source BIOS, built into the core.
 Its splash lasts as long as Nintendo's logo, and a game starts on the same cycle.
+
 Game Boy boot ROMs are optional, looked for under these names in this order:
 
 - Game Boy: `gb_bios.bin`, `dmg_boot.bin`
@@ -155,9 +158,9 @@ Game Boy boot ROMs are optional, looked for under these names in this order:
 - Game Boy Advance: `cgb_agb_boot.bin`, `cgb_agb0_boot.bin`, `agb_boot.bin`, then the Game Boy
   Color's (converted)
 
-With Boot ROM set to Nintendo's, the boot ROM is used under whichever of these names it has. A SameBoy boot
-ROM under one of them is used only where Nintendo's isn't there. With neither, armGBA's own starts
-the game.
+With Boot ROM set to Nintendo's, the boot ROM is used under whichever of these names it has. A
+SameBoy boot ROM under one of them is used only where Nintendo's isn't there. With neither, armGBA's
+own starts the game.
 
 armGBA's own boot ROMs (`gbboot/`, built into the core) are the size of Nintendo's and run on the
 hardware: on the Game Boy and the Pocket, in 256 bytes, the cartridge's logo scrolls down as on
@@ -248,8 +251,8 @@ The two ways to link:
   player 1. This is the way to bring a player's own save to the host before playing Together.
 - Backups Kept: 10 per player unless chosen. A save the same as its newest backup isn't backed up
   again.
-- Player 1's Save Folder can keep player 1's save in armGBA/Player 1 too, beside the other players'. When
-  it changes, the newer save is used.
+- Player 1's Save Folder can keep player 1's save in armGBA/Player 1 too, beside the other players'.
+  When it changes, the newer save is used.
 
 The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of
 Pokemon FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game
@@ -444,7 +447,7 @@ Gambatte. Each part keeps its own notice:
 | `gambatte/libgambatte/src/mem/snes_spc/` | GNU LGPL |
 | `libretro/libretro.h` | MIT |
 | `libretro/deps/` | MIT and public domain, as each file states |
-| `frontend/` | Mozilla Public License 2.0 |
+| `frontend/`, `appimage/`, `shaders/`, `bios/`, `gbboot/` | Mozilla Public License 2.0 |
 | `frontend/stb_truetype.h` | public domain or MIT |
 | `frontend/fonts/` | SIL Open Font License 1.1 (`LICENSES/OFL-1.1.txt`) |
 | The Game Boy palettes (other than Grayscale) and color curves in `libretro/gb-gambatte.cpp` | MIT, from SameBoy (Lior Halphon) |
