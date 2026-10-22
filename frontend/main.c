@@ -473,9 +473,13 @@ static float gapCoverage(int at, float pitch, float gap) {
 
 // A pattern over the picture. Scanlines: a CRT's dark line under each row, a source pixel to each 3x3
 // of it. LCD Grid: the gaps between the console screen's pixels, drawn at the size the picture is
-// shown, a gap that falls between output pixels shading each by how much of it is in the gap. A
-// Game Boy Color's or Advance's screen has a black matrix there; the first Game Boy's and the Pocket's
-// show the screen's unlit color. The gaps' widths, as shares of a pixel, and strengths are estimates.
+// shown, a gap that falls between output pixels shading each by how much of it is in the gap. The
+// first Game Boy's and the Pocket's show the screen's color while off there, the Color's and
+// Advance's a black matrix. Each screen's gaps, as a share of the pixel pitch, and how much of the gap
+// color shows across (between columns) and down (between rows), are from photos of the consoles: the
+// first Game Boy's are a quarter of the pitch and brighter than its lightest shade; the Advance's
+// darken as much as a black line a ninth of the pitch would; the Color's do so between columns, but
+// hardly between rows. The Pocket's are thinner than the first Game Boy's, by an estimate.
 static void makeOverlay(SDL_Rect to) {
 	uint32_t gap = 0;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
@@ -506,16 +510,23 @@ static void makeOverlay(SDL_Rect to) {
 		return;
 	}
 	if (grid) {
-		float const share = lcd == LIBRETRO_LCD_TFT ? 0.15f : 0.10f, strength = lcd == LIBRETRO_LCD_TFT ? 0.6f : 0.8f;
+		static const struct {
+			float share, across, down;
+		} screens[] = {
+			[LIBRETRO_LCD_DMG] = { 0.25f, 1, 1 },
+			[LIBRETRO_LCD_POCKET] = { 0.15f, 1, 1 },
+			[LIBRETRO_LCD_COLOR] = { 0.15f, 0.6f, 0.1f },
+			[LIBRETRO_LCD_ADVANCE] = { 0.15f, 0.75f, 0.75f },
+		};
 		float const pitchX = (float) w / app.gameWidth, pitchY = (float) h / app.gameHeight;
 		for (int x = 0; x < w; ++x) {
-			across[x] = gapCoverage(x, pitchX, share * pitchX);
+			across[x] = gapCoverage(x, pitchX, screens[lcd].share * pitchX) * screens[lcd].across;
 		}
 		for (int y = 0; y < h; ++y) {
-			float const down = gapCoverage(y, pitchY, share * pitchY);
+			float const down = gapCoverage(y, pitchY, screens[lcd].share * pitchY) * screens[lcd].down;
 			for (int x = 0; x < w; ++x) {
 				float const covered = 1 - (1 - across[x]) * (1 - down);
-				pixels[y * w + x] = (uint32_t) lroundf(covered * strength * 255) << 24 | (gap & 0xFFFFFF);
+				pixels[y * w + x] = (uint32_t) lroundf(covered * 255) << 24 | (gap & 0xFFFFFF);
 			}
 		}
 	} else {
