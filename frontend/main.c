@@ -49,6 +49,7 @@ static bool coreFastForward;
 static uint8_t* writtenSave[2];
 static size_t writtenSize[2];
 
+// path and each folder above it, as mkdir -p makes them.
 static void makeDirectories(const char* path) {
 	char partial[PATH_SIZE];
 	snprintf(partial, sizeof(partial), "%s", path);
@@ -62,6 +63,7 @@ static void makeDirectories(const char* path) {
 	mkdir(partial, 0755);
 }
 
+// armgba's folder under the XDG base directory xdg names, or under fallback in the home folder.
 static void dataDirectory(char* out, const char* xdg, const char* fallback, const char* leaf) {
 	const char* base = getenv(xdg);
 	if (base && *base) {
@@ -72,6 +74,7 @@ static void dataDirectory(char* out, const char* xdg, const char* fallback, cons
 	makeDirectories(out);
 }
 
+// The core's log, to stderr.
 static void logMessage(enum retro_log_level level, const char* format, ...) {
 	(void) level;
 	va_list args;
@@ -82,6 +85,7 @@ static void logMessage(enum retro_log_level level, const char* format, ...) {
 
 // The core's calls back.
 
+// The core sets each motor's strength; SDL takes both at once, kept on until changed.
 static bool setRumble(unsigned port, enum retro_rumble_effect effect, uint16_t strength) {
 	if (port >= PORTS || !app.pads[port]) {
 		return false;
@@ -91,6 +95,8 @@ static bool setRumble(unsigned port, enum retro_rumble_effect effect, uint16_t s
 	return true;
 }
 
+// What the core asks of the frontend: its options, folders, pixel format, logging, rumble, the link
+// cable's netpacket interface, and whether this frame is shown and heard. The rest it does without.
 static bool environment(unsigned command, void* data) {
 	switch (command) {
 	case RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION:
@@ -121,10 +127,12 @@ static bool environment(unsigned command, void* data) {
 		}
 		return option != NULL;
 	}
+	// Whether an option changed since the core last asked.
 	case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
 		*(bool*) data = optionsChanged;
 		optionsChanged = false;
 		return true;
+	// What this frontend has no use for, accepted.
 	case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK:
 	case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
 	case RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO:
@@ -141,6 +149,7 @@ static bool environment(unsigned command, void* data) {
 	case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
 		*(const char**) data = saveDirectory;
 		return true;
+	// RGB565 for the Advance, XRGB8888 for the Game Boy; the texture is made again for it.
 	case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: {
 		enum retro_pixel_format format = *(const enum retro_pixel_format*) data;
 		if (format != RETRO_PIXEL_FORMAT_RGB565 && format != RETRO_PIXEL_FORMAT_XRGB8888) {
@@ -159,6 +168,7 @@ static bool environment(unsigned command, void* data) {
 	case RETRO_ENVIRONMENT_GET_LOG_INTERFACE:
 		((struct retro_log_callback*) data)->log = logMessage;
 		return true;
+	// Whether this frame is shown and heard: not while run-ahead or netplay runs frames ahead or again.
 	case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:
 		if (data) {
 			*(int*) data = app.avEnable;
@@ -174,6 +184,7 @@ static bool environment(unsigned command, void* data) {
 	case RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE:
 		((struct retro_rumble_interface*) data)->set_rumble_state = setRumble;
 		return true;
+	// Netplay's states need only load back into this same core.
 	case RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT:
 		if (data) {
 			*(int*) data = netRollingBack() ? RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY : RETRO_SAVESTATE_CONTEXT_NORMAL;
@@ -184,6 +195,7 @@ static bool environment(unsigned command, void* data) {
 	}
 }
 
+// Whether the game's texture was made for Smooth.
 static bool gameSmooth;
 
 // SDL 2.0.14 can't change the scaling of a texture the renderer converts (RGB565 under OpenGL), so
@@ -201,15 +213,20 @@ static void makeGameTexture(unsigned width, unsigned height) {
 	app.gameHeight = height;
 }
 
+// The core's picture: to the game's texture, and kept for screenshots and the pixel shadow.
 static void videoRefresh(const void* data, unsigned width, unsigned height, size_t pitch) {
 	// No picture: the last one stays. While a frame is run again, nothing is shown.
 	if (!data || !(app.avEnable & RETRO_AV_ENABLE_VIDEO)) {
 		return;
 	}
-	if (!app.game || (int) width != app.gameWidth || (int) height != app.gameHeight) {
+	if (!app.game || (int) width != app.gameWidth || (int) height != app.gameHeight || pitch != app.picturePitch) {
 		makeGameTexture(width, height);
 		free(app.picture);
 		app.picture = malloc(pitch * height);
+		if (!app.picture) {
+			app.picturePitch = 0;
+			return;
+		}
 	}
 	SDL_UpdateTexture(app.game, NULL, data, (int) pitch);
 	memcpy(app.picture, data, pitch * height);
@@ -220,6 +237,7 @@ static void videoRefresh(const void* data, unsigned width, unsigned height, size
 	}
 }
 
+// The core's sound, gathered for the frame; sendSound sends it on.
 static size_t audioBatch(const int16_t* data, size_t frames) {
 	if (!(app.avEnable & RETRO_AV_ENABLE_AUDIO)) {
 		return frames;
@@ -267,6 +285,7 @@ uint16_t localButtons(unsigned port) {
 	return bits;
 }
 
+// The buttons the core reads: netplay's for each player when connected; the sticks only when not.
 static int16_t inputState(unsigned port, unsigned device, unsigned index, unsigned id) {
 	if (port >= PORTS) {
 		return 0;
@@ -321,6 +340,17 @@ static void savePath(char out[FILE_SIZE], const char* extension) {
 	snprintf(out, FILE_SIZE, "%s/%s.%s", saveDirectory, app.gameName, extension);
 }
 
+// The save's memory as it is now, as written.
+static void rememberSave(int slot, const uint8_t* memory, size_t size) {
+	free(writtenSave[slot]);
+	writtenSave[slot] = malloc(size);
+	writtenSize[slot] = writtenSave[slot] ? size : 0;
+	if (writtenSave[slot]) {
+		memcpy(writtenSave[slot], memory, size);
+	}
+}
+
+// The game's save memory from its file, when there is one.
 static void readSave(unsigned id, int slot, const char* extension) {
 	uint8_t* memory = retro_get_memory_data(id);
 	size_t size = retro_get_memory_size(id);
@@ -334,12 +364,10 @@ static void readSave(unsigned id, int slot, const char* extension) {
 		fread(memory, 1, size, f);
 		fclose(f);
 	}
-	free(writtenSave[slot]);
-	writtenSave[slot] = malloc(size);
-	memcpy(writtenSave[slot], memory, size);
-	writtenSize[slot] = size;
+	rememberSave(slot, memory, size);
 }
 
+// The game's save memory to its file, when it has changed since last read or written.
 static void writeSave(unsigned id, int slot, const char* extension) {
 	uint8_t* memory = retro_get_memory_data(id);
 	size_t size = retro_get_memory_size(id);
@@ -355,12 +383,10 @@ static void writeSave(unsigned id, int slot, const char* extension) {
 	}
 	fwrite(memory, 1, size, f);
 	fclose(f);
-	free(writtenSave[slot]);
-	writtenSave[slot] = malloc(size);
-	memcpy(writtenSave[slot], memory, size);
-	writtenSize[slot] = size;
+	rememberSave(slot, memory, size);
 }
 
+// The cartridge's save and its clock's.
 void writeSaves(void) {
 	if (app.loaded) {
 		writeSave(RETRO_MEMORY_SAVE_RAM, 0, "srm");
@@ -370,6 +396,8 @@ void writeSaves(void) {
 
 // Games.
 
+// Closes the game: netplay and recording stop, and the save, and the state when Save and Load State
+// on Exit and Start is on, are written.
 void unloadGame(void) {
 	if (!app.loaded) {
 		return;
@@ -397,6 +425,8 @@ void unloadGame(void) {
 	cheatCount = 0;
 }
 
+// Loads a game, or the first game in an archive, with its save, cheats and achievements, and its
+// state when Save and Load State on Exit and Start is on.
 bool loadGame(const char* path) {
 	unloadGame();
 	// A game in an archive is named as RetroArch names it, archive#game, so the core sees its extension.
@@ -427,6 +457,7 @@ bool loadGame(const char* path) {
 		osd("That game didn't load");
 		return false;
 	}
+	// The game's file is kept for its achievements' hash and netplay's CRC.
 	app.gameData = data;
 	app.gameSize = size;
 	struct retro_system_av_info av;
@@ -555,17 +586,15 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 			return;
 		}
 		// A pixel's darkness, from a sixteenth below the unlit screen, as an alpha: a fifth (51) at black.
+		// Game Boy pictures, the only ones with a shadow, are XRGB8888.
 		int const litLevel = 2 * (lit >> 16 & 0xFF) + 5 * (lit >> 8 & 0xFF) + (lit & 0xFF), start = litLevel - litLevel / 16;
 		int const scale = start ? (LIBRETRO_LCD_SHADOW << 16) / start : 0;
-		bool const wide = app.format == RETRO_PIXEL_FORMAT_XRGB8888;
 		for (int y = 0; y < app.gameHeight; ++y) {
-			const uint8_t* const row = app.picture + y * app.picturePitch;
+			const uint32_t* const row = (const uint32_t*) (app.picture + y * app.picturePitch);
 			uint32_t* const out = (uint32_t*) ((uint8_t*) pixels + y * pitch);
 			for (int x = 0; x < app.gameWidth; ++x) {
-				uint32_t const c = wide ? ((const uint32_t*) row)[x] : 0;
-				uint32_t const n = wide ? 0 : ((const uint16_t*) row)[x];
-				int const level = wide ? 2 * (int) (c >> 16 & 0xFF) + 5 * (int) (c >> 8 & 0xFF) + (int) (c & 0xFF)
-				                       : 2 * (int) (n >> 11 << 3) + 5 * (int) (n >> 5 & 0x3F) * 4 + (int) (n & 0x1F) * 8;
+				uint32_t const c = row[x];
+				int const level = 2 * (int) (c >> 16 & 0xFF) + 5 * (int) (c >> 8 & 0xFF) + (int) (c & 0xFF);
 				int const dark = level < start ? (start - level) * scale >> 16 : 0;
 				out[x] = (uint32_t) dark << 24;
 			}
@@ -594,6 +623,7 @@ static void present(void) {
 		int width, height;
 		SDL_GetRendererOutputSize(app.renderer, &width, &height);
 		SDL_Rect to = { 0, 0, width, height };
+		// The console's shape, as large as fits; in whole multiples with Integer Scaling.
 		if (!settings.stretch) {
 			float const aspect = app.geometry.aspect_ratio > 0 ? app.geometry.aspect_ratio : (float) app.gameWidth / app.gameHeight;
 			to.h = (int) (width / aspect);
@@ -616,7 +646,8 @@ static void present(void) {
 		}
 		uint32_t lit = 0;
 		enum LibretroLcd const lcd = libretroLcd(&lit);
-		if (settings.filter == FILTER_LCD && settings.shadow && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
+		if (settings.filter == FILTER_LCD && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 &&
+		    (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
 			drawShadow(to, lit);
 		}
 	}
@@ -624,6 +655,7 @@ static void present(void) {
 	SDL_RenderPresent(app.renderer);
 }
 
+// Makes the renderer again, as VSync changes; a software one if the GPU's can't be made.
 void recreateRenderer(void) {
 	if (app.game) {
 		SDL_DestroyTexture(app.game);
@@ -650,6 +682,7 @@ void recreateRenderer(void) {
 	uiRecreateTextures();
 }
 
+// Full screen, or a window the console's screen times the window size.
 void applyWindowSize(void) {
 	SDL_SetWindowFullscreen(app.window, settings.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 	if (!settings.fullscreen) {
@@ -720,6 +753,7 @@ void runFrames(void) {
 
 // Hotkeys and the menu.
 
+// A hotkey pressed. Menu and Full Screen work without a game; Pause and Restart not during netplay.
 static void doAction(enum Action action) {
 	if (action == ACT_MENU) {
 		if (app.menuOpen) {
@@ -771,6 +805,8 @@ static void doAction(enum Action action) {
 	}
 }
 
+// An event the menus didn't take: quitting, a file dropped on the window to load, controllers
+// plugged in or out, hotkeys, and a right-click for the menu.
 static void handleEvent(const SDL_Event* event) {
 	if (uiEvent(event)) {
 		return;
@@ -827,11 +863,14 @@ static bool actionHeld(enum Action action) {
 	return held;
 }
 
+// Reads the settings and arguments, opens the window, sound and controllers, then runs the game until
+// Quit, writing the saves every five seconds.
 int main(int argc, char** argv) {
 	const char* game = NULL;
 	const char* connectTo = NULL;
 	bool listControllers = false;
 	int hostMode = 0;
+	// The settings, then the arguments over them.
 	settingsDefaults();
 	dataDirectory(configDirectory, "XDG_CONFIG_HOME", ".config", "");
 	dataDirectory(systemDirectory, "XDG_CONFIG_HOME", ".config", "/system");
@@ -892,12 +931,14 @@ int main(int argc, char** argv) {
 	}
 
 	retro_set_environment(environment);
+	// The core's calls back.
 	retro_set_video_refresh(videoRefresh);
 	retro_set_audio_sample(audioSample);
 	retro_set_audio_sample_batch(audioBatch);
 	retro_set_input_poll(inputPoll);
 	retro_set_input_state(inputState);
 
+	// Stereo at the core's rate. Without a sound device the game runs silent.
 	SDL_AudioSpec want = { .freq = AUDIO_RATE, .format = AUDIO_S16SYS, .channels = 2, .samples = 512 }, have;
 	audio = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
 	if (audio) {
@@ -907,6 +948,7 @@ int main(int argc, char** argv) {
 	}
 	bytesPerFrame = (unsigned) (AUDIO_RATE / FRAME_RATE) * 4;
 
+	// A game given loads, and hosts or joins if asked; without one, the menu opens.
 	cheevosInit();
 	setPadForPort();
 	if (game && loadGame(game)) {
@@ -919,6 +961,7 @@ int main(int argc, char** argv) {
 		uiOpenMenu();
 	}
 
+	// The main loop: events, then the frames due, then the picture.
 	Uint64 const frequency = SDL_GetPerformanceFrequency();
 	double const frameTicks = frequency / FRAME_RATE;
 	Uint64 last = SDL_GetPerformanceCounter(), fpsSince = last;
@@ -933,6 +976,7 @@ int main(int argc, char** argv) {
 		app.fastForward = actionHeld(ACT_FAST_FORWARD) || coreFastForward;
 		app.rewinding = settings.rewind && !cheevosHardcore() && !netRunning() && actionHeld(ACT_REWIND);
 		cheevosIdle();
+		// Paused, in the menus or without a game: only the picture. Netplay runs on behind the menus.
 		bool const idle = !app.loaded || ((app.paused || app.menuOpen) && !netRunning());
 		if (idle) {
 			present();
@@ -953,6 +997,7 @@ int main(int argc, char** argv) {
 			due = SDL_min(due, 4);
 		}
 		last = now;
+		// Fast forward: as many frames as a 60th of a second takes, up to 12.
 		if (app.fastForward && !netRunning()) {
 			due = 0;
 			Uint64 const until = now + frequency / 60;
@@ -987,6 +1032,7 @@ int main(int argc, char** argv) {
 			}
 		}
 	}
+	// Quitting: the game's save, the settings and the options are written.
 	unloadGame();
 	settingsWrite();
 	optionsWrite();

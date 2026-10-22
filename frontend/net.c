@@ -64,6 +64,7 @@ enum NetMode netMode;
 bool netTogether;
 char netStatus[256];
 
+// A connection and what's waiting to be read from it and sent on it.
 struct Connection {
 	int fd;
 	int id;
@@ -144,6 +145,12 @@ static uint32_t get32(const uint8_t* p) {
 	return get16(p) | (uint32_t) get16(p + 2) << 16;
 }
 
+// A frame number from the host. Frames index the rings, so one below 0 is refused.
+static bool isFrame(const uint8_t* p) {
+	return (int) get32(p) >= 0;
+}
+
+// Room for need bytes in a connection's buffer, doubling it as often as that takes.
 static bool grow(uint8_t** data, size_t* cap, size_t need) {
 	if (need <= *cap) {
 		return true;
@@ -161,6 +168,7 @@ static bool grow(uint8_t** data, size_t* cap, size_t need) {
 	return true;
 }
 
+// Sends what the socket will take now; the rest waits for the next time.
 static void flushOne(struct Connection* c) {
 	while (c->fd >= 0 && c->outSize) {
 		ssize_t const n = send(c->fd, c->out, c->outSize, MSG_NOSIGNAL);
@@ -172,6 +180,7 @@ static void flushOne(struct Connection* c) {
 	}
 }
 
+// Queues a message and sends what it can. Nothing is sent to no connection, or one closed.
 static void sendTo(struct Connection* c, int type, const void* payload, size_t size) {
 	if (!c || c->fd < 0 || !grow(&c->out, &c->outCap, c->outSize + 5 + size)) {
 		return;
@@ -186,6 +195,7 @@ static void sendTo(struct Connection* c, int type, const void* payload, size_t s
 	flushOne(c);
 }
 
+// The host's message to every player who has been welcomed but except.
 static void sendOthers(int except, int type, const void* payload, size_t size) {
 	for (int i = 0; i < PEERS; ++i) {
 		if (connections[i].fd >= 0 && connections[i].welcomed && connections[i].id != except) {
@@ -213,6 +223,7 @@ static void closeConnection(struct Connection* c) {
 	c->fd = -1;
 }
 
+// The netplay menu's status line.
 static void setStatus(void) {
 	if (netMode == NET_OFF) {
 		netStatus[0] = '\0';
@@ -231,6 +242,7 @@ static void setStatus(void) {
 
 // Options.
 
+// A core option the host's session needs, the device's own value kept to put back after it.
 static void setOption(const char* key, const char* value) {
 	struct Option* o = optionFind(key);
 	if (!o || !strcmp(o->value, value)) {
@@ -298,6 +310,8 @@ static bool linkMode(const char* mode) {
 
 // The core's link cable (Separate).
 
+// The core's link cable data for player to, or every player: a client's goes through the host. Each
+// message carries who it's from and who it's for.
 static void packetSend(int flags, const void* buf, size_t len, uint16_t to) {
 	static uint8_t message[4 + 65536];
 	(void) flags;
@@ -318,10 +332,12 @@ static void packetSend(int flags, const void* buf, size_t len, uint16_t to) {
 
 static void pump(void);
 
+// The core asks for what has come: everything read now.
 static void packetPoll(void) {
 	pump();
 }
 
+// The core's netpacket interface; a new one stops the old one's session.
 bool netPacketInterface(const struct retro_netpacket_callback* callback) {
 	if (packetsStarted && callback != packets) {
 		packetsStarted = false;
@@ -333,6 +349,7 @@ bool netPacketInterface(const struct retro_netpacket_callback* callback) {
 	return true;
 }
 
+// Starts the core's link cable session as this player; false if the core has no link cable.
 static bool startPackets(void) {
 	if (!packets) {
 		return false;
@@ -346,10 +363,13 @@ static bool startPackets(void) {
 
 // Together: buttons and states.
 
+// Whether player is in the game at frame.
 static bool present(int player, int frame) {
 	return frame >= roll.joined[player] && frame < roll.left[player];
 }
 
+// A player's buttons for a frame: as known, or the last known ones as a guess, or none while the
+// player isn't in the game.
 static uint16_t inputFor(int player, int frame) {
 	if (!present(player, frame)) {
 		return 0;
@@ -371,8 +391,10 @@ static int confirmedFrame(void) {
 	return frame;
 }
 
+// A player's buttons for the frame after the last known. If a frame already run guessed otherwise,
+// the frames from it are run again.
 static void takeInput(int player, int frame, uint16_t buttons) {
-	if (player < 0 || player >= PEERS || frame != roll.known[player] + 1) {
+	if (player < 0 || player >= PEERS || frame < 0 || frame - 1 != roll.known[player]) {
 		return;
 	}
 	roll.buttons[player][frame % RING] = buttons;
@@ -382,6 +404,7 @@ static void takeInput(int player, int frame, uint16_t buttons) {
 	}
 }
 
+// The states kept for going back, at the core's state size.
 static bool ensureStates(void) {
 	size_t const size = retro_serialize_size();
 	if (size == roll.stateSize && roll.states[0]) {
@@ -407,6 +430,8 @@ static void freeStates(void) {
 	roll.stateSize = 0;
 }
 
+// A player's buttons for frames from through to, 64 frames to a message, to c or every player, with the
+// frame this device is at.
 static void sendInputs(int player, int from, int to, struct Connection* c) {
 	for (int f = from; f <= to; f += 64) {
 		int const count = SDL_min(64, to - f + 1);
@@ -466,10 +491,16 @@ static void sendState(struct Connection* c) {
 	}
 }
 
+// The host's state for a frame, and each player's frames in the game: this device starts from there.
 static void takeState(const uint8_t* p, size_t size) {
 	size_t const header = 8 + PEERS * 12;
-	if (size < header) {
+	if (size < header || !isFrame(p)) {
 		return;
+	}
+	for (int q = 0; q < PEERS; ++q) {
+		if (!isFrame(p + 8 + q * 12) || !isFrame(p + 12 + q * 12)) {
+			return;
+		}
 	}
 	int const frame = (int) get32(p);
 	uLongf length = get32(p + 4);
@@ -535,6 +566,7 @@ static void advance(int avEnable) {
 	runFrame(avEnable);
 }
 
+// The host's check and this device's for a frame, when both are in: if they differ, the host's state.
 static void checkAgainst(int frame) {
 	struct Check const* host = &roll.hostChecks[frame / CHECK_FRAMES % CHECKS];
 	struct Check const* own = &roll.ownChecks[frame / CHECK_FRAMES % CHECKS];
@@ -589,6 +621,9 @@ static void hostSendStates(void) {
 	}
 }
 
+// A frame of Together. The frames run with wrong buttons are run again first, from the state before
+// them; with that state gone, a client asks for the host's. Nothing runs while waiting for the host's
+// state or too far ahead of every player's buttons.
 static void togetherFrame(void) {
 	if (!roll.synced) {
 		SDL_Delay(2);
@@ -641,6 +676,7 @@ uint16_t netInput(unsigned port, unsigned id) {
 
 // The session.
 
+// A new session: no players yet, nothing known.
 static void resetSync(void) {
 	freeStates();
 	memset(&roll, 0, sizeof(roll));
@@ -656,14 +692,17 @@ static void resetSync(void) {
 	memset(roll.ownChecks, 0xFF, sizeof(roll.ownChecks));
 }
 
+// The loaded game's CRC, to see that every device has the same game.
 static uint32_t gameCrc(void) {
 	return app.gameData ? (uint32_t) crc32(0, app.gameData, (uInt) app.gameSize) : 0;
 }
 
+// Together takes up to the core's link players; Separate is two.
 static int playersMost(void) {
 	return netTogether ? SDL_max(2, SDL_min(PEERS, atoi(optionValue("armgba_link_players")))) : 2;
 }
 
+// A listening socket on the netplay port, for IPv4 and IPv6 both when family is AF_INET6.
 static int listenOn(int family) {
 	int const fd = socket(family, SOCK_STREAM, 0);
 	if (fd < 0) {
@@ -685,6 +724,7 @@ static int listenOn(int family) {
 	return fd;
 }
 
+// Nonblocking, and without Nagle's delay, as messages are small and wanted at once.
 static void useSocket(struct Connection* c, int fd) {
 	int const yes = 1;
 	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
@@ -692,6 +732,7 @@ static void useSocket(struct Connection* c, int fd) {
 	c->fd = fd;
 }
 
+// Hosts the loaded game, as Together or Separate; the game restarts if the link mode must change.
 bool netHost(bool together) {
 	netStop();
 	if (!app.loaded) {
@@ -729,6 +770,8 @@ bool netHost(bool together) {
 	return true;
 }
 
+// Connects to a host, waiting up to five seconds for each address the name has, then says hello. The
+// host's welcome does the rest.
 bool netJoin(const char* address) {
 	netStop();
 	if (!app.loaded) {
@@ -794,6 +837,8 @@ bool netJoin(const char* address) {
 	return true;
 }
 
+// Ends the session: the connections close and the options the session changed are put back. Not
+// while a client loads the host's game.
 void netStop(void) {
 	if (loadingForSession || netMode == NET_OFF) {
 		return;
@@ -818,6 +863,7 @@ void netStop(void) {
 	setStatus();
 }
 
+// The players in the session, this device's included.
 int netPlayers(void) {
 	if (netMode == NET_OFF) {
 		return 0;
@@ -846,11 +892,13 @@ bool netRollingBack(void) {
 
 // The host.
 
+// Tells a player why they can't join, then closes the connection.
 static void refuse(struct Connection* c, const char* why) {
 	sendTo(c, MSG_REFUSE, why, strlen(why) + 1);
 	closeConnection(c);
 }
 
+// The lowest player number not taken, or -1 when the game is full.
 static int freeId(void) {
 	for (int id = 1; id < playersMost(); ++id) {
 		if (!connectionFor(id)) {
@@ -860,6 +908,8 @@ static int freeId(void) {
 	return -1;
 }
 
+// A player's hello: the same armGBA version is needed, and room in the game. The welcome carries
+// everything the player needs to play the host's game as the host has it.
 static void hostHello(struct Connection* c, const uint8_t* p, size_t size) {
 	struct retro_system_info info;
 	retro_get_system_info(&info);
@@ -901,6 +951,8 @@ static void hostHello(struct Connection* c, const uint8_t* p, size_t size) {
 	setStatus();
 }
 
+// A player's connection closed: the others are told, Together from the frame after their last
+// buttons.
 static void playerGone(struct Connection* c) {
 	int const id = c->id;
 	bool const welcomed = c->welcomed;
@@ -927,9 +979,13 @@ static void playerGone(struct Connection* c) {
 
 // A client.
 
-// The host's game, beside this device's game or in the game list's folder.
+// The host's game, beside this device's game or in the game list's folder. The host gives a file's
+// name, never a path.
 static bool loadHostGame(const char* name, uint32_t crc) {
 	const char* folders[2] = { app.gamePath, settings.directory };
+	if (strchr(name, '/')) {
+		return false;
+	}
 	for (int i = 0; i < 2; ++i) {
 		char path[FILE_SIZE];
 		snprintf(path, sizeof(path), "%s", folders[i]);
@@ -948,14 +1004,26 @@ static bool loadHostGame(const char* name, uint32_t crc) {
 	return false;
 }
 
+// The text at *at, moving *at past it; NULL if it doesn't end before end.
+static const char* takeText(const char** at, const char* end) {
+	const char* const text = *at;
+	size_t const length = strnlen(text, (size_t) (end - text));
+	if (length == (size_t) (end - text)) {
+		return NULL;
+	}
+	*at = text + length + 1;
+	return text;
+}
+
+// The host's welcome. Together, the host's game is loaded if this device's isn't the same, and the
+// host's options are taken; the host's state follows. Separate, the link cable starts.
 static void clientWelcome(const uint8_t* p, size_t size) {
-	if (size < 9) {
+	const char* const end = (const char*) p + size;
+	const char* at = (const char*) p + 8;
+	const char* const game = size >= 8 ? takeText(&at, end) : NULL;
+	if (!game || p[1] >= PEERS) {
 		return;
 	}
-	const char* end = (const char*) p + size;
-	const char* at = (const char*) p + 8;
-	const char* game = at;
-	at += strnlen(at, end - at) + 1;
 	netTogether = p[0];
 	self = p[1];
 	if (netTogether && gameCrc() != get32(p + 4) && !loadHostGame(game, get32(p + 4))) {
@@ -963,12 +1031,10 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 		netStop();
 		return;
 	}
-	for (unsigned i = 0; i < get16(p + 2) && at < end && netTogether; ++i) {
-		const char* key = at;
-		at += strnlen(at, end - at) + 1;
-		const char* value = at;
-		at += strnlen(at, end - at) + 1;
-		if (at > end) {
+	for (unsigned i = 0; i < get16(p + 2) && netTogether; ++i) {
+		const char* const key = takeText(&at, end);
+		const char* value = key ? takeText(&at, end) : NULL;
+		if (!value) {
 			break;
 		}
 		if (!strcmp(key, "armgba_player2_game") && !localSecondGame(value, &value)) {
@@ -999,6 +1065,8 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 
 // Messages as they come.
 
+// One message. Everything from the network is checked before it is used. The host takes nothing but
+// a hello from a player before welcoming them.
 static void handle(struct Connection* c, int type, const uint8_t* p, size_t size) {
 	bool const host = netMode == NET_HOSTING;
 	if (host && !c->welcomed && type != MSG_HELLO) {
@@ -1033,7 +1101,7 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 		}
 		break;
 	case MSG_PLAYER:
-		if (!host && size >= 9 && p[0] < PEERS && p[0] != self) {
+		if (!host && size >= 9 && p[0] < PEERS && p[0] != self && isFrame(p + 1) && isFrame(p + 5)) {
 			int const q = p[0];
 			roll.joined[q] = (int) get32(p + 1);
 			roll.left[q] = (int) get32(p + 5);
@@ -1063,12 +1131,13 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 		break;
 	}
 	case MSG_CHECK:
-		if (!host && size >= 8) {
+		if (!host && size >= 8 && isFrame(p)) {
 			int const frame = (int) get32(p);
 			roll.hostChecks[frame / CHECK_FRAMES % CHECKS] = (struct Check) { frame, get32(p + 4) };
 			checkAgainst(frame);
 		}
 		break;
+	// The host passes link data for another player on, and keeps its own and a broadcast's.
 	case MSG_PACKET: {
 		if (size < 4 || !packetsStarted) {
 			break;
@@ -1103,7 +1172,8 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 
 // Reads what has come, and handles each whole message; false when the connection is gone.
 static bool readFrom(struct Connection* c) {
-	for (;;) {
+	// No more than the longest message at once, so a sender can't keep this reading.
+	while (c->inSize < 4 + MESSAGE_MOST) {
 		if (!grow(&c->in, &c->inCap, c->inSize + 65536)) {
 			return false;
 		}
@@ -1136,6 +1206,7 @@ static bool readFrom(struct Connection* c) {
 	return true;
 }
 
+// Takes new players, sends what's queued and reads what's come. A client whose host left stops.
 static void pump(void) {
 	int fd;
 	while (listener >= 0 && (fd = accept(listener, NULL, NULL)) >= 0) {
@@ -1167,6 +1238,7 @@ static void pump(void) {
 	}
 }
 
+// Runs a frame, as the session has it: a client pings the host every second for the round trip.
 void netFrame(void) {
 	pump();
 	if (netMode == NET_OFF) {
@@ -1191,6 +1263,7 @@ void netFrame(void) {
 	}
 }
 
+// No connections yet.
 void netInit(void) {
 	for (int i = 0; i < PEERS; ++i) {
 		connections[i].fd = -1;

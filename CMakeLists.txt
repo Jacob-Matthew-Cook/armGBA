@@ -115,7 +115,7 @@ target_compile_options(armgba_libretro PRIVATE -O2)
 set_target_properties(armgba_libretro PROPERTIES PREFIX "")
 target_link_options(armgba_libretro PRIVATE -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libretro/link.T -Wl,--no-undefined)
 
-# armgba, a standalone frontend (frontend/sdl.c): the core linked into an SDL2 program. SDL2 comes from
+# armgba, a standalone frontend (frontend/): the core linked into an SDL2 program. SDL2 comes from
 # pkg-config, or SDL2_INCLUDE_DIR and SDL2_LIBRARY when given.
 option(ARMGBA_SDL "Build armgba, the standalone SDL2 frontend" OFF)
 if(ARMGBA_SDL)

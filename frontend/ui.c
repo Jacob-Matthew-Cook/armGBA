@@ -5,7 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // The menus, messages and on-screen keyboard, drawn over the game. Every menu is built again each
-// frame from the settings it shows, so it is never out of date. The keyboard, a controller and the
+// frame from the settings it shows, so it is never out of date; only a folder's listing is kept, read
+// again when another folder is opened. The keyboard, a controller and the
 // mouse all work: arrows or the D-pad or stick move, Enter or A or a click chooses, left and right
 // change a value, Esc or B or a right-click goes back.
 
@@ -24,7 +25,8 @@
 #include "text.h"
 
 enum {
-	ITEMS_MAX = 512,
+	// Rows a menu shows at once, at most.
+	ROWS_MAX = 128,
 	DEPTH_MAX = 8,
 	MESSAGES = 4,
 	MESSAGE_MS = 3000,
@@ -57,16 +59,17 @@ struct Menu {
 	int scroll;
 };
 
+// The menu shown, built again each frame, and the menus opened to reach it.
 static struct Item* items;
 static int itemCapacity;
 static int itemCount;
 static struct Menu stack[DEPTH_MAX];
 static int depth;
 // Where each item was last drawn, for the mouse.
-static SDL_Rect itemRects[ITEMS_MAX];
+static SDL_Rect itemRects[ROWS_MAX];
 static int firstShown, shownCount;
 // Where a selected value's arrows were drawn, or -1.
-static int arrowLeft[ITEMS_MAX], arrowRight[ITEMS_MAX];
+static int arrowLeft[ROWS_MAX], arrowRight[ROWS_MAX];
 // The footer shows a controller's buttons once one is used, and keys once the keyboard or mouse is.
 static bool lastInputPad;
 
@@ -111,6 +114,7 @@ static char browserPath[PATH_SIZE];
 static char recentGames[RECENT_MAX][PATH_SIZE];
 static int recentCount;
 
+// A message at the bottom left for a few seconds, the newest lowest; stderr gets it too.
 void osd(const char* format, ...) {
 	for (int i = MESSAGES - 1; i > 0; --i) {
 		messages[i] = messages[i - 1];
@@ -131,6 +135,7 @@ static struct {
 } circles[CIRCLES];
 static int nextCircle;
 
+// After the renderer is made again: the textures went with the old one.
 void uiRecreateTextures(void) {
 	textReset();
 	for (int i = 0; i < CIRCLES; ++i) {
@@ -141,11 +146,13 @@ void uiRecreateTextures(void) {
 	}
 }
 
+// The game list starts in the games folder the settings name.
 bool uiInit(void) {
 	snprintf(browserPath, sizeof(browserPath), "%s", settings.directory);
 	return textInit();
 }
 
+// A white circle of radius, its edge antialiased, as a texture to tint. The last few sizes are kept.
 static SDL_Texture* circle(int radius) {
 	for (int i = 0; i < CIRCLES; ++i) {
 		if (circles[i].texture && circles[i].radius == radius) {
@@ -183,6 +190,7 @@ static void fillRect(int x, int y, int w, int h, SDL_Color colour) {
 	SDL_RenderFillRect(app.renderer, &r);
 }
 
+// A plain rectangle if the circle can't be made.
 static void fillRounded(SDL_Rect r, int radius, SDL_Color colour) {
 	radius = SDL_min(radius, SDL_min(r.w, r.h) / 2);
 	SDL_Texture* texture = radius > 0 ? circle(radius) : NULL;
@@ -211,6 +219,7 @@ static void fillBordered(SDL_Rect r, int radius, SDL_Color fill, SDL_Color edge,
 
 // The menus' building blocks.
 
+// A row added to the menu being built. If the list can't grow, it goes to a spare that isn't shown.
 static struct Item* addItem(const char* label, ItemFunction function, int argument) {
 	static struct Item spare;
 	if (itemCount == itemCapacity) {
@@ -230,10 +239,12 @@ static struct Item* addItem(const char* label, ItemFunction function, int argume
 	return item;
 }
 
+// A section's title, not selectable.
 static void addHeader(const char* label) {
 	addItem(label, NULL, 0)->header = true;
 }
 
+// A value that left and right step through.
 static void addValue(const char* label, const char* value, ItemFunction function, int argument) {
 	struct Item* item = addItem(label, function, argument);
 	snprintf(item->value, sizeof(item->value), "%s", value);
@@ -265,11 +276,13 @@ static void disarm(void) {
 	armed.function = NULL;
 }
 
+// A row that only shows something, not selectable.
 static void addInfo(const char* label, const char* value) {
 	struct Item* item = addItem(label, NULL, 0);
 	snprintf(item->value, sizeof(item->value), "%s", value ? value : "");
 }
 
+// Opens a menu over the one shown; build makes its rows each frame.
 static void pushMenu(void (*build)(void), const char* title) {
 	disarm();
 	if (depth < DEPTH_MAX) {
@@ -281,6 +294,7 @@ static void pushMenu(void (*build)(void), const char* title) {
 	}
 }
 
+// Back to the menu before, or out of the menus from the first.
 static void popMenu(void) {
 	disarm();
 	if (depth > 1) {
@@ -290,6 +304,8 @@ static void popMenu(void) {
 	}
 }
 
+// The on-screen keyboard, to type text, starting from text: done gets what was typed if it's accepted.
+// hidden shows stars for a password.
 static void openEntry(const char* title, const char* text, bool hidden, void (*done)(const char* text)) {
 	entry.open = true;
 	snprintf(entry.title, sizeof(entry.title), "%s", title);
@@ -317,6 +333,7 @@ static const char* frames(int count) {
 	return count == 1 ? "frame" : "frames";
 }
 
+// value + delta, wrapped round into 0 to count - 1.
 static int wrap(int value, int delta, int count) {
 	return ((value + delta) % count + count) % count;
 }
@@ -332,6 +349,7 @@ static void resume(int argument, int delta) {
 	}
 }
 
+// Save State and Load State: left and right change the slot.
 static void stateItem(int load, int delta) {
 	if (delta) {
 		app.slot = wrap(app.slot, delta, SLOTS);
@@ -350,6 +368,7 @@ static void undoLoad(int argument, int delta) {
 	}
 }
 
+// Not during netplay, where every device runs the same game from the same start.
 static void restart(int argument, int delta) {
 	(void) argument;
 	if (!delta && !netRunning()) {
@@ -359,6 +378,7 @@ static void restart(int argument, int delta) {
 	}
 }
 
+// The files the game list shows: games, and archives that may hold one.
 static bool gameFile(const char* name) {
 	static const char* const extensions[] = { ".gba", ".gb", ".gbc", ".zip", ".7z", ".gba2", ".gb2", ".bin" };
 	const char* dot = strrchr(name, '.');
@@ -392,6 +412,7 @@ static int browserCount, browserCapacity;
 // The folder browserEntries lists; emptied to read it again.
 static char browserListed[PATH_SIZE];
 
+// Folders first, then by name, case ignored.
 static int compareEntries(const void* a, const void* b) {
 	const struct BrowserEntry* const x = a;
 	const struct BrowserEntry* const y = b;
@@ -401,6 +422,8 @@ static int compareEntries(const void* a, const void* b) {
 	return strcasecmp(x->name, y->name);
 }
 
+// Reads browserPath's folders and games (or cheat files), sorted, unless it's the folder read last.
+// File systems that don't say what an entry is, and symbolic links, are asked with stat.
 static void readBrowser(void) {
 	if (!strcmp(browserListed, browserPath)) {
 		return;
@@ -426,6 +449,7 @@ static void readBrowser(void) {
 			}
 			directory = S_ISDIR(st.st_mode);
 		}
+		// Only folders and the files the list is for.
 		if (!directory && !(browserCheats ? cheatFile(e->d_name) : gameFile(e->d_name))) {
 			continue;
 		}
@@ -456,6 +480,7 @@ static void grouped(char* out, size_t size, int n) {
 	}
 }
 
+// The game list: the folder's name and counts, "..", then each folder and game.
 static void browserMenu(void) {
 	readBrowser();
 	// The folder's name, and how many games and folders it holds.
@@ -465,10 +490,12 @@ static void browserMenu(void) {
 	for (int i = 0; i < browserCount; ++i) {
 		folders += browserEntries[i].directory;
 	}
-	char games[16], counts[64];
+	char games[16], folderCount[32] = "", counts[80];
 	grouped(games, sizeof(games), browserCount - folders);
-	snprintf(counts, sizeof(counts), "%s %s%s", games, browserCheats ? "cheat files" : browserCount - folders == 1 ? "game" : "games",
-	         folders ? folders == 1 ? ", 1 folder" : ", folders" : "");
+	if (folders) {
+		snprintf(folderCount, sizeof(folderCount), ", %d %s", folders, folders == 1 ? "folder" : "folders");
+	}
+	snprintf(counts, sizeof(counts), "%s %s%s", games, browserCheats ? "cheat files" : browserCount - folders == 1 ? "game" : "games", folderCount);
 	addInfo(name, counts);
 	addItem("..", browse, -1);
 	helpFor(browserPath);
@@ -492,15 +519,16 @@ static void browserMenu(void) {
 	browserReselect[0] = '\0';
 }
 
-// The selected entry's first letter, upper case, with digits and the rest as '#'.
+// A name's first letter, upper case, with digits and the rest as '#'.
 static char initialOf(const char* name) {
 	char const c = (char) toupper((unsigned char) name[0]);
 	return c >= 'A' && c <= 'Z' ? c : '#';
 }
 
-static void selectEntry(int entry) {
+// Selects the row of the game list's entry index.
+static void selectEntry(int index) {
 	for (int i = 0; i < itemCount; ++i) {
-		if (items[i].function == browse && items[i].argument == entry) {
+		if (items[i].function == browse && items[i].argument == index) {
 			stack[depth - 1].selected = i;
 			return;
 		}
@@ -508,8 +536,8 @@ static void selectEntry(int entry) {
 }
 
 // Folders, then games, by first letter.
-static int groupOf(int entry) {
-	return browserEntries[entry].directory * 256 + initialOf(browserEntries[entry].name);
+static int groupOf(int index) {
+	return browserEntries[index].directory * 256 + initialOf(browserEntries[index].name);
 }
 
 // Moves to the first game or folder of the next letter, or back to the start of this one or the one
@@ -520,6 +548,7 @@ static void browserJump(int delta) {
 		return;
 	}
 	int at = selectable(m->selected) && items[m->selected].function == browse ? items[m->selected].argument : -1;
+	// With nothing selected: the first entry, or the last going back.
 	if (at < 0) {
 		selectEntry(delta > 0 ? 0 : browserCount - 1);
 		return;
@@ -532,6 +561,7 @@ static void browserJump(int delta) {
 		selectEntry(at < browserCount ? at : 0);
 		return;
 	}
+	// Going back: to this letter's first entry, or the letter before's if already there.
 	int start = at;
 	while (start > 0 && groupOf(start - 1) == group) {
 		--start;
@@ -565,6 +595,8 @@ static void browserFind(char c) {
 	}
 }
 
+// A game list row: ".." (index -1) goes up, selecting the folder left; a folder opens; a game loads; a
+// cheat file's cheats are added to the game's.
 static void browse(int index, int delta) {
 	if (delta) {
 		return;
@@ -600,6 +632,7 @@ static void browse(int index, int delta) {
 	}
 }
 
+// The game list, for games: back in the games folder if it was showing cheat files.
 static void openBrowser(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
@@ -612,6 +645,7 @@ static void openBrowser(int argument, int delta) {
 	}
 }
 
+// The first menu then shows the recent games.
 static void closeGame(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
@@ -653,6 +687,7 @@ static void cheatNameDone(const char* text) {
 	}
 }
 
+// A cheat's Code (0), Name (1) and Delete (2).
 static void cheatEdit(int which, int delta) {
 	if (delta || cheatShown >= cheatCount) {
 		return;
@@ -681,6 +716,7 @@ static void cheatMenu(void) {
 	addItem("Delete", cheatEdit, 2);
 }
 
+// A cheat's row: left and right turn it on or off; choosing it opens its menu.
 static void cheatOpen(int index, int delta) {
 	if (delta) {
 		cheatToggle(index, delta);
@@ -690,6 +726,7 @@ static void cheatOpen(int index, int delta) {
 	pushMenu(cheatMenu, cheats[index].description);
 }
 
+// Adding a cheat asks for its name, then its code.
 static char newCheatName[128];
 
 static void newCheatCode(const char* text) {
@@ -710,6 +747,7 @@ static void cheatNew(int argument, int delta) {
 	}
 }
 
+// The game list, for RetroArch cheat files; where it was in the games is kept for when it goes back.
 static void openCheatFiles(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
@@ -758,6 +796,7 @@ static void openCheats(int argument, int delta) {
 
 static int categoryShown;
 
+// A core option's row: left and right step through its values; choosing it steps forward.
 static void optionChange(int index, int delta) {
 	struct Option* o = &options[index];
 	int at = 0;
@@ -770,6 +809,7 @@ static void optionChange(int index, int delta) {
 	optionsWrite();
 }
 
+// The visible core options in category, or those in none when category is NULL.
 static void addOptions(const char* category) {
 	for (int i = 0; i < optionCount; ++i) {
 		struct Option* o = &options[i];
@@ -804,6 +844,7 @@ static void openCategory(int index, int delta) {
 	}
 }
 
+// A row for each category with options to show, then the options in none.
 static void coreOptionsMenu(void) {
 	if (!optionCount) {
 		addInfo("The core's options appear once it has started", "");
@@ -854,6 +895,8 @@ enum {
 	SET_HARDCORE,
 };
 
+// A setting's row (SET_*): left and right step a value or turn it over, as choosing it does. The
+// settings file is written each time.
 static void changeSetting(int which, int delta) {
 	int const d = delta ? delta : 1;
 	switch (which) {
@@ -874,6 +917,7 @@ static void changeSetting(int which, int delta) {
 	case SET_FILTER:
 		settings.filter = wrap(settings.filter, d, FILTERS);
 		break;
+	// Off, then the eight directions.
 	case SET_SHADOW:
 		settings.shadow = wrap(settings.shadow, d, 9);
 		break;
@@ -894,6 +938,7 @@ static void changeSetting(int which, int delta) {
 		settings.rewind = !settings.rewind;
 		rewindReset();
 		break;
+	// 16 to 512 MB, doubling.
 	case SET_REWIND_SIZE: {
 		static const int sizes[] = { 16, 32, 64, 128, 256, 512 };
 		int at = 0;
@@ -921,6 +966,8 @@ static void changeSetting(int which, int delta) {
 	settingsWrite();
 }
 
+// Settings > Video. Pixel Shadow shows only with LCD Grid on the first Game Boy's and the Pocket's
+// screens, or before a game is loaded.
 static void videoMenu(void) {
 	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid", "Scanlines" };
 	char text[32];
@@ -976,6 +1023,7 @@ static void gameplayMenu(void) {
 	helpFor("Saves a state as the game closes and loads it as the game starts again.");
 }
 
+// which: the button's or hotkey's index, plus 1000 for a controller's, plus 2000 for a hotkey.
 static void bind(int which, int delta) {
 	if (delta) {
 		return;
@@ -984,6 +1032,7 @@ static void bind(int which, int delta) {
 	uiCaptureBinding(index, kind == 1 || kind == 3, kind >= 2);
 }
 
+// The default keys, buttons and hotkeys; the other settings are kept.
 static void resetControls(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
@@ -1074,6 +1123,7 @@ static void nicknameDone(const char* text) {
 	settingsWrite();
 }
 
+// The host's address, kept for the next time.
 static void joinDone(const char* text) {
 	snprintf(settings.host, sizeof(settings.host), "%s", text);
 	settingsWrite();
@@ -1092,6 +1142,8 @@ static void portDone(const char* text) {
 	settingsWrite();
 }
 
+// Netplay's rows: Your Name (0), hosting Separate (1) or Together (2), Join (3), Disconnect (4) and
+// Port (5).
 static void netAction(int which, int delta) {
 	if (delta) {
 		return;
@@ -1163,6 +1215,7 @@ static void passwordDone(const char* text) {
 	cheevosLogin(loginUser, text);
 }
 
+// Logging in asks for the user name, then the password; cheevos.c keeps the token, not the password.
 static void userDone(const char* text) {
 	snprintf(loginUser, sizeof(loginUser), "%s", text);
 	openEntry("RetroAchievements password (sent only to retroachievements.org)", "", true, passwordDone);
@@ -1205,6 +1258,7 @@ static void openCheevos(int argument, int delta) {
 	}
 }
 
+// Screenshot (0), recording (1) and Quit (2).
 static void misc(int which, int delta) {
 	if (delta) {
 		return;
@@ -1235,6 +1289,7 @@ static void addRecent(int index) {
 	if (dot && dot != name) {
 		*dot = '\0';
 	}
+	// The folder's own name, not its path.
 	if (slash && slash != path) {
 		int const length = (int) (slash - path);
 		const char* start = path + length;
@@ -1259,6 +1314,8 @@ static void openRecent(int argument, int delta) {
 	}
 }
 
+// The first menu. With a game, its states, Restart and the game's menus first; without, the five most
+// recent games.
 static void rootMenu(void) {
 	char text[32];
 	if (app.loaded) {
@@ -1281,6 +1338,7 @@ static void rootMenu(void) {
 			addRecent(i);
 		}
 	}
+	// With a game, Recent Games...; without, More Recent Games... when there are more than five.
 	if (app.loaded && recentCount) {
 		addItem("Recent Games...", openRecent, 0);
 	} else if (recentCount > 5) {
@@ -1306,6 +1364,7 @@ static void rootMenu(void) {
 	items[itemCount - 1].confirm = app.loaded;
 }
 
+// Opens the first menu, the game list back in the games folder.
 void uiOpenMenu(void) {
 	if (app.menuOpen) {
 		return;
@@ -1318,6 +1377,7 @@ void uiOpenMenu(void) {
 	browserCheats = false;
 }
 
+// Back to the game, closing the keyboard and any binding waited for.
 void uiCloseMenu(void) {
 	if (!app.loaded) {
 		// Nothing to go back to: the menu stays.
@@ -1331,6 +1391,7 @@ void uiCloseMenu(void) {
 	SDL_StopTextInput();
 }
 
+// Waits for a key or a controller's button for button which, or hotkey which.
 void uiCaptureBinding(int which, bool controller, bool hotkey) {
 	capture.open = true;
 	capture.which = which;
@@ -1356,10 +1417,12 @@ static void captured(int value) {
 
 // Moving through a menu.
 
+// Headers and rows that only show something can't be selected.
 static bool selectable(int i) {
 	return i >= 0 && i < itemCount && !items[i].header && items[i].function;
 }
 
+// The next selectable row the way delta points, wrapping round.
 static void moveSelection(int delta) {
 	disarm();
 	struct Menu* m = &stack[depth - 1];
@@ -1373,6 +1436,8 @@ static void moveSelection(int delta) {
 	}
 }
 
+// The selected row's function, chosen (delta 0) or changed by delta. A row that asks twice is armed
+// the first time it's chosen.
 static void activate(int delta) {
 	struct Menu* m = &stack[depth - 1];
 	if (!selectable(m->selected)) {
@@ -1430,6 +1495,7 @@ static void entryMove(int dx, int dy) {
 // The on-screen keyboard's keys, as drawn last, for the mouse.
 static SDL_Rect keyRects[5][12];
 
+// On the keyboard a direction moves between keys; in a menu up and down select, left and right change.
 static void direction(int dx, int dy) {
 	if (entry.open) {
 		entryMove(dx, dy);
@@ -1440,6 +1506,7 @@ static void direction(int dx, int dy) {
 	}
 }
 
+// A or Enter: types the key, or chooses the row.
 static void confirm(void) {
 	if (entry.open) {
 		entryType();
@@ -1448,6 +1515,7 @@ static void confirm(void) {
 	}
 }
 
+// B or Esc: closes the keyboard, or goes back a menu.
 static void back(void) {
 	if (entry.open) {
 		closeEntry(false);
@@ -1470,6 +1538,7 @@ static int menuButton(int button) {
 	return button == BUTTON_A ? SDL_CONTROLLER_BUTTON_B : SDL_CONTROLLER_BUTTON_A;
 }
 
+// An event while the menus are open or a binding is waited for; returns whether it was used.
 bool uiEvent(const SDL_Event* event) {
 	if (event->type == SDL_CONTROLLERBUTTONDOWN || (event->type == SDL_CONTROLLERAXISMOTION && abs(event->caxis.value) > 20000)) {
 		lastInputPad = true;
@@ -1477,6 +1546,7 @@ bool uiEvent(const SDL_Event* event) {
 		lastInputPad = false;
 	}
 	if (capture.open) {
+		// Waiting for a binding: Esc cancels, Delete clears it, and a key or button (a trigger too) binds.
 		if (event->type == SDL_KEYDOWN && !capture.controller) {
 			SDL_Scancode const code = event->key.keysym.scancode;
 			if (code == SDL_SCANCODE_ESCAPE) {
@@ -1509,6 +1579,7 @@ bool uiEvent(const SDL_Event* event) {
 		return false;
 	}
 	switch (event->type) {
+	// Text typed into the keyboard, from the system's own.
 	case SDL_TEXTINPUT:
 		if (entry.open && strlen(entry.text) + strlen(event->text.text) < sizeof(entry.text)) {
 			strcat(entry.text, event->text.text);
@@ -1517,6 +1588,7 @@ bool uiEvent(const SDL_Event* event) {
 	case SDL_KEYDOWN: {
 		SDL_Scancode const code = event->key.keysym.scancode;
 		if (entry.open) {
+			// The keyboard takes editing keys, arrows and Ctrl+V.
 			if (code == SDL_SCANCODE_BACKSPACE && entry.text[0]) {
 				entry.text[strlen(entry.text) - 1] = '\0';
 			} else if (code == SDL_SCANCODE_RETURN || code == SDL_SCANCODE_KP_ENTER) {
@@ -1548,6 +1620,7 @@ bool uiEvent(const SDL_Event* event) {
 		case SDL_SCANCODE_RIGHT:
 			direction(1, 0);
 			break;
+		// Ten rows at a time.
 		case SDL_SCANCODE_PAGEUP:
 			for (int i = 0; i < 10; ++i) {
 				moveSelection(-1);
@@ -1565,12 +1638,9 @@ bool uiEvent(const SDL_Event* event) {
 			break;
 		case SDL_SCANCODE_ESCAPE:
 		case SDL_SCANCODE_BACKSPACE:
-			if (code == SDL_SCANCODE_ESCAPE && depth <= 1) {
-				uiCloseMenu();
-			} else {
-				back();
-			}
+			back();
 			break;
+		// The Full Screen hotkey works in the menus too; in the game list, letters find a name.
 		default: {
 			SDL_Keycode const key = event->key.keysym.sym;
 			if (code == settings.hotkeys[ACT_FULLSCREEN]) {
@@ -1607,6 +1677,7 @@ bool uiEvent(const SDL_Event* event) {
 		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
 			direction(1, 0);
 			break;
+		// On the keyboard, X deletes and Start is Done.
 		case SDL_CONTROLLER_BUTTON_X:
 			if (entry.open && entry.text[0]) {
 				entry.text[strlen(entry.text) - 1] = '\0';
@@ -1617,6 +1688,7 @@ bool uiEvent(const SDL_Event* event) {
 				closeEntry(true);
 			}
 			break;
+		// L and R jump a letter in the game list, or ten rows elsewhere.
 		case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
 		case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: {
 			int const way = event->cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER ? -1 : 1;
@@ -1630,6 +1702,7 @@ bool uiEvent(const SDL_Event* event) {
 			break;
 		}
 		default:
+			// The menu hotkey closes the menus.
 			if (event->cbutton.button == settings.padHotkeys[ACT_MENU]) {
 				uiCloseMenu();
 			}
@@ -1637,6 +1710,7 @@ bool uiEvent(const SDL_Event* event) {
 		}
 		return true;
 	case SDL_CONTROLLERAXISMOTION:
+		// The left stick moves as the D-pad does; uiDraw repeats it while it's held.
 		if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX || event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
 			int const v = event->caxis.value > 20000 ? 1 : event->caxis.value < -20000 ? -1 : 0;
 			int const dx = event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX ? v : held.dx;
@@ -1649,6 +1723,7 @@ bool uiEvent(const SDL_Event* event) {
 			held.dy = dy;
 		}
 		return true;
+	// The mouse selects the row it's over.
 	case SDL_MOUSEMOTION:
 		if (!entry.open) {
 			for (int i = 0; i < shownCount; ++i) {
@@ -1663,6 +1738,7 @@ bool uiEvent(const SDL_Event* event) {
 		SDL_Point const p = { event->button.x, event->button.y };
 		if (event->button.button == SDL_BUTTON_RIGHT) {
 			back();
+		// A click on the keyboard types the key.
 		} else if (event->button.button == SDL_BUTTON_LEFT && entry.open) {
 			for (int r = 0; r < 5; ++r) {
 				for (int c = 0; c < 12; ++c) {
@@ -1693,17 +1769,12 @@ bool uiEvent(const SDL_Event* event) {
 		}
 		return true;
 	}
+	// The wheel scrolls three rows at a time.
 	case SDL_MOUSEWHEEL:
 		if (!entry.open) {
 			stack[depth - 1].scroll -= event->wheel.y * 3;
 		}
 		return true;
-	case SDL_QUIT:
-	case SDL_DROPFILE:
-	case SDL_CONTROLLERDEVICEADDED:
-	case SDL_CONTROLLERDEVICEREMOVED:
-	case SDL_WINDOWEVENT:
-		return false;
 	default:
 		return false;
 	}
@@ -1721,6 +1792,7 @@ static SDL_Color faded(SDL_Color c, int alpha) {
 	return c;
 }
 
+// A 24th of the height or a 40th of the width, whichever is less.
 static int unitFor(int width, int height) {
 	return SDL_max(12, SDL_min(height / 24, width / 40));
 }
@@ -1744,6 +1816,7 @@ static int drawBadge(int x, int y, int u, const char* label, bool round) {
 	return w;
 }
 
+// A badge and what it does, in the footer; returns where the next one goes.
 static int drawHint(int x, int y, int u, const char* badge, bool round, const char* label) {
 	int const size = u * 7 / 10, h = u + u / 8;
 	x += drawBadge(x, y, u, badge, round) + u / 3;
@@ -1797,12 +1870,14 @@ static int footerTop(SDL_Rect panel, int u) {
 	return panel.y + panel.h - u * 9 / 4;
 }
 
+// The footer's line; returns where its hints go.
 static int drawFooter(SDL_Rect panel, int u) {
 	int const top = footerTop(panel, u);
 	fillRect(panel.x + u, top, panel.w - 2 * u, 1, edge);
 	return top + (u * 9 / 4 - (u + u / 8)) / 2;
 }
 
+// The messages, newest lowest, each fading out over its last 0.4 seconds.
 static void drawMessages(int width, int height, int u) {
 	Uint32 const now = SDL_GetTicks();
 	int const size = u * 3 / 4, h = u * 3 / 2;
@@ -1822,6 +1897,8 @@ static void drawMessages(int width, int height, int u) {
 	}
 }
 
+// The on-screen keyboard: the text typed, as stars for a password, with a blinking caret, then the
+// keys. The last row's four keys are three wide.
 static void drawEntry(int width, int height, int u) {
 	int const fieldH = u * 2, keyH = u * 7 / 4, keySize = u * 4 / 5;
 	SDL_Rect panel;
@@ -1832,6 +1909,7 @@ static void drawEntry(int width, int height, int u) {
 	int y = drawPanel(panel, u, entry.title) + u / 4;
 	int const left = panel.x + u, inner = panel.w - 2 * u;
 	fillBordered((SDL_Rect) { left, y, inner, fieldH }, u / 2, (SDL_Color) { 13, 18, 28, 255 }, accent, 2);
+	// The text, as stars when hidden, its start cut off if it's too long.
 	char shown[300];
 	size_t const n = SDL_min(strlen(entry.text), sizeof(shown) - 1);
 	if (entry.hidden) {
@@ -1843,10 +1921,12 @@ static void drawEntry(int width, int height, int u) {
 	char fitted[320];
 	textFit(FACE_BODY, keySize, shown, inner - u * 2, true, fitted, sizeof(fitted));
 	int const tw = textDraw(FACE_BODY, keySize, left + u * 2 / 3, y + (fieldH - keySize) / 2, white, fitted);
+	// The caret: half a second on, half off.
 	if (SDL_GetTicks() / 500 % 2 == 0) {
 		fillRect(left + u * 2 / 3 + tw + 1, y + (fieldH - keySize) / 2, 2, keySize, accent);
 	}
 	y += fieldH + u / 2;
+	// Each key's rectangle is kept for the mouse, the last row's for each of the columns it spans.
 	int const keyW = inner / 12, gap = SDL_max(2, u / 8);
 	for (int r = 0; r < 5; ++r) {
 		for (int c = 0; c < 12; ++c) {
@@ -1884,6 +1964,7 @@ static void drawEntry(int width, int height, int u) {
 	}
 }
 
+// Asks for the key or button to bind, over the menu.
 static void drawCapture(int width, int height, int u) {
 	fillRect(0, 0, width, height, (SDL_Color) { 4, 6, 12, 140 });
 	const char* what = capture.hotkey ? actionNames[capture.which] : buttonNames[capture.which];
@@ -1903,6 +1984,7 @@ static void drawCapture(int width, int height, int u) {
 	textDraw(FACE_BODY, small, panel.x + (panel.w - hw) / 2, panel.y + u * 3, muted, hint);
 }
 
+// The menu on top: its rows, the help for the selected one and the footer's hints.
 static void drawMenu(int width, int height, int u) {
 	// Menus are built again each frame, so their values stay current; the game list, which can hold
 	// thousands of games, is kept until its folder changes.
@@ -1925,12 +2007,14 @@ static void drawMenu(int width, int height, int u) {
 	}
 	int const helpSize = u * 13 / 20, helpLine = u * 9 / 10, helpH = anyHelp ? helpLine * 2 + u / 2 : 0;
 	int const chrome = u * 3 + u / 4 + u / 4 + u * 9 / 4 + helpH;
-	int const rows = SDL_max(1, SDL_min(itemCount, (height - u - chrome) / rowH));
+	int const rows = SDL_max(1, SDL_min(SDL_min(itemCount, ROWS_MAX), (height - u - chrome) / rowH));
 	SDL_Rect panel;
 	panel.w = SDL_min(width - u, u * 30);
+	// The panel fits the rows shown, in the middle of the window.
 	panel.h = chrome + rows * rowH;
 	panel.x = (width - panel.w) / 2;
 	panel.y = SDL_max(0, (height - panel.h) / 2);
+	// Where you are: the menu before and this one.
 	char where[512];
 	if (depth > 1) {
 		snprintf(where, sizeof(where), "%s \xE2\x80\xBA %s", stack[depth - 2].title, stack[depth - 1].title);
@@ -1943,6 +2027,7 @@ static void drawMenu(int width, int height, int u) {
 		m->scroll = m->selected < m->scroll ? m->selected : m->selected - rows + 1;
 	}
 	m->scroll = SDL_max(0, SDL_min(m->scroll, itemCount - rows));
+	// A scroll bar takes room on the right when the rows don't all fit.
 	bool const scrolls = itemCount > rows;
 	int const pillL = panel.x + u, pillR = panel.x + panel.w - u - (scrolls ? u / 2 : 0);
 	int const textL = pillL + u * 3 / 4, textR = pillR - u * 3 / 4;
@@ -1981,6 +2066,7 @@ static void drawMenu(int width, int height, int u) {
 		int const y = top + shownCount * rowH;
 		itemRects[shownCount] = (SDL_Rect) { pillL, y, pillR - pillL, rowH };
 		arrowLeft[shownCount] = arrowRight[shownCount] = -1;
+		// A header: spaced capitals, at the foot of its row.
 		if (item->header) {
 			drawSpaced(FACE_STRONG, headerSize, textL, y + rowH - headerSize - u / 3, accent, item->label, SDL_max(1, u / 10));
 			continue;
@@ -1996,6 +2082,7 @@ static void drawMenu(int width, int height, int u) {
 			snprintf(again, sizeof(again), "Press %s again", lastInputPad ? "A" : "Enter");
 			shownValue = again;
 		}
+		// A value is right-aligned; with arrows round it, kept for clicks, when it's selected and can change.
 		if (shownValue[0]) {
 			char value[NAME_SIZE + 64];
 			int const arrows = on && item->adjustable ? textWidth(face, size, "\xE2\x80\xB9") + u / 2 : 0;
@@ -2017,19 +2104,23 @@ static void drawMenu(int width, int height, int u) {
 			}
 		}
 		char label[NAME_SIZE + 64];
+		// The label, cut to fit before the value.
 		textFit(face, size, item->label, valueL - textL - u, item->label[0] == '/', label, sizeof(label));
 		textDraw(face, size, textL, ty, on ? white : item->function ? text : muted, label);
 	}
+	// The scroll bar.
 	if (scrolls) {
 		int const trackH = rows * rowH, barH = SDL_max(u, trackH * rows / itemCount);
 		int const barY = top + (trackH - barH) * m->scroll / SDL_max(1, itemCount - rows);
 		fillRounded((SDL_Rect) { panel.x + panel.w - u, barY, SDL_max(3, u / 6), barH }, u, faded(accent, 110));
 	}
+	// The selected row's help, above the footer.
 	if (helpH && selectable(m->selected) && items[m->selected].help) {
 		drawHelp(items[m->selected].help, textL, footerTop(panel, u) - helpH + u / 4, textR - textL, helpSize, helpLine);
 	}
 	int x = panel.x + u + u / 2;
 	int const y = drawFooter(panel, u);
+	// The footer's hints, for a controller or the keyboard, whichever was used last.
 	bool const adjustable = selectable(m->selected) && items[m->selected].adjustable;
 	const char* backLabel = depth > 1 ? "Back" : app.loaded ? "Close" : NULL;
 	if (lastInputPad) {
@@ -2057,6 +2148,7 @@ static void drawMenu(int width, int height, int u) {
 	}
 }
 
+// The menus, or the keyboard, over the dimmed game; then the frame rate and messages over everything.
 void uiDraw(void) {
 	int width, height;
 	SDL_GetRendererOutputSize(app.renderer, &width, &height);
@@ -2076,9 +2168,11 @@ void uiDraw(void) {
 				drawCapture(width, height, u);
 			}
 		}
+	// A binding waited for ends with the menus.
 	} else if (capture.open) {
 		capture.open = false;
 	}
+	// The frame rate, at the top right.
 	if (settings.showFps && app.loaded) {
 		char fps[32];
 		snprintf(fps, sizeof(fps), "%.1f FPS", app.fps);
