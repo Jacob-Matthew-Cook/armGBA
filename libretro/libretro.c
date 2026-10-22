@@ -2882,6 +2882,8 @@ enum LibretroLcd libretroLcd(uint32_t* gap) {
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#elif defined(__AVX2__)
+#include <immintrin.h>
 #endif
 #if defined(__AVX2__)
 #define GRID_VECTOR 32
@@ -3030,6 +3032,45 @@ static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top
 		to[i] = gridScale8888One(from[i], 256 - ((top[i] * (255u - lower) + bottom[i] * lower) >> 8));
 	}
 }
+#elif defined(__AVX2__)
+// With AVX2, 16 pixels at a time the same way: their shares kept in 16-bit lanes, packed to bytes and
+// copied to each pixel's four bytes by a byte shuffle, then each byte times its share, 8 pixels to a
+// register.
+static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top, const uint8_t* bottom, unsigned w, unsigned count) {
+	uint8_t const lower = (uint8_t) (w > 255 ? 255 : w);
+	__m256i const below = _mm256_set1_epi16(lower), above = _mm256_set1_epi16((short) (255 - lower)), full = _mm256_set1_epi16(255);
+	__m256i const zero = _mm256_setzero_si256();
+	// Pixels 0-3 of the 8 in each 128-bit half, then 4-7, for the first 8 pixels and the next 8.
+	__m256i const spread[2] = {
+		_mm256_setr_epi8(0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7),
+		_mm256_setr_epi8(8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15),
+	};
+	unsigned i = 0;
+	for (; i + 16 <= count; i += 16) {
+		__m128i const t = _mm_loadu_si128((const __m128i*) (top + i)), u = _mm_loadu_si128((const __m128i*) (bottom + i));
+		if (_mm_testz_si128(_mm_or_si128(t, u), _mm_or_si128(t, u))) {
+			memcpy(to + i, from + i, 16 * sizeof(uint32_t));
+			continue;
+		}
+		__m256i const shade = _mm256_srli_epi16(
+			_mm256_add_epi16(_mm256_mullo_epi16(_mm256_cvtepu8_epi16(t), above), _mm256_mullo_epi16(_mm256_cvtepu8_epi16(u), below)), 8);
+		__m256i const kept16 = _mm256_sub_epi16(full, shade);
+		__m128i const kept = _mm_packus_epi16(_mm256_castsi256_si128(kept16), _mm256_extracti128_si256(kept16, 1));
+		__m256i const both = _mm256_broadcastsi128_si256(kept);
+		for (int h = 0; h < 2; ++h) {
+			__m256i const c = _mm256_loadu_si256((const __m256i*) (from + i + h * 8));
+			__m256i const k = _mm256_shuffle_epi8(both, spread[h]);
+			__m256i const cl = _mm256_unpacklo_epi8(c, zero), ch = _mm256_unpackhi_epi8(c, zero);
+			__m256i const kl = _mm256_unpacklo_epi8(k, zero), kh = _mm256_unpackhi_epi8(k, zero);
+			__m256i const rl = _mm256_srli_epi16(_mm256_add_epi16(_mm256_mullo_epi16(cl, kl), cl), 8);
+			__m256i const rh = _mm256_srli_epi16(_mm256_add_epi16(_mm256_mullo_epi16(ch, kh), ch), 8);
+			_mm256_storeu_si256((__m256i*) (to + i + h * 8), _mm256_packus_epi16(rl, rh));
+		}
+	}
+	for (; i < count; ++i) {
+		to[i] = gridScale8888One(from[i], 256 - ((top[i] * (255u - lower) + bottom[i] * lower) >> 8));
+	}
+}
 #else
 static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top, const uint8_t* bottom, unsigned w, unsigned count) {
 	uint16_t const above = (uint16_t) (256 - w), below = (uint16_t) w;
@@ -3067,6 +3108,129 @@ static void gridShade8888(uint32_t* to, const uint32_t* from, const uint8_t* top
 		}                                                                                                              \
 	} while (0)
 
+#if defined(__AVX2__) && !defined(__aarch64__)
+// Rows woven with AVX2, 32 bytes of each at a time. Elements of 1, 2, 4 or 8 bytes are interleaved
+// within each 128-bit half by unpacking, the halves then put in order; three rows of 4- or 8-byte
+// elements by permuting each across the register and blending. Six and eight rows are three and
+// four rows of pairs.
+
+// a and b interleaved, size-byte elements, in order: first holds the first half of the pairs.
+static inline void gridAvxPairs(__m256i a, __m256i b, int size, __m256i* first, __m256i* second) {
+	__m256i low, high;
+	if (size == 1) {
+		low = _mm256_unpacklo_epi8(a, b);
+		high = _mm256_unpackhi_epi8(a, b);
+	} else if (size == 2) {
+		low = _mm256_unpacklo_epi16(a, b);
+		high = _mm256_unpackhi_epi16(a, b);
+	} else if (size == 4) {
+		low = _mm256_unpacklo_epi32(a, b);
+		high = _mm256_unpackhi_epi32(a, b);
+	} else {
+		low = _mm256_unpacklo_epi64(a, b);
+		high = _mm256_unpackhi_epi64(a, b);
+	}
+	*first = _mm256_permute2x128_si256(low, high, 0x20);
+	*second = _mm256_permute2x128_si256(low, high, 0x31);
+}
+
+// Four rows: two levels of pairs. 64 bytes of elements of 2 * size bytes, in order, per pair level.
+static inline void gridAvxFour(__m256i a, __m256i b, __m256i c, __m256i d, int size, __m256i* to) {
+	__m256i ab0, ab1, cd0, cd1;
+	gridAvxPairs(a, b, size, &ab0, &ab1);
+	gridAvxPairs(c, d, size, &cd0, &cd1);
+	gridAvxPairs(ab0, cd0, size * 2, &to[0], &to[1]);
+	gridAvxPairs(ab1, cd1, size * 2, &to[2], &to[3]);
+}
+
+// Three rows of 4-byte elements, 8 each: a0 b0 c0 a1 b1 c1 ...
+static inline void gridAvxThree32(__m256i a, __m256i b, __m256i c, __m256i* to) {
+	__m256i const ia0 = _mm256_setr_epi32(0, 0, 0, 1, 0, 0, 2, 0), ib0 = _mm256_setr_epi32(0, 0, 0, 0, 1, 0, 0, 2), ic0 = _mm256_setr_epi32(0, 0, 0, 0, 0, 1, 0, 0);
+	__m256i const ia1 = _mm256_setr_epi32(0, 3, 0, 0, 4, 0, 0, 5), ib1 = _mm256_setr_epi32(0, 0, 3, 0, 0, 4, 0, 0), ic1 = _mm256_setr_epi32(2, 0, 0, 3, 0, 0, 4, 0);
+	__m256i const ia2 = _mm256_setr_epi32(0, 0, 6, 0, 0, 7, 0, 0), ib2 = _mm256_setr_epi32(5, 0, 0, 6, 0, 0, 7, 0), ic2 = _mm256_setr_epi32(0, 5, 0, 0, 6, 0, 0, 7);
+	__m256i const b0 = _mm256_permutevar8x32_epi32(b, ib0), c0 = _mm256_permutevar8x32_epi32(c, ic0);
+	to[0] = _mm256_blend_epi32(_mm256_blend_epi32(_mm256_permutevar8x32_epi32(a, ia0), b0, 0x92), c0, 0x24);
+	to[1] = _mm256_blend_epi32(_mm256_blend_epi32(_mm256_permutevar8x32_epi32(a, ia1), _mm256_permutevar8x32_epi32(b, ib1), 0x24),
+	                           _mm256_permutevar8x32_epi32(c, ic1), 0x49);
+	to[2] = _mm256_blend_epi32(_mm256_blend_epi32(_mm256_permutevar8x32_epi32(a, ia2), _mm256_permutevar8x32_epi32(b, ib2), 0x49),
+	                           _mm256_permutevar8x32_epi32(c, ic2), 0x92);
+}
+
+// Three rows of 8-byte elements, 4 each: a0 b0 c0 a1 | b1 c1 a2 b2 | c2 a3 b3 c3.
+static inline void gridAvxThree64(__m256i a, __m256i b, __m256i c, __m256i* to) {
+	__m256i const ia0 = _mm256_setr_epi32(0, 1, 0, 0, 0, 0, 2, 3), ib0 = _mm256_setr_epi32(0, 0, 0, 1, 0, 0, 0, 0), ic0 = _mm256_setr_epi32(0, 0, 0, 0, 0, 1, 0, 0);
+	__m256i const ia1 = _mm256_setr_epi32(0, 0, 0, 0, 4, 5, 0, 0), ib1 = _mm256_setr_epi32(2, 3, 0, 0, 0, 0, 4, 5), ic1 = _mm256_setr_epi32(0, 0, 2, 3, 0, 0, 0, 0);
+	__m256i const ia2 = _mm256_setr_epi32(0, 0, 6, 7, 0, 0, 0, 0), ib2 = _mm256_setr_epi32(0, 0, 0, 0, 6, 7, 0, 0), ic2 = _mm256_setr_epi32(4, 5, 0, 0, 0, 0, 6, 7);
+	to[0] = _mm256_blend_epi32(_mm256_blend_epi32(_mm256_permutevar8x32_epi32(a, ia0), _mm256_permutevar8x32_epi32(b, ib0), 0x0C),
+	                           _mm256_permutevar8x32_epi32(c, ic0), 0x30);
+	to[1] = _mm256_blend_epi32(_mm256_blend_epi32(_mm256_permutevar8x32_epi32(a, ia1), _mm256_permutevar8x32_epi32(b, ib1), 0xC3),
+	                           _mm256_permutevar8x32_epi32(c, ic1), 0x0C);
+	to[2] = _mm256_blend_epi32(_mm256_blend_epi32(_mm256_permutevar8x32_epi32(a, ia2), _mm256_permutevar8x32_epi32(b, ib2), 0x30),
+	                           _mm256_permutevar8x32_epi32(c, ic2), 0xC3);
+}
+
+static inline __m256i gridAvxLoad(const uint8_t* row, unsigned at, int size) {
+	return _mm256_loadu_si256((const __m256i*) (row + (size_t) at * size));
+}
+
+// Weaves what it can; returns how many of each row it did.
+static unsigned gridWeaveAvx2(uint8_t* to, const uint8_t* const* from, int s, unsigned count, int size) {
+	unsigned const step = 32 / size;
+	unsigned done = 0;
+	for (; done + step <= count; done += step) {
+		__m256i* const t = (__m256i*) (to + (size_t) done * s * size);
+		__m256i r[8];
+		if (s == 2) {
+			gridAvxPairs(gridAvxLoad(from[0], done, size), gridAvxLoad(from[1], done, size), size, &r[0], &r[1]);
+			_mm256_storeu_si256(t, r[0]);
+			_mm256_storeu_si256(t + 1, r[1]);
+		} else if (s == 4) {
+			gridAvxFour(gridAvxLoad(from[0], done, size), gridAvxLoad(from[1], done, size), gridAvxLoad(from[2], done, size),
+			            gridAvxLoad(from[3], done, size), size, r);
+			for (int k = 0; k < 4; ++k) {
+				_mm256_storeu_si256(t + k, r[k]);
+			}
+		} else if (s == 3 && size == 4) {
+			gridAvxThree32(gridAvxLoad(from[0], done, 4), gridAvxLoad(from[1], done, 4), gridAvxLoad(from[2], done, 4), r);
+			for (int k = 0; k < 3; ++k) {
+				_mm256_storeu_si256(t + k, r[k]);
+			}
+		} else if (s == 6 && (size == 2 || size == 4)) {
+			// Three rows of pairs, each pair row two registers long.
+			__m256i p[3][2];
+			for (int k = 0; k < 3; ++k) {
+				gridAvxPairs(gridAvxLoad(from[k * 2], done, size), gridAvxLoad(from[k * 2 + 1], done, size), size, &p[k][0], &p[k][1]);
+			}
+			for (int h = 0; h < 2; ++h) {
+				if (size == 2) {
+					gridAvxThree32(p[0][h], p[1][h], p[2][h], r + h * 3);
+				} else {
+					gridAvxThree64(p[0][h], p[1][h], p[2][h], r + h * 3);
+				}
+			}
+			for (int k = 0; k < 6; ++k) {
+				_mm256_storeu_si256(t + k, r[k]);
+			}
+		} else if (s == 8 && size <= 2) {
+			// Four rows of pairs.
+			__m256i p[4][2];
+			for (int k = 0; k < 4; ++k) {
+				gridAvxPairs(gridAvxLoad(from[k * 2], done, size), gridAvxLoad(from[k * 2 + 1], done, size), size, &p[k][0], &p[k][1]);
+			}
+			for (int h = 0; h < 2; ++h) {
+				gridAvxFour(p[0][h], p[1][h], p[2][h], p[3][h], size * 2, r + h * 4);
+			}
+			for (int k = 0; k < 8; ++k) {
+				_mm256_storeu_si256(t + k, r[k]);
+			}
+		} else {
+			break;
+		}
+	}
+	return done;
+}
+#endif
+
 static void gridWeave8(uint8_t* to, const uint8_t* const* from, int s, unsigned count) {
 	unsigned done = 0;
 #if defined(__aarch64__)
@@ -3099,6 +3263,8 @@ static void gridWeave8(uint8_t* to, const uint8_t* const* from, int s, unsigned 
 			}
 		}
 	}
+#elif defined(__AVX2__)
+	done = gridWeaveAvx2((uint8_t*) to, (const uint8_t* const*) from, s, count, 1);
 #endif
 	GRID_WEAVE_SCALAR(uint8_t);
 }
@@ -3135,6 +3301,8 @@ static void gridWeave16(uint16_t* to, const uint16_t* const* from, int s, unsign
 			}
 		}
 	}
+#elif defined(__AVX2__)
+	done = gridWeaveAvx2((uint8_t*) to, (const uint8_t* const*) from, s, count, 2);
 #endif
 	GRID_WEAVE_SCALAR(uint16_t);
 }
@@ -3171,6 +3339,8 @@ static void gridWeave32(uint32_t* to, const uint32_t* const* from, int s, unsign
 			}
 		}
 	}
+#elif defined(__AVX2__)
+	done = gridWeaveAvx2((uint8_t*) to, (const uint8_t* const*) from, s, count, 4);
 #endif
 	GRID_WEAVE_SCALAR(uint32_t);
 }
