@@ -55,6 +55,10 @@ static bool advancePanel(void) {
 	return !gameBoy || (libretroGbOnAdvance() && !gbColorPanel);
 }
 
+bool lcdCastsShadow(void) {
+	return screenKind() != SCREEN_TFT;
+}
+
 enum LibretroLcd libretroLcd(uint32_t* gap) {
 	int const kind = screenKind();
 	*gap = kind == SCREEN_TFT ? 0 : libretroGbOffColor();
