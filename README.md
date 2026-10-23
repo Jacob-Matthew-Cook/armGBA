@@ -30,9 +30,10 @@ the D-pad, L is the flick.
 
 ## Options
 
-The options are in five categories. The menu shows only those that do something for the game loaded
-and the Link Mode chosen: the Tilt and Solar Sensors only for cartridges with one, the link options
-only with Link Mode on.
+The options are in six categories, Link's in four parts: Link (Link Mode), Link: Players, Link:
+Connection, and Link: Screens and Controls; the standalone frontend shows Link's as one page with
+headers. The menu shows only those that do something for the game loaded and the Link Mode chosen:
+the Tilt and Solar Sensors only for cartridges with one, the link options only with Link Mode on.
 
 | Category | Option | Console | Values (default first) |
 | --- | --- | --- | --- |
@@ -56,14 +57,16 @@ only with Link Mode on.
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
 | | Restart Buttons | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
 | Link | Link Mode (applies on restart) | Both | Off, Together, Separate, GameCube (Game Boy Advance) |
-| | Players (applies on restart) | Both | 2, 3, 4 (Together) |
+| Link: Players | Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
+| Link: Connection | This Console's Cartridge (applies on restart) | Game Boy Advance | Inserted, Removed (Separate, GameCube) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
 | | GameCube Address | Game Boy Advance | Find on the Network, This Device (GameCube) |
 | | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
 | | Game Boy Link Timing | Game Boy | Standard, Exact (Separate) |
-| | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
+| Link: Screens and Controls | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
 | | L2 Button | Both | Fast Forward, Previous Screens (Together) |
+| | Switch Controller | Both | L + R + A + B, Start + L2 + R2, Off |
 | Saves | Back Up Save | Both | Off, then each player |
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
 | | Load Into | Both | Same Player, then each player (Together) |
