@@ -332,6 +332,7 @@ void optionsDefine(const struct retro_core_options_v2* definitions) {
 		if (!known) {
 			categories[categoryCount].key = strdup(c->key);
 			categories[categoryCount].description = copyString(c->desc);
+			categories[categoryCount].info = copyString(c->info);
 			++categoryCount;
 		}
 	}

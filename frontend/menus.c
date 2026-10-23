@@ -394,9 +394,13 @@ static void cheatMenu(void) {
 	}
 	struct Cheat* c = &cheats[cheatShown];
 	addValue("Enabled", onOff(c->enabled), cheatToggle, cheatShown);
+	helpFor("Whether the cheat is on while you play.");
 	addChoice("Code", c->code, cheatEdit, 0);
+	helpFor("The cheat's code; choose it to change it.");
 	addChoice("Name", c->description, cheatEdit, 1);
+	helpFor("What the cheat list calls it; choose it to change it.");
 	addItem("Delete", cheatEdit, 2);
+	helpFor("Takes the cheat off this game's list.");
 }
 
 // A cheat's row: left and right turn it on or off; choosing it opens its menu.
@@ -578,6 +582,7 @@ static void coreOptionsMenu(void) {
 			char label[160];
 			snprintf(label, sizeof(label), "%s...", categories[c].description ? categories[c].description : categories[c].key);
 			addItem(label, openCategory, c);
+			helpFor(categories[c].info);
 		}
 	}
 	addOptions(NULL);
@@ -748,6 +753,7 @@ static void videoMenu(void) {
 	helpFor("Shows each frame as the display refreshes, so the picture doesn't tear.");
 	addHeader("On-Screen Display");
 	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
+	helpFor("Frames a second, at the top right.");
 	addValue("Show Messages", onOff(settings.showMessages), changeSetting, SET_MESSAGES);
 	helpFor("The notes at the bottom left, such as a state saved or a controller connected.");
 }
@@ -779,6 +785,7 @@ static void audioMenu(void) {
 	char text[32];
 	snprintf(text, sizeof(text), "%d%%", settings.volume);
 	addValue("Volume", text, changeSetting, SET_VOLUME);
+	helpFor("How loud the game is.");
 	snprintf(text, sizeof(text), "%d %s (%d ms)", settings.latency, frames(settings.latency), (int) (settings.latency * 1000 / FRAME_RATE));
 	addValue("Latency", text, changeSetting, SET_LATENCY);
 	helpFor("How much sound waits to play. Less answers sooner but may crackle on a slow device.");
@@ -873,6 +880,7 @@ static void controlsMenu(void) {
 	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
 	helpFor("How fast the Fast-Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);
+	helpFor("Puts every button, key and hotkey back as it first was.");
 	items[itemCount - 1].confirm = true;
 }
 
@@ -905,9 +913,11 @@ static void addSettingsPages(void) {
 	addItem("Shaders...", openSettingsPage, 1);
 	helpFor("The filter, and the GPU's LCD grid and Game Boy pixel shadow.");
 	addItem("Audio...", openSettingsPage, 2);
+	helpFor("The volume, and how long sound waits to play.");
 	addItem("Controls...", openSettingsPage, 3);
 	helpFor("Buttons, hotkeys and fast-forward speed, for controllers and the keyboard.");
 	addItem("Rewind and Run-Ahead...", openSettingsPage, 4);
+	helpFor("Going back in time, and answering the buttons sooner.");
 	addItem("Saves and Folders...", openSettingsPage, 5);
 	helpFor("Saving a state on exit, and where games, BIOS files, saves, states and screenshots are.");
 	addItem("Appearance...", openSettingsPage, 6);
@@ -1165,6 +1175,7 @@ static void netplayMenu(void) {
 		helpFor("Type the host's name or address.");
 	} else {
 		addItem("Disconnect", netAction, 4);
+		helpFor("Leaves netplay; the game carries on here.");
 	}
 }
 
@@ -1204,8 +1215,10 @@ static void cheevosMenu(void) {
 	addInfo("Status", cheevosStatus());
 	if (settings.cheevosToken[0]) {
 		addItem("Log Out", cheevosAction, 1);
+		helpFor("Forgets your RetroAchievements login on this device.");
 	} else {
 		addItem("Log In...", cheevosAction, 0);
+		helpFor("Your RetroAchievements name and password; only a token is kept.");
 	}
 	addValue("Hardcore Mode", onOff(settings.hardcore), changeSetting, SET_HARDCORE);
 	helpFor("Earns achievements as hardcore: save states, cheats, rewind and run-ahead are off, and turning it on restarts the game.");
@@ -1293,11 +1306,14 @@ static void generalTab(void) {
 		}
 		if (recentCount > 5) {
 			addItem("More Recent Games...", openRecent, 0);
+			helpFor("Every game played lately.");
 		}
 	} else if (recentCount) {
 		addItem("Recent Games...", openRecent, 0);
+		helpFor("The games played lately, newest first.");
 	}
 	addItem("Load Game...", openBrowser, 0);
+	helpFor("Finds a game in your folders; zip and 7z archives open too.");
 	addHeader("Settings");
 	addSettingsPages();
 	addItem("Reset Config", resetConfig, 0);
@@ -1306,6 +1322,7 @@ static void generalTab(void) {
 	        "and recent games stay.");
 	addItem("Quit", misc, 2);
 	items[itemCount - 1].confirm = app.loaded;
+	helpFor("Closes armGBA; the game's save is written first.");
 }
 
 // Game: the game loaded, its states, and closing it.
@@ -1314,10 +1331,12 @@ static void gameTab(void) {
 	if (!app.loaded) {
 		addInfo("No game loaded", "");
 		addItem("Load Game...", openBrowser, 0);
+		helpFor("Finds a game in your folders; zip and 7z archives open too.");
 		return;
 	}
 	addHeader(app.gameName);
 	addItem("Resume", resume, 0);
+	helpFor("Back to the game.");
 	snprintf(text, sizeof(text), stateExists(app.slot) ? "Slot %d" : "Slot %d \xC2\xB7 Empty", app.slot);
 	addValue("Save State", text, stateItem, 0);
 	helpFor("Saves the game as it is now in the slot shown; left and right change the slot.");
@@ -1331,18 +1350,24 @@ static void gameTab(void) {
 	items[itemCount - 1].confirm = true;
 	helpFor("Starts the game again from the beginning; the game's own save is kept.");
 	addItem("Screenshot", misc, 0);
+	helpFor("Saves the game's picture as it is now, in the screenshots folder.");
 	addItem(recording() ? "Stop Recording" : "Start Recording", misc, 1);
+	helpFor("Records the game's picture and sound to a video in the screenshots folder.");
 	addItem("Close Game", closeGame, 0);
 	items[itemCount - 1].confirm = true;
+	helpFor("Ends the game, writing its save, and goes back to General.");
 }
 
 // Extras: cheats for the game loaded, netplay and RetroAchievements.
 static void extrasTab(void) {
 	if (app.loaded) {
 		addItem("Cheats...", openCheats, 0);
+		helpFor("This game's cheats: add codes, load RetroArch cheat files, turn them on or off.");
 	}
 	addItem("Netplay...", openNetplay, 0);
+	helpFor("Play linked with another device over the network.");
 	addItem("Achievements...", openCheevos, 0);
+	helpFor("RetroAchievements: log in, hardcore mode, and this game's achievements.");
 }
 
 const char* const tabNames[TABS] = { "General", "Game", "Core", "Extras" };

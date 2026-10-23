@@ -36,6 +36,8 @@ enum {
 	CIRCLES = 16,
 	// How long a tab takes to slide in.
 	SLIDE_MS = 180,
+	// The most lines the help above the footer takes.
+	HELP_LINES = 3,
 };
 
 // The menu shown, built again each frame, and the menus opened to reach it.
@@ -836,30 +838,51 @@ static int drawPanel(SDL_Rect panel, int u, const char* where) {
 	return panel.y + headerH + u / 4;
 }
 
-// Help text in up to two lines, words wrapped, the second cut short with "..." if it runs on.
-static void drawHelp(const char* help, int x, int y, int width, int size, int line) {
-	char first[512] = "";
-	const char* rest = help;
-	const char* p = help;
+// Where help's next line starts, the words that fit in width from text on, or the first word alone;
+// line gets them.
+static const char* helpLineFrom(const char* text, int width, int size, char line[512]) {
+	const char* next = text;
+	const char* p = text;
+	line[0] = '\0';
 	while (*p) {
 		const char* end = p;
 		while (*end && *end != ' ') {
 			++end;
 		}
 		char trial[512];
-		snprintf(trial, sizeof(trial), "%.*s", (int) (end - help), help);
-		if (textWidth(FACE_BODY, size, trial) > width && first[0]) {
+		snprintf(trial, sizeof(trial), "%.*s", (int) (end - text), text);
+		if (textWidth(FACE_BODY, size, trial) > width && line[0]) {
 			break;
 		}
-		snprintf(first, sizeof(first), "%s", trial);
-		rest = *end ? end + 1 : end;
-		p = rest;
+		snprintf(line, 512, "%s", trial);
+		next = *end ? end + 1 : end;
+		p = next;
 	}
-	textDraw(FACE_BODY, size, x, y, muted, first);
-	if (*rest) {
-		char second[512];
-		textFit(FACE_BODY, size, rest, width, false, second, sizeof(second));
-		textDraw(FACE_BODY, size, x, y + line, muted, second);
+	return next;
+}
+
+// How many lines help takes in width, at most HELP_LINES.
+static int helpLinesFor(const char* help, int width, int size) {
+	int lines = 0;
+	char line[512];
+	for (const char* p = help; *p && lines < HELP_LINES; ++lines) {
+		p = helpLineFrom(p, width, size, line);
+	}
+	return lines;
+}
+
+// Help in up to lines lines, words wrapped, the last cut short with "..." if it runs on.
+static void drawHelp(const char* help, int x, int y, int width, int size, int line, int lines) {
+	const char* p = help;
+	for (int i = 0; *p && i < lines; ++i) {
+		char text[512];
+		if (i == lines - 1) {
+			textFit(FACE_BODY, size, p, width, false, text, sizeof(text));
+			p = "";
+		} else {
+			p = helpLineFrom(p, width, size, text);
+		}
+		textDraw(FACE_BODY, size, x, y + i * line, muted, text);
 	}
 }
 
@@ -1014,11 +1037,24 @@ static void drawMenu(int width, int height, int u) {
 	int const size = u * 19 / 20, headerSize = u;
 	int rowH = u * 13 / 8;
 	// Two lines above the footer say what the selected item does, when this menu's items say.
-	bool anyHelp = false;
-	for (int i = 0; i < itemCount && !anyHelp; ++i) {
-		anyHelp = items[i].help != NULL;
+	// Room above the footer for what the selected item does: as many lines, up to HELP_LINES, as this
+	// menu's longest help takes (worked out once for each menu and size), so the rows don't move.
+	int const helpSize = u * 13 / 20, helpLine = u * 9 / 10, helpWidth = width - u * 4;
+	static const void* helpMenu;
+	static int helpItems, helpU, helpW, helpLines;
+	if (helpMenu != (const void*) m->build || helpItems != itemCount || helpU != u || helpW != helpWidth) {
+		helpMenu = (const void*) m->build;
+		helpItems = itemCount;
+		helpU = u;
+		helpW = helpWidth;
+		helpLines = 0;
+		for (int i = 0; i < itemCount; ++i) {
+			if (items[i].help) {
+				helpLines = SDL_max(helpLines, SDL_max(2, helpLinesFor(items[i].help, helpWidth, helpSize)));
+			}
+		}
 	}
-	int const helpSize = u * 13 / 20, helpLine = u * 9 / 10, helpH = anyHelp ? helpLine * 2 + u / 2 : 0;
+	int const helpH = helpLines ? helpLine * helpLines + u / 2 : 0;
 	int const chrome = u * 3 + u / 4 + u / 4 + u * 9 / 4 + helpH;
 	// A list longer than the room takes the nearest whole number of rows, a little shorter or taller
 	// to fill it to the help text.
@@ -1140,7 +1176,7 @@ static void drawMenu(int width, int height, int u) {
 	}
 	// The selected row's help, above the footer.
 	if (helpH && selectable(m->selected) && items[m->selected].help) {
-		drawHelp(items[m->selected].help, textL, footerTop(panel, u) - helpH + u / 4, textR - textL, helpSize, helpLine);
+		drawHelp(items[m->selected].help, textL, footerTop(panel, u) - helpH + u / 4, textR - textL, helpSize, helpLine, helpLines);
 	}
 	int x = panel.x + u + u / 2;
 	int const y = drawFooter(panel, u);
