@@ -334,7 +334,11 @@ static void pngChunk(FILE* f, const char* type, const uint8_t* data, uint32_t si
 	uint8_t head[8] = { size >> 24, size >> 16, size >> 8, size, type[0], type[1], type[2], type[3] };
 	fwrite(head, 1, 8, f);
 	fwrite(data, 1, size, f);
-	uLong crc = crc32(crc32(0, head + 4, 4), data, size);
+	// zlib's crc32 gives back its starting value, not the one passed in, for no data (IEND's).
+	uLong crc = crc32(0, head + 4, 4);
+	if (size) {
+		crc = crc32(crc, data, size);
+	}
 	uint8_t tail[4] = { crc >> 24, crc >> 16, crc >> 8, crc };
 	fwrite(tail, 1, 4, f);
 }
