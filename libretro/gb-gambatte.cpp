@@ -450,25 +450,44 @@ void setColors() {
 		{ 0x7FE2C3, 0x56B495, 0x357862, 0x0A1C15 },
 	};
 	s->gb->setDmgPaletteColor(0, 4, offColors[screen]);
-	// The wheel changes the voltage across the whole screen: each step moves every shade a twelfth
-	// of the way between the unlit screen and the darkest shade, darker up and lighter down. The
-	// darkest goes no darker, so turned up the dark shades merge, and down the lightest fades into
-	// the unlit screen.
-	auto const contrasted = [](unsigned long shade) {
-		unsigned long const off = offColors[screen], dark = shades[screen][3];
-		unsigned long color = 0;
+	// The wheel sets the drive voltages of the whole STN screen together (DMG-LCD-06: its 30k pot sets
+	// the IR3E02's bias levels), from about -11 V to -14 V end to end, so 12% either side of the
+	// middle, each step a tenth of the turn. An STN pixel's darkness is an S-curve of its voltage, 10%
+	// to 90% dark over about 12% of it, so the wheel sweeps nearly the whole curve: down, the screen
+	// fades to blank; up, it goes to black, past the darkest shade. Each shade's place on the curve
+	// comes from its darkness in linear light: the lightest a little past the unlit screen, the
+	// darkest nine tenths of the way to black. Darker, a shade keeps its hue, as a pixel blocking
+	// more light would; lighter, it moves toward the unlit screen.
+	auto const contrasted = [](int shade) {
+		auto const linear = [](unsigned long color, int bits) {
+			double const c = (color >> bits & 0xFF) / 255.0;
+			return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+		};
+		auto const luminance = [&](unsigned long color) {
+			return 0.2126 * linear(color, 16) + 0.7152 * linear(color, 8) + 0.0722 * linear(color, 0);
+		};
+		double const width = 0.12 / (2 * std::log(9.0)), lightest = 0.03, darkest = 0.95;
+		unsigned long const off = offColors[screen], dark = shades[screen][3], color = shades[screen][shade];
+		double const share = (luminance(off) - luminance(color)) / (luminance(off) - luminance(dark));
+		double const before = lightest + (darkest - lightest) * share;
+		double const voltage = (1 + width * std::log(before / (1 - before))) * (1 + 0.12 * contrast / 5);
+		double const after = 1 / (1 + std::exp(-(voltage - 1) / width));
+		double const now = luminance(color), unlit = luminance(off);
+		double const wanted = std::min(std::max(unlit - (unlit - luminance(dark)) * (after - lightest) / (darkest - lightest), 0.0), unlit);
+		unsigned long result = 0;
 		for (int bits = 0; bits < 24; bits += 8) {
-			int const o = off >> bits & 0xFF, d = dark >> bits & 0xFF, v = shade >> bits & 0xFF;
-			double const t = std::min(std::max((o - v) / double(o - d) + contrast / 12.0, 0.0), 1.0);
-			color |= (unsigned long) std::lround(o - t * (o - d)) << bits;
+			double const o = linear(off, bits), v = linear(color, bits);
+			double const l = wanted <= now ? (now > 0 ? v * wanted / now : 0) : o + (v - o) * (unlit - wanted) / (unlit - now);
+			double const c = l <= 0.0031308 ? l * 12.92 : 1.055 * std::pow(l, 1 / 2.4) - 0.055;
+			result |= (unsigned long) std::lround(c * 255) << bits;
 		}
-		return color;
+		return result;
 	};
 	// A Game Boy game started through a Game Boy Color's boot ROM keeps the colors the boot ROM
 	// gave it (a state stores them too), so they aren't replaced here.
 	if (!s->gb->isCgb() || (s->loadFlags & gambatte::GB::NO_BIOS)) {
 		for (int i = 0; i < 12; ++i) {
-			s->gb->setDmgPaletteColor(i / 4, i % 4, contrast ? contrasted(shades[screen][i % 4]) : shades[screen][i % 4]);
+			s->gb->setDmgPaletteColor(i / 4, i % 4, contrast ? contrasted(i % 4) : shades[screen][i % 4]);
 		}
 	}
 	// Game Boy screen shades are shown as they are; color correction is only for a Game Boy Color's
