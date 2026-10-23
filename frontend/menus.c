@@ -673,7 +673,7 @@ static void changeSetting(int which, int delta) {
 // Settings > Video. Pixel Shadow shows only with LCD Grid on the first Game Boy's and the Pocket's
 // screens, or before a game is loaded.
 static void videoMenu(void) {
-	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid", "Scanlines" };
+	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid (GPU)", "Scanlines" };
 	char text[32];
 	addHeader("Window");
 	if (!settings.fullscreen) {
@@ -698,7 +698,7 @@ static void videoMenu(void) {
 	enum LibretroLcd const lcd = libretroLcd(&gap);
 	if (settings.filter == FILTER_LCD && (!app.loaded || lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
 		static const char* const shadows[9] = { "Off", "Up", "Up Right", "Right", "Down Right", "Down", "Down Left", "Left", "Up Left" };
-		addValue("Game Boy Pixel Shadow", shadows[settings.shadow], changeSetting, SET_SHADOW);
+		addValue("Game Boy Pixel Shadow (GPU)", shadows[settings.shadow], changeSetting, SET_SHADOW);
 		helpFor("On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls.");
 	}
 	addOptions("video");
