@@ -159,35 +159,35 @@ static SDL_Texture* circle(int radius) {
 	return circles[slot].texture;
 }
 
-static void fillRect(int x, int y, int w, int h, SDL_Color colour) {
+static void fillRect(int x, int y, int w, int h, SDL_Color color) {
 	SDL_SetRenderDrawBlendMode(app.renderer, SDL_BLENDMODE_BLEND);
-	SDL_SetRenderDrawColor(app.renderer, colour.r, colour.g, colour.b, colour.a);
+	SDL_SetRenderDrawColor(app.renderer, color.r, color.g, color.b, color.a);
 	SDL_Rect const r = { x, y, w, h };
 	SDL_RenderFillRect(app.renderer, &r);
 }
 
 // A plain rectangle if the circle can't be made.
-static void fillRounded(SDL_Rect r, int radius, SDL_Color colour) {
+static void fillRounded(SDL_Rect r, int radius, SDL_Color color) {
 	radius = SDL_min(radius, SDL_min(r.w, r.h) / 2);
 	SDL_Texture* texture = radius > 0 ? circle(radius) : NULL;
 	if (!texture) {
-		fillRect(r.x, r.y, r.w, r.h, colour);
+		fillRect(r.x, r.y, r.w, r.h, color);
 		return;
 	}
-	SDL_SetTextureColorMod(texture, colour.r, colour.g, colour.b);
-	SDL_SetTextureAlphaMod(texture, colour.a);
+	SDL_SetTextureColorMod(texture, color.r, color.g, color.b);
+	SDL_SetTextureAlphaMod(texture, color.a);
 	for (int i = 0; i < 4; ++i) {
 		int const right = i & 1, bottom = i >> 1;
 		SDL_Rect const from = { right * radius, bottom * radius, radius, radius };
 		SDL_Rect const to = { right ? r.x + r.w - radius : r.x, bottom ? r.y + r.h - radius : r.y, radius, radius };
 		SDL_RenderCopy(app.renderer, texture, &from, &to);
 	}
-	fillRect(r.x + radius, r.y, r.w - 2 * radius, r.h, colour);
-	fillRect(r.x, r.y + radius, radius, r.h - 2 * radius, colour);
-	fillRect(r.x + r.w - radius, r.y + radius, radius, r.h - 2 * radius, colour);
+	fillRect(r.x + radius, r.y, r.w - 2 * radius, r.h, color);
+	fillRect(r.x, r.y + radius, radius, r.h - 2 * radius, color);
+	fillRect(r.x + r.w - radius, r.y + radius, radius, r.h - 2 * radius, color);
 }
 
-// A rounded rectangle with an edge of another colour.
+// A rounded rectangle with an edge of another color.
 static void fillBordered(SDL_Rect r, int radius, SDL_Color fill, SDL_Color edge, int edgeWidth) {
 	fillRounded(r, radius, edge);
 	fillRounded((SDL_Rect) { r.x + edgeWidth, r.y + edgeWidth, r.w - 2 * edgeWidth, r.h - 2 * edgeWidth }, radius - edgeWidth, fill);
@@ -343,7 +343,7 @@ int wrap(int value, int delta, int count) {
 	return ((value + delta) % count + count) % count;
 }
 
-// The menus' look: each accent colour for titles and headers, the selection's fill and a held key;
+// The menus' look: each accent color for titles and headers, the selection's fill and a held key;
 // the sizes, in percent; how dark the game is behind the menus.
 const struct Accent accents[ACCENTS] = {
 	{ "Blue", { 111, 168, 255, 255 }, { 58, 120, 232, 255 }, { 47, 74, 122, 255 } },
@@ -792,7 +792,7 @@ bool uiEvent(const SDL_Event* event) {
 
 static const SDL_Color white = { 255, 255, 255, 255 }, text = { 214, 220, 234, 255 }, muted = { 143, 155, 181, 255 },
                        panelFill = { 20, 26, 38, 240 }, edge = { 42, 53, 80, 255 }, keyFill = { 34, 43, 63, 255 };
-// The accent colour chosen, set as each frame is drawn.
+// The accent color chosen, set as each frame is drawn.
 static SDL_Color accent, pillFill, keyHeld;
 
 static SDL_Color faded(SDL_Color c, int alpha) {
@@ -863,7 +863,7 @@ static void drawHelp(const char* help, int x, int y, int width, int size, int li
 	}
 }
 
-// The tabs, right of ARMGBA in the header: the one shown in the accent colour and underlined.
+// The tabs, right of ARMGBA in the header: the one shown in the accent color and underlined.
 static void drawTabs(SDL_Rect panel, int u) {
 	int const size = u * 4 / 5, gap = u * 5 / 4, headerH = u * 3, inset = u + u / 2;
 	int const y = panel.y + (headerH - size) / 2;
@@ -1112,19 +1112,19 @@ static void drawMenu(int width, int height, int u) {
 			int const arrows = on && item->adjustable ? textWidth(face, size, "\xE2\x80\xB9") + u / 2 : 0;
 			textFit(face, size, shownValue, (textR - textL) / 2 - 2 * arrows, false, value, sizeof(value));
 			int const vw = textWidth(face, size, value);
-			SDL_Color const colour = on ? white : item->function ? text : muted;
+			SDL_Color const color = on ? white : item->function ? text : muted;
 			if (arrows) {
 				int const aw = textWidth(face, size, "\xE2\x80\xBA");
 				textDraw(face, size, textR - aw, ty, white, "\xE2\x80\xBA");
 				arrowRight[shownCount] = textR - aw - u / 4;
 				valueL = textR - arrows - vw;
-				textDraw(face, size, valueL, ty, colour, value);
+				textDraw(face, size, valueL, ty, color, value);
 				valueL -= arrows;
 				textDraw(face, size, valueL, ty, white, "\xE2\x80\xB9");
 				arrowLeft[shownCount] = valueL + aw + u / 4;
 			} else {
 				valueL = textR - vw;
-				textDraw(face, size, valueL, ty, item->adjustable && !on ? muted : colour, value);
+				textDraw(face, size, valueL, ty, item->adjustable && !on ? muted : color, value);
 			}
 		}
 		char label[NAME_SIZE + 64];

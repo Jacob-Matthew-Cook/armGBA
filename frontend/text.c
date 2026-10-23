@@ -76,7 +76,7 @@ void textReset(void) {
 }
 
 // The atlas for a face and size: printable ASCII and the extra glyphs packed into one texture, white
-// with the glyphs' coverage as alpha, so it takes any colour.
+// with the glyphs' coverage as alpha, so it takes any color.
 static struct Atlas* atlasFor(enum FaceId face, int size) {
 	struct Atlas* oldest = &atlases[0];
 	for (int i = 0; i < CACHED; ++i) {
@@ -168,13 +168,13 @@ int textWidth(enum FaceId face, int size, const char* text) {
 }
 
 // Draws text with its top at y; returns how wide it was.
-int textDraw(enum FaceId face, int size, int x, int y, SDL_Color colour, const char* text) {
+int textDraw(enum FaceId face, int size, int x, int y, SDL_Color color, const char* text) {
 	struct Atlas* atlas = atlasFor(face, size);
 	if (!atlas) {
 		return 0;
 	}
-	SDL_SetTextureColorMod(atlas->texture, colour.r, colour.g, colour.b);
-	SDL_SetTextureAlphaMod(atlas->texture, colour.a);
+	SDL_SetTextureColorMod(atlas->texture, color.r, color.g, color.b);
+	SDL_SetTextureAlphaMod(atlas->texture, color.a);
 	float pen = (float) x;
 	for (const char* p = text; *p;) {
 		const stbtt_packedchar* g = glyphFor(atlas, nextCode(&p));

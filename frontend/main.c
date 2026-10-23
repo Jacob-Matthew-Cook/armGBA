@@ -34,9 +34,9 @@ char ownSystemDirectory[PATH_SIZE];
 char saveDirectory[PATH_SIZE];
 char ownSaveDirectory[PATH_SIZE];
 char stateDirectory[PATH_SIZE];
-static char ownStateDirectory[PATH_SIZE];
+char ownStateDirectory[PATH_SIZE];
 char shotDirectory[PATH_SIZE];
-static char ownShotDirectory[PATH_SIZE];
+char ownShotDirectory[PATH_SIZE];
 char cheatDirectory[PATH_SIZE];
 
 static SDL_AudioDeviceID audio;
@@ -172,9 +172,14 @@ static void findRetroarch(void) {
 	}
 }
 
-// Whether RetroArch has the folder which ("bios", "saves" or "screenshots") for the menu to offer.
-bool retroarchFolder(const char* which) {
-	return !strcmp(which, "bios") ? retroarch.system[0] : !strcmp(which, "saves") ? retroarch.found : retroarch.shots[0];
+// RetroArch's folder which ("bios", "saves" or "screenshots") for the menu, or NULL if it has none;
+// its saves may be beside each game.
+const char* retroarchFolder(const char* which) {
+	if (!strcmp(which, "saves")) {
+		return !retroarch.found ? NULL : retroarch.savesBesideGame ? "beside each game" : retroarch.saves;
+	}
+	const char* const folder = !strcmp(which, "bios") ? retroarch.system : retroarch.shots;
+	return folder[0] ? folder : NULL;
 }
 
 // Whether folder holds a BIOS or boot ROM the core reads.
@@ -618,7 +623,7 @@ void unloadGame(void) {
 }
 
 // Loads a game, or the first game in an archive, with its save, cheats and achievements, and its
-// state when Save and Load State on Exit and Start is on.
+// state when Auto Save State is on.
 bool loadGame(const char* path) {
 	unloadGame();
 	// A game in an archive is named as RetroArch names it, archive#game, so the core sees its extension.

@@ -457,10 +457,11 @@ static void cheatsMenu(void) {
 	if (!cheatCount) {
 		addInfo("No cheats for this game yet", "");
 	} else {
-		addHeader("Cheats (left / right turns one on or off)");
+		addHeader("Cheats");
 	}
 	for (int i = 0; i < cheatCount; ++i) {
 		addValue(cheats[i].description, onOff(cheats[i].enabled), cheatOpen, i);
+		helpFor("Left and right turn it on or off; choose it to change it.");
 	}
 }
 
@@ -514,11 +515,6 @@ static void addOptions(const char* category) {
 	}
 }
 
-// The core's Video options are shown in General > Video, with the rest of the picture's.
-static bool shownInSettings(const char* category) {
-	return category && !strcmp(category, "video");
-}
-
 // Whether category is one of parent's own groups, "link_players" of "link", shown on its page.
 static bool isGroupOf(const char* category, const char* parent) {
 	size_t const length = strlen(parent);
@@ -535,10 +531,16 @@ static bool anyShown(const char* category) {
 	return false;
 }
 
+static void addLcdRendering(void);
+
 // A category's options, then each of its groups' under a header: the group's name after its
-// category's ("Link: Players" shows as Players).
+// category's ("Link: Players" shows as Players). Video starts with LCD Rendering, which Shaders shows
+// too.
 static void categoryMenu(void) {
 	const char* const key = categories[categoryShown].key;
+	if (!strcmp(key, "video")) {
+		addLcdRendering();
+	}
 	addOptions(key);
 	for (int c = 0; c < categoryCount; ++c) {
 		if (isGroupOf(categories[c].key, key) && anyShown(categories[c].key)) {
@@ -565,7 +567,7 @@ static void coreOptionsMenu(void) {
 	}
 	for (int c = 0; c < categoryCount; ++c) {
 		// Groups are on their category's page.
-		if (shownInSettings(categories[c].key) || strchr(categories[c].key, '_')) {
+		if (strchr(categories[c].key, '_')) {
 			continue;
 		}
 		bool any = anyShown(categories[c].key);
@@ -717,15 +719,16 @@ static void changeSetting(int which, int delta) {
 	settingsWrite();
 }
 
-// LCD Rendering, the same row on Video and Shaders: which of them draws the LCD grid and pixel shadow.
+// LCD Rendering, the same row on Core > Video and Shaders: which of them draws the LCD grid and pixel
+// shadow.
 static void addLcdRendering(void) {
 	addValue("LCD Rendering", settings.lcdOnGpu ? "GPU" : "CPU", changeSetting, SET_LCD_RENDERING);
-	helpFor("Who draws the LCD grid and the Game Boy pixel shadow: CPU, the emulator (set in Video), or GPU, at the size the "
-	        "picture is shown (set in Shaders). Only one is used.");
+	helpFor("Who draws the LCD grid and the Game Boy pixel shadow: CPU, the emulator (set in Core > Video), or GPU, at the size "
+	        "the picture is shown (set in Shaders). Only one is used.");
 }
 
-// General > Video: the window, and the core's picture options, which it draws on the CPU; its
-// LCD grid and pixel shadow only with LCD Rendering on the CPU.
+// General > Video: the window, how the picture is scaled and shown, and what's drawn over it. The
+// emulator's own picture options are in Core > Video.
 static void videoMenu(void) {
 	char text[32];
 	addHeader("Window");
@@ -736,18 +739,17 @@ static void videoMenu(void) {
 	}
 	addValue("Full Screen", onOff(settings.fullscreen), changeSetting, SET_FULLSCREEN);
 	helpFor("Fills the display. On a handheld it's on from the start.");
+	addHeader("Picture");
 	addValue("Integer Scaling", onOff(settings.integerScale), changeSetting, SET_INTEGER);
 	helpFor("Scales by whole numbers only, so every pixel is the same size; leaves a border.");
 	addValue("Aspect Ratio", settings.stretch ? "Fill the Window" : "The Console's", changeSetting, SET_STRETCH);
 	helpFor("The Console's keeps the screen's shape; Fill the Window stretches it.");
 	addValue("VSync", onOff(settings.vsync), changeSetting, SET_VSYNC);
 	helpFor("Shows each frame as the display refreshes, so the picture doesn't tear.");
+	addHeader("On-Screen Display");
 	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
 	addValue("Show Messages", onOff(settings.showMessages), changeSetting, SET_MESSAGES);
 	helpFor("The notes at the bottom left, such as a state saved or a controller connected.");
-	addHeader("Picture");
-	addLcdRendering();
-	addOptions("video");
 }
 
 // General > Shaders: what the GPU does to the picture as it scales it; its LCD grid and pixel
@@ -823,8 +825,13 @@ static void resetControls(int argument, int delta) {
 // shoulders.
 static const int buttonOrder[BUTTONS] = { BUTTON_A, BUTTON_B, 10, 11, 3, 2, 4, 5, 6, 7, 9, 1, 12, 13, 14, 15 };
 
+// Fast Forward and Rewind work while held.
+static const char* hotkeyHelp(int action) {
+	return action == ACT_FAST_FORWARD ? "Runs the game faster while held." : action == ACT_REWIND ? "Goes back in time while held." : NULL;
+}
+
 static void padControlsMenu(void) {
-	addHeader("Buttons (a controller for each player)");
+	addHeader("Buttons");
 	for (int k = 0; k < BUTTONS; ++k) {
 		int const i = buttonOrder[k];
 		addChoice(buttonNames[i], padName(settings.pad[i]), bind, 1000 + i);
@@ -833,11 +840,12 @@ static void padControlsMenu(void) {
 	addHeader("Hotkeys");
 	for (int i = 0; i < ACTIONS; ++i) {
 		addChoice(actionNames[i], padName(settings.padHotkeys[i]), bind, 3000 + i);
+		helpFor(hotkeyHelp(i));
 	}
 }
 
 static void keyControlsMenu(void) {
-	addHeader("Buttons (player 1)");
+	addHeader("Buttons");
 	for (int k = 0; k < BUTTONS; ++k) {
 		int const i = buttonOrder[k];
 		addChoice(buttonNames[i], scancodeName(settings.keys[i]), bind, i);
@@ -845,6 +853,7 @@ static void keyControlsMenu(void) {
 	addHeader("Hotkeys");
 	for (int i = 0; i < ACTIONS; ++i) {
 		addChoice(actionNames[i], scancodeName(settings.hotkeys[i]), bind, 2000 + i);
+		helpFor(hotkeyHelp(i));
 	}
 }
 
@@ -856,28 +865,28 @@ static void openControlsPage(int which, int delta) {
 
 static void controlsMenu(void) {
 	addItem("Controller...", openControlsPage, 0);
-	helpFor("The buttons and hotkeys on a controller.");
+	helpFor("The buttons and hotkeys on a controller, the same for each player's.");
 	addItem("Keyboard...", openControlsPage, 1);
-	helpFor("The keys and hotkeys on the keyboard.");
+	helpFor("The keys and hotkeys on the keyboard, which plays player 1.");
 	char text[32];
-	snprintf(text, sizeof(text), settings.fastForward ? "%dx" : "As Fast as It Goes", settings.fastForward);
+	snprintf(text, sizeof(text), settings.fastForward ? "%dx" : "Max", settings.fastForward);
 	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
-	helpFor("How fast the Fast Forward hotkey runs the game while it's held. As Fast as It Goes stops at 12x.");
+	helpFor("How fast the Fast Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);
 	items[itemCount - 1].confirm = true;
 }
 
 static void appearanceMenu(void) {
-	addValue("Accent Colour", accents[settings.accent].name, changeSetting, SET_ACCENT);
-	helpFor("The colour of the title, the headers and the selection.");
+	addValue("Accent Color", accents[settings.accent].name, changeSetting, SET_ACCENT);
+	helpFor("The color of the title, the headers and the selection.");
 	const char* size = "Normal";
 	for (int i = 0; i < MENU_SIZES; ++i) {
 		size = menuSizes[i].percent == settings.menuSize ? menuSizes[i].name : size;
 	}
 	addValue("Menu Size", size, changeSetting, SET_MENU_SIZE);
 	helpFor("The menus' text and rows, larger for a TV across the room or smaller for more rows.");
-	addValue("Game Behind the Menus", dims[settings.dim], changeSetting, SET_DIM);
-	helpFor("How far the game is dimmed while the menus are open.");
+	addValue("Menu Background", dims[settings.dim], changeSetting, SET_DIM);
+	helpFor("How dark the menus are over the game: Light shows the game most, Dark hides it.");
 }
 
 static void foldersMenu(void);
@@ -892,7 +901,7 @@ static void openSettingsPage(int which, int delta) {
 
 static void addSettingsPages(void) {
 	addItem("Video...", openSettingsPage, 0);
-	helpFor("The window, and the console screen's colours, ghosting and the CPU's LCD grid.");
+	helpFor("The window, scaling, vsync, and the frame rate and messages on screen.");
 	addItem("Shaders...", openSettingsPage, 1);
 	helpFor("The filter, and the GPU's LCD grid and Game Boy pixel shadow.");
 	addItem("Audio...", openSettingsPage, 2);
@@ -902,36 +911,29 @@ static void addSettingsPages(void) {
 	addItem("Saves and Folders...", openSettingsPage, 5);
 	helpFor("Saving a state on exit, and where games, BIOS files, saves, states and screenshots are.");
 	addItem("Appearance...", openSettingsPage, 6);
-	helpFor("The menus' colour and size, and how dark the game is behind them.");
+	helpFor("The menus' color and size, and how dark the game is behind them.");
 }
 
-// Saves and Folders: where games, BIOS files, saves, states and screenshots are. Left and right step
-// through a folder's kinds, Auto, armGBA's and RetroArch's, where it has them; choosing it types one.
+// Saves and Folders: where games, BIOS files, saves, states and screenshots are. Each folder's row
+// opens its choices: Auto, armGBA's and RetroArch's where it has them, or a folder typed in.
 enum { FOLDER_GAMES, FOLDER_BIOS, FOLDER_SAVES, FOLDER_STATES, FOLDER_SHOTS, FOLDERS };
 static const struct {
 	const char* label;
 	char* setting;
-	// What retroarchFolder calls RetroArch's, or NULL; and whether "" is Auto rather than armGBA's.
+	// armGBA's own folder; what retroarchFolder calls RetroArch's, or NULL; and whether "" is Auto
+	// rather than armGBA's.
+	const char* own;
 	const char* retroarch;
 	bool automatic;
 	const char* help;
 } folders[FOLDERS] = {
-	{ "Games", settings.directory, NULL, false, "Where Load Game opens; the folder of the last game loaded. Choose it to type one." },
-	{ "BIOS", settings.biosFolder, "bios", true,
-	  "Read as each game loads. Auto is armGBA's own folder if it has a BIOS or boot ROM, RetroArch's otherwise." },
-	{ "Saves", settings.saveFolder, "saves", true,
-	  "Games' saves, shared with RetroArch in RetroArch's. Auto is armGBA's own folder for a game with its save there, "
-	  "RetroArch's otherwise. Applies when a game loads." },
-	{ "States", settings.stateFolder, NULL, false, "Save states, kept apart from RetroArch's, which it compresses." },
-	{ "Screenshots", settings.shotFolder, "screenshots", false, "Screenshots and recordings." },
+	{ "Games", settings.directory, NULL, NULL, false, "Where Load Game opens; the folder of the last game loaded." },
+	{ "BIOS", settings.biosFolder, ownSystemDirectory, "bios", true, "Read as each game loads." },
+	{ "Saves", settings.saveFolder, ownSaveDirectory, "saves", true, "Games' saves; in RetroArch's, shared with RetroArch. Applies when a game loads." },
+	{ "States", settings.stateFolder, ownStateDirectory, NULL, false, "Save states, kept apart from RetroArch's, which it compresses." },
+	{ "Screenshots", settings.shotFolder, ownShotDirectory, "screenshots", false, "Screenshots and recordings." },
 };
-static int typingFolder;
-
-static void folderTyped(const char* text) {
-	snprintf(folders[typingFolder].setting, PATH_SIZE, "%s", text);
-	chooseFolders();
-	settingsWrite();
-}
+static int folderShown;
 
 // The folder in use, for the help line; the save folder is the game's.
 static const char* folderPath(int which) {
@@ -949,49 +951,90 @@ static const char* folderPath(int which) {
 	}
 }
 
-static void folderChange(int which, int delta) {
-	if (!delta) {
-		typingFolder = which;
-		const char* const path = folderPath(which);
-		openEntry(folders[which].label, path ? path : ownSaveDirectory, false, folderTyped);
-		return;
-	}
-	const char* kinds[3];
-	int count = 0;
-	kinds[count++] = "";
-	if (folders[which].automatic) {
-		kinds[count++] = "armgba";
-	}
-	if (folders[which].retroarch && retroarchFolder(folders[which].retroarch)) {
-		kinds[count++] = "retroarch";
-	}
-	int at = -1;
-	for (int i = 0; i < count; ++i) {
-		at = !strcmp(folders[which].setting, kinds[i]) ? i : at;
-	}
-	snprintf(folders[which].setting, PATH_SIZE, "%s", kinds[at < 0 ? 0 : wrap(at, delta, count)]);
+static bool folderTypedIn(int which) {
+	const char* const setting = folders[which].setting;
+	return which == FOLDER_GAMES || (setting[0] && strcmp(setting, "armgba") && strcmp(setting, "retroarch"));
+}
+
+// A folder's name without the folders it's in.
+static const char* folderName(const char* path) {
+	const char* const slash = strrchr(path, '/');
+	return slash && slash[1] ? slash + 1 : path;
+}
+
+static void folderTyped(const char* text) {
+	snprintf(folders[folderShown].setting, PATH_SIZE, "%s", text);
 	chooseFolders();
 	settingsWrite();
+}
+
+// A choice on a folder's page: 0 Auto, 1 armGBA's, 2 RetroArch's, 3 typed in.
+static void folderPick(int kind, int delta) {
+	if (delta) {
+		return;
+	}
+	if (kind == 3) {
+		const char* const path = folderPath(folderShown);
+		openEntry(folders[folderShown].label, path ? path : folders[folderShown].own, false, folderTyped);
+		return;
+	}
+	const char* const kinds[3] = { "", folders[folderShown].automatic ? "armgba" : "", "retroarch" };
+	snprintf(folders[folderShown].setting, PATH_SIZE, "%s", kinds[kind]);
+	chooseFolders();
+	settingsWrite();
+}
+
+static void folderMenu(void) {
+	int const which = folderShown;
+	const char* const setting = folders[which].setting;
+	bool const typed = folderTypedIn(which);
+	static char help[4][PATH_SIZE + 200];
+	if (folders[which].automatic) {
+		addChoice("Auto", !setting[0] ? "In Use" : "", folderPick, 0);
+		helpFor(which == FOLDER_BIOS ? "armGBA's own folder if it has a BIOS or boot ROM, RetroArch's otherwise."
+		                             : "armGBA's own folder for a game with its save there, RetroArch's otherwise.");
+	}
+	if (folders[which].own) {
+		bool const own = folders[which].automatic ? !strcmp(setting, "armgba") : !setting[0];
+		addChoice("armGBA's", own ? "In Use" : "", folderPick, 1);
+		snprintf(help[1], sizeof(help[1]), "%s", folders[which].own);
+		helpFor(help[1]);
+	}
+	const char* const theirs = folders[which].retroarch ? retroarchFolder(folders[which].retroarch) : NULL;
+	if (theirs) {
+		addChoice("RetroArch's", !strcmp(setting, "retroarch") ? "In Use" : "", folderPick, 2);
+		snprintf(help[2], sizeof(help[2]), "%s, read from RetroArch's retroarch.cfg.", theirs);
+		helpFor(help[2]);
+	}
+	addChoice("Type a Folder...", typed ? folderName(setting) : "", folderPick, 3);
+	snprintf(help[3], sizeof(help[3]), typed ? "In use: %s" : "Any folder, typed in.", setting);
+	helpFor(help[3]);
+}
+
+static void openFolder(int which, int delta) {
+	if (!delta) {
+		folderShown = which;
+		char title[64];
+		snprintf(title, sizeof(title), "%s Folder", folders[which].label);
+		pushMenu(folderMenu, title);
+	}
 }
 
 static void addFolder(int which) {
 	const char* const setting = folders[which].setting;
 	const char* const path = folderPath(which);
-	char value[NAME_SIZE];
-	if (which == FOLDER_GAMES || (setting[0] && strcmp(setting, "armgba") && strcmp(setting, "retroarch"))) {
-		// A folder typed in, by its own name.
-		const char* const slash = strrchr(setting, '/');
-		snprintf(value, sizeof(value), "%s", slash && slash[1] ? slash + 1 : setting);
+	char label[64], value[NAME_SIZE];
+	snprintf(label, sizeof(label), "%s...", folders[which].label);
+	if (folderTypedIn(which)) {
+		snprintf(value, sizeof(value), "%s", folderName(setting));
 	} else if (setting[0] || !folders[which].automatic) {
 		snprintf(value, sizeof(value), "%s", !strcmp(setting, "retroarch") ? "RetroArch's" : "armGBA's");
 	} else if (path) {
-		bool const own = !strcmp(path, which == FOLDER_BIOS ? ownSystemDirectory : ownSaveDirectory);
-		snprintf(value, sizeof(value), "Auto (%s)", own ? "armGBA's" : "RetroArch's");
+		snprintf(value, sizeof(value), "Auto (%s)", !strcmp(path, folders[which].own) ? "armGBA's" : "RetroArch's");
 	} else {
 		snprintf(value, sizeof(value), "Auto");
 	}
-	addValue(folders[which].label, value, folderChange, which);
-	items[itemCount - 1].adjustable = which != FOLDER_GAMES;
+	addChoice(label, value, openFolder, which);
 	static char help[FOLDERS][PATH_SIZE + 300];
 	snprintf(help[which], sizeof(help[which]), "%s%s%s%s", path ? "Now: " : "", path ? path : "", path ? ". " : "", folders[which].help);
 	helpFor(help[which]);
@@ -999,9 +1042,9 @@ static void addFolder(int which) {
 
 static void foldersMenu(void) {
 	addHeader("Saves");
-	addValue("Save and Load State on Exit and Start", onOff(settings.autoState), changeSetting, SET_AUTO_STATE);
-	helpFor("Saves a state as the game closes and loads it as the game starts again.");
-	addHeader("Folders (choose one to type a folder)");
+	addValue("Auto Save State", onOff(settings.autoState), changeSetting, SET_AUTO_STATE);
+	helpFor("Saves a state when the game closes and loads it when the game starts again.");
+	addHeader("Folders");
 	for (int i = 0; i < FOLDERS; ++i) {
 		addFolder(i);
 	}
@@ -1108,15 +1151,15 @@ static void netplayMenu(void) {
 	addChoice("Port", text, netAction, 5);
 	helpFor("The network port the host listens on; everyone uses the same one.");
 	snprintf(text, sizeof(text), "%d %s", settings.inputDelay, frames(settings.inputDelay));
-	addValue("Input Delay (Together)", text, changeSetting, SET_INPUT_DELAY);
+	addValue("Input Delay", text, changeSetting, SET_INPUT_DELAY);
 	helpFor("How long each player's buttons wait in Together, so fewer corrections show. More suits a slow network.");
 	if (netMode == NET_OFF) {
-		addHeader("Host the loaded game");
-		addItem("Host: Separate", netAction, 1);
-		helpFor("Each device runs its own console and game, joined by the link cable over the network. Two players.");
-		addItem("Host: Together", netAction, 2);
-		helpFor("Every device runs every player's console, with rollback, so the link never waits on the network. Everyone needs every "
-		        "game.");
+		addHeader("Host");
+		addItem("Separate", netAction, 1);
+		helpFor("Hosts the loaded game: each device runs its own console and game, joined by the link cable over the network. Two "
+		        "players.");
+		addItem("Together", netAction, 2);
+		helpFor("Hosts the loaded game: every device runs every player's console, with rollback, so the link never waits on the network.");
 		addHeader("Join");
 		addItem("Join a Host...", netAction, 3);
 		helpFor("Type the host's name or address.");
@@ -1169,7 +1212,7 @@ static void cheevosMenu(void) {
 	static char lines[400][160];
 	int const n = cheevosList(lines, 400);
 	if (n) {
-		addHeader("This game's achievements");
+		addHeader("Achievements");
 	}
 	for (int i = 0; i < n; ++i) {
 		addInfo(lines[i], "");
@@ -1244,7 +1287,7 @@ static void openRecent(int argument, int delta) {
 // General: the games, then the settings. Without a game, the five most recent games first.
 static void generalTab(void) {
 	if (!app.loaded && recentCount) {
-		addHeader("Recent games");
+		addHeader("Recent Games");
 		for (int i = 0; i < recentCount && i < 5; ++i) {
 			addRecent(i);
 		}
@@ -1255,14 +1298,14 @@ static void generalTab(void) {
 		addItem("Recent Games...", openRecent, 0);
 	}
 	addItem("Load Game...", openBrowser, 0);
-	addItem("Quit", misc, 2);
-	items[itemCount - 1].confirm = app.loaded;
 	addHeader("Settings");
 	addSettingsPages();
 	addItem("Reset Config", resetConfig, 0);
 	items[itemCount - 1].confirm = true;
 	helpFor("Puts every setting and emulator option back as it first was. Your RetroAchievements login, netplay name, folders "
 	        "and recent games stay.");
+	addItem("Quit", misc, 2);
+	items[itemCount - 1].confirm = app.loaded;
 }
 
 // Game: the game loaded, its states, and closing it.
