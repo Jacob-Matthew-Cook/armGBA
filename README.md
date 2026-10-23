@@ -47,7 +47,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
 | | Game Boy on Advance Border | Game Boy | Cropped, Shown (Game Boy Advance model) |
 | | Game Boy on Advance Screen | Game Boy | Game Boy Advance, Game Boy Color (Game Boy Advance model) |
-| | LCD Ghosting | Both | Off, Half, Full |
+| Video: LCD Effects | LCD Ghosting | Both | Off, Half, Full |
 | | Interleaved Rows | Both | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left |

@@ -543,19 +543,19 @@ static bool anyShown(const char* category) {
 static void addLcdRendering(void);
 
 // A category's options, then each of its groups' under a header: the group's name after its
-// category's ("Link: Players" shows as Players). Video starts with LCD Rendering, which Shaders shows
-// too.
+// category's ("Link: Players" shows as Players). LCD Effects starts with LCD Rendering, which Shaders
+// shows too.
 static void categoryMenu(void) {
 	const char* const key = categories[categoryShown].key;
-	if (!strcmp(key, "video")) {
-		addLcdRendering();
-	}
 	addOptions(key);
 	for (int c = 0; c < categoryCount; ++c) {
 		if (isGroupOf(categories[c].key, key) && anyShown(categories[c].key)) {
 			const char* const name = categories[c].description ? categories[c].description : categories[c].key;
 			const char* const colon = strstr(name, ": ");
 			addHeader(colon ? colon + 2 : name);
+			if (!strcmp(categories[c].key, "video_lcd")) {
+				addLcdRendering();
+			}
 			addOptions(categories[c].key);
 		}
 	}
