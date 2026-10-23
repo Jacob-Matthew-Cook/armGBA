@@ -100,6 +100,8 @@ struct Settings {
 	char cheevosToken[64];
 	bool hardcore;
 	char directory[PATH_SIZE];
+	// BIOS Folder: "" for Auto, "armgba" or "retroarch" for theirs, or a folder typed in.
+	char biosFolder[PATH_SIZE];
 	// The menus' look: the accent colour, their size as a percentage, and how far the game behind them
 	// is dimmed (0 to 2).
 	int accent;
@@ -138,7 +140,10 @@ extern const char* buttonNames[BUTTONS];
 
 // Directories, made at start.
 extern char configDirectory[PATH_SIZE];
+// The BIOS folder the core is given, chosen from armGBA's own and RetroArch's (empty if none).
 extern char systemDirectory[PATH_SIZE];
+extern char ownSystemDirectory[PATH_SIZE];
+extern char retroarchSystemDirectory[PATH_SIZE];
 extern char saveDirectory[PATH_SIZE];
 extern char stateDirectory[PATH_SIZE];
 extern char shotDirectory[PATH_SIZE];
@@ -178,6 +183,7 @@ void unloadGame(void);
 void recreateRenderer(void);
 void applyWindowSize(void);
 void refreshShownOptions(void);
+void chooseSystemDirectory(void);
 void writeSaves(void);
 void runFrames(void);
 void setPadForPort(void);

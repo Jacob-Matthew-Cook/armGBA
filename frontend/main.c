@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <file/archive_file.h>
 #include <file/file_path.h>
@@ -29,6 +30,8 @@ struct App app = { .format = RETRO_PIXEL_FORMAT_0RGB1555, .avEnable = RETRO_AV_E
 
 char configDirectory[PATH_SIZE];
 char systemDirectory[PATH_SIZE];
+char ownSystemDirectory[PATH_SIZE];
+char retroarchSystemDirectory[PATH_SIZE];
 char saveDirectory[PATH_SIZE];
 char stateDirectory[PATH_SIZE];
 char shotDirectory[PATH_SIZE];
@@ -73,6 +76,82 @@ static void dataDirectory(char* out, const char* xdg, const char* fallback, cons
 		snprintf(out, PATH_SIZE, "%s/%s/armgba%s", getenv("HOME") ? getenv("HOME") : ".", fallback, leaf);
 	}
 	makeDirectories(out);
+}
+
+// RetroArch's BIOS folder: system_directory in its retroarch.cfg ("~" its home, ":" the folder
+// retroarch.cfg is in, "default" a system folder there), if it's there.
+static void findRetroarchSystem(void) {
+	const char* const home = getenv("HOME") ? getenv("HOME") : ".";
+	const char* const xdg = getenv("XDG_CONFIG_HOME");
+	char folders[3][PATH_SIZE];
+	snprintf(folders[0], PATH_SIZE, "%s/retroarch", xdg && *xdg ? xdg : "");
+	snprintf(folders[1], PATH_SIZE, "%s/.config/retroarch", home);
+	snprintf(folders[2], PATH_SIZE, "%s/.var/app/org.libretro.RetroArch/config/retroarch", home);
+	for (int i = xdg && *xdg ? 0 : 1; i < 3 && !retroarchSystemDirectory[0]; ++i) {
+		char path[PATH_SIZE + 16];
+		snprintf(path, sizeof(path), "%s/retroarch.cfg", folders[i]);
+		FILE* f = fopen(path, "r");
+		if (!f) {
+			continue;
+		}
+		char line[PATH_SIZE + 64];
+		while (fgets(line, sizeof(line), f)) {
+			const char* p = line + strspn(line, " \t");
+			if (strncmp(p, "system_directory", 16)) {
+				continue;
+			}
+			const char* const open = strchr(p, '"');
+			const char* const close = open ? strchr(open + 1, '"') : NULL;
+			if (!close) {
+				continue;
+			}
+			char value[PATH_SIZE];
+			snprintf(value, sizeof(value), "%.*s", (int) (close - open - 1), open + 1);
+			char folder[PATH_SIZE * 2];
+			if (!value[0] || !strcmp(value, "default")) {
+				snprintf(folder, sizeof(folder), "%s/system", folders[i]);
+			} else if (value[0] == '~') {
+				snprintf(folder, sizeof(folder), "%s%s", home, value + 1);
+			} else if (value[0] == ':') {
+				snprintf(folder, sizeof(folder), "%s%s", folders[i], value + 1);
+			} else {
+				snprintf(folder, sizeof(folder), "%s", value);
+			}
+			struct stat st;
+			if (stat(folder, &st) == 0 && S_ISDIR(st.st_mode)) {
+				snprintf(retroarchSystemDirectory, PATH_SIZE, "%s", folder);
+			}
+		}
+		fclose(f);
+	}
+}
+
+// Whether folder holds a BIOS or boot ROM the core reads.
+static bool holdsBios(const char* folder) {
+	static const char* const names[] = { "gba_bios.bin", "gb_bios.bin", "dmg_boot.bin", "mgb_boot.bin", "gbc_bios.bin",
+		                                 "cgb_boot.bin", "cgb_agb_boot.bin", "cgb_agb0_boot.bin", "agb_boot.bin" };
+	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+		char path[PATH_SIZE + 32];
+		snprintf(path, sizeof(path), "%s/%s", folder, names[i]);
+		if (access(path, R_OK) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// BIOS Folder: armGBA's own, RetroArch's, or one typed in; Auto takes armGBA's when it holds a BIOS or
+// boot ROM, and RetroArch's otherwise. The core reads it as each game loads.
+void chooseSystemDirectory(void) {
+	const char* folder = settings.biosFolder;
+	if (!strcmp(folder, "armgba") || (!strcmp(folder, "retroarch") && !retroarchSystemDirectory[0])) {
+		folder = ownSystemDirectory;
+	} else if (!strcmp(folder, "retroarch")) {
+		folder = retroarchSystemDirectory;
+	} else if (!folder[0]) {
+		folder = !retroarchSystemDirectory[0] || holdsBios(ownSystemDirectory) ? ownSystemDirectory : retroarchSystemDirectory;
+	}
+	snprintf(systemDirectory, PATH_SIZE, "%s", folder);
 }
 
 // The core's log, to stderr.
@@ -909,12 +988,14 @@ int main(int argc, char** argv) {
 	// The settings, then the arguments over them.
 	settingsDefaults();
 	dataDirectory(configDirectory, "XDG_CONFIG_HOME", ".config", "");
-	dataDirectory(systemDirectory, "XDG_CONFIG_HOME", ".config", "/system");
+	dataDirectory(ownSystemDirectory, "XDG_CONFIG_HOME", ".config", "/system");
+	findRetroarchSystem();
 	dataDirectory(saveDirectory, "XDG_DATA_HOME", ".local/share", "/saves");
 	dataDirectory(stateDirectory, "XDG_DATA_HOME", ".local/share", "/states");
 	dataDirectory(shotDirectory, "XDG_DATA_HOME", ".local/share", "/screenshots");
 	dataDirectory(cheatDirectory, "XDG_DATA_HOME", ".local/share", "/cheats");
 	settingsRead();
+	chooseSystemDirectory();
 	netInit();
 	optionsReadSaved();
 	for (int i = 1; i < argc; ++i) {

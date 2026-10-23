@@ -56,6 +56,13 @@ void helpFor(const char* help);
 // Opens a menu over the one shown, build making its rows each frame; back to the one before.
 void pushMenu(void (*build)(void), const char* title);
 void popMenu(void);
+// The first menu's tabs, side by side in the header: L and R move between them, and so do left and
+// right on a row without a value. menus.c names and builds them; showTab shows one, back on the row it
+// was left on, sliding in from way's side.
+enum { TAB_GENERAL, TAB_GAME, TAB_CORE, TAB_EXTRAS, TABS };
+extern const char* const tabNames[TABS];
+extern void (*const tabBuilds[TABS])(void);
+void showTab(int which, int way);
 // The on-screen keyboard, to type text, starting from text: done gets it if it's accepted; hidden
 // shows stars for a password.
 void openEntry(const char* title, const char* text, bool hidden, void (*done)(const char* text));

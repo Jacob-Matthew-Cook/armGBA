@@ -187,6 +187,8 @@ static void takeSetting(const char* key, const char* value) {
 		settings.dim = n >= 0 && n <= 2 ? n : 1;
 	} else if (!strcmp(key, "directory")) {
 		copyText(settings.directory, sizeof(settings.directory), value);
+	} else if (!strcmp(key, "bios_folder")) {
+		copyText(settings.biosFolder, sizeof(settings.biosFolder), strcmp(value, "auto") ? value : "");
 	} else if (!strncmp(key, "key_", 4) || !strncmp(key, "pad_", 4) || !strncmp(key, "hotkey_", 7) || !strncmp(key, "padhotkey_", 10)) {
 		int const index = atoi(strrchr(key, '_') + 1);
 		if (!strncmp(key, "key_", 4) && index >= 0 && index < BUTTONS) {
@@ -231,7 +233,7 @@ void settingsWrite(void) {
 	fprintf(f, "cheevos_user = \"%s\"\ncheevos_token = \"%s\"\nhardcore = %s\n", settings.cheevosUser, settings.cheevosToken,
 	        no[settings.hardcore]);
 	fprintf(f, "ui_accent = %d\nui_menu_size = %d\nui_dim = %d\n", settings.accent, settings.menuSize, settings.dim);
-	fprintf(f, "directory = \"%s\"\n", settings.directory);
+	fprintf(f, "directory = \"%s\"\nbios_folder = \"%s\"\n", settings.directory, settings.biosFolder[0] ? settings.biosFolder : "auto");
 	for (int i = 0; i < BUTTONS; ++i) {
 		fprintf(f, "key_%d = %d\npad_%d = %d\n", i, settings.keys[i], i, settings.pad[i]);
 	}
@@ -270,7 +272,7 @@ void optionsWrite(void) {
 	if (!f) {
 		return;
 	}
-	fprintf(f, "# armGBA's options: the menu's Emulator Options change them, or edit each line's value, one of those\n# listed above it.\n\n");
+	fprintf(f, "# armGBA's options: the menu's Core tab changes them, or edit each line's value, one of those\n# listed above it.\n\n");
 	for (int i = 0; i < optionCount; ++i) {
 		struct Option* o = &options[i];
 		fprintf(f, "# %s:", o->description ? o->description : o->key);

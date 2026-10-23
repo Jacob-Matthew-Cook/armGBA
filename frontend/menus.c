@@ -26,8 +26,6 @@ char browserPath[PATH_SIZE];
 static char recentGames[RECENT_MAX][PATH_SIZE];
 static int recentCount;
 
-static void rootMenu(void);
-
 static void resume(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
@@ -331,15 +329,14 @@ static void openBrowser(int argument, int delta) {
 	}
 }
 
-// The first menu then shows the recent games.
+// Then General, with the recent games.
 static void closeGame(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
 		unloadGame();
 		SDL_SetWindowTitle(app.window, "armGBA");
-		depth = 0;
 		recentCount = recentList(recentGames, RECENT_MAX);
-		pushMenu(rootMenu, "No game loaded");
+		showTab(TAB_GENERAL, 0);
 	}
 }
 
@@ -517,7 +514,7 @@ static void addOptions(const char* category) {
 	}
 }
 
-// The core's Video options are shown in General Settings > Video, with the rest of the picture's.
+// The core's Video options are shown in General > Video, with the rest of the picture's.
 static bool shownInSettings(const char* category) {
 	return category && !strcmp(category, "video");
 }
@@ -582,13 +579,6 @@ static void coreOptionsMenu(void) {
 		}
 	}
 	addOptions(NULL);
-}
-
-static void openCoreOptions(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		pushMenu(coreOptionsMenu, "Emulator Options");
-	}
 }
 
 // Settings.
@@ -719,7 +709,7 @@ static void addLcdRendering(void) {
 	        "picture is shown (set in Shaders). Only one is used.");
 }
 
-// General Settings > Video: the window, and the core's picture options, which it draws on the CPU; its
+// General > Video: the window, and the core's picture options, which it draws on the CPU; its
 // LCD grid and pixel shadow only with LCD Rendering on the CPU.
 static void videoMenu(void) {
 	char text[32];
@@ -743,7 +733,7 @@ static void videoMenu(void) {
 	addOptions("video");
 }
 
-// General Settings > Shaders: what the GPU does to the picture as it scales it; its LCD grid and pixel
+// General > Shaders: what the GPU does to the picture as it scales it; its LCD grid and pixel
 // shadow only with LCD Rendering on the GPU, the shadow only on the first Game Boy's and the Pocket's
 // screens, or before a game is loaded.
 static void shadersMenu(void) {
@@ -879,7 +869,7 @@ static void openSettingsPage(int which, int delta) {
 	}
 }
 
-static void settingsMenu(void) {
+static void addSettingsPages(void) {
 	addItem("Video...", openSettingsPage, 0);
 	helpFor("The window, and the console screen's colours, ghosting and the CPU's LCD grid.");
 	addItem("Shaders...", openSettingsPage, 1);
@@ -892,11 +882,74 @@ static void settingsMenu(void) {
 	helpFor("The menus' colour and size, and how dark the game is behind them.");
 }
 
-static void openSettings(int argument, int delta) {
+// BIOS Folder: left and right step through Auto, armGBA's and RetroArch's; choosing it types a folder.
+static void biosFolderTyped(const char* text) {
+	snprintf(settings.biosFolder, sizeof(settings.biosFolder), "%s", text);
+	chooseSystemDirectory();
+	settingsWrite();
+}
+
+static void biosFolderChange(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
-		pushMenu(settingsMenu, "General Settings");
+		openEntry("BIOS folder", systemDirectory, false, biosFolderTyped);
+		return;
 	}
+	static const char* const kinds[3] = { "", "armgba", "retroarch" };
+	int at = 0;
+	for (int i = 0; i < 3; ++i) {
+		at = !strcmp(settings.biosFolder, kinds[i]) ? i : at;
+	}
+	snprintf(settings.biosFolder, sizeof(settings.biosFolder), "%s", kinds[wrap(at, delta, 3)]);
+	chooseSystemDirectory();
+	settingsWrite();
+}
+
+static void addBiosFolder(void) {
+	const char* const chosen = settings.biosFolder;
+	const char* const whose = !strcmp(systemDirectory, ownSystemDirectory) ? "armGBA's" : "RetroArch's";
+	char value[64];
+	if (!chosen[0]) {
+		snprintf(value, sizeof(value), "Auto (%s)", whose);
+	} else {
+		snprintf(value, sizeof(value), "%s", !strcmp(chosen, "armgba") || !strcmp(chosen, "retroarch") ? whose : "Typed In");
+	}
+	addValue("BIOS Folder", value, biosFolderChange, 0);
+	static char help[PATH_SIZE + 200];
+	snprintf(help, sizeof(help),
+	         "Read as each game loads: %s. Auto uses armGBA's own folder if it has a BIOS or boot ROM, RetroArch's otherwise; choose it "
+	         "to type another.",
+	         systemDirectory);
+	helpFor(help);
+}
+
+// Reset Config: the settings and the core's options as they first were, but for the RetroAchievements
+// login, the netplay name and host, the games folder and the recent games.
+static void resetConfig(int argument, int delta) {
+	(void) argument;
+	if (delta) {
+		return;
+	}
+	struct Settings const kept = settings;
+	settingsDefaults();
+	memcpy(settings.cheevosUser, kept.cheevosUser, sizeof(settings.cheevosUser));
+	memcpy(settings.cheevosToken, kept.cheevosToken, sizeof(settings.cheevosToken));
+	memcpy(settings.nickname, kept.nickname, sizeof(settings.nickname));
+	memcpy(settings.host, kept.host, sizeof(settings.host));
+	settings.netPort = kept.netPort;
+	memcpy(settings.directory, kept.directory, sizeof(settings.directory));
+	for (int i = 0; i < optionCount; ++i) {
+		optionSet(&options[i], options[i].defaultValue);
+	}
+	chooseSystemDirectory();
+	cheevosSetHardcore(settings.hardcore);
+	rewindReset();
+	applyWindowSize();
+	recreateRenderer();
+	refreshShownOptions();
+	settingsWrite();
+	optionsWrite();
+	osd("Settings and emulator options reset");
 }
 
 // Netplay.
@@ -1097,72 +1150,88 @@ static void openRecent(int argument, int delta) {
 	}
 }
 
-// Emulator Options... and General Settings..., near the top of the first menu.
-static void addOptionMenus(void) {
-	addItem("Emulator Options...", openCoreOptions, 0);
-	helpFor("The emulator's options for the console: model, BIOS, link play, saves and sensors.");
-	addItem("General Settings...", openSettings, 0);
-	helpFor("The picture, sound, controls, rewind and states.");
-}
+// The tabs.
 
-// The first menu. With a game, its states, Restart and the game's menus first; without, the five most
-// recent games.
-static void rootMenu(void) {
-	char text[32];
-	if (app.loaded) {
-		addItem("Resume", resume, 0);
-		snprintf(text, sizeof(text), stateExists(app.slot) ? "Slot %d" : "Slot %d \xC2\xB7 Empty", app.slot);
-		addValue("Save State", text, stateItem, 0);
-		helpFor("Saves the game as it is now in the slot shown; left and right change the slot.");
-		addValue("Load State", text, stateItem, 1);
-		helpFor("Goes back to the state in the slot shown. Undo Load State brings back what you had.");
-		if (canUndoLoad()) {
-			addItem("Undo Load State", undoLoad, 0);
-			helpFor("Goes back to the game as it was before the last state loaded.");
-		}
-		addItem("Restart", restart, 0);
-		items[itemCount - 1].confirm = true;
-		helpFor("Starts the game again from the beginning; the game's own save is kept.");
-		addOptionMenus();
-		addItem("Cheats...", openCheats, 0);
-	} else if (recentCount) {
+// General: the games, then the settings. Without a game, the five most recent games first.
+static void generalTab(void) {
+	if (!app.loaded && recentCount) {
 		addHeader("Recent games");
 		for (int i = 0; i < recentCount && i < 5; ++i) {
 			addRecent(i);
 		}
-	}
-	// With a game, Recent Games...; without, More Recent Games... when there are more than five.
-	if (app.loaded && recentCount) {
+		if (recentCount > 5) {
+			addItem("More Recent Games...", openRecent, 0);
+		}
+	} else if (recentCount) {
 		addItem("Recent Games...", openRecent, 0);
-	} else if (recentCount > 5) {
-		addItem("More Recent Games...", openRecent, 0);
 	}
 	addItem("Load Game...", openBrowser, 0);
+	addItem("Quit", misc, 2);
+	items[itemCount - 1].confirm = app.loaded;
+	addHeader("Settings");
+	addSettingsPages();
+	addBiosFolder();
+	addItem("Reset Config", resetConfig, 0);
+	items[itemCount - 1].confirm = true;
+	helpFor("Puts every setting and emulator option back as it first was. Your RetroAchievements login, netplay name, games folder "
+	        "and recent games stay.");
+}
+
+// Game: the game loaded, its states, and closing it.
+static void gameTab(void) {
+	char text[32];
+	if (!app.loaded) {
+		addInfo("No game loaded", "");
+		addItem("Load Game...", openBrowser, 0);
+		return;
+	}
+	addHeader(app.gameName);
+	addItem("Resume", resume, 0);
+	snprintf(text, sizeof(text), stateExists(app.slot) ? "Slot %d" : "Slot %d \xC2\xB7 Empty", app.slot);
+	addValue("Save State", text, stateItem, 0);
+	helpFor("Saves the game as it is now in the slot shown; left and right change the slot.");
+	addValue("Load State", text, stateItem, 1);
+	helpFor("Goes back to the state in the slot shown. Undo Load State brings back what you had.");
+	if (canUndoLoad()) {
+		addItem("Undo Load State", undoLoad, 0);
+		helpFor("Goes back to the game as it was before the last state loaded.");
+	}
+	addItem("Restart", restart, 0);
+	items[itemCount - 1].confirm = true;
+	helpFor("Starts the game again from the beginning; the game's own save is kept.");
+	addItem("Screenshot", misc, 0);
+	addItem(recording() ? "Stop Recording" : "Start Recording", misc, 1);
+	addItem("Close Game", closeGame, 0);
+	items[itemCount - 1].confirm = true;
+}
+
+// Extras: cheats for the game loaded, netplay and RetroAchievements.
+static void extrasTab(void) {
 	if (app.loaded) {
-		addItem("Close Game", closeGame, 0);
-		items[itemCount - 1].confirm = true;
-	} else {
-		addOptionMenus();
+		addItem("Cheats...", openCheats, 0);
 	}
 	addItem("Netplay...", openNetplay, 0);
 	addItem("Achievements...", openCheevos, 0);
-	if (app.loaded) {
-		addItem("Screenshot", misc, 0);
-		addItem(recording() ? "Stop Recording" : "Start Recording", misc, 1);
-	}
-	addItem("Quit", misc, 2);
-	items[itemCount - 1].confirm = app.loaded;
 }
 
-// Opens the first menu, the game list back in the games folder.
+const char* const tabNames[TABS] = { "General", "Game", "Core", "Extras" };
+void (*const tabBuilds[TABS])(void) = { generalTab, gameTab, coreOptionsMenu, extrasTab };
+
+// Opens the menus where they were left, the game list back in the games folder.
 void uiOpenMenu(void) {
 	if (app.menuOpen) {
 		return;
 	}
 	app.menuOpen = true;
-	depth = 0;
 	recentCount = recentList(recentGames, RECENT_MAX);
-	pushMenu(rootMenu, app.loaded ? app.gameName : "No game loaded");
+	// Where the menus were left, the first time General; a game list, left by loading a game, back to
+	// its tab.
+	if (!depth) {
+		showTab(TAB_GENERAL, 0);
+	}
+	while (depth > 1 && (stack[depth - 1].build == browserMenu || stack[depth - 1].build == recentMenu)) {
+		--depth;
+	}
 	snprintf(browserPath, sizeof(browserPath), "%s", settings.directory);
 	browserCheats = false;
 }
