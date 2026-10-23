@@ -220,6 +220,9 @@ void optionSet(struct Option* option, const char* value);
 const char* scancodeName(SDL_Scancode code);
 const char* padName(int binding);
 uint32_t padBit(int binding);
+// The core's (libretro/saves.c): writes a whole file, the old one kept whole until the new one is,
+// with Safe Saves on; false if it couldn't.
+bool writeWholeFile(const char* path, const void* data, size_t size);
 // Whether a button or trigger pressed on a controller completes a hotkey there; its buttons are then
 // kept from the game until let go.
 bool padHotkeyPressed(SDL_JoystickID which, uint32_t bit, uint32_t combo);

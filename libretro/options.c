@@ -191,6 +191,9 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_list_saves", "Backups Listed", NULL,
 	  "How many of each player's newest backups Load Save lists, up to 126 in all.",
 	  NULL, "saves_settings", { { "10", "10" }, { "20", "20" }, { "40", "40" }, { "80", "80" }, { "126", "126" }, { NULL, NULL } }, "10" },
+	{ "armgba_safe_saves", "Safe Saves", NULL,
+	  "Writes each save to a new file first, then swaps it in, so a save cut off by a crash or a dead battery leaves the last one whole. In RetroArch, for the saves armGBA writes itself.",
+	  NULL, "saves_settings", { { "disabled", "Off" }, { "enabled", "On" }, { NULL, NULL } }, "enabled" },
 	{ NULL, NULL, NULL, NULL, NULL, NULL, { { NULL, NULL } }, NULL },
 };
 
@@ -207,7 +210,7 @@ static struct retro_core_option_v2_category optionCategories[] = {
 	{ "link_connection", "Link: Connection", "The link cable, the Wireless Adapter, the Four Player Adapter and the GameCube." },
 	{ "link_screens", "Link: Screens and Controls", "How the consoles' screens are shown, and moving a controller between them." },
 	{ "saves", "Saves", "Backing up, loading and sending saves." },
-	{ "saves_settings", "Saves: Settings", "Where saves are kept, new players' saves, and how many backups." },
+	{ "saves_settings", "Saves: Settings", "Where saves are kept, new players' saves, how many backups, and Safe Saves." },
 	{ NULL, NULL, NULL },
 };
 

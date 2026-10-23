@@ -13,7 +13,6 @@
 #include "games.h"
 #include "patch.h"
 
-#include <errno.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -614,14 +613,9 @@ static void writeSave(unsigned id, int slot, const char* extension) {
 	}
 	char path[FILE_SIZE];
 	savePath(path, extension);
-	FILE* f = fopen(path, "wb");
-	if (!f) {
-		osd("Can't write %s: %s", path, strerror(errno));
-		return;
+	if (writeWholeFile(path, memory, size)) {
+		rememberSave(slot, memory, size);
 	}
-	fwrite(memory, 1, size, f);
-	fclose(f);
-	rememberSave(slot, memory, size);
 }
 
 // The cartridge's save and its clock's.
