@@ -733,8 +733,8 @@ static void changeSetting(int which, int delta) {
 // shadow.
 static void addLcdRendering(void) {
 	addValue("LCD Rendering", settings.lcdOnGpu ? "GPU" : "CPU", changeSetting, SET_LCD_RENDERING);
-	helpFor("Who draws the LCD grid and the Game Boy pixel shadow: CPU, the emulator (set in Core > Video), or GPU, at the size "
-	        "the picture is shown (set in Shaders). Only one is used.");
+	helpFor("Who draws the LCD grid and the Game Boy pixel shadow: CPU, the emulator (set in Core \xE2\x80\xBA Video), or GPU, at the size "
+	        "the picture is shown (set in General \xE2\x80\xBA Shaders). Only one is used.");
 }
 
 // General > Video: the window, how the picture is scaled and shown, and what's drawn over it. The
