@@ -141,23 +141,27 @@ V turbo B and A; controllers work too, one per player. Tab fast-forwards while h
 pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its slot, F12 takes a
 screenshot, F9 starts and stops recording, F11 goes full screen. The menu changes all of these.
 
-The menu also has recent games, Emulator Options (the core's) and General Settings, cheats
-(RetroArch's `.cht` files can be added), ten state slots with Undo Load State, the picture (integer
-scaling, vsync, and the core's screen options with its CPU LCD grid), a Shaders page for what the
-GPU draws (Sharp, Smooth, and its own LCD grid and Game Boy pixel shadow), LCD Rendering on both to
-pick the CPU's grid or the GPU's, the sound's volume and latency, rewind, run-ahead, netplay,
-RetroAchievements, and the menus' own look: accent colour, size, and how dark the game is behind
-them. The line under the menu says what the selected item does. With a controller, the buttons bound
-to A and B choose and go back, and L and R jump by letter in the game list; on the keyboard, typing
-a name's start finds it. Restart, Close Game, Quit and Reset Controls and Hotkeys ask for a second
-press. Netplay is armgba to armgba: Separate carries the link cable between two devices each running
-its own game; Together runs every player's console on every device, kept in step with rollback.
-`--host`, `--host-together` and `--connect ADDRESS` start it from the command line. Achievements
-need the system's libcurl, and recording its ffmpeg.
+The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyboard; left and right
+too on a row without a value), and it opens again where it was left. General has the recent games,
+Load Game, Quit and the settings: the picture (integer scaling, vsync, and the core's screen options
+with its CPU LCD grid), Shaders for what the GPU draws (Sharp, Smooth, and its own LCD grid and Game
+Boy pixel shadow), LCD Rendering on both to pick the CPU's grid or the GPU's, the sound's volume and
+latency, controls, rewind and run-ahead, the menus' own look (accent colour, size, and how dark the
+game is behind them), the BIOS folder, and Reset Config. Game has the loaded game's ten state slots
+with Undo Load State, Restart, screenshots, recording and Close Game. Core has the core's options.
+Extras has cheats (RetroArch's `.cht` files can be added), netplay and RetroAchievements. The line
+under the menu says what the selected item does. With a controller, the buttons bound to A and B
+choose and go back, and in the game list L and R jump by letter; on the keyboard, typing a name's
+start finds it. Restart, Close Game, Quit, Reset Config and Reset Controls and Hotkeys ask for a
+second press. Netplay is armgba to armgba: Separate carries the link cable between two devices each
+running its own game; Together runs every player's console on every device, kept in step with
+rollback. `--host`, `--host-together` and `--connect ADDRESS` start it from the command line.
+Achievements need the system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
 `~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`; BIOS and boot
-ROM files go in `~/.config/armgba/system`, saves, states, screenshots and cheats in
+ROM files go in `~/.config/armgba/system` (when it has none, RetroArch's system folder is used;
+General's BIOS Folder picks either); saves, states, screenshots and cheats in
 `~/.local/share/armgba`.
 
 Game Boy Advance games run on Nintendo's `gba_bios.bin` from the system directory when it's there

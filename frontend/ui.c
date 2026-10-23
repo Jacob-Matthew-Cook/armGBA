@@ -34,6 +34,8 @@ enum {
 	REPEAT_DELAY_MS = 400,
 	REPEAT_MS = 90,
 	CIRCLES = 16,
+	// How long a tab takes to slide in.
+	SLIDE_MS = 180,
 };
 
 // The menu shown, built again each frame, and the menus opened to reach it.
@@ -266,6 +268,36 @@ void pushMenu(void (*build)(void), const char* title) {
 	}
 }
 
+// The tab shown, the row each was left on, and when and from which side the last one slid in.
+static int tab;
+static struct {
+	int selected, scroll;
+} tabSpots[TABS];
+static Uint32 slideStart;
+static int slideWay;
+// Where each tab's name was drawn, for the mouse.
+static SDL_Rect tabRects[TABS];
+
+void showTab(int which, int way) {
+	disarm();
+	if (depth) {
+		tabSpots[tab].selected = stack[0].selected;
+		tabSpots[tab].scroll = stack[0].scroll;
+	}
+	tab = which;
+	depth = 1;
+	stack[0].build = tabBuilds[which];
+	snprintf(stack[0].title, sizeof(stack[0].title), "%s", tabNames[which]);
+	stack[0].selected = tabSpots[which].selected;
+	stack[0].scroll = tabSpots[which].scroll;
+	slideWay = way;
+	slideStart = SDL_GetTicks();
+}
+
+static void moveTab(int way) {
+	showTab(wrap(tab, way, TABS), way);
+}
+
 // Back to the menu before, or out of the menus from the first.
 void popMenu(void) {
 	disarm();
@@ -333,8 +365,8 @@ void uiCloseMenu(void) {
 		depth = 1;
 		return;
 	}
+	// The menus open again where they were left.
 	app.menuOpen = false;
-	depth = 0;
 	entry.open = false;
 	capture.open = false;
 	SDL_StopTextInput();
@@ -444,12 +476,21 @@ static void entryMove(int dx, int dy) {
 // The on-screen keyboard's keys, as drawn last, for the mouse.
 static SDL_Rect keyRects[5][12];
 
-// On the keyboard a direction moves between keys; in a menu up and down select, left and right change.
+// Whether left and right move between the tabs: on a tab, unless the row selected has a value.
+static bool tabsMove(void) {
+	struct Menu const* m = &stack[depth - 1];
+	return depth == 1 && !(selectable(m->selected) && items[m->selected].adjustable);
+}
+
+// On the keyboard a direction moves between keys; in a menu up and down select, left and right change
+// a value or the tab.
 static void direction(int dx, int dy) {
 	if (entry.open) {
 		entryMove(dx, dy);
 	} else if (dy) {
 		moveSelection(dy);
+	} else if (dx && tabsMove()) {
+		moveTab(dx);
 	} else if (dx) {
 		activate(dx);
 	}
@@ -585,6 +626,12 @@ bool uiEvent(const SDL_Event* event) {
 		case SDL_SCANCODE_SPACE:
 			confirm();
 			break;
+		// Tab, Shift+Tab, Q and E move between the tabs.
+		case SDL_SCANCODE_TAB:
+			if (depth == 1) {
+				moveTab(event->key.keysym.mod & KMOD_SHIFT ? -1 : 1);
+			}
+			break;
 		case SDL_SCANCODE_ESCAPE:
 		case SDL_SCANCODE_BACKSPACE:
 			back();
@@ -595,6 +642,8 @@ bool uiEvent(const SDL_Event* event) {
 			if (code == settings.hotkeys[ACT_FULLSCREEN]) {
 				settings.fullscreen = !settings.fullscreen;
 				applyWindowSize();
+			} else if (depth == 1 && (code == SDL_SCANCODE_Q || code == SDL_SCANCODE_E)) {
+				moveTab(code == SDL_SCANCODE_Q ? -1 : 1);
 			} else if (inBrowser() && key < 128 && isalnum((int) key)) {
 				browserFind((char) key);
 			}
@@ -637,11 +686,13 @@ bool uiEvent(const SDL_Event* event) {
 				closeEntry(true);
 			}
 			break;
-		// L and R jump a letter in the game list, or ten rows elsewhere.
+		// L and R move between the tabs, jump a letter in the game list, or ten rows elsewhere.
 		case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
 		case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: {
 			int const way = event->cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER ? -1 : 1;
-			if (inBrowser()) {
+			if (depth == 1 && !entry.open) {
+				moveTab(way);
+			} else if (inBrowser()) {
 				browserJump(way);
 			} else {
 				for (int i = 0; i < 10; ++i) {
@@ -700,6 +751,12 @@ bool uiEvent(const SDL_Event* event) {
 				}
 			}
 		} else if (event->button.button == SDL_BUTTON_LEFT) {
+			for (int t = 0; t < TABS && depth == 1; ++t) {
+				if (t != tab && SDL_PointInRect(&p, &tabRects[t])) {
+					showTab(t, t > tab ? 1 : -1);
+					return true;
+				}
+			}
 			for (int i = 0; i < shownCount; ++i) {
 				if (selectable(firstShown + i) && SDL_PointInRect(&p, &itemRects[i])) {
 					bool const already = stack[depth - 1].selected == firstShown + i;
@@ -802,6 +859,23 @@ static void drawHelp(const char* help, int x, int y, int width, int size, int li
 		char second[512];
 		textFit(FACE_BODY, size, rest, width, false, second, sizeof(second));
 		textDraw(FACE_BODY, size, x, y + line, muted, second);
+	}
+}
+
+// The tabs, right of ARMGBA in the header: the one shown in the accent colour and underlined.
+static void drawTabs(SDL_Rect panel, int u) {
+	int const size = u * 4 / 5, gap = u * 5 / 4, headerH = u * 3, inset = u + u / 2;
+	int const y = panel.y + (headerH - size) / 2;
+	int x = panel.x + panel.w - inset;
+	for (int i = TABS - 1; i >= 0; --i) {
+		int const w = textWidth(FACE_STRONG, size, tabNames[i]);
+		x -= w;
+		textDraw(FACE_STRONG, size, x, y, i == tab ? accent : muted, tabNames[i]);
+		if (i == tab) {
+			fillRect(x, y + size + u / 4, w, SDL_max(2, u / 8), accent);
+		}
+		tabRects[i] = (SDL_Rect) { x - gap / 2, panel.y, w + gap, headerH };
+		x -= gap;
 	}
 }
 
@@ -953,14 +1027,15 @@ static void drawMenu(int width, int height, int u) {
 		rowH = room / rows;
 	}
 	SDL_Rect const panel = { 0, 0, width, height };
-	// Where you are: the menu before and this one.
-	char where[512];
+	// Where you are, the menu before and this one; on a tab, the tabs.
+	char where[512] = "";
 	if (depth > 1) {
 		snprintf(where, sizeof(where), "%s \xE2\x80\xBA %s", stack[depth - 2].title, stack[depth - 1].title);
-	} else {
-		snprintf(where, sizeof(where), "%s", stack[0].title);
 	}
 	int const top = drawPanel(panel, u, where);
+	if (depth == 1) {
+		drawTabs(panel, u);
+	}
 	// Keep the selection in view; the mouse wheel moves the view too.
 	if (m->selected >= 0 && (m->selected < m->scroll || m->selected >= m->scroll + rows)) {
 		m->scroll = m->selected < m->scroll ? m->selected : m->selected - rows + 1;
@@ -968,7 +1043,14 @@ static void drawMenu(int width, int height, int u) {
 	m->scroll = SDL_max(0, SDL_min(m->scroll, itemCount - rows));
 	// A scroll bar takes room on the right when the rows don't all fit.
 	bool const scrolls = itemCount > rows;
-	int const pillL = panel.x + u, pillR = panel.x + panel.w - u - (scrolls ? u / 2 : 0);
+	// A tab just moved to slides in from its side, slowing as it comes.
+	int slide = 0;
+	Uint32 const since = SDL_GetTicks() - slideStart;
+	if (depth == 1 && slideWay && since < SLIDE_MS) {
+		float const left = 1 - (float) since / SLIDE_MS;
+		slide = (int) (slideWay * u * 6 * left * left);
+	}
+	int const pillL = panel.x + u + slide, pillR = panel.x + panel.w - u - (scrolls ? u / 2 : 0) + slide;
 	int const textL = pillL + u * 3 / 4, textR = pillR - u * 3 / 4;
 	// The highlight glides to the selection.
 	static float pillY;
@@ -1074,6 +1156,8 @@ static void drawMenu(int width, int height, int u) {
 		}
 		if (inBrowser()) {
 			drawHint(x, y, u, "L R", false, "Letter");
+		} else if (depth == 1) {
+			drawHint(x, y, u, "L R", false, "Tabs");
 		}
 	} else {
 		x = drawHint(x, y, u, "Enter", false, "Select");
@@ -1085,6 +1169,8 @@ static void drawMenu(int width, int height, int u) {
 		}
 		if (inBrowser()) {
 			drawHint(x, y, u, "A-Z", false, "Find");
+		} else if (depth == 1) {
+			drawHint(x, y, u, "Q E", false, "Tabs");
 		}
 	}
 }
@@ -1098,7 +1184,9 @@ void uiDraw(void) {
 	pillFill = accents[settings.accent].fill;
 	keyHeld = accents[settings.accent].held;
 	// A held controller direction repeats.
-	if ((held.dx || held.dy) && SDL_TICKS_PASSED(SDL_GetTicks(), held.next) && app.menuOpen) {
+	// A held direction repeats, but doesn't run on through the tabs.
+	bool const tabbing = held.dx && !held.dy && !entry.open && depth && tabsMove();
+	if ((held.dx || held.dy) && !tabbing && SDL_TICKS_PASSED(SDL_GetTicks(), held.next) && app.menuOpen) {
 		direction(held.dx, held.dy);
 		held.next = SDL_GetTicks() + REPEAT_MS;
 	}
