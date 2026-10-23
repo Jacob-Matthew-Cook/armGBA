@@ -495,46 +495,14 @@ static void optionChange(int index, int delta) {
 	optionsWrite();
 }
 
-// The header each option is shown under, in a category long enough to need them; NULL for none.
-static const char* optionGroup(const char* key) {
-	static const struct {
-		const char* key;
-		const char* group;
-	} groups[] = {
-		{ "armgba_link_players", "Players" },
-		{ "armgba_player2_game", "Players" },
-		{ "armgba_link_cartridge", "Connection" },
-		{ "armgba_link_port", "Connection" },
-		{ "armgba_gamecube_address", "Connection" },
-		{ "armgba_gb_link_port", "Connection" },
-		{ "armgba_gb_link_timing", "Connection" },
-		{ "armgba_link_screens", "Screens and Controls" },
-		{ "armgba_link_l2", "Screens and Controls" },
-		{ "armgba_switch_controller", "Screens and Controls" },
-	};
-	for (size_t i = 0; i < sizeof(groups) / sizeof(*groups); ++i) {
-		if (!strcmp(groups[i].key, key)) {
-			return groups[i].group;
-		}
-	}
-	return NULL;
-}
-
-// The visible core options in category, or those in none when category is NULL, each group under
-// its header.
+// The visible core options in category, or those in none when category is NULL.
 static void addOptions(const char* category) {
-	const char* group = NULL;
 	for (int i = 0; i < optionCount; ++i) {
 		struct Option* o = &options[i];
 		bool const here = category ? o->category && !strcmp(o->category, category) : !o->category;
 		if (!here || !o->visible) {
 			continue;
 		}
-		const char* const its = optionGroup(o->key);
-		if (its && (!group || strcmp(its, group))) {
-			addHeader(its);
-		}
-		group = its;
 		const char* label = o->value;
 		for (int v = 0; v < o->valueCount; ++v) {
 			if (!strcmp(o->values[v], o->value)) {
@@ -551,8 +519,35 @@ static bool shownInSettings(const char* category) {
 	return category && !strcmp(category, "video");
 }
 
+// Whether category is one of parent's own groups, "link_players" of "link", shown on its page.
+static bool isGroupOf(const char* category, const char* parent) {
+	size_t const length = strlen(parent);
+	return category && !strncmp(category, parent, length) && category[length] == '_';
+}
+
+// Whether any of the category's options shows.
+static bool anyShown(const char* category) {
+	for (int i = 0; i < optionCount; ++i) {
+		if (options[i].visible && options[i].category && !strcmp(options[i].category, category)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// A category's options, then each of its groups' under a header: the group's name after its
+// category's ("Link: Players" shows as Players).
 static void categoryMenu(void) {
-	addOptions(categories[categoryShown].key);
+	const char* const key = categories[categoryShown].key;
+	addOptions(key);
+	for (int c = 0; c < categoryCount; ++c) {
+		if (isGroupOf(categories[c].key, key) && anyShown(categories[c].key)) {
+			const char* const name = categories[c].description ? categories[c].description : categories[c].key;
+			const char* const colon = strstr(name, ": ");
+			addHeader(colon ? colon + 2 : name);
+			addOptions(categories[c].key);
+		}
+	}
 }
 
 static void openCategory(int index, int delta) {
@@ -569,12 +564,13 @@ static void coreOptionsMenu(void) {
 		return;
 	}
 	for (int c = 0; c < categoryCount; ++c) {
-		if (shownInSettings(categories[c].key)) {
+		// Groups are on their category's page.
+		if (shownInSettings(categories[c].key) || strchr(categories[c].key, '_')) {
 			continue;
 		}
-		bool any = false;
-		for (int i = 0; i < optionCount; ++i) {
-			any |= options[i].visible && options[i].category && !strcmp(options[i].category, categories[c].key);
+		bool any = anyShown(categories[c].key);
+		for (int g = 0; g < categoryCount; ++g) {
+			any |= isGroupOf(categories[g].key, categories[c].key) && anyShown(categories[g].key);
 		}
 		if (any) {
 			char label[160];
