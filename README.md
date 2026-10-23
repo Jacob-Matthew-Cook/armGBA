@@ -40,9 +40,10 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | System | Skip BIOS Intro | Game Boy Advance | Disabled, Enabled |
 | | BIOS (applies on restart) | Game Boy Advance | Nintendo's (System Folder), armGBA's (Built In) |
 | | Game Boy Model (applies on restart) | Game Boy | Auto, Game Boy, Game Boy Pocket / Light, Game Boy Color, Game Boy Advance |
-| | Boot ROM (applies on restart) | Game Boy | Nintendo's (System Folder), Off, armGBA's (Built In) |
+| | Boot ROM (applies on restart) | Game Boy | Nintendo's (System Folder), armGBA's (Built In), Off |
 | Video | Threaded Video | Game Boy Advance | Disabled, Enabled, One Frame Late |
-| | Color Correction | Both | Disabled, Enabled |
+| | Color Correction | Game Boy Advance | Disabled, Enabled |
+| | Game Boy Color Correction | Game Boy | Disabled, Enabled |
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
 | | Game Boy Advance Border | Game Boy | Cropped, Shown |
 | | Game Boy Advance Panel | Game Boy | Game Boy Advance, Game Boy Color |
@@ -62,7 +63,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | Link: Connection | This Console's Cartridge (applies on restart) | Game Boy Advance | Inserted, Removed (Separate, GameCube) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
 | | GameCube Address | Game Boy Advance | Find on the Network, This Device (GameCube) |
-| | Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
+| | Game Boy Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
 | | Game Boy Link Timing | Game Boy | Standard, Exact (Separate) |
 | Link: Screens and Controls | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
 | | L2 Button | Both | Fast Forward, Previous Screens (Together) |
