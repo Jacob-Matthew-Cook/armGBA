@@ -37,13 +37,13 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 
 | Category | Option | Console | Values (default first) |
 | --- | --- | --- | --- |
-| System | Skip BIOS Intro | Game Boy Advance | Disabled, Enabled |
+| System | Skip BIOS Intro | Game Boy Advance | Off, On |
 | | BIOS (applies on restart) | Game Boy Advance | Nintendo's (System Folder), armGBA's (Built In) |
 | | Game Boy Model (applies on restart) | Game Boy | Auto, Game Boy, Game Boy Pocket / Light, Game Boy Color, Game Boy Advance |
 | | Boot ROM (applies on restart) | Game Boy | Nintendo's (System Folder), armGBA's (Built In), Off |
-| Video | Threaded Video | Game Boy Advance | Disabled, Enabled, One Frame Late |
-| | Color Correction | Game Boy Advance | Disabled, Enabled |
-| | Game Boy Color Correction | Game Boy | Disabled, Enabled |
+| Video | Threaded Video | Game Boy Advance | Off, On, One Frame Late |
+| | Color Correction | Game Boy Advance | Off, On |
+| | Game Boy Color Correction | Game Boy | Off, On |
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
 | | Game Boy Advance Border | Game Boy | Cropped, Shown |
 | | Game Boy Advance Panel | Game Boy | Game Boy Advance, Game Boy Color |
@@ -52,7 +52,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | LCD Grid | Both | Off, 2x to 8x |
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left |
 | | CPU Effect Threads | Both | Auto, 1, 2, 3, 4 |
-| Audio | Low-Pass Filter | Both | Disabled, 20%, 40%, 60%, 80% |
+| Audio | Low-Pass Filter | Both | Off, 20%, 40%, 60%, 80% |
 | Input | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
@@ -72,8 +72,8 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
 | | Load Into | Both | Same Player, then each player (Together) |
 | | Send Save | Both | Off, then player 1's current save, backups, remote and received saves (Separate) |
-| | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
-| | Player 1's Save Folder (applies when a game starts) | Both | RetroArch's Save Folder, armGBA/Player 1 Folder |
+| Saves: Settings | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
+| | Player 1's Save Folder (applies when a game starts) | Both | Save Folder, armGBA/Player 1 Folder |
 | | Backups Kept | Both | 10, 5, 20, All |
 | | Backups Listed | Both | 10, 20, 40, 80, 126 |
 
@@ -143,26 +143,30 @@ screenshot, F9 starts and stops recording, F11 goes full screen. The menu change
 
 The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyboard; left and right
 too on a row without a value), and it opens again where it was left. General has the recent games,
-Load Game, Quit and the settings: the picture (integer scaling, vsync, and the core's screen options
-with its CPU LCD grid), Shaders for what the GPU draws (Sharp, Smooth, and its own LCD grid and Game
-Boy pixel shadow), LCD Rendering on both to pick the CPU's grid or the GPU's, the sound's volume and
-latency, controls, rewind and run-ahead, the menus' own look (accent colour, size, and how dark the
-game is behind them), the BIOS folder, and Reset Config. Game has the loaded game's ten state slots
-with Undo Load State, Restart, screenshots, recording and Close Game. Core has the core's options.
-Extras has cheats (RetroArch's `.cht` files can be added), netplay and RetroAchievements. The line
-under the menu says what the selected item does. With a controller, the buttons bound to A and B
-choose and go back, and in the game list L and R jump by letter; on the keyboard, typing a name's
-start finds it. Restart, Close Game, Quit, Reset Config and Reset Controls and Hotkeys ask for a
-second press. Netplay is armgba to armgba: Separate carries the link cable between two devices each
-running its own game; Together runs every player's console on every device, kept in step with
-rollback. `--host`, `--host-together` and `--connect ADDRESS` start it from the command line.
-Achievements need the system's libcurl, and recording its ffmpeg.
+Load Game, Quit and the settings: Video (integer scaling, vsync, the frame rate and messages, and
+the core's screen options with its CPU LCD grid), Shaders for what the GPU draws (Sharp, Smooth, and
+its own LCD grid and Game Boy pixel shadow), LCD Rendering on both to pick the CPU's grid or the
+GPU's, the sound's volume and latency, controls and fast-forward speed, rewind and run-ahead, Saves
+and Folders, the menus' own look (accent colour, size, and how dark the game is behind them), and
+Reset Config. Game has the loaded game's ten state slots with Undo Load State, Restart, screenshots,
+recording and Close Game. Core has the core's options. Extras has cheats (RetroArch's `.cht` files
+can be added), netplay and RetroAchievements. The line under the menu says what the selected item
+does. With a controller, the buttons bound to A and B choose and go back, and in the game list L and
+R jump by letter; on the keyboard, typing a name's start finds it. Restart, Close Game, Quit, Reset
+Config and Reset Controls and Hotkeys ask for a second press. Netplay is armgba to armgba: Separate
+carries the link cable between two devices each running its own game; Together runs every player's
+console on every device, kept in step with rollback. `--host`, `--host-together` and `--connect
+ADDRESS` start it from the command line. Achievements need the system's libcurl, and recording its
+ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
-`~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`; BIOS and boot
-ROM files go in `~/.config/armgba/system` (when it has none, RetroArch's system folder is used;
-General's BIOS Folder picks either); saves, states, screenshots and cheats in
-`~/.local/share/armgba`.
+`~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`. BIOS and boot
+ROM files go in `~/.config/armgba/system`, and saves, states, screenshots and cheats in
+`~/.local/share/armgba`. General's Saves and Folders can use RetroArch's folders instead, read from
+its `retroarch.cfg`: its BIOS folder, its saves (beside the game or in its saves folder, sorted as
+it sorts them), shared with RetroArch, and its screenshots. By itself the BIOS folder is RetroArch's
+when armGBA's has no BIOS or boot ROM, and a game's saves are RetroArch's unless armGBA's already
+has that game's save. States stay armGBA's, as RetroArch compresses its own.
 
 Game Boy Advance games run on Nintendo's `gba_bios.bin` from the system directory when it's there
 and BIOS is set to Nintendo's, and otherwise on armGBA's own open-source BIOS, built into the core.

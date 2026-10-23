@@ -100,8 +100,15 @@ struct Settings {
 	char cheevosToken[64];
 	bool hardcore;
 	char directory[PATH_SIZE];
-	// BIOS Folder: "" for Auto, "armgba" or "retroarch" for theirs, or a folder typed in.
+	// The Folders: "" for Auto (armGBA's for states and screenshots), "armgba" or "retroarch" for
+	// theirs, or a folder typed in.
 	char biosFolder[PATH_SIZE];
+	char saveFolder[PATH_SIZE];
+	char stateFolder[PATH_SIZE];
+	char shotFolder[PATH_SIZE];
+	// Fast-Forward Speed: times as fast, 0 for as fast as it goes (up to 12).
+	int fastForward;
+	bool showMessages;
 	// The menus' look: the accent colour, their size as a percentage, and how far the game behind them
 	// is dimmed (0 to 2).
 	int accent;
@@ -140,11 +147,12 @@ extern const char* buttonNames[BUTTONS];
 
 // Directories, made at start.
 extern char configDirectory[PATH_SIZE];
-// The BIOS folder the core is given, chosen from armGBA's own and RetroArch's (empty if none).
+// The BIOS, save, state and screenshot folders in use, chosen by the Folders settings (the save folder
+// as each game loads), and armGBA's own.
 extern char systemDirectory[PATH_SIZE];
 extern char ownSystemDirectory[PATH_SIZE];
-extern char retroarchSystemDirectory[PATH_SIZE];
 extern char saveDirectory[PATH_SIZE];
+extern char ownSaveDirectory[PATH_SIZE];
 extern char stateDirectory[PATH_SIZE];
 extern char shotDirectory[PATH_SIZE];
 extern char cheatDirectory[PATH_SIZE];
@@ -183,7 +191,8 @@ void unloadGame(void);
 void recreateRenderer(void);
 void applyWindowSize(void);
 void refreshShownOptions(void);
-void chooseSystemDirectory(void);
+void chooseFolders(void);
+bool retroarchFolder(const char* which);
 void writeSaves(void);
 void runFrames(void);
 void setPadForPort(void);

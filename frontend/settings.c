@@ -44,6 +44,7 @@ void settingsDefaults(void) {
 	settings.vsync = true;
 	settings.filter = FILTER_SHARP;
 	settings.lcdOnGpu = true;
+	settings.showMessages = true;
 	settings.shadow = 4;
 	settings.volume = 100;
 	settings.latency = 3;
@@ -189,6 +190,16 @@ static void takeSetting(const char* key, const char* value) {
 		copyText(settings.directory, sizeof(settings.directory), value);
 	} else if (!strcmp(key, "bios_folder")) {
 		copyText(settings.biosFolder, sizeof(settings.biosFolder), strcmp(value, "auto") ? value : "");
+	} else if (!strcmp(key, "save_folder")) {
+		copyText(settings.saveFolder, sizeof(settings.saveFolder), strcmp(value, "auto") ? value : "");
+	} else if (!strcmp(key, "state_folder")) {
+		copyText(settings.stateFolder, sizeof(settings.stateFolder), strcmp(value, "armgba") ? value : "");
+	} else if (!strcmp(key, "screenshot_folder")) {
+		copyText(settings.shotFolder, sizeof(settings.shotFolder), strcmp(value, "armgba") ? value : "");
+	} else if (!strcmp(key, "fast_forward")) {
+		settings.fastForward = n >= 2 && n <= 12 ? n : 0;
+	} else if (!strcmp(key, "show_messages")) {
+		settings.showMessages = yes;
 	} else if (!strncmp(key, "key_", 4) || !strncmp(key, "pad_", 4) || !strncmp(key, "hotkey_", 7) || !strncmp(key, "padhotkey_", 10)) {
 		int const index = atoi(strrchr(key, '_') + 1);
 		if (!strncmp(key, "key_", 4) && index >= 0 && index < BUTTONS) {
@@ -233,7 +244,10 @@ void settingsWrite(void) {
 	fprintf(f, "cheevos_user = \"%s\"\ncheevos_token = \"%s\"\nhardcore = %s\n", settings.cheevosUser, settings.cheevosToken,
 	        no[settings.hardcore]);
 	fprintf(f, "ui_accent = %d\nui_menu_size = %d\nui_dim = %d\n", settings.accent, settings.menuSize, settings.dim);
-	fprintf(f, "directory = \"%s\"\nbios_folder = \"%s\"\n", settings.directory, settings.biosFolder[0] ? settings.biosFolder : "auto");
+	fprintf(f, "directory = \"%s\"\nbios_folder = \"%s\"\nsave_folder = \"%s\"\nstate_folder = \"%s\"\nscreenshot_folder = \"%s\"\n",
+	        settings.directory, settings.biosFolder[0] ? settings.biosFolder : "auto", settings.saveFolder[0] ? settings.saveFolder : "auto",
+	        settings.stateFolder[0] ? settings.stateFolder : "armgba", settings.shotFolder[0] ? settings.shotFolder : "armgba");
+	fprintf(f, "fast_forward = %d\nshow_messages = %s\n", settings.fastForward, no[settings.showMessages]);
 	for (int i = 0; i < BUTTONS; ++i) {
 		fprintf(f, "key_%d = %d\npad_%d = %d\n", i, settings.keys[i], i, settings.pad[i]);
 	}
