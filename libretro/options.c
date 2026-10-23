@@ -246,8 +246,8 @@ bool adapterWanted(int count) {
 // Hides the options that do nothing for the game and Link Mode. RetroArch calls it when an option
 // changes; returns whether that changed which are shown.
 bool showOptions(void) {
-	bool const advance = advanceRunning();
-	int const devices = advanceDevices();
+	bool const advance = gba && !gameBoy;
+	int const devices = advance ? gba->gpio.devices : 0;
 	bool const together = togetherWanted();
 	bool const linked = together || separateWanted();
 	const struct {
