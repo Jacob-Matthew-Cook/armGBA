@@ -83,6 +83,8 @@ static struct {
 	int which;
 	bool controller;
 	bool hotkey;
+	// A controller hotkey: the buttons pressed, and those still held.
+	uint32_t combo, down;
 } capture;
 
 // A controller's held direction, for repeats.
@@ -383,12 +385,13 @@ void uiCaptureBinding(int which, bool controller, bool hotkey) {
 	capture.which = which;
 	capture.controller = controller;
 	capture.hotkey = hotkey;
+	capture.combo = capture.down = 0;
 }
 
 static void captured(int value) {
 	if (capture.hotkey) {
 		if (capture.controller) {
-			settings.padHotkeys[capture.which] = value;
+			settings.padHotkeys[capture.which] = value == PAD_NONE ? 0 : capture.combo;
 		} else {
 			settings.hotkeys[capture.which] = (SDL_Scancode) value;
 		}
@@ -559,6 +562,23 @@ bool uiEvent(const SDL_Event* event) {
 			captured(PAD_NONE);
 			return true;
 		}
+		// A hotkey is every button held together, taken when they're all let go.
+		if (capture.controller && capture.hotkey) {
+			bool const trigger = event->type == SDL_CONTROLLERAXISMOTION &&
+			                     (event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT || event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+			uint32_t const bit = trigger ? padBit(event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT ? PAD_LEFT_TRIGGER : PAD_RIGHT_TRIGGER)
+			                             : event->type == SDL_CONTROLLERBUTTONDOWN || event->type == SDL_CONTROLLERBUTTONUP ? padBit(event->cbutton.button) : 0;
+			if (event->type == SDL_CONTROLLERBUTTONDOWN || (trigger && event->caxis.value > 24000)) {
+				capture.combo |= bit;
+				capture.down |= bit;
+			} else if ((event->type == SDL_CONTROLLERBUTTONUP || (trigger && event->caxis.value < 8000)) && capture.down & bit) {
+				capture.down &= ~bit;
+				if (!capture.down) {
+					captured(0);
+				}
+			}
+			return event->type != SDL_QUIT;
+		}
 		if (event->type == SDL_CONTROLLERBUTTONDOWN && capture.controller) {
 			captured(event->cbutton.button);
 			return true;
@@ -657,7 +677,17 @@ bool uiEvent(const SDL_Event* event) {
 		}
 		return true;
 	}
-	case SDL_CONTROLLERBUTTONDOWN:
+	case SDL_CONTROLLERBUTTONDOWN: {
+		// The Quit hotkey quits, and the Menu hotkey closes the menus.
+		uint32_t const bit = padBit(event->cbutton.button);
+		if (padHotkeyPressed(event->cbutton.which, bit, settings.padHotkeys[ACT_QUIT])) {
+			app.running = false;
+			return true;
+		}
+		if (padHotkeyPressed(event->cbutton.which, bit, settings.padHotkeys[ACT_MENU])) {
+			uiCloseMenu();
+			return true;
+		}
 		// The buttons bound to the game's A and B choose and go back, as in RetroArch.
 		if (event->cbutton.button == menuButton(BUTTON_A)) {
 			confirm();
@@ -707,13 +737,10 @@ bool uiEvent(const SDL_Event* event) {
 			break;
 		}
 		default:
-			// The menu hotkey closes the menus.
-			if (event->cbutton.button == settings.padHotkeys[ACT_MENU]) {
-				uiCloseMenu();
-			}
 			break;
 		}
 		return true;
+	}
 	case SDL_CONTROLLERAXISMOTION:
 		// The left stick moves as the D-pad does; uiDraw repeats it while it's held.
 		if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX || event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
@@ -1029,7 +1056,7 @@ static void drawCapture(int width, int height, int u) {
 	fillRect(0, 0, width, height, (SDL_Color) { 4, 6, 12, 140 });
 	const char* what = capture.hotkey ? actionNames[capture.which] : buttonNames[capture.which];
 	char line[256];
-	snprintf(line, sizeof(line), capture.controller ? "Press a button for %s" : "Press a key for %s", what);
+	snprintf(line, sizeof(line), !capture.controller ? "Press a key for %s" : capture.hotkey ? "Hold the buttons for %s, then let go" : "Press a button for %s", what);
 	int const size = u, small = u * 17 / 20;
 	SDL_Rect panel;
 	panel.w = SDL_min(width - u, SDL_max(u * 22, textWidth(FACE_STRONG, size, line) + u * 3));

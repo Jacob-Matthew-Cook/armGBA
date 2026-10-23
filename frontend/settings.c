@@ -23,7 +23,7 @@ bool optionsChanged;
 
 const char* actionNames[ACTIONS] = {
 	"Menu", "Fast-Forward", "Rewind", "Pause", "Save State", "Load State", "Previous Slot", "Next Slot",
-	"Screenshot", "Record", "Full Screen", "Restart",
+	"Screenshot", "Record", "Full Screen", "Restart", "Quit",
 };
 
 const char* buttonNames[BUTTONS] = {
@@ -72,14 +72,15 @@ void settingsDefaults(void) {
 	static const SDL_Scancode hotkeys[ACTIONS] = {
 		SDL_SCANCODE_ESCAPE, SDL_SCANCODE_TAB, SDL_SCANCODE_R, SDL_SCANCODE_P, SDL_SCANCODE_F5, SDL_SCANCODE_F7,
 		SDL_SCANCODE_F6, SDL_SCANCODE_F8, SDL_SCANCODE_F12, SDL_SCANCODE_F9, SDL_SCANCODE_F11, SDL_SCANCODE_F2,
+		SDL_SCANCODE_UNKNOWN,
 	};
 	memcpy(settings.keys, keys, sizeof(keys));
 	memcpy(settings.pad, pad, sizeof(pad));
 	memcpy(settings.hotkeys, hotkeys, sizeof(hotkeys));
-	for (int i = 0; i < ACTIONS; ++i) {
-		settings.padHotkeys[i] = PAD_NONE;
-	}
-	settings.padHotkeys[ACT_MENU] = SDL_CONTROLLER_BUTTON_GUIDE;
+	// Home + North for the menu and Home + Start to quit, as on ROCKNIX.
+	memset(settings.padHotkeys, 0, sizeof(settings.padHotkeys));
+	settings.padHotkeys[ACT_MENU] = padBit(SDL_CONTROLLER_BUTTON_GUIDE) | padBit(SDL_CONTROLLER_BUTTON_Y);
+	settings.padHotkeys[ACT_QUIT] = padBit(SDL_CONTROLLER_BUTTON_GUIDE) | padBit(SDL_CONTROLLER_BUTTON_START);
 	const char* home = getenv("HOME");
 	snprintf(settings.directory, sizeof(settings.directory), "%s", home ? home : "/");
 }
@@ -200,7 +201,8 @@ static void takeSetting(const char* key, const char* value) {
 		settings.fastForward = n >= 2 && n <= 12 ? n : 0;
 	} else if (!strcmp(key, "show_messages")) {
 		settings.showMessages = yes;
-	} else if (!strncmp(key, "key_", 4) || !strncmp(key, "pad_", 4) || !strncmp(key, "hotkey_", 7) || !strncmp(key, "padhotkey_", 10)) {
+	} else if (!strncmp(key, "key_", 4) || !strncmp(key, "pad_", 4) || !strncmp(key, "hotkey_", 7) || !strncmp(key, "padhotkey_", 10) ||
+	           !strncmp(key, "padcombo_", 9)) {
 		int const index = atoi(strrchr(key, '_') + 1);
 		if (!strncmp(key, "key_", 4) && index >= 0 && index < BUTTONS) {
 			settings.keys[index] = (SDL_Scancode) n;
@@ -209,7 +211,12 @@ static void takeSetting(const char* key, const char* value) {
 		} else if (!strncmp(key, "hotkey_", 7) && index >= 0 && index < ACTIONS) {
 			settings.hotkeys[index] = (SDL_Scancode) n;
 		} else if (!strncmp(key, "padhotkey_", 10) && index >= 0 && index < ACTIONS) {
-			settings.padHotkeys[index] = n;
+			// Before hotkeys were buttons held together: one button, the menu's on Home alone then.
+			if (index != ACT_MENU || n != SDL_CONTROLLER_BUTTON_GUIDE) {
+				settings.padHotkeys[index] = padBit(n);
+			}
+		} else if (!strncmp(key, "padcombo_", 9) && index >= 0 && index < ACTIONS) {
+			settings.padHotkeys[index] = (uint32_t) strtoul(value, NULL, 10);
 		}
 	}
 }
@@ -252,7 +259,7 @@ void settingsWrite(void) {
 		fprintf(f, "key_%d = %d\npad_%d = %d\n", i, settings.keys[i], i, settings.pad[i]);
 	}
 	for (int i = 0; i < ACTIONS; ++i) {
-		fprintf(f, "hotkey_%d = %d\npadhotkey_%d = %d\n", i, settings.hotkeys[i], i, settings.padHotkeys[i]);
+		fprintf(f, "hotkey_%d = %d\npadcombo_%d = %u\n", i, settings.hotkeys[i], i, (unsigned) settings.padHotkeys[i]);
 	}
 	fclose(f);
 }
@@ -414,6 +421,32 @@ const char* padName(int binding) {
 	}
 	const char* name = SDL_GameControllerGetStringForButton((SDL_GameControllerButton) binding);
 	return name ? name : "?";
+}
+
+// A button's bit in a hotkey: the buttons' own numbers, the triggers the top two.
+uint32_t padBit(int binding) {
+	if (binding == PAD_LEFT_TRIGGER || binding == PAD_RIGHT_TRIGGER) {
+		return 1u << (binding == PAD_LEFT_TRIGGER ? 30 : 31);
+	}
+	return binding >= 0 && binding < SDL_CONTROLLER_BUTTON_MAX ? 1u << binding : 0;
+}
+
+// A hotkey's buttons, Home, Select and Start first: Home + North.
+const char* padComboName(uint32_t combo) {
+	enum { FIRST = 3 };
+	static const int first[FIRST] = { SDL_CONTROLLER_BUTTON_GUIDE, SDL_CONTROLLER_BUTTON_BACK, SDL_CONTROLLER_BUTTON_START };
+	static char name[160];
+	name[0] = '\0';
+	uint32_t left = combo;
+	for (int k = 0; left && k < FIRST + 32; ++k) {
+		int const b = k < FIRST ? first[k] : k - FIRST;
+		int const binding = b == 30 ? PAD_LEFT_TRIGGER : b == 31 ? PAD_RIGHT_TRIGGER : b;
+		if (left & padBit(binding)) {
+			left &= ~padBit(binding);
+			snprintf(name + strlen(name), sizeof(name) - strlen(name), "%s%s", name[0] ? " + " : "", padName(binding));
+		}
+	}
+	return name[0] ? name : "None";
 }
 
 // Recent games.

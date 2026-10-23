@@ -839,7 +839,18 @@ static const int buttonOrder[BUTTONS] = { BUTTON_A, BUTTON_B, 10, 11, 3, 2, 4, 5
 
 // Fast-Forward and Rewind work while held.
 static const char* hotkeyHelp(int action) {
-	return action == ACT_FAST_FORWARD ? "Runs the game faster while held." : action == ACT_REWIND ? "Goes back in time while held." : NULL;
+	switch (action) {
+	case ACT_MENU:
+		return "Opens and closes this menu.";
+	case ACT_FAST_FORWARD:
+		return "Runs the game faster while held.";
+	case ACT_REWIND:
+		return "Goes back in time while held.";
+	case ACT_QUIT:
+		return "Quits armGBA, writing the game's save first.";
+	default:
+		return NULL;
+	}
 }
 
 static void padControlsMenu(void) {
@@ -851,7 +862,7 @@ static void padControlsMenu(void) {
 	}
 	addHeader("Hotkeys");
 	for (int i = 0; i < ACTIONS; ++i) {
-		addChoice(actionNames[i], padName(settings.padHotkeys[i]), bind, 3000 + i);
+		addChoice(actionNames[i], padComboName(settings.padHotkeys[i]), bind, 3000 + i);
 		helpFor(hotkeyHelp(i));
 	}
 }
