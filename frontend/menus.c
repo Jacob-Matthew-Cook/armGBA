@@ -825,7 +825,7 @@ static void resetControls(int argument, int delta) {
 // shoulders.
 static const int buttonOrder[BUTTONS] = { BUTTON_A, BUTTON_B, 10, 11, 3, 2, 4, 5, 6, 7, 9, 1, 12, 13, 14, 15 };
 
-// Fast Forward and Rewind work while held.
+// Fast-Forward and Rewind work while held.
 static const char* hotkeyHelp(int action) {
 	return action == ACT_FAST_FORWARD ? "Runs the game faster while held." : action == ACT_REWIND ? "Goes back in time while held." : NULL;
 }
@@ -871,7 +871,7 @@ static void controlsMenu(void) {
 	char text[32];
 	snprintf(text, sizeof(text), settings.fastForward ? "%dx" : "Max", settings.fastForward);
 	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
-	helpFor("How fast the Fast Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
+	helpFor("How fast the Fast-Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);
 	items[itemCount - 1].confirm = true;
 }
@@ -1212,7 +1212,7 @@ static void cheevosMenu(void) {
 	static char lines[400][160];
 	int const n = cheevosList(lines, 400);
 	if (n) {
-		addHeader("Achievements");
+		addHeader("This Game");
 	}
 	for (int i = 0; i < n; ++i) {
 		addInfo(lines[i], "");

@@ -22,7 +22,7 @@ int categoryCount;
 bool optionsChanged;
 
 const char* actionNames[ACTIONS] = {
-	"Menu", "Fast Forward", "Rewind", "Pause", "Save State", "Load State", "Previous Slot", "Next Slot",
+	"Menu", "Fast-Forward", "Rewind", "Pause", "Save State", "Load State", "Previous Slot", "Next Slot",
 	"Screenshot", "Record", "Full Screen", "Restart",
 };
 

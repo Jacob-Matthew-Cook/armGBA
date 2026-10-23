@@ -22,11 +22,13 @@ static bool optionsShownSet;
 
 static void fillTurboPeriods(struct retro_core_option_v2_definition* definitions) {
 	static char periods[TURBO_MOST - TURBO_FEWEST + 1][4];
+	static char labels[TURBO_MOST - TURBO_FEWEST + 1][12];
 	for (; definitions->key && strcmp(definitions->key, "armgba_turbo_period"); ++definitions) {
 	}
 	for (size_t i = 0; definitions->key && i < COUNT(periods); ++i) {
 		snprintf(periods[i], sizeof(periods[i]), "%d", TURBO_FEWEST + (int) i);
-		definitions->values[i] = (struct retro_core_option_value) { periods[i], NULL };
+		snprintf(labels[i], sizeof(labels[i]), "%d frames", TURBO_FEWEST + (int) i);
+		definitions->values[i] = (struct retro_core_option_value) { periods[i], labels[i] };
 	}
 }
 
@@ -152,7 +154,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  "side by side" },
 	{ "armgba_link_l2", "L2 Button", NULL,
 	  "What L2 does outside netplay: fast-forward while held, or go back to the previous screens. In netplay it always goes back.",
-	  NULL, "link_screens", { { "fast forward", "Fast Forward" }, { "previous screens", "Previous Screens" }, { NULL, NULL } }, "fast forward" },
+	  NULL, "link_screens", { { "fast forward", "Fast-Forward" }, { "previous screens", "Previous Screens" }, { NULL, NULL } }, "fast forward" },
 	{ "armgba_switch_controller", "Switch Controller", NULL,
 	  "Pressed on controller 1, moves it to the next console, the other controllers moving along with it: one controller can play every console. Not in netplay.",
 	  NULL, "link_screens", { { "l r a b", "L + R + A + B" }, { "start l2 r2", "Start + L2 + R2" }, { "off", "Off" }, { NULL, NULL } }, "l r a b" },
@@ -263,7 +265,7 @@ bool showOptions(void) {
 		{ "armgba_skip_bios", !gameBoy },
 		{ "armgba_bios", !gameBoy },
 		{ "armgba_threaded_video", !gameBoy },
-		{ "armgba_lcd_shadow", gameBoy && !optionIs("armgba_lcd_grid", "disabled") },
+		{ "armgba_lcd_shadow", lcdCastsShadow() && !optionIs("armgba_lcd_grid", "disabled") },
 		{ "armgba_color_correction", !gameBoy },
 		{ "armgba_solar_sensor", !gameBoy && (!advance || devices & HW_LIGHT_SENSOR) },
 		{ "armgba_gb_tilt", (!gameBoy && !advance) || devices & (HW_TILT | HW_GYRO) || (gameBoy && tiltCartridge) },
@@ -281,6 +283,7 @@ bool showOptions(void) {
 		{ "armgba_link_players", together },
 		{ "armgba_link_screens", together },
 		{ "armgba_link_l2", together },
+		{ "armgba_switch_controller", together },
 		{ "armgba_player2_game", together },
 		{ "armgba_new_save", together },
 		{ "armgba_load_into", together },

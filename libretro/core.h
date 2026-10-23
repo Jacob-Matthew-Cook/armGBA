@@ -158,5 +158,7 @@ extern int gridWay;
 extern int lcdThreads;
 void showPicture(const void* picture, unsigned width, unsigned height, size_t pitch);
 void sendPicture(const void* picture, unsigned width, unsigned height, size_t pitch);
+// Whether the screen is the first Game Boy's or the Pocket's, whose pixels cast a shadow.
+bool lcdCastsShadow(void);
 
 #endif
