@@ -35,7 +35,7 @@ enum {
 
 #define FRAME_RATE (16777216.0 / 280896.0)
 
-static retro_environment_t environment;
+retro_environment_t environment;
 retro_video_refresh_t videoRefresh;
 static retro_audio_sample_batch_t audioBatch;
 static retro_input_poll_t inputPoll;
@@ -50,7 +50,6 @@ enum { RESTART_L_R_START, RESTART_L_R_A_B, RESTART_STICKS, RESTART_SELECT_START_
 static int restartButtons;
 // Turbo timing: each press-and-release cycle lasts turboPeriod frames, and the button is held for
 // the first turboPulse of them.
-enum { TURBO_FEWEST = 4, TURBO_MOST = 120 };
 static unsigned turboPeriod = TURBO_FEWEST;
 static unsigned turboPulse = 2;
 // Boktai's sunlight, 0 to 10.
@@ -73,7 +72,7 @@ static bool gbColorCorrection;
 int gbShades;
 // On the Game Boy Advance model, a Game Boy game is shown as that console shows it: centered on its
 // screen, or stretched across it. When cropped, the black border is left out.
-static bool gbOnAdvance;
+bool gbOnAdvance;
 // Game Boy Advance Panel: a Game Boy game on the Advance model shows the Color's panel.
 bool gbColorPanel;
 static bool gbStretched;
@@ -83,7 +82,6 @@ static uint32_t gbAdvanceFrame[SCREEN_WIDTH * SCREEN_HEIGHT];
 static bool gbTogether;
 static bool gbAdapter;
 static uint32_t gbTogetherFrame[LIBRETRO_GB_WIDTH * 2 * LIBRETRO_GB_HEIGHT * 2];
-enum { MAX_PLAYERS = 4 };
 // Buffer sizes: a path RetroArch gives, a save's file made from one, and a backup's, which adds a
 // stamp.
 enum { PATH_SIZE = 4096, SAVE_PATH_SIZE = 8192, BACKUP_PATH_SIZE = SAVE_PATH_SIZE + SECOND_STAMP };
@@ -177,7 +175,6 @@ static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game: the choices offered, and the game running (empty for player 1's).
 enum { SECOND_CHOICES = 125 };
-static struct retro_core_options_v2* coreOptions;
 static struct retro_core_option_v2_definition* secondOption;
 static struct SecondGame secondGames[SECOND_CHOICES];
 static size_t secondCount;
@@ -234,18 +231,11 @@ static int backupsListed;
 // The player Load Into named when the remote saves' labels were made.
 static int listedInto = -1;
 
-// Which options were last shown, once set; and whether the Game Boy cartridge has a tilt sensor
-// (MBC7).
-static bool optionsShown[32];
-static bool optionsShownSet;
-static bool tiltCartridge;
+// Whether the Game Boy cartridge has a tilt sensor (MBC7).
+bool tiltCartridge;
 // Whether the GameCube link was last shown as connected.
 static bool gamecubeShown;
 
-static bool showOptions(void);
-static bool togetherWanted(void);
-static bool separateWanted(void);
-static bool gamecubeWanted(void);
 static void fillSaveChoices(void);
 static void offerSaveChoices(void);
 static void keepSession(void);
@@ -294,12 +284,6 @@ static void logMessage(enum retro_log_level level, const char* message) {
 	}
 }
 
-#define COUNT(array) (sizeof(array) / sizeof((array)[0]))
-
-static int clampInt(int value, int low, int high) {
-	return value < low ? low : value > high ? high : value;
-}
-
 static void notify(const char* message, unsigned frames) {
 	struct retro_message shown = { message, frames };
 	environment(RETRO_ENVIRONMENT_SET_MESSAGE, &shown);
@@ -319,179 +303,6 @@ static void updateRumble(bool on) {
 }
 
 // The frontend's calls to set the core up, and what the core tells it.
-
-static void fillTurboPeriods(struct retro_core_option_v2_definition* definitions) {
-	static char periods[TURBO_MOST - TURBO_FEWEST + 1][4];
-	for (; definitions->key && strcmp(definitions->key, "armgba_turbo_period"); ++definitions) {
-	}
-	for (size_t i = 0; definitions->key && i < COUNT(periods); ++i) {
-		snprintf(periods[i], sizeof(periods[i]), "%d", TURBO_FEWEST + (int) i);
-		definitions->values[i] = (struct retro_core_option_value) { periods[i], NULL };
-	}
-}
-
-// Older frontends take each option as "Label; value|value", the default first, made here from the
-// definitions.
-static void setVariables(retro_environment_t callback, const struct retro_core_option_v2_definition* definitions) {
-	static struct retro_variable variables[64];
-	static char text[64][1024];
-	int n = 0;
-	for (; definitions->key && n < 63; ++definitions, ++n) {
-		size_t at = snprintf(text[n], sizeof(text[n]), "%s; %s", definitions->desc, definitions->default_value);
-		for (int i = 0; definitions->values[i].value && at < sizeof(text[n]); ++i) {
-			if (strcmp(definitions->values[i].value, definitions->default_value)) {
-				at += snprintf(text[n] + at, sizeof(text[n]) - at, "|%s", definitions->values[i].value);
-			}
-		}
-		variables[n] = (struct retro_variable) { definitions->key, text[n] };
-	}
-	variables[n] = (struct retro_variable) { NULL, NULL };
-	callback(RETRO_ENVIRONMENT_SET_VARIABLES, variables);
-}
-
-// Keys and values match saved configurations; labels are what the menu shows. showOptions hides
-// the options that do nothing for the game and Link Mode.
-static struct retro_core_option_v2_definition optionDefinitions[] = {
-	{ "armgba_skip_bios", "Skip BIOS Intro", NULL, "Start games without the BIOS's intro: the Game Boy Advance logo, or armGBA's splash.", NULL, "system",
-	  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
-	{ "armgba_bios", "BIOS", NULL,
-	  "Nintendo's gba_bios.bin from the system folder, or armGBA's open-source BIOS built into the core. Nintendo's falls back to armGBA's when the file isn't there. Applies on Restart.",
-	  NULL, "system",
-	  { { "nintendo", "Nintendo's (System Folder)" }, { "open-source", "armGBA's (Built In)" }, { NULL, NULL } }, "nintendo" },
-	{ "armgba_gb_model", "Game Boy Model", NULL,
-	  "The console Game Boy and Game Boy Color games run on. On the Game Boy Advance, L or R stretches the picture. Applies on Restart.",
-	  NULL, "system",
-	  { { "Auto", NULL }, { "Game Boy", NULL }, { "Game Boy Pocket", "Game Boy Pocket / Light" }, { "Game Boy Color", NULL }, { "Game Boy Advance", NULL }, { NULL, NULL } }, "Auto" },
-	{ "armgba_gb_boot_rom", "Boot ROM", NULL,
-	  "Start with the console's logo: Nintendo's boot ROM from the system folder (armGBA's when it isn't there), or armGBA's open-source one built into the core. Applies on Restart.",
-	  NULL, "system",
-	  { { "enabled", "Nintendo's (System Folder)" }, { "disabled", "Off" }, { "open-source", "armGBA's (Built In)" }, { NULL, NULL } }, "enabled" },
-	{ "armgba_threaded_video", "Threaded Video", NULL,
-	  "Draw the picture on a second CPU core, which helps fast-forward and runahead on slower devices. One Frame Late is faster still, but shows each frame a frame late.", NULL, "video",
-	  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { "one frame late", "One Frame Late" }, { NULL, NULL } }, "disabled" },
-	{ "armgba_color_correction", "Color Correction", NULL, "Darker, softer colors, as the Game Boy Advance's screen showed them. Costs a little speed.", NULL, "video",
-	  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
-	{ "armgba_gb_color_correction", "Color Correction", NULL,
-	  "Colors as the Game Boy Color's screen showed them. Not used for games running on an original Game Boy.", NULL, "video",
-	  { { "disabled", "Disabled" }, { "enabled", "Enabled" }, { NULL, NULL } }, "disabled" },
-	{ "armgba_gb_screen", "Game Boy Screen", NULL, "The colors original Game Boy games are shown in: plain grays, the first model's green, the Pocket's olive gray, or the Light's backlit teal.", NULL, "video",
-	  { { "grayscale", "Grayscale" }, { "original", "Game Boy (Green)" }, { "pocket", "Game Boy Pocket (Olive)" }, { "light", "Game Boy Light (Teal)" }, { NULL, NULL } }, "grayscale" },
-	{ "armgba_gb_advance_border", "Game Boy Advance Border", NULL,
-	  "On the Game Boy Advance model: Cropped shows only the game's picture, Shown the black around it as that console's screen has.", NULL, "video",
-	  { { "cropped", "Cropped" }, { "shown", "Shown" }, { NULL, NULL } }, "cropped" },
-	{ "armgba_gb_advance_panel", "Game Boy Advance Panel", NULL,
-	  "For Game Boy and Game Boy Color games on the Game Boy Advance model: whose screen is shown, the Advance's or the Color's, with its colors (with Color Correction on), LCD Grid and ghosting.",
-	  NULL, "video", { { "advance", "Game Boy Advance" }, { "color", "Game Boy Color" }, { NULL, NULL } }, "advance" },
-	{ "armgba_lcd_ghosting", "LCD Ghosting", NULL,
-	  "The console's slow screen, which some games flicker sprites on to make them see-through: each change fades in over a few frames, darkening faster than it lightens, the first Game Boy's slowest. Half fades twice as fast.",
-	  NULL, "video", { { "disabled", "Off" }, { "half", "Half" }, { "enabled", "Full" }, { NULL, NULL } }, "disabled" },
-	{ "armgba_lcd_interleave", "Interleaved Rows", NULL,
-	  "With LCD Ghosting on, the Game Boy Advance's screen: alternate rows are driven harder each frame, the others the next, so a picture that alternates each frame shows in stripes, as testers have seen on the console.",
-	  NULL, "video", { { "disabled", "Off" }, { "enabled", "On" }, { NULL, NULL } }, "disabled" },
-	{ "armgba_lcd_grid", "LCD Grid", NULL,
-	  "Draws the gaps between the console screen's pixels, as the real screen shows them, into a picture this many times larger: pick the largest that fits your screen, with integer scaling on. The armgba shader presets do the same on the GPU.",
-	  NULL, "video",
-	  { { "disabled", "Off" }, { "2", "2x" }, { "3", "3x" }, { "4", "4x" }, { "5", "5x" }, { "6", "6x" }, { "7", "7x" }, { "8", "8x" }, { NULL, NULL } },
-	  "disabled" },
-	{ "armgba_lcd_shadow", "Game Boy Pixel Shadow", NULL,
-	  "With LCD Grid on, the first Game Boy's and the Pocket's pixels cast a soft shadow on the screen behind them: where it falls.",
-	  NULL, "video",
-	  { { "off", "Off" }, { "up", "Up" }, { "up right", "Up Right" }, { "right", "Right" }, { "down right", "Down Right" }, { "down", "Down" },
-	    { "down left", "Down Left" }, { "left", "Left" }, { "up left", "Up Left" }, { NULL, NULL } },
-	  "down right" },
-	{ "armgba_lcd_threads", "LCD Effect Threads", NULL,
-	  "How many CPU cores share LCD Ghosting's and LCD Grid's work each frame. Auto leaves one core for the rest, two with Threaded Video; 1 keeps it on the emulator's own.",
-	  NULL, "video", { { "auto", "Auto" }, { "1", "1" }, { "2", "2" }, { "3", "3" }, { "4", "4" }, { NULL, NULL } }, "auto" },
-	{ "armgba_low_pass_filter", "Low-Pass Filter", NULL,
-	  "Softens the sound's high notes, as the consoles' small speakers did. Higher is softer.", NULL, "audio",
-	  { { "disabled", "Disabled" }, { "20", "20%" }, { "40", "40%" }, { "60", "60%" }, { "80", "80%" }, { NULL, NULL } }, "disabled" },
-	{ "armgba_turbo_period", "Turbo Button Period", NULL,
-	  "Frames per press while a turbo button is held: X and Y for A and B, and L3 and R3 for L and R on the Game Boy Advance.", NULL, "input",
-	  { { NULL, NULL } }, "4" },
-	{ "armgba_gb_tilt", "Tilt Sensor", NULL,
-	  "What tilts the cartridge in motion sensor games, such as Kirby Tilt 'n' Tumble and WarioWare: Twisted!.",
-	  NULL, "input",
-	  { { "left stick", "Left Stick" }, { "right stick", "Right Stick" }, { "d-pad", "D-Pad" }, { NULL, NULL } }, "left stick" },
-	{ "armgba_solar_sensor", "Solar Sensor", NULL,
-	  "The sunlight Boktai's sensor sees. Pushing the right stick up or down changes it while playing.", NULL, "input",
-	  { { "0", "0 (Dark)" }, { "1", NULL }, { "2", NULL }, { "3", NULL }, { "4", NULL }, { "5", NULL }, { "6", NULL }, { "7", NULL }, { "8", NULL }, { "9", NULL }, { "10", "10 (Full Sun)" }, { NULL, NULL } }, "5" },
-	{ "armgba_restart_buttons", "Restart Buttons", NULL,
-	  "Hold for a second to restart that player's console. On many handhelds Select + Start also quits RetroArch.",
-	  NULL, "input",
-	  { { "l r start", "L + R + Start" }, { "l r a b", "L + R + A + B" }, { "l3 r3", "L3 + R3" }, { "select start a b", "Select + Start + A + B" }, { "off", "Off" }, { NULL, NULL } },
-	  "l r start" },
-	{ "armgba_link_mode", "Link Mode", NULL,
-	  "Together: two to four consoles run on each device, for multiplayer on one device (a controller each) or smooth rollback netplay. Separate: two players in netplay, each device running only its own player's console and game. GameCube: this Game Boy Advance is plugged into a GameCube in Dolphin. Applies on Restart.",
-	  NULL, "link",
-	  { { "off", "Off" }, { "together", "Together (one device, or smooth netplay)" }, { "separate", "Separate (each device its own console)" }, { "gamecube", "GameCube (Dolphin)" }, { NULL, NULL } },
-	  "off" },
-	{ "armgba_link_players", "Players", NULL,
-	  "How many consoles run. Four Game Boy Advances need a fast device. Applies on Restart.",
-	  NULL, "link", { { "2", NULL }, { "3", NULL }, { "4", NULL }, { NULL, NULL } }, "2" },
-	{ "armgba_player2_game", "Player 2's Game", NULL,
-	  "The game on player 2's console, from the games beside player 1's, likeliest partners first. Players 3 and 4 play player 1's. No Cartridge leaves the other consoles empty, for games that send themselves over the cable. Applies on Restart.",
-	  NULL, "link", { { "same", "Same Game" }, { NULL, NULL } }, "same" },
-	{ "armgba_link_cartridge", "This Console's Cartridge", NULL,
-	  "Removed starts this console with no cartridge, waiting for a game the other player's console sends over the cable, as single-pak games do. The game's save is left as it is. Applies on Restart.",
-	  NULL, "link", { { "inserted", "Inserted" }, { "removed", "Removed" }, { NULL, NULL } }, "inserted" },
-	{ "armgba_link_port", "Link Port", NULL,
-	  "What is plugged in: the Link Cable, or the Wireless Adapter that Pokemon FireRed, LeafGreen and Emerald and other games use. Applies on Restart.",
-	  NULL, "link", { { "cable", "Link Cable" }, { "wireless", "Wireless Adapter (smoothest over Wi-Fi)" }, { NULL, NULL } }, "cable" },
-	{ "armgba_gamecube_address", "GameCube Address", NULL,
-	  "Where Dolphin runs, with a controller port set to GBA (TCP): found on this device or the local network, or this device only.",
-	  NULL, "link", { { "auto", "Find on the Network" }, { "127.0.0.1", "This Device" }, { NULL, NULL } }, "auto" },
-	{ "armgba_gb_link_port", "Link Port", NULL,
-	  "What joins the Game Boys: the Link Cable, for two, or the Four Player Adapter that Wario Blast, F-1 Race and other four-player games use. Three or four always use the adapter. Applies on Restart.",
-	  NULL, "link", { { "cable", "Link Cable" }, { "adapter", "Four Player Adapter" }, { NULL, NULL } }, "cable" },
-	{ "armgba_gb_link_timing", "Game Boy Link Timing", NULL,
-	  "Standard suits Wi-Fi and games that link in turns, such as trades and battles. Exact keeps both Game Boys in step, as a real cable does, for games that link all the time; it slows with a long ping. Game Boy Advances are always exact.",
-	  NULL, "link", { { "standard", "Standard (smooth on Wi-Fi)" }, { "exact", "Exact (if a game errors or desyncs)" }, { NULL, NULL } }, "standard" },
-	{ "armgba_link_screens", "Screens", NULL,
-	  "How the screens are arranged. R2 changes it while playing.", NULL, "link",
-	  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
-	  "side by side" },
-	{ "armgba_link_l2", "L2 Button", NULL,
-	  "What L2 does outside netplay: fast-forward while held, or go back to the previous screens. In netplay it always goes back.",
-	  NULL, "link", { { "fast forward", "Fast Forward" }, { "previous screens", "Previous Screens" }, { NULL, NULL } }, "fast forward" },
-	{ "armgba_switch_controller", "Switch Controller", NULL,
-	  "Pressed on controller 1, moves it to the next console, the other controllers moving along with it: one controller can play every console. Not in netplay.",
-	  NULL, "link", { { "l r a b", "L + R + A + B" }, { "start l2 r2", "Start + L2 + R2" }, { "off", "Off" }, { NULL, NULL } }, "l r a b" },
-	{ "armgba_back_up_save", "Back Up Save", NULL,
-	  "Copies a player's save, as it is now, to a file beside it named for the time: Game.20261018-153012.srm. The game carries on.",
-	  NULL, "saves", { { "off", "Off" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "off" },
-	{ "armgba_load_save", "Load Save", NULL,
-	  "Makes a backed-up save, or another player's current one, a player's save, and restarts their console. Load Into picks the player. The save it replaces is backed up first. Not during netplay.",
-	  NULL, "saves", { { "off", "Off" }, { NULL, NULL } }, "off" },
-	{ "armgba_load_into", "Load Into", NULL,
-	  "The player Load Save gives a save to: the one it belongs to, or the player named here.",
-	  NULL, "saves", { { "same", "Same Player" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "same" },
-	{ "armgba_send_save", "Send Save", NULL,
-	  "With Separate, while linked: sends the chosen save to the other player, who finds it under Received in Load Save. Linked devices also swap their current saves when they connect.",
-	  NULL, "saves", { { "off", "Off" }, { "1 now", "Player 1: Now" }, { NULL, NULL } }, "off" },
-	{ "armgba_new_save", "New Players' Saves", NULL,
-	  "What a player on player 1's game starts with when they have no save yet: a new save, or a copy of player 1's. Their saves are kept in the save folder's armGBA/Player 2 to 4 folders. Applies on Restart.",
-	  NULL, "saves", { { "new", "Create New Save" }, { "copy", "Copy Player 1's Save" }, { NULL, NULL } }, "new" },
-	{ "armgba_player1_saves", "Player 1's Save Folder", NULL,
-	  "Where player 1's save is kept: where RetroArch keeps saves, or in the save folder's armGBA/Player 1 folder, beside the other players' saves and player 1's backups. When it changes, the newer of the two is used. Applies when a game starts.",
-	  NULL, "saves", { { "retroarch", "RetroArch's Save Folder" }, { "armgba", "armGBA/Player 1 Folder" }, { NULL, NULL } }, "retroarch" },
-	{ "armgba_keep_saves", "Backups Kept", NULL,
-	  "How many backups each player keeps. When there are more, the oldest are deleted. A save the same as its newest backup isn't backed up again.",
-	  NULL, "saves", { { "5", "5" }, { "10", "10" }, { "20", "20" }, { "all", "All" }, { NULL, NULL } }, "10" },
-	{ "armgba_list_saves", "Backups Listed", NULL,
-	  "How many of each player's newest backups Load Save lists, up to 126 in all.",
-	  NULL, "saves", { { "10", "10" }, { "20", "20" }, { "40", "40" }, { "80", "80" }, { "126", "126" }, { NULL, NULL } }, "10" },
-	{ NULL, NULL, NULL, NULL, NULL, NULL, { { NULL, NULL } }, NULL },
-};
-static struct retro_core_option_v2_category optionCategories[] = {
-	{ "system", "System", "The console the game runs on and how it starts." },
-	{ "video", "Video", "Colors, the picture and how it is drawn." },
-	{ "audio", "Audio", "How the sound is filtered." },
-	{ "input", "Input", "Turbo, restart buttons and cartridge sensors." },
-	{ "link", "Link", "Playing together: the link cable, the Wireless Adapter and the Four Player Adapter." },
-	{ "saves", "Saves", "Backing up, loading and sending saves." },
-	{ NULL, NULL, NULL },
-};
-static struct retro_core_options_v2 optionsV2 = { optionCategories, optionDefinitions };
 
 void retro_set_environment(retro_environment_t callback) {
 	environment = callback;
@@ -515,29 +326,14 @@ void retro_set_environment(retro_environment_t callback) {
 	if (callback(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging)) {
 		logPrintf = logging.log;
 	}
-	fillTurboPeriods(optionDefinitions);
-	unsigned version = 0;
-	if (callback(RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION, &version) && version >= 2) {
-		callback(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &optionsV2);
-		coreOptions = &optionsV2;
-		for (struct retro_core_option_v2_definition* definition = optionDefinitions; definition->key; ++definition) {
-			if (!strcmp(definition->key, "armgba_player2_game")) {
-				secondOption = definition;
-			} else if (!strcmp(definition->key, "armgba_load_save")) {
-				loadChoices.option = definition;
-			} else if (!strcmp(definition->key, "armgba_send_save")) {
-				sendChoices.option = definition;
-			} else if (!strcmp(definition->key, "armgba_back_up_save")) {
-				backUpOption = definition;
-			} else if (!strcmp(definition->key, "armgba_load_into")) {
-				loadIntoOption = definition;
-			}
-		}
-		struct retro_core_options_update_display_callback display = { showOptions };
-		callback(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK, &display);
-		return;
+	// The options whose choices the core fills in, with a frontend that takes them.
+	if (optionsGive(callback)) {
+		secondOption = optionDefinition("armgba_player2_game");
+		loadChoices.option = optionDefinition("armgba_load_save");
+		sendChoices.option = optionDefinition("armgba_send_save");
+		backUpOption = optionDefinition("armgba_back_up_save");
+		loadIntoOption = optionDefinition("armgba_load_into");
 	}
-	setVariables(callback, optionDefinitions);
 }
 
 void retro_set_video_refresh(retro_video_refresh_t callback) {
@@ -680,32 +476,6 @@ static bool buildCorrectedColors(void) {
 		correctedColors[i] = out[0] << 11 | out[1] << 5 | out[2];
 	}
 	return true;
-}
-
-static const char* option(const char* key) {
-	struct retro_variable variable = { key, NULL };
-	return environment(RETRO_ENVIRONMENT_GET_VARIABLE, &variable) ? variable.value : NULL;
-}
-
-static bool optionIs(const char* key, const char* wanted) {
-	const char* const value = option(key);
-	return value && !strcmp(value, wanted);
-}
-
-struct Choice {
-	const char* value;
-	int number;
-};
-
-// The number for the option's value, or fallback if the value isn't one of the choices.
-static int optionChoice(const char* key, const struct Choice* choices, size_t count, int fallback) {
-	const char* const value = option(key);
-	for (size_t i = 0; value && i < count; ++i) {
-		if (!strcmp(value, choices[i].value)) {
-			return choices[i].number;
-		}
-	}
-	return fallback;
 }
 
 // Names each button for the loaded console, including the tilt sensor's controls.
@@ -885,93 +655,6 @@ static void readOptions(void) {
 	if (value) {
 		solarLevel = atoi(value);
 	}
-}
-
-// Hides the options that do nothing for the game and Link Mode. RetroArch calls it when an option
-// changes; returns whether that changed which are shown.
-static bool showOptions(void) {
-	bool const advance = gba && !gameBoy;
-	int const devices = advance ? gba->gpio.devices : 0;
-	bool const together = togetherWanted();
-	bool const linked = together || separateWanted();
-	const struct {
-		const char* key;
-		bool shown;
-	} options[] = {
-		{ "armgba_skip_bios", !gameBoy },
-		{ "armgba_bios", !gameBoy },
-		{ "armgba_threaded_video", !gameBoy },
-		{ "armgba_lcd_shadow", gameBoy },
-		{ "armgba_color_correction", !gameBoy },
-		{ "armgba_solar_sensor", !gameBoy && (!advance || devices & HW_LIGHT_SENSOR) },
-		{ "armgba_gb_tilt", (!gameBoy && !advance) || devices & (HW_TILT | HW_GYRO) || (gameBoy && tiltCartridge) },
-		{ "armgba_link_port", !gameBoy && linked },
-		{ "armgba_gb_model", !advance },
-		{ "armgba_gb_boot_rom", !advance },
-		{ "armgba_gb_color_correction", !advance },
-		{ "armgba_gb_screen", !advance },
-		{ "armgba_gb_advance_border", !advance },
-		{ "armgba_gb_advance_panel", !advance },
-		{ "armgba_lcd_interleave", advance || (gbOnAdvance && !gbColorPanel) },
-		{ "armgba_lcd_threads", ghosting || gridScale > 1 },
-		{ "armgba_gb_link_port", !advance && together },
-		{ "armgba_gb_link_timing", !advance && separateWanted() },
-		{ "armgba_link_players", together },
-		{ "armgba_link_screens", together },
-		{ "armgba_link_l2", together },
-		{ "armgba_player2_game", together },
-		{ "armgba_new_save", together },
-		{ "armgba_load_into", together },
-		{ "armgba_send_save", separateWanted() },
-		{ "armgba_link_cartridge", advance && (separateWanted() || gamecubeWanted()) },
-		{ "armgba_gamecube_address", advance && gamecubeWanted() },
-	};
-	enum { OPTIONS = COUNT(options) };
-	bool changed = false;
-	for (int i = 0; i < OPTIONS; ++i) {
-		if (!optionsShownSet || optionsShown[i] != options[i].shown) {
-			optionsShown[i] = options[i].shown;
-			struct retro_core_option_display display = { options[i].key, options[i].shown };
-			environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &display);
-			changed = true;
-		}
-	}
-	optionsShownSet = true;
-	return changed;
-}
-
-// Sets the options again after a list of choices changed. That shows every option, so they are
-// hidden again.
-static void setOptions(void) {
-	environment(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, coreOptions);
-	optionsShownSet = false;
-	showOptions();
-}
-
-static bool togetherWanted(void) {
-	const char* value = option("armgba_link_mode");
-	return value && !strcmp(value, "together");
-}
-
-static bool separateWanted(void) {
-	const char* value = option("armgba_link_mode");
-	return value && !strcmp(value, "separate");
-}
-
-static bool gamecubeWanted(void) {
-	const char* value = option("armgba_link_mode");
-	return value && !strcmp(value, "gamecube");
-}
-
-static int playersWanted(void) {
-	const char* value = option("armgba_link_players");
-	return clampInt(value ? atoi(value) : 2, 2, MAX_PLAYERS);
-}
-
-// Three or four Game Boys always use the Four Player Adapter.
-static bool adapterWanted(int count) {
-	const char* value = option("armgba_gb_link_port");
-	return count > 2 || (value && !strcmp(value, "adapter"));
 }
 
 // Player 2's Game.
@@ -2719,6 +2402,14 @@ static void readStretch(uint16_t keys) {
 		}
 	}
 	held = now;
+}
+
+bool advanceRunning(void) {
+	return gba && !gameBoy;
+}
+
+int advanceDevices(void) {
+	return advanceRunning() ? gba->gpio.devices : 0;
 }
 
 // Whether RetroArch is running this frame again, for a netplay rollback or runahead, rather than
