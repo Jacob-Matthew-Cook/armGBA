@@ -17,7 +17,7 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | --- | --- | --- |
 | L2, R2 (held) | Fast-forward, up to RetroArch's Maximum Run Speed | Same |
 | X, Y (held) | Turbo A, turbo B | Same |
-| L3, R3 (held) | Turbo L, turbo R | Click of the tilt stick: flick (motion sensor); R3 otherwise resets the contrast |
+| L3, R3 (held) | Turbo L, turbo R | Click of the tilt stick: flick (motion sensor); R3 otherwise sets the contrast back to 50% |
 | L, R | L, R | Stretch the picture (Game Boy Advance model) |
 | Tilt stick | Tilt and turn (motion sensor games) | Tilt (motion sensor games) |
 | Left stick, with Left Stick as D-Pad | D-pad, except while it tilts | Same |
@@ -46,7 +46,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Color Correction | Game Boy Advance | Off, On |
 | | Game Boy Color Correction | Game Boy | Off, On |
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
-| | Game Boy Contrast | Game Boy | -5 to +5, 0 by default (original Game Boy screens) |
+| | Game Boy Contrast | Game Boy | 0% to 100% of the wheel in tenths, 50% by default (original Game Boy screens) |
 | | Game Boy on Advance Border | Game Boy | Cropped, Shown (Game Boy Advance model) |
 | | Game Boy on Advance Screen | Game Boy | Game Boy Advance, Game Boy Color (Game Boy Advance model) |
 | Video: LCD Effects | LCD Ghosting | Both | Off, Half, Full |

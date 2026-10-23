@@ -1398,7 +1398,7 @@ static void readContrast(void) {
 	struct retro_variable variable = { "armgba_gb_contrast", value };
 	environment(RETRO_ENVIRONMENT_SET_VARIABLE, &variable);
 	char message[32];
-	snprintf(message, sizeof(message), gbContrast > 0 ? "Contrast +%d" : "Contrast %d", gbContrast);
+	snprintf(message, sizeof(message), "Contrast %d%%", (gbContrast + 5) * 10);
 	notify(message, 120);
 }
 
