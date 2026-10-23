@@ -77,12 +77,12 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Backups Kept | Both | 10, 5, 20, All |
 | | Backups Listed | Both | 10, 20, 40, 80, 126 |
 
-On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy Advance
-Border set to Shown, the black around it shows too, as on that console's screen. Game Boy Advance
-Panel shows its screen as the Advance's panel or the Color's: their colors with Color Correction on,
-their LCD Grid and their ghosting. Interleaved Rows, on the Advance's panel with LCD Ghosting on,
-drives alternate rows harder each frame, so pictures that alternate each frame show in stripes, as
-on the console.
+On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy on Advance
+Border set to Shown, the black around it shows too, as on that console's screen. Game Boy on Advance
+Screen shows it on the Advance's panel or the Color's: their colors with Color Correction on, their
+LCD Grid and their ghosting. Interleaved Rows, on the Advance's panel with LCD Ghosting on, drives
+alternate rows harder each frame, so pictures that alternate each frame show in stripes, as on the
+console.
 
 LCD Grid draws the gaps between the console screen's pixels into a picture as many times larger,
 with the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen,
@@ -134,11 +134,11 @@ then named `armgba_libretro_android.so`:
 `appimage/build.sh`, then `appimage/package.sh`, make AppImages for x86-64 and 64-bit ARM in a
 Debian 11 container (Docker), with SDL2 built in; they need only glibc 2.29 or later.
 
-Run `armgba game.gba` (or a `.gb`, `.gbc` or `.zip`), or drop a game on the window. Esc, a
+Run `armgba game.gba` (or a `.gb`, `.gbc`, `.zip` or `.7z`), or drop a game on the window. Esc, a
 controller's Guide button or a right-click opens the menu, which the keyboard, a controller or the
-mouse moves through. Arrow keys, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select, C and
-V turbo B and A; controllers work too, one per player. Tab fast-forwards while held, R rewinds, P
-pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its slot, F12 takes a
+mouse moves through. Arrow keys, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select, C
+and V turbo B and A; controllers work too, one per player. Tab fast-forwards while held, R rewinds,
+P pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its slot, F12 takes a
 screenshot, F9 starts and stops recording, F11 goes full screen. The menu changes all of these.
 
 The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyboard; left and right
