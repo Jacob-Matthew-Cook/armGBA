@@ -142,16 +142,16 @@ screenshot, F9 starts and stops recording, F11 goes full screen. The menu change
 
 The menu also has recent games, Emulator Options (the core's) and General Settings, cheats
 (RetroArch's `.cht` files can be added), ten state slots with Undo Load State, the picture (integer
-scaling, Sharp, Smooth, the LCD grid drawn on the GPU or by the core on the CPU, vsync, and the
-core's screen options), the sound's volume and latency, rewind, run-ahead, netplay,
-RetroAchievements, and the menus' own look: accent colour, size, and how dark the game is behind
-them. The line under the menu says what the selected item does. With a controller, the buttons bound
-to A and B choose and go back, and L and R jump by letter in the game list; on the keyboard, typing
-a name's start finds it. Restart, Close Game, Quit and Reset Controls and Hotkeys ask for a second
-press. Netplay is armgba to armgba: Separate carries the link cable between two devices each running
-its own game; Together runs every player's console on every device, kept in step with rollback.
-`--host`, `--host-together` and `--connect ADDRESS` start it from the command line. Achievements
-need the system's libcurl, and recording its ffmpeg.
+scaling, vsync, and the core's screen options with its CPU LCD grid), a Shaders page for what the
+GPU draws (Sharp, Smooth, the GPU LCD grid and the Game Boy pixel shadow), the sound's volume and
+latency, rewind, run-ahead, netplay, RetroAchievements, and the menus' own look: accent colour,
+size, and how dark the game is behind them. The line under the menu says what the selected item
+does. With a controller, the buttons bound to A and B choose and go back, and L and R jump by letter
+in the game list; on the keyboard, typing a name's start finds it. Restart, Close Game, Quit and
+Reset Controls and Hotkeys ask for a second press. Netplay is armgba to armgba: Separate carries the
+link cable between two devices each running its own game; Together runs every player's console on
+every device, kept in step with rollback. `--host`, `--host-together` and `--connect ADDRESS` start
+it from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
 `~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`; BIOS and boot
