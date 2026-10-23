@@ -53,13 +53,11 @@ static inline float libretroLcdReach(int way) {
 	return libretroLcdWays[way][0] && libretroLcdWays[way][1] ? 1.0f : 1.4f;
 }
 
-// How strongly a grid drawn at any size shows when a source pixel is pitch output pixels wide: half
-// the photos' darkness from 5 on, as the full darkness reads too heavy on a lit screen, rising
-// smoothly from none at 1. Below about 4 a gap is under a pixel wide and lands unevenly, as lines one
-// and two pixels apart; fainter, it reads as the screen's texture rather than as lines.
+// How strongly a grid drawn at any size shows when a source pixel is pitch output pixels wide: a
+// tenth of the photos' darkness for each, all of it from 10 on. Small, a gap is under a pixel wide
+// and lands unevenly; fainter, it reads as the screen's texture rather than as lines.
 static inline float libretroLcdFade(float pitch) {
-	float const t = fminf(fmaxf((pitch - 1) / 4, 0), 1);
-	return 0.5f * t * t * (3 - 2 * t);
+	return fminf(fmaxf(pitch * 0.1f, 0), 1);
 }
 
 // How much of output pixel at, from 0 to 1, falls in the gaps along one direction: each gap is gap

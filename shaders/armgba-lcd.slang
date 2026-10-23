@@ -63,12 +63,11 @@ float gapCoverage(float p, float size) {
 	return clamp((min(edge + size * 0.5, halfGap) - max(edge - size * 0.5, -halfGap)) / size, 0.0, 1.0);
 }
 
-// How strongly the grid shows, a dot being pitch output pixels wide, as lcd.h's libretroLcdFade: half
-// the photos' darkness from 5 on, rising smoothly from none at 1. A gap under a pixel wide lands
+// How strongly the grid shows, a dot being pitch output pixels wide, as lcd.h's libretroLcdFade: a
+// tenth of the photos' darkness for each, all of it from 10 on. A gap under a pixel wide lands
 // unevenly; fainter, it reads as the screen's texture rather than as lines.
 float gridFade(float pitch) {
-	float t = clamp((pitch - 1.0) / 4.0, 0.0, 1.0);
-	return 0.5 * t * t * (3.0 - 2.0 * t);
+	return clamp(pitch * 0.1, 0.0, 1.0);
 }
 
 float level(vec3 c) {
