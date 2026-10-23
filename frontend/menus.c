@@ -495,14 +495,46 @@ static void optionChange(int index, int delta) {
 	optionsWrite();
 }
 
-// The visible core options in category, or those in none when category is NULL.
+// The header each option is shown under, in a category long enough to need them; NULL for none.
+static const char* optionGroup(const char* key) {
+	static const struct {
+		const char* key;
+		const char* group;
+	} groups[] = {
+		{ "armgba_link_players", "Players" },
+		{ "armgba_player2_game", "Players" },
+		{ "armgba_link_cartridge", "Connection" },
+		{ "armgba_link_port", "Connection" },
+		{ "armgba_gamecube_address", "Connection" },
+		{ "armgba_gb_link_port", "Connection" },
+		{ "armgba_gb_link_timing", "Connection" },
+		{ "armgba_link_screens", "Screens and Controls" },
+		{ "armgba_link_l2", "Screens and Controls" },
+		{ "armgba_switch_controller", "Screens and Controls" },
+	};
+	for (size_t i = 0; i < sizeof(groups) / sizeof(*groups); ++i) {
+		if (!strcmp(groups[i].key, key)) {
+			return groups[i].group;
+		}
+	}
+	return NULL;
+}
+
+// The visible core options in category, or those in none when category is NULL, each group under
+// its header.
 static void addOptions(const char* category) {
+	const char* group = NULL;
 	for (int i = 0; i < optionCount; ++i) {
 		struct Option* o = &options[i];
 		bool const here = category ? o->category && !strcmp(o->category, category) : !o->category;
 		if (!here || !o->visible) {
 			continue;
 		}
+		const char* const its = optionGroup(o->key);
+		if (its && (!group || strcmp(its, group))) {
+			addHeader(its);
+		}
+		group = its;
 		const char* label = o->value;
 		for (int v = 0; v < o->valueCount; ++v) {
 			if (!strcmp(o->values[v], o->value)) {
