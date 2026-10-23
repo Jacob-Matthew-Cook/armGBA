@@ -551,10 +551,10 @@ static void makeOverlay(SDL_Rect to) {
 	float const pitchX = (float) w / app.gameWidth, pitchY = (float) h / app.gameHeight;
 	float const fade = libretroLcdFade(fminf(pitchX, pitchY));
 	for (int x = 0; x < w; ++x) {
-		across[x] = (int) lroundf(libretroLcdGapCoverage(x, pitchX, look->share * pitchX) * look->across * fade * 255);
+		across[x] = (int) lroundf(libretroLcdGapSpread(x, pitchX, look->share * pitchX) * look->across * fade * 255);
 	}
 	for (int y = 0; y < h; ++y) {
-		int const down = (int) lroundf(libretroLcdGapCoverage(y, pitchY, look->share * pitchY) * look->down * fade * 255);
+		int const down = (int) lroundf(libretroLcdGapSpread(y, pitchY, look->share * pitchY) * look->down * fade * 255);
 		uint32_t* const row = pixels + (size_t) y * w;
 		for (int x = 0; x < w; ++x) {
 			row[x] = (uint32_t) (across[x] + down - (across[x] * down + 127) / 255) << 24 | (gap & 0xFFFFFF);

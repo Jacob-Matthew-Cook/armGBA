@@ -71,4 +71,21 @@ static inline float libretroLcdGapCoverage(int at, float pitch, float gap) {
 	return fminf(covered, 1);
 }
 
+// The share of a tent two output pixels wide, centered on 0, that lies below u output pixels.
+static inline float libretroLcdTentBelow(float u) {
+	u = fminf(fmaxf(u, -1), 1);
+	return u < 0 ? (u + 1) * (u + 1) / 2 : 1 - (1 - u) * (1 - u) / 2;
+}
+
+// libretroLcdGapCoverage seen through a tent two output pixels wide: each gap spreads over the same
+// two pixels wherever it lands, so lines under a pixel wide stay even instead of some looking darker.
+static inline float libretroLcdGapSpread(int at, float pitch, float gap) {
+	float const center = at + 0.5f;
+	float covered = 0;
+	for (int edge = (int) floorf((center - 1 - gap / 2) / pitch); edge * pitch - gap / 2 < center + 1; ++edge) {
+		covered += libretroLcdTentBelow(edge * pitch + gap / 2 - center) - libretroLcdTentBelow(edge * pitch - gap / 2 - center);
+	}
+	return fminf(covered, 1);
+}
+
 #endif
