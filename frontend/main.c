@@ -506,6 +506,13 @@ bool loadGame(const char* path) {
 
 // The picture.
 
+// The core's LCD Grid (CPU): how many times larger it makes the picture, 1 when it's off.
+static int coreGridScale(void) {
+	struct Option* const o = optionFind("armgba_lcd_grid");
+	int const scale = o ? atoi(o->value) : 0;
+	return scale > 1 ? scale : 1;
+}
+
 // A pattern over the picture. Scanlines: a CRT's dark line under each row, a source pixel to each 3x3
 // of it. LCD Grid: the gaps between the console screen's pixels, drawn at the size the picture is
 // shown, a gap that falls between output pixels shading each by how much of it is in the gap. The
@@ -649,13 +656,15 @@ static void present(void) {
 		to.x = (width - to.w) / 2;
 		to.y = (height - to.h) / 2;
 		SDL_RenderCopy(app.renderer, app.game, NULL, &to);
+		// With the core's LCD Grid (CPU) on, the grid is in the picture already.
+		bool const gpuGrid = coreGridScale() == 1;
 		makeOverlay(to);
-		if (overlay) {
+		if (overlay && (gpuGrid || settings.filter != FILTER_LCD)) {
 			SDL_RenderCopy(app.renderer, overlay, NULL, &to);
 		}
 		uint32_t lit = 0;
 		enum LibretroLcd const lcd = libretroLcd(&lit);
-		if (settings.filter == FILTER_LCD && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 &&
+		if (gpuGrid && settings.filter == FILTER_LCD && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 &&
 		    (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
 			drawShadow(to, lit);
 		}
@@ -695,8 +704,10 @@ void recreateRenderer(void) {
 void applyWindowSize(void) {
 	SDL_SetWindowFullscreen(app.window, settings.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 	if (!settings.fullscreen) {
-		int const w = app.loaded && app.geometry.base_width ? (int) app.geometry.base_width : 240;
-		int const h = app.loaded && app.geometry.base_height ? (int) app.geometry.base_height : 160;
+		// The console's screen times the window size, whatever the core's LCD Grid made the picture.
+		int const grid = coreGridScale();
+		int const w = app.loaded && app.geometry.base_width ? (int) app.geometry.base_width / grid : 240;
+		int const h = app.loaded && app.geometry.base_height ? (int) app.geometry.base_height / grid : 160;
 		SDL_SetWindowSize(app.window, w * settings.scale, h * settings.scale);
 	}
 }

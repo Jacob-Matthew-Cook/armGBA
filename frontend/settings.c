@@ -292,9 +292,9 @@ void optionSet(struct Option* option, const char* value) {
 	}
 }
 
-// The core's LCD Grid, which this frontend draws itself on the GPU: kept off and out of the menus.
-static bool drawnHere(const char* key) {
-	return !strcmp(key, "armgba_lcd_grid") || !strcmp(key, "armgba_lcd_shadow");
+// The core's LCD Grid draws on the CPU, beside this frontend's on the GPU: named so in the menus.
+static const char* shownName(const char* key, const char* name) {
+	return !strcmp(key, "armgba_lcd_grid") ? "LCD Grid (CPU)" : !strcmp(key, "armgba_lcd_shadow") ? "Game Boy Pixel Shadow (CPU)" : name;
 }
 
 // The core's options and their categories, as it defines them, each taking its value from armgba.cfg.
@@ -317,7 +317,7 @@ void optionsDefine(const struct retro_core_options_v2* definitions) {
 		}
 		struct Option* o = &options[optionCount++];
 		o->key = strdup(d->key);
-		o->description = copyString(d->desc);
+		o->description = copyString(shownName(d->key, d->desc));
 		o->info = copyString(d->info);
 		o->category = copyString(d->category_key);
 		o->visible = true;
@@ -338,11 +338,6 @@ void optionsDefine(const struct retro_core_options_v2* definitions) {
 				o->value = strdup(savedValues[i]);
 			}
 		}
-		if (drawnHere(o->key)) {
-			free(o->value);
-			o->value = strdup(o->values[0]);
-			o->visible = false;
-		}
 	}
 }
 
@@ -350,7 +345,7 @@ void optionsDefine(const struct retro_core_options_v2* definitions) {
 void optionsDisplay(const struct retro_core_option_display* display) {
 	struct Option* o = display && display->key ? optionFind(display->key) : NULL;
 	if (o) {
-		o->visible = display->visible && !drawnHere(o->key);
+		o->visible = display->visible;
 	}
 }
 
