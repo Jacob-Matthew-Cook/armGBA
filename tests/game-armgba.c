@@ -6,7 +6,7 @@
 #include "game.h"
 
 #include "gba.h"
-#include "jit.h"
+#include "cpu/jit.h"
 #include "mgba-state.h"
 
 #include <stdio.h>

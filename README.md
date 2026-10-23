@@ -346,7 +346,7 @@ slower chips.
 **Recompiler with an exact fallback.** ARM and Thumb code is compiled to AArch64, 32-bit ARM or
 x86-64 and counts its own cycles. When an event (timer, video line, DMA, IRQ) falls inside a block,
 a copy of the block with a check before each instruction takes over. An event the instruction cannot
-observe runs after it. For one it can observe, a cycle-exact stepping CPU (`src/step.c`) runs that
+observe runs after it. For one it can observe, a cycle-exact stepping CPU (`src/cpu/step.c`) runs that
 single instruction.
 
 **Fewer events.** On a small core an event costs far more than its own work, because handling it

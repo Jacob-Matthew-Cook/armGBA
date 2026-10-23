@@ -6,7 +6,7 @@
 #include "mgba-state.h"
 
 #include "gba.h"
-#include "jit.h"
+#include "cpu/jit.h"
 
 #include <stdio.h>
 #include <stdlib.h>

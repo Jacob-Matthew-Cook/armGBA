@@ -6,7 +6,7 @@
 #ifndef ARMGBA_GBA_H
 #define ARMGBA_GBA_H
 
-#include "render.h"
+#include "video/render.h"
 
 #include <stdbool.h>
 #include <stddef.h>
