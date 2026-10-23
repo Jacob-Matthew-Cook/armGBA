@@ -10,7 +10,9 @@
 // outside the core.
 
 #include "gb.h"
+#include "gba.h"
 #include "libretro.h"
+#include "second.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -24,6 +26,13 @@ static inline int clampInt(int value, int low, int high) {
 
 enum {
 	MAX_PLAYERS = 4,
+	// Buffer sizes: a path RetroArch gives, a save's file made from one, and a backup's, which adds
+	// a stamp.
+	PATH_SIZE = 4096,
+	SAVE_PATH_SIZE = 8192,
+	BACKUP_PATH_SIZE = SAVE_PATH_SIZE + SECOND_STAMP,
+	// Player 2's Game's choices.
+	SECOND_CHOICES = 125,
 	// Turbo Button Period's range, in frames.
 	TURBO_FEWEST = 4,
 	TURBO_MOST = 120,
@@ -32,9 +41,11 @@ enum {
 // libretro.c: the frontend's calls back, and the game and consoles running.
 extern retro_environment_t environment;
 extern retro_video_refresh_t videoRefresh;
-// Whether a Game Boy Advance game runs, and its cartridge's hardware (gba.h's HW_ bits).
-bool advanceRunning(void);
-int advanceDevices(void);
+// Player 1's Game Boy Advance, or NULL with a Game Boy game; each player's, when they run here.
+extern struct GBA* gba;
+extern struct GBA* gbas[MAX_PLAYERS];
+extern int playersHere;
+extern bool skipBios;
 extern bool gameBoy;
 extern enum LibretroGbModel gbModel;
 // The original Game Boy's screen colors: 0 plain grays, 1 the Pocket's, 2 the first model's, 3 the
@@ -53,6 +64,65 @@ extern int threadedVideo;
 // Whether RetroArch is running this frame again, for a netplay rollback or runahead, rather than
 // for the first time.
 bool rerunning(void);
+
+// The games: player 1's file, player 2's (empty for player 1's) and players 3 and 4's from a pair
+// file; whether the others have no cartridge; the pair file; Player 2's Game's choices.
+extern char firstPath[PATH_SIZE];
+extern char secondPath[PATH_SIZE];
+extern char otherPaths[MAX_PLAYERS][PATH_SIZE];
+extern bool othersBare;
+extern bool pairFile;
+extern char pairPath[PATH_SIZE];
+extern struct SecondGame secondGames[SECOND_CHOICES];
+extern size_t secondCount;
+// The game player runs, as a path.
+const char* gameOf(int player);
+// Restarts player's console, as its power switch would.
+void restartConsole(int player);
+// Players whose save starts as a copy of player 1's, made before the first frame.
+extern uint8_t copySaves;
+// Whether rollback netplay has been seen this session, and whether this device joined another's.
+extern bool netplaySeen;
+extern bool netplayJoined;
+// A Game Boy Advance's save memory size, as large as the largest until the game shows its type.
+size_t saveSize(struct GBA* machine);
+// A message on screen for frames frames; showMessage logs it as an error too.
+void notify(const char* message, unsigned frames);
+void showMessage(const char* message);
+
+// saves.c: each player's save memory and files, the saves the core keeps itself (the other
+// players', and player 1's with a pair file or Player 1's Save Folder), and the Saves options.
+void* saveMemory(int player, size_t* size);
+// Reads a file into memory, as much as fits; returns whether there was a file.
+bool readFileInto(const char* path, void* data, size_t size);
+// Where RetroArch keeps player 1's save and clock, and whether the core keeps player 1's instead.
+void retroArchFiles(char file[SAVE_PATH_SIZE], char rtcFile[SAVE_PATH_SIZE]);
+bool retroArchSaves(void);
+// Reading saves as games start: player 1's, the newer of RetroArch's and the core's; a player's of
+// a game of their own; the other players'. readNewerPlayerOne reads player 1's again each frame
+// RetroArch wrote it.
+void readPlayerOneSave(void);
+void readNewerPlayerOne(void);
+bool readSave(int player, const char* game);
+void readOtherSaves(void);
+void copyFirstSave(void);
+// Writes the kept saves that changed (in netplay only as the game closes, on the host); forgets
+// them; writeKeptSaves checks every few seconds.
+void writeSaves(bool closing);
+void forgetSaves(void);
+void forgetOtherSaves(void);
+void writeKeptSaves(void);
+// The Saves options: found as the frontend sets up, their choices filled and offered, and their
+// actions, done once when chosen (or only reset when act is false, as a game starts).
+void findSaveOptions(void);
+void fillSaveChoices(void);
+void offerSaveChoices(void);
+void readSaveActions(bool act);
+void saveOptionsChanged(void);
+// Netplay's saves: a joined session's kept for Load Save, and a Separate link's sent and received.
+void keepSession(void);
+void sendSaveOnPairing(void);
+void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);
 
 // options.c: the options given to the frontend (NULL to an older frontend, which has plain
 // variables), and their values. optionChoice gives the number of the option's value among
