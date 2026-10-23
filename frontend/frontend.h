@@ -55,7 +55,6 @@ enum Action {
 enum Filter {
 	FILTER_SHARP,
 	FILTER_SMOOTH,
-	FILTER_LCD,
 	FILTERS,
 };
 
@@ -76,7 +75,11 @@ struct Settings {
 	bool stretch;
 	bool vsync;
 	int filter;
-	// Where the LCD Grid's Game Boy pixels cast their shadow: 0 nowhere, then up and on clockwise.
+	// LCD Rendering: the LCD grid and Game Boy pixel shadow drawn here on the GPU, or by the core on the
+	// CPU; never both.
+	bool lcdOnGpu;
+	bool gpuGrid;
+	// Where the GPU grid's Game Boy pixels cast their shadow: 0 nowhere, then up and on clockwise.
 	int shadow;
 	bool showFps;
 	int volume;

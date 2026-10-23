@@ -500,7 +500,9 @@ static void addOptions(const char* category) {
 	for (int i = 0; i < optionCount; ++i) {
 		struct Option* o = &options[i];
 		bool const here = category ? o->category && !strcmp(o->category, category) : !o->category;
-		if (!here || !o->visible) {
+		// The core's LCD grid and pixel shadow show only with LCD Rendering on the CPU.
+		bool const cpuLcd = !strcmp(o->key, "armgba_lcd_grid") || !strcmp(o->key, "armgba_lcd_shadow");
+		if (!here || !o->visible || (cpuLcd && settings.lcdOnGpu)) {
 			continue;
 		}
 		const char* label = o->value;
@@ -596,6 +598,8 @@ enum {
 	SET_INTEGER,
 	SET_STRETCH,
 	SET_FILTER,
+	SET_LCD_RENDERING,
+	SET_GPU_GRID,
 	SET_SHADOW,
 	SET_VSYNC,
 	SET_FPS,
@@ -633,6 +637,14 @@ static void changeSetting(int which, int delta) {
 		break;
 	case SET_FILTER:
 		settings.filter = wrap(settings.filter, d, FILTERS);
+		break;
+	// The core reads its grid again, now off or back at its size.
+	case SET_LCD_RENDERING:
+		settings.lcdOnGpu = !settings.lcdOnGpu;
+		optionsChanged = true;
+		break;
+	case SET_GPU_GRID:
+		settings.gpuGrid = !settings.gpuGrid;
 		break;
 	// Off, then the eight directions.
 	case SET_SHADOW:
@@ -698,7 +710,15 @@ static void changeSetting(int which, int delta) {
 	settingsWrite();
 }
 
-// General Settings > Video: the window, and the core's picture options, which it draws on the CPU.
+// LCD Rendering, the same row on Video and Shaders: which of them draws the LCD grid and pixel shadow.
+static void addLcdRendering(void) {
+	addValue("LCD Rendering", settings.lcdOnGpu ? "GPU" : "CPU", changeSetting, SET_LCD_RENDERING);
+	helpFor("Who draws the LCD grid and the Game Boy pixel shadow: CPU, the emulator (set in Video), or GPU, at the size the "
+	        "picture is shown (set in Shaders). Only one is used.");
+}
+
+// General Settings > Video: the window, and the core's picture options, which it draws on the CPU; its
+// LCD grid and pixel shadow only with LCD Rendering on the CPU.
 static void videoMenu(void) {
 	char text[32];
 	addHeader("Window");
@@ -717,22 +737,29 @@ static void videoMenu(void) {
 	helpFor("Shows each frame as the display refreshes, so the picture doesn't tear.");
 	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
 	addHeader("Picture");
+	addLcdRendering();
 	addOptions("video");
 }
 
-// General Settings > Shaders: what the GPU does to the picture as it scales it. Pixel
-// Shadow shows only with LCD Grid on the first Game Boy's and the Pocket's screens, or before a game
-// is loaded.
+// General Settings > Shaders: what the GPU does to the picture as it scales it; its LCD grid and pixel
+// shadow only with LCD Rendering on the GPU, the shadow only on the first Game Boy's and the Pocket's
+// screens, or before a game is loaded.
 static void shadersMenu(void) {
-	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid (GPU)" };
+	static const char* const filters[FILTERS] = { "Sharp", "Smooth" };
 	addValue("Filter", filters[settings.filter], changeSetting, SET_FILTER);
-	helpFor("Sharp keeps pixels square; Smooth blends them; LCD Grid (GPU) draws the screen's gaps at any size, fainter the "
-	        "smaller it is. On a small screen, LCD Grid (CPU) at 2x with Integer Scaling looks cleanest.");
+	helpFor("Sharp keeps pixels square; Smooth blends them.");
+	addLcdRendering();
+	if (!settings.lcdOnGpu) {
+		return;
+	}
+	addValue("LCD Grid", onOff(settings.gpuGrid), changeSetting, SET_GPU_GRID);
+	helpFor("Draws the gaps between the console screen's pixels at any size, fainter the smaller it is. On a small screen, "
+	        "the CPU's at 2x with Integer Scaling looks cleanest.");
 	uint32_t gap;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
-	if (settings.filter == FILTER_LCD && (!app.loaded || lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
+	if (settings.gpuGrid && (!app.loaded || lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
 		static const char* const shadows[9] = { "Off", "Up", "Up Right", "Right", "Down Right", "Down", "Down Left", "Left", "Up Left" };
-		addValue("Game Boy Pixel Shadow (GPU)", shadows[settings.shadow], changeSetting, SET_SHADOW);
+		addValue("Game Boy Pixel Shadow", shadows[settings.shadow], changeSetting, SET_SHADOW);
 		helpFor("On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls.");
 	}
 }
@@ -852,9 +879,9 @@ static void openSettingsPage(int which, int delta) {
 
 static void settingsMenu(void) {
 	addItem("Video...", openSettingsPage, 0);
-	helpFor("The window, and the console screen's colours, ghosting and CPU LCD grid.");
+	helpFor("The window, and the console screen's colours, ghosting and the CPU's LCD grid.");
 	addItem("Shaders...", openSettingsPage, 1);
-	helpFor("The filter, the GPU LCD grid and the Game Boy pixel shadow.");
+	helpFor("The filter, and the GPU's LCD grid and Game Boy pixel shadow.");
 	addItem("Audio...", openSettingsPage, 2);
 	addItem("Controls...", openSettingsPage, 3);
 	helpFor("Buttons and hotkeys, for controllers and the keyboard.");
