@@ -63,9 +63,9 @@ enum { TAB_GENERAL, TAB_GAME, TAB_CORE, TAB_EXTRAS, TABS };
 extern const char* const tabNames[TABS];
 extern void (*const tabBuilds[TABS])(void);
 void showTab(int which, int way);
-// The on-screen keyboard, to type text, starting from text: done gets it if it's accepted; hidden
-// shows stars for a password.
-void openEntry(const char* title, const char* text, bool hidden, void (*done)(const char* text));
+// The on-screen keyboard, to type text, starting from text: done gets it if it's accepted; hint,
+// under the text, says what goes there (or NULL); hidden shows stars for a password.
+void openEntry(const char* title, const char* hint, const char* text, bool hidden, void (*done)(const char* text));
 // Headers and rows that only show something can't be selected.
 bool selectable(int i);
 // value + delta, wrapped round into 0 to count - 1; and words for values.

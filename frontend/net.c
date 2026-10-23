@@ -775,7 +775,7 @@ bool netHost(bool together) {
 bool netJoin(const char* address) {
 	netStop();
 	if (!app.loaded) {
-		osd("Load your game first");
+		osd("Netplay: load your game first");
 		return false;
 	}
 	// name, name:port, [IPv6 address]:port, or an IPv6 address alone.
