@@ -698,10 +698,8 @@ static void changeSetting(int which, int delta) {
 	settingsWrite();
 }
 
-// General Settings > Video. Pixel Shadow shows only with LCD Grid on the first Game Boy's and the Pocket's
-// screens, or before a game is loaded.
+// General Settings > Video: the window, and the core's picture options, which it draws on the CPU.
 static void videoMenu(void) {
-	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid (GPU)" };
 	char text[32];
 	addHeader("Window");
 	if (!settings.fullscreen) {
@@ -719,6 +717,14 @@ static void videoMenu(void) {
 	helpFor("Shows each frame as the display refreshes, so the picture doesn't tear.");
 	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
 	addHeader("Picture");
+	addOptions("video");
+}
+
+// General Settings > Shaders: what the GPU does to the picture as it scales it. Pixel
+// Shadow shows only with LCD Grid on the first Game Boy's and the Pocket's screens, or before a game
+// is loaded.
+static void shadersMenu(void) {
+	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid (GPU)" };
 	addValue("Filter", filters[settings.filter], changeSetting, SET_FILTER);
 	helpFor("Sharp keeps pixels square; Smooth blends them; LCD Grid (GPU) draws the screen's gaps at any size, fainter the "
 	        "smaller it is. On a small screen, LCD Grid (CPU) at 2x with Integer Scaling looks cleanest.");
@@ -729,7 +735,6 @@ static void videoMenu(void) {
 		addValue("Game Boy Pixel Shadow (GPU)", shadows[settings.shadow], changeSetting, SET_SHADOW);
 		helpFor("On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls.");
 	}
-	addOptions("video");
 }
 
 static void audioMenu(void) {
@@ -838,8 +843,8 @@ static void appearanceMenu(void) {
 }
 
 static void openSettingsPage(int which, int delta) {
-	static void (*const pages[])(void) = { videoMenu, audioMenu, controlsMenu, gameplayMenu, appearanceMenu };
-	static const char* const titles[] = { "Video", "Audio", "Controls", "Rewind, Run-Ahead and States", "Appearance" };
+	static void (*const pages[])(void) = { videoMenu, shadersMenu, audioMenu, controlsMenu, gameplayMenu, appearanceMenu };
+	static const char* const titles[] = { "Video", "Shaders", "Audio", "Controls", "Rewind, Run-Ahead and States", "Appearance" };
 	if (!delta) {
 		pushMenu(pages[which], titles[which]);
 	}
@@ -847,12 +852,14 @@ static void openSettingsPage(int which, int delta) {
 
 static void settingsMenu(void) {
 	addItem("Video...", openSettingsPage, 0);
-	helpFor("The window, the filter and LCD grid, and the console screen's colours and ghosting.");
-	addItem("Audio...", openSettingsPage, 1);
-	addItem("Controls...", openSettingsPage, 2);
+	helpFor("The window, and the console screen's colours, ghosting and CPU LCD grid.");
+	addItem("Shaders...", openSettingsPage, 1);
+	helpFor("The filter, the GPU LCD grid and the Game Boy pixel shadow.");
+	addItem("Audio...", openSettingsPage, 2);
+	addItem("Controls...", openSettingsPage, 3);
 	helpFor("Buttons and hotkeys, for controllers and the keyboard.");
-	addItem("Rewind, Run-Ahead and States...", openSettingsPage, 3);
-	addItem("Appearance...", openSettingsPage, 4);
+	addItem("Rewind, Run-Ahead and States...", openSettingsPage, 4);
+	addItem("Appearance...", openSettingsPage, 5);
 	helpFor("The menus' colour and size, and how dark the game is behind them.");
 }
 
