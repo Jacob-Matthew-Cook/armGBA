@@ -62,9 +62,9 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | Link: Connection | This Console's Cartridge (applies on restart) | Game Boy Advance | Inserted, Removed (Separate, GameCube) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
-| | GameCube Address | Game Boy Advance | Find on the Network, This Device (GameCube) |
 | | Game Boy Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
 | | Game Boy Link Timing | Game Boy | Standard, Exact (Separate) |
+| | GameCube Address | Game Boy Advance | Find on the Network, This Device (GameCube) |
 | Link: Screens and Controls | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
 | | L2 Button | Both | Fast-Forward, Previous Screens (Together) |
 | | Switch Controller | Both | L + R + A + B, Start + L2 + R2, Off |
