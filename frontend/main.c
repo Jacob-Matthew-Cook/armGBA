@@ -197,11 +197,13 @@ static bool holdsBios(const char* folder) {
 }
 
 // One of the Folders: armGBA's own (setting "" or "armgba"), RetroArch's ("retroarch", when it has
-// one), or the folder typed in.
-static void chooseFolder(char out[PATH_SIZE], const char* setting, const char* own, const char* retroarchOwn) {
+// one), or the folder typed in; made if it's written to and isn't there.
+static void chooseFolder(char out[PATH_SIZE], const char* setting, const char* own, const char* retroarchOwn, bool written) {
 	bool const theirs = !strcmp(setting, "retroarch") && retroarchOwn[0];
 	snprintf(out, PATH_SIZE, "%s", theirs ? retroarchOwn : !setting[0] || !strcmp(setting, "armgba") || !strcmp(setting, "retroarch") ? own : setting);
-	makeDirectories(out);
+	if (written) {
+		makeDirectories(out);
+	}
 }
 
 // The BIOS, state and screenshot folders, as the Folders say. Auto BIOS is armGBA's when it holds a
@@ -211,9 +213,9 @@ void chooseFolders(void) {
 	if (!bios[0]) {
 		bios = !retroarch.system[0] || holdsBios(ownSystemDirectory) ? "armgba" : "retroarch";
 	}
-	chooseFolder(systemDirectory, bios, ownSystemDirectory, retroarch.system);
-	chooseFolder(stateDirectory, settings.stateFolder, ownStateDirectory, "");
-	chooseFolder(shotDirectory, settings.shotFolder, ownShotDirectory, retroarch.shots);
+	chooseFolder(systemDirectory, bios, ownSystemDirectory, retroarch.system, false);
+	chooseFolder(stateDirectory, settings.stateFolder, ownStateDirectory, "", true);
+	chooseFolder(shotDirectory, settings.shotFolder, ownShotDirectory, retroarch.shots, true);
 }
 
 // The save folder for the game at path, as it loads, so a change can't put the running game's save
@@ -252,7 +254,7 @@ static void chooseSaveFolder(const char* path) {
 		snprintf(own, sizeof(own), "%s/%s.srm", ownSaveDirectory, name);
 		chosen = !theirs[0] || access(own, R_OK) == 0 ? "armgba" : "retroarch";
 	}
-	chooseFolder(saveDirectory, chosen, ownSaveDirectory, theirs);
+	chooseFolder(saveDirectory, chosen, ownSaveDirectory, theirs, true);
 }
 
 // The core's log, to stderr.

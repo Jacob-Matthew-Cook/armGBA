@@ -454,7 +454,7 @@ static void cheatsMenu(void) {
 		return;
 	}
 	addItem("Add Cheat...", cheatNew, 0);
-	helpFor("Type a code: Action Replay, GameShark, CodeBreaker or Game Genie.");
+	helpFor("Name a cheat, then type its code: Action Replay, GameShark, CodeBreaker or Game Genie.");
 	addItem("Load Cheat File...", openCheatFiles, 0);
 	snprintf(fileHelp, sizeof(fileHelp), "Adds the cheats in a RetroArch .cht file. This game's cheats are kept in %s.", cheatDirectory);
 	helpFor(fileHelp);
