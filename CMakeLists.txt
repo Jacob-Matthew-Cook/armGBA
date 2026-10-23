@@ -109,6 +109,10 @@ set_target_properties(retro-archive PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 set(LIBRETRO_SOURCES libretro/libretro.c libretro/lcd.c libretro/options.c libretro/saves.c libretro/dolphin.c libretro/link.c libretro/games.c libretro/savefiles.c libretro/patch.c libretro/dmg07.c libretro/workers.c libretro/gb-gambatte.cpp)
 add_library(armgba_libretro SHARED ${LIBRETRO_SOURCES})
+# RetroArch for Android lists cores by the _android ending.
+if(ANDROID)
+	set_target_properties(armgba_libretro PROPERTIES OUTPUT_NAME armgba_libretro_android)
+endif()
 target_link_libraries(armgba_libretro armgba gambatte retro-archive m z)
 # A toolchain file may leave C++ without an optimisation level
 target_compile_options(armgba_libretro PRIVATE -O2)
