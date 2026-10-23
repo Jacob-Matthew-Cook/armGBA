@@ -522,9 +522,12 @@ static int coreGridScale(void) {
 }
 
 // The GPU LCD grid: the gaps between the console screen's pixels, drawn at the size the picture is
-// shown, a gap that falls between output pixels shading each by how much of it is in the gap, faded
-// at small sizes (lcd.h's libretroLcdFade). The first Game Boy's and the Pocket's show the screen's
-// color while off there, the Color's and Advance's a black matrix; lcd.h has each screen's values.
+// shown, each spread over the two output pixels nearest it (lcd.h's libretroLcdGapSpread) and faded
+// at small sizes (libretroLcdFade). The first Game Boy's and the Pocket's show the screen's color
+// while off there, the Color's and Advance's a black matrix; lcd.h has each screen's values. It's
+// blended as in linear light: over black, color c becomes c * (1 - a)^(1 / 2.2), which an ordinary
+// blend gives with alpha 1 - (1 - a)^(1 / 2.2); the Game Boy's gaps, near its pixels' colors, take
+// the same.
 static void makeOverlay(SDL_Rect to) {
 	uint32_t gap = 0;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
@@ -553,6 +556,10 @@ static void makeOverlay(SDL_Rect to) {
 		free(across);
 		return;
 	}
+	uint8_t linear[256];
+	for (int a = 0; a < 256; ++a) {
+		linear[a] = (uint8_t) lroundf((1 - powf(1 - a / 255.0f, 1 / 2.2f)) * 255);
+	}
 	const struct LibretroLcdLook* const look = &libretroLcdLooks[lcd];
 	// Each column's and row's share of gap as an alpha, 0 to 255; a pixel takes either's.
 	float const pitchX = (float) w / app.gameWidth, pitchY = (float) h / app.gameHeight;
@@ -564,7 +571,7 @@ static void makeOverlay(SDL_Rect to) {
 		int const down = (int) lroundf(libretroLcdGapSpread(y, pitchY, look->share * pitchY) * look->down * fade * 255);
 		uint32_t* const row = pixels + (size_t) y * w;
 		for (int x = 0; x < w; ++x) {
-			row[x] = (uint32_t) (across[x] + down - (across[x] * down + 127) / 255) << 24 | (gap & 0xFFFFFF);
+			row[x] = (uint32_t) linear[across[x] + down - (across[x] * down + 127) / 255] << 24 | (gap & 0xFFFFFF);
 		}
 	}
 	overlay = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
