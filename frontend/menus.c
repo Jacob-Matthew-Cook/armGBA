@@ -493,6 +493,7 @@ static void optionChange(int index, int delta) {
 	}
 	optionSet(o, o->values[wrap(at, delta ? delta : 1, o->valueCount)]);
 	optionsWrite();
+	refreshShownOptions();
 }
 
 // The visible core options in category, or those in none when category is NULL.
@@ -642,6 +643,7 @@ static void changeSetting(int which, int delta) {
 	case SET_LCD_RENDERING:
 		settings.lcdOnGpu = !settings.lcdOnGpu;
 		optionsChanged = true;
+		refreshShownOptions();
 		break;
 	case SET_GPU_GRID:
 		settings.gpuGrid = !settings.gpuGrid;
