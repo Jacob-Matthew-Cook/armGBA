@@ -299,7 +299,12 @@ static void browse(int index, int delta) {
 	char path[FILE_SIZE];
 	snprintf(path, sizeof(path), "%s%s%s", browserPath, strcmp(browserPath, "/") ? "/" : "", browserEntries[index].name);
 	if (browserEntries[index].directory) {
-		snprintf(browserPath, sizeof(browserPath), "%s", path);
+		size_t const length = strlen(path);
+		if (length >= sizeof(browserPath)) {
+			osd("That folder's path is too long");
+			return;
+		}
+		memcpy(browserPath, path, length + 1);
 		stack[depth - 1].selected = -1;
 	} else if (browserCheats) {
 		int const added = cheatListImport(path);
