@@ -47,6 +47,7 @@ struct GBA* gba;
 bool skipBios;
 enum { TILT_LEFT_STICK, TILT_RIGHT_STICK, TILT_DPAD };
 static int tiltControl;
+static bool leftStickDpad;
 enum { RESTART_L_R_START, RESTART_L_R_A_B, RESTART_STICKS, RESTART_SELECT_START_A_B, RESTART_OFF };
 static int restartButtons;
 // Turbo timing: each press-and-release cycle lasts turboPeriod frames, and the button is held for
@@ -531,6 +532,7 @@ static void readOptions(void) {
 		{ "select start a b", RESTART_SELECT_START_A_B },
 		{ "off", RESTART_OFF },
 	};
+	leftStickDpad = optionIs("armgba_left_stick_dpad", "enabled");
 	static const struct Choice tiltChoices[] = { { "right stick", TILT_RIGHT_STICK }, { "d-pad", TILT_DPAD } };
 
 	skipBios = optionIs("armgba_skip_bios", "enabled");
@@ -1465,6 +1467,14 @@ static uint16_t readKeys(unsigned port) {
 	static unsigned turboA[MAX_PLAYERS], turboB[MAX_PLAYERS];
 	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_X, &turboA[port]) ? KEY_A : 0;
 	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_Y, &turboB[port]) ? KEY_B : 0;
+	// The left stick as the D-pad, unless it tilts controller 1's motion sensor cartridge.
+	bool const tilting = port == 0 && tiltControl == TILT_LEFT_STICK &&
+	                     (gameBoy ? tiltCartridge : gba && gba->gpio.devices & (HW_TILT | HW_GYRO));
+	if (leftStickDpad && !tilting) {
+		int const x = inputState(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
+		int const y = inputState(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y);
+		keys |= (x < -0x4000 ? KEY_LEFT : 0) | (x > 0x4000 ? KEY_RIGHT : 0) | (y < -0x4000 ? KEY_UP : 0) | (y > 0x4000 ? KEY_DOWN : 0);
+	}
 	// Start + L3 or R3 switches controllers: with the stick clicked first, the game doesn't see Start.
 	unsigned const stick = switchController == SWITCH_START_L3 ? RETRO_DEVICE_ID_JOYPAD_L3 : RETRO_DEVICE_ID_JOYPAD_R3;
 	if (port == 0 && switchController >= SWITCH_START_L3 && switchStick(stick) && inputState(0, RETRO_DEVICE_JOYPAD, 0, stick)) {
