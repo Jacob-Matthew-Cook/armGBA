@@ -953,11 +953,16 @@ static void drawMessages(int width, int height, int u) {
 // The on-screen keyboard: the text typed, as stars for a password, with a blinking caret, what goes
 // there, then the keys. The last row's four keys are three wide.
 static void drawEntry(int width, int height, int u) {
-	int const fieldH = u * 2, keyH = u * 7 / 4, keySize = u * 4 / 5, hintSize = u * 9 / 10, hintH = entry.hint[0] ? u * 3 / 2 : 0;
+	int const fieldH = u * 2, keySize = u * 4 / 5, hintSize = u * 9 / 10, hintLine = u * 11 / 10;
 	SDL_Rect const panel = { 0, 0, width, height };
 	int const top = drawPanel(panel, u, entry.title);
-	// The field and keys, as wide as 28 units, in the middle of the room between header and footer.
+	// The field and keys, as wide as 28 units, in the middle of the room between header and footer;
+	// what goes there in up to two lines under the field.
 	int const inner = SDL_min(width - 2 * u, u * 28), left = (width - inner) / 2;
+	int const hintLines = entry.hint[0] ? SDL_min(2, helpLinesFor(entry.hint, inner - u / 3, hintSize)) : 0;
+	int const hintH = hintLines ? hintLines * hintLine + u * 2 / 5 : 0;
+	// Keys 1.75 units high, or less to fit between the field and the footer.
+	int const keyH = SDL_max(keySize + u / 4, SDL_min(u * 7 / 4, (footerTop(panel, u) - top - u / 2 - fieldH - hintH - u / 2) / 5));
 	int y = top + SDL_max(u / 4, (footerTop(panel, u) - top - (fieldH + hintH + u / 2 + 5 * keyH)) / 2);
 	fillBordered((SDL_Rect) { left, y, inner, fieldH }, u / 2, (SDL_Color) { 13, 18, 28, 255 }, accent, 2);
 	// The text, as stars when hidden, its start cut off if it's too long.
@@ -977,10 +982,8 @@ static void drawEntry(int width, int height, int u) {
 		fillRect(left + u * 2 / 3 + tw + 1, y + (fieldH - keySize) / 2, 2, keySize, accent);
 	}
 	y += fieldH + u / 2;
-	if (hintH) {
-		char hint[sizeof(entry.hint) + 8];
-		textFit(FACE_BODY, hintSize, entry.hint, inner, false, hint, sizeof(hint));
-		textDraw(FACE_BODY, hintSize, left + u / 3, y - u / 4, helpText, hint);
+	if (hintLines) {
+		drawHelp(entry.hint, left + u / 3, y - u / 4, inner - u / 3, hintSize, hintLine, hintLines);
 		y += hintH;
 	}
 	// Each key's rectangle is kept for the mouse, the last row's for each of the columns it spans.
@@ -1062,10 +1065,17 @@ static void drawMenu(int width, int height, int u) {
 	// Room above the footer for what the selected item does: as many lines, up to HELP_LINES, as this
 	// menu's longest help takes (worked out once for each menu and size), so the rows don't move.
 	int const helpSize = u * 3 / 4, helpLine = u * 21 / 20, helpWidth = width - u * 4;
+	// Pages built by one function (Core's categories, the folders) differ by their help.
+	uintptr_t helpTexts = 0;
+	for (int i = 0; i < itemCount; ++i) {
+		helpTexts = helpTexts * 31 + (uintptr_t) items[i].help;
+	}
 	static const void* helpMenu;
+	static uintptr_t helpSeen;
 	static int helpItems, helpU, helpW, helpLines;
-	if (helpMenu != (const void*) m->build || helpItems != itemCount || helpU != u || helpW != helpWidth) {
+	if (helpMenu != (const void*) m->build || helpSeen != helpTexts || helpItems != itemCount || helpU != u || helpW != helpWidth) {
 		helpMenu = (const void*) m->build;
+		helpSeen = helpTexts;
 		helpItems = itemCount;
 		helpU = u;
 		helpW = helpWidth;
