@@ -514,7 +514,7 @@ static void addOptions(const char* category) {
 	}
 }
 
-// The core's Video options are shown in Settings > Video, with the rest of the picture's.
+// The core's Video options are shown in General Settings > Video, with the rest of the picture's.
 static bool shownInSettings(const char* category) {
 	return category && !strcmp(category, "video");
 }
@@ -556,7 +556,7 @@ static void coreOptionsMenu(void) {
 static void openCoreOptions(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
-		pushMenu(coreOptionsMenu, "Core Options");
+		pushMenu(coreOptionsMenu, "Emulator Options");
 	}
 }
 
@@ -670,7 +670,7 @@ static void changeSetting(int which, int delta) {
 	settingsWrite();
 }
 
-// Settings > Video. Pixel Shadow shows only with LCD Grid on the first Game Boy's and the Pocket's
+// General Settings > Video. Pixel Shadow shows only with LCD Grid on the first Game Boy's and the Pocket's
 // screens, or before a game is loaded.
 static void videoMenu(void) {
 	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid (GPU)" };
@@ -831,7 +831,7 @@ static void settingsMenu(void) {
 static void openSettings(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
-		pushMenu(settingsMenu, "Settings");
+		pushMenu(settingsMenu, "General Settings");
 	}
 }
 
@@ -1033,11 +1033,11 @@ static void openRecent(int argument, int delta) {
 	}
 }
 
-// Core Options... and Settings..., near the top of the first menu.
+// Emulator Options... and General Settings..., near the top of the first menu.
 static void addOptionMenus(void) {
-	addItem("Core Options...", openCoreOptions, 0);
+	addItem("Emulator Options...", openCoreOptions, 0);
 	helpFor("The emulator's options for the console: model, BIOS, link play, saves and sensors.");
-	addItem("Settings...", openSettings, 0);
+	addItem("General Settings...", openSettings, 0);
 	helpFor("The picture, sound, controls, rewind and states.");
 }
 

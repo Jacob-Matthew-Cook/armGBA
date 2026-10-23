@@ -257,7 +257,7 @@ void optionsWrite(void) {
 	if (!f) {
 		return;
 	}
-	fprintf(f, "# armGBA's options: the menu's Core Options change them, or edit each line's value, one of those\n# listed above it.\n\n");
+	fprintf(f, "# armGBA's options: the menu's Emulator Options change them, or edit each line's value, one of those\n# listed above it.\n\n");
 	for (int i = 0; i < optionCount; ++i) {
 		struct Option* o = &options[i];
 		fprintf(f, "# %s:", o->description ? o->description : o->key);
