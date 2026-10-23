@@ -40,7 +40,7 @@ static unsigned bytesPerFrame;
 static int16_t frameSound[2 * 4096];
 static size_t frameSoundCount;
 static SDL_Texture* overlay;
-static int overlayFilter = -1, overlayWidth, overlayHeight, overlayShownWidth, overlayShownHeight;
+static int overlayWidth, overlayHeight, overlayShownWidth, overlayShownHeight;
 static uint32_t overlayGap = 1;
 static SDL_Texture* shadow;
 static bool shadowStale;
@@ -115,6 +115,10 @@ static bool environment(unsigned command, void* data) {
 		struct retro_variable* variable = data;
 		struct Option* option = optionFind(variable->key);
 		variable->value = option ? option->value : NULL;
+		// With LCD Rendering on the GPU, the core's grid is off whatever size it's set to.
+		if (option && settings.lcdOnGpu && !strcmp(variable->key, "armgba_lcd_grid")) {
+			variable->value = "disabled";
+		}
 		return option != NULL;
 	}
 	case RETRO_ENVIRONMENT_SET_VARIABLE: {
@@ -506,30 +510,33 @@ bool loadGame(const char* path) {
 
 // The picture.
 
-// The core's LCD Grid (CPU): how many times larger it makes the picture, 1 when it's off.
+// The core's LCD grid: how many times larger it makes the picture, 1 when it's off or LCD Rendering
+// is on the GPU.
 static int coreGridScale(void) {
+	if (settings.lcdOnGpu) {
+		return 1;
+	}
 	struct Option* const o = optionFind("armgba_lcd_grid");
 	int const scale = o ? atoi(o->value) : 0;
 	return scale > 1 ? scale : 1;
 }
 
-// LCD Grid (GPU): the gaps between the console screen's pixels, drawn at the size the picture is
+// The GPU LCD grid: the gaps between the console screen's pixels, drawn at the size the picture is
 // shown, a gap that falls between output pixels shading each by how much of it is in the gap, faded
 // at small sizes (lcd.h's libretroLcdFade). The first Game Boy's and the Pocket's show the screen's
 // color while off there, the Color's and Advance's a black matrix; lcd.h has each screen's values.
 static void makeOverlay(SDL_Rect to) {
 	uint32_t gap = 0;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
-	bool const grid = settings.filter == FILTER_LCD;
-	if (overlay && overlayFilter == settings.filter && overlayWidth == app.gameWidth && overlayHeight == app.gameHeight &&
-	    (!grid || (overlayShownWidth == to.w && overlayShownHeight == to.h && overlayGap == gap))) {
+	bool const grid = settings.lcdOnGpu && settings.gpuGrid;
+	if (overlay && grid && overlayWidth == app.gameWidth && overlayHeight == app.gameHeight && overlayShownWidth == to.w &&
+	    overlayShownHeight == to.h && overlayGap == gap) {
 		return;
 	}
 	if (overlay) {
 		SDL_DestroyTexture(overlay);
 		overlay = NULL;
 	}
-	overlayFilter = settings.filter;
 	overlayWidth = app.gameWidth;
 	overlayHeight = app.gameHeight;
 	overlayShownWidth = to.w;
@@ -648,15 +655,13 @@ static void present(void) {
 		to.x = (width - to.w) / 2;
 		to.y = (height - to.h) / 2;
 		SDL_RenderCopy(app.renderer, app.game, NULL, &to);
-		// With the core's LCD Grid (CPU) on, the grid is in the picture already.
-		bool const gpuGrid = coreGridScale() == 1;
 		makeOverlay(to);
-		if (overlay && (gpuGrid || settings.filter != FILTER_LCD)) {
+		if (overlay) {
 			SDL_RenderCopy(app.renderer, overlay, NULL, &to);
 		}
 		uint32_t lit = 0;
 		enum LibretroLcd const lcd = libretroLcd(&lit);
-		if (gpuGrid && settings.filter == FILTER_LCD && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 &&
+		if (overlay && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 &&
 		    (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
 			drawShadow(to, lit);
 		}

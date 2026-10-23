@@ -43,6 +43,7 @@ void settingsDefaults(void) {
 	settings.fullscreen = !getenv("XDG_CURRENT_DESKTOP");
 	settings.vsync = true;
 	settings.filter = FILTER_SHARP;
+	settings.lcdOnGpu = true;
 	settings.shadow = 4;
 	settings.volume = 100;
 	settings.latency = 3;
@@ -136,7 +137,15 @@ static void takeSetting(const char* key, const char* value) {
 	} else if (!strcmp(key, "vsync")) {
 		settings.vsync = yes;
 	} else if (!strcmp(key, "filter")) {
-		settings.filter = n >= 0 && n < FILTERS ? n : 0;
+		settings.filter = n >= 0 && n < FILTERS ? n : FILTER_SHARP;
+		// The GPU LCD grid was once the third filter.
+		if (n == 2) {
+			settings.gpuGrid = true;
+		}
+	} else if (!strcmp(key, "lcd_rendering")) {
+		settings.lcdOnGpu = strcmp(value, "cpu") != 0;
+	} else if (!strcmp(key, "gpu_lcd_grid")) {
+		settings.gpuGrid = yes;
 	} else if (!strcmp(key, "lcd_shadow")) {
 		settings.shadow = n >= 0 && n <= 8 ? n : 4;
 	} else if (!strcmp(key, "show_fps")) {
@@ -208,9 +217,10 @@ void settingsWrite(void) {
 	fchmod(fileno(f), 0600);
 	const char* const no[2] = { "false", "true" };
 	fprintf(f, "# armgba's own settings; the menu changes them. Keys and buttons are SDL's numbers.\n");
-	fprintf(f, "scale = %d\nfullscreen = %s\ninteger_scale = %s\nstretch = %s\nvsync = %s\nfilter = %d\nlcd_shadow = %d\nshow_fps = %s\n",
-	        settings.scale, no[settings.fullscreen], no[settings.integerScale], no[settings.stretch], no[settings.vsync], settings.filter,
-	        settings.shadow, no[settings.showFps]);
+	fprintf(f, "scale = %d\nfullscreen = %s\ninteger_scale = %s\nstretch = %s\nvsync = %s\nfilter = %d\nshow_fps = %s\n", settings.scale,
+	        no[settings.fullscreen], no[settings.integerScale], no[settings.stretch], no[settings.vsync], settings.filter, no[settings.showFps]);
+	fprintf(f, "lcd_rendering = %s\ngpu_lcd_grid = %s\nlcd_shadow = %d\n", settings.lcdOnGpu ? "gpu" : "cpu", no[settings.gpuGrid],
+	        settings.shadow);
 	fprintf(f, "volume = %d\nlatency = %d\nrunahead = %d\nrewind = %s\nrewind_megabytes = %d\nauto_state = %s\n", settings.volume,
 	        settings.latency, settings.runahead, no[settings.rewind], settings.rewindMegabytes, no[settings.autoState]);
 	fprintf(f, "nickname = \"%s\"\nnetplay_host = \"%s\"\nnetplay_port = %d\ninput_delay = %d\n", settings.nickname, settings.host,
@@ -292,11 +302,6 @@ void optionSet(struct Option* option, const char* value) {
 	}
 }
 
-// The core's LCD Grid draws on the CPU, beside this frontend's on the GPU: named so in the menus.
-static const char* shownName(const char* key, const char* name) {
-	return !strcmp(key, "armgba_lcd_grid") ? "LCD Grid (CPU)" : !strcmp(key, "armgba_lcd_shadow") ? "Game Boy Pixel Shadow (CPU)" : name;
-}
-
 // The core's options and their categories, as it defines them, each taking its value from armgba.cfg.
 // An option defined again keeps its first definition.
 void optionsDefine(const struct retro_core_options_v2* definitions) {
@@ -317,7 +322,7 @@ void optionsDefine(const struct retro_core_options_v2* definitions) {
 		}
 		struct Option* o = &options[optionCount++];
 		o->key = strdup(d->key);
-		o->description = copyString(shownName(d->key, d->desc));
+		o->description = copyString(d->desc);
 		o->info = copyString(d->info);
 		o->category = copyString(d->category_key);
 		o->visible = true;
