@@ -813,8 +813,13 @@ static int unitFor(int width, int height) {
 }
 
 // A button or key in the footer's hints: a circle for a controller's buttons, a key cap otherwise.
+// A footer hint's height: its badge's.
+static int hintHeight(int u) {
+	return u * 5 / 4;
+}
+
 static int drawBadge(int x, int y, int u, const char* label, bool round) {
-	int const size = u * 3 / 5, h = u + u / 8;
+	int const size = u * 7 / 10, h = hintHeight(u);
 	int const tw = textWidth(FACE_STRONG, size, label);
 	int const w = round ? h : SDL_max(h, tw + u * 2 / 3);
 	fillRounded((SDL_Rect) { x, y, w, h }, round ? h / 2 : u / 4, keyFill);
@@ -824,9 +829,9 @@ static int drawBadge(int x, int y, int u, const char* label, bool round) {
 
 // A badge and what it does, in the footer; returns where the next one goes.
 static int drawHint(int x, int y, int u, const char* badge, bool round, const char* label) {
-	int const size = u * 7 / 10, h = u + u / 8;
+	int const size = u * 17 / 20, h = hintHeight(u);
 	x += drawBadge(x, y, u, badge, round) + u / 3;
-	x += textDraw(FACE_BODY, size, x, y + (h - size) / 2, muted, label);
+	x += textDraw(FACE_BODY, size, x, y + (h - size) / 2, helpText, label);
 	return x + u;
 }
 
@@ -922,7 +927,7 @@ static int drawFooter(SDL_Rect panel, int u) {
 	int const top = footerTop(panel, u);
 	fillRect(panel.x, top, panel.w, panel.y + panel.h - top, helpBand);
 	fillRect(panel.x + u, top, panel.w - 2 * u, 1, edge);
-	return top + (u * 9 / 4 - (u + u / 8)) / 2;
+	return top + (u * 9 / 4 - hintHeight(u)) / 2;
 }
 
 // The messages, newest lowest, each fading out over its last 0.4 seconds.
@@ -948,7 +953,7 @@ static void drawMessages(int width, int height, int u) {
 // The on-screen keyboard: the text typed, as stars for a password, with a blinking caret, what goes
 // there, then the keys. The last row's four keys are three wide.
 static void drawEntry(int width, int height, int u) {
-	int const fieldH = u * 2, keyH = u * 7 / 4, keySize = u * 4 / 5, hintSize = u * 3 / 4, hintH = entry.hint[0] ? u * 5 / 4 : 0;
+	int const fieldH = u * 2, keyH = u * 7 / 4, keySize = u * 4 / 5, hintSize = u * 9 / 10, hintH = entry.hint[0] ? u * 3 / 2 : 0;
 	SDL_Rect const panel = { 0, 0, width, height };
 	int const top = drawPanel(panel, u, entry.title);
 	// The field and keys, as wide as 28 units, in the middle of the room between header and footer.
