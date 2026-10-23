@@ -96,6 +96,16 @@ static bool setRumble(unsigned port, enum retro_rumble_effect effect, uint16_t s
 	return true;
 }
 
+// The core's way to show and hide its options again for their values.
+static retro_core_options_update_display_callback_t updateShown;
+
+// Has the core show and hide its options again after one changes.
+void refreshShownOptions(void) {
+	if (updateShown && app.loaded) {
+		updateShown();
+	}
+}
+
 // What the core asks of the frontend: its options, folders, pixel format, logging, rumble, the link
 // cable's netpacket interface, and whether this frame is shown and heard. The rest it does without.
 static bool environment(unsigned command, void* data) {
@@ -137,8 +147,10 @@ static bool environment(unsigned command, void* data) {
 		*(bool*) data = optionsChanged;
 		optionsChanged = false;
 		return true;
-	// What this frontend has no use for, accepted.
 	case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK:
+		updateShown = data ? ((const struct retro_core_options_update_display_callback*) data)->callback : NULL;
+		return true;
+	// What this frontend has no use for, accepted.
 	case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
 	case RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO:
 	case RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS:

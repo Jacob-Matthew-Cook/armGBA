@@ -50,7 +50,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Interleaved Rows | Both | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left |
-| | LCD Effect Threads | Both | Auto, 1, 2, 3, 4 |
+| | CPU Effect Threads | Both | Auto, 1, 2, 3, 4 |
 | Audio | Low-Pass Filter | Both | Disabled, 20%, 40%, 60%, 80% |
 | Input | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
@@ -86,7 +86,7 @@ on the console.
 LCD Grid draws the gaps between the console screen's pixels into a picture as many times larger,
 with the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen,
 with RetroArch's integer scaling on. It works on the CPU, in vectors (NEON, SSE or AVX), its rows
-shared out among the cores, as LCD Ghosting's are: LCD Effect Threads says how many, Auto leaving
+shared out among the cores, as LCD Ghosting's are: CPU Effect Threads says how many, Auto leaving
 one core for the rest, or two with Threaded Video. Its shadow is one shade for each pixel's square,
 a close likeness of the smooth one the shaders and the standalone frontend draw, at a fraction of
 the cost. At 6x, a Game Boy game's grid adds about 1.5 ms a frame on an RG353M and its shadow 0.1 ms

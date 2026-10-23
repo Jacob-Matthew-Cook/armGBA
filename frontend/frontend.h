@@ -177,6 +177,7 @@ bool loadGame(const char* path);
 void unloadGame(void);
 void recreateRenderer(void);
 void applyWindowSize(void);
+void refreshShownOptions(void);
 void writeSaves(void);
 void runFrames(void);
 void setPadForPort(void);

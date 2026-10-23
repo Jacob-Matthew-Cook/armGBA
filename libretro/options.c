@@ -99,7 +99,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  { { "off", "Off" }, { "up", "Up" }, { "up right", "Up Right" }, { "right", "Right" }, { "down right", "Down Right" }, { "down", "Down" },
 	    { "down left", "Down Left" }, { "left", "Left" }, { "up left", "Up Left" }, { NULL, NULL } },
 	  "down right" },
-	{ "armgba_lcd_threads", "LCD Effect Threads", NULL,
+	{ "armgba_lcd_threads", "CPU Effect Threads", NULL,
 	  "How many CPU cores share LCD Ghosting's and LCD Grid's work each frame. Auto leaves one core for the rest, two with Threaded Video; 1 keeps it on the emulator's own.",
 	  NULL, "video", { { "auto", "Auto" }, { "1", "1" }, { "2", "2" }, { "3", "3" }, { "4", "4" }, { NULL, NULL } }, "auto" },
 	{ "armgba_low_pass_filter", "Low-Pass Filter", NULL,
@@ -248,7 +248,8 @@ bool adapterWanted(int count) {
 }
 
 // Hides the options that do nothing for the game and Link Mode. RetroArch calls it when an option
-// changes; returns whether that changed which are shown.
+// changes, before the core has read it, so it reads the options itself; returns whether that changed
+// which are shown.
 bool showOptions(void) {
 	bool const advance = gba && !gameBoy;
 	int const devices = advance ? gba->gpio.devices : 0;
@@ -272,8 +273,8 @@ bool showOptions(void) {
 		{ "armgba_gb_screen", !advance },
 		{ "armgba_gb_advance_border", !advance },
 		{ "armgba_gb_advance_panel", !advance },
-		{ "armgba_lcd_interleave", advance || (gbOnAdvance && !gbColorPanel) },
-		{ "armgba_lcd_threads", ghosting || gridScale > 1 },
+		{ "armgba_lcd_interleave", advance || (gbOnAdvance && !optionIs("armgba_gb_advance_panel", "color")) },
+		{ "armgba_lcd_threads", !optionIs("armgba_lcd_ghosting", "disabled") || !optionIs("armgba_lcd_grid", "disabled") },
 		{ "armgba_gb_link_port", !advance && together },
 		{ "armgba_gb_link_timing", !advance && separateWanted() },
 		{ "armgba_link_players", together },
