@@ -71,6 +71,7 @@ static bool gbColorCorrection;
 // The original Game Boy's screen colors: 0 plain grays, 1 the Pocket's, 2 the first model's, 3 the
 // Light's.
 int gbShades;
+static int gbContrast;
 // On the Game Boy Advance model, a Game Boy game is shown as that console shows it: centered on its
 // screen, or stretched across it. When cropped, the black border is left out.
 bool gbOnAdvance;
@@ -485,6 +486,9 @@ static void showButtons(void) {
 	if (!forGameBoy && tiltControl != TILT_RIGHT_STICK) {
 		BUTTON(RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y, "Sunlight (Solar Sensor)");
 	}
+	if (forGameBoy && tiltControl != TILT_RIGHT_STICK && lcdCastsShadow()) {
+		BUTTON(RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y, "Contrast");
+	}
 	for (port = 1; port < (unsigned) playersHere; ++port) {
 		static const unsigned ids[12] = {
 			RETRO_DEVICE_ID_JOYPAD_LEFT, RETRO_DEVICE_ID_JOYPAD_UP, RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_RIGHT,
@@ -561,11 +565,14 @@ static void readOptions(void) {
 	libretroGbSetBootRom(optionChoice("armgba_gb_boot_rom", bootChoices, COUNT(bootChoices), LIBRETRO_GB_BOOT_NINTENDO));
 	int const shades = optionChoice("armgba_gb_screen", shadeChoices, COUNT(shadeChoices), 0);
 	gbShades = shades;
+	const char* const contrast = option("armgba_gb_contrast");
+	gbContrast = contrast ? atoi(contrast) : 0;
 	gbColorCorrection = optionIs("armgba_gb_color_correction", "enabled");
 	gbColorPanel = optionIs("armgba_gb_advance_panel", "color");
 	interleaved = optionIs("armgba_lcd_interleave", "enabled");
 	for (int i = gameBoy ? playersHere - 1 : 0; i >= 0; --i) {
 		libretroGbSelect(i);
+		libretroGbSetContrast(gbContrast);
 		libretroGbSetScreen(shades);
 		libretroGbSetColorPanel(gbColorPanel);
 		if (gameBoy) {
@@ -1346,6 +1353,38 @@ static void readTilt(uint16_t keys) {
 	libretroGbSetTilt(x, y);
 }
 
+// Whether pushing the right stick up or down turns the Game Boy's contrast wheel: on a screen that
+// has one, unless the right stick tilts the cartridge.
+static bool contrastStick(void) {
+	return lcdCastsShadow() && !(tiltCartridge && tiltControl == TILT_RIGHT_STICK);
+}
+
+// Pushing the right stick up or down turns the contrast wheel a step, the option keeping its place.
+static void readContrast(void) {
+	static bool held;
+	if (rerunning() || !contrastStick()) {
+		return;
+	}
+	int const push = inputState(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
+	bool const up = push < -0x4000;
+	bool const down = push > 0x4000;
+	if ((up || down) && !held) {
+		gbContrast += up ? gbContrast < 5 : -(gbContrast > -5);
+		for (int i = playersHere - 1; i >= 0; --i) {
+			libretroGbSelect(i);
+			libretroGbSetContrast(gbContrast);
+		}
+		char value[4];
+		snprintf(value, sizeof(value), "%d", gbContrast);
+		struct retro_variable variable = { "armgba_gb_contrast", value };
+		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &variable);
+		char message[32];
+		snprintf(message, sizeof(message), gbContrast > 0 ? "Contrast +%d" : "Contrast %d", gbContrast);
+		notify(message, 120);
+	}
+	held = up || down;
+}
+
 // Feeds a Game Boy Advance cartridge's sensors before each frame. The tilt sensor and the gyro are
 // scaled as mGBA's SDL frontend scales a stick; the gyro's turn comes from the control's left and
 // right. The light sensor uses mGBA's levels, and pushing the right stick up or down changes the
@@ -1726,6 +1765,7 @@ static void runGameBoys(void) {
 		keys[i] = readKeys(portFor(i));
 	}
 	readTilt(keys[0]);
+	readContrast();
 	readScreensKeys();
 	readRestarts(keys);
 	if (copySaves) {
@@ -2062,6 +2102,7 @@ static void runOneGameBoy(void) {
 	size_t frames;
 	uint16_t keys = readKeys(0);
 	readTilt(keys);
+	readContrast();
 	readRestarts(&keys);
 	const uint32_t* picture = libretroGbRunFrame(keys, &samples, &frames);
 	// A restart or a loaded state can change the model.
