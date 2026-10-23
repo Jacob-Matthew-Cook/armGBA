@@ -16,8 +16,25 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define COUNT(array) (sizeof(array) / sizeof((array)[0]))
+
+static inline int clampInt(int value, int low, int high) {
+	return value < low ? low : value > high ? high : value;
+}
+
+enum {
+	MAX_PLAYERS = 4,
+	// Turbo Button Period's range, in frames.
+	TURBO_FEWEST = 4,
+	TURBO_MOST = 120,
+};
+
 // libretro.c: the frontend's calls back, and the game and consoles running.
+extern retro_environment_t environment;
 extern retro_video_refresh_t videoRefresh;
+// Whether a Game Boy Advance game runs, and its cartridge's hardware (gba.h's HW_ bits).
+bool advanceRunning(void);
+int advanceDevices(void);
 extern bool gameBoy;
 extern enum LibretroGbModel gbModel;
 // The original Game Boy's screen colors: 0 plain grays, 1 the Pocket's, 2 the first model's, 3 the
@@ -27,11 +44,38 @@ extern int gbShades;
 extern bool gbColorPanel;
 // Game Boy Advance consoles linked here, run in turns.
 extern bool gbaTogether;
+// On the Game Boy Advance model, a Game Boy game is shown as that console shows it.
+extern bool gbOnAdvance;
+// Whether the Game Boy cartridge has a tilt sensor (MBC7).
+extern bool tiltCartridge;
 enum { THREADED_OFF, THREADED_ON, THREADED_LATE };
 extern int threadedVideo;
 // Whether RetroArch is running this frame again, for a netplay rollback or runahead, rather than
 // for the first time.
 bool rerunning(void);
+
+// options.c: the options given to the frontend (NULL to an older frontend, which has plain
+// variables), and their values. optionChoice gives the number of the option's value among
+// choices, or fallback if it isn't one. The Wanted functions read Link Mode, Players and Link Port.
+// showOptions shows the options that do something for the game and Link Mode, and returns whether
+// that changed; setOptions gives the options again after a list of choices changed.
+extern struct retro_core_options_v2* coreOptions;
+struct Choice {
+	const char* value;
+	int number;
+};
+bool optionsGive(retro_environment_t callback);
+struct retro_core_option_v2_definition* optionDefinition(const char* key);
+const char* option(const char* key);
+bool optionIs(const char* key, const char* wanted);
+int optionChoice(const char* key, const struct Choice* choices, size_t count, int fallback);
+bool togetherWanted(void);
+bool separateWanted(void);
+bool gamecubeWanted(void);
+int playersWanted(void);
+bool adapterWanted(int count);
+bool showOptions(void);
+void setOptions(void);
 
 // lcd.c: LCD Ghosting (0 off, 1 half, 2 full) and Interleaved Rows; LCD Grid's scale (1 when off)
 // and its shadow's way (0 none, then up and on clockwise); the threads they share rows among (0
