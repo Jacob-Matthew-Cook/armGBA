@@ -56,11 +56,21 @@ layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
 layout(set = 0, binding = 2) uniform sampler2D Source;
 
-// How much of an output pixel, size wide in dots, centered at p, the gap at the nearest edge covers.
+// The share of a tent two output pixels wide, centered on 0, that lies below u output pixels.
+float tentBelow(float u) {
+	u = clamp(u, -1.0, 1.0);
+	return u < 0.0 ? (u + 1.0) * (u + 1.0) * 0.5 : 1.0 - (1.0 - u) * (1.0 - u) * 0.5;
+}
+
+// How much of the gaps at the edges either side of p an output pixel, size wide in dots, centered at
+// p, sees through a tent two output pixels wide: each gap spreads over the same two pixels wherever it
+// lands, so lines under a pixel wide stay even instead of some looking darker.
 float gapCoverage(float p, float size) {
-	float edge = abs(p - floor(p + 0.5));
 	float halfGap = params.GAP_SHARE * 0.5;
-	return clamp((min(edge + size * 0.5, halfGap) - max(edge - size * 0.5, -halfGap)) / size, 0.0, 1.0);
+	float below = floor(p) - p;
+	float above = below + 1.0;
+	return min(tentBelow((below + halfGap) / size) - tentBelow((below - halfGap) / size) +
+	           tentBelow((above + halfGap) / size) - tentBelow((above - halfGap) / size), 1.0);
 }
 
 // How strongly the grid shows, a dot being pitch output pixels wide, as lcd.h's libretroLcdFade: a
