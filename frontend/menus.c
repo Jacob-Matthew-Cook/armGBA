@@ -673,7 +673,7 @@ static void changeSetting(int which, int delta) {
 // Settings > Video. Pixel Shadow shows only with LCD Grid on the first Game Boy's and the Pocket's
 // screens, or before a game is loaded.
 static void videoMenu(void) {
-	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid (GPU)", "Scanlines" };
+	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid (GPU)" };
 	char text[32];
 	addHeader("Window");
 	if (!settings.fullscreen) {
@@ -692,8 +692,8 @@ static void videoMenu(void) {
 	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
 	addHeader("Picture");
 	addValue("Filter", filters[settings.filter], changeSetting, SET_FILTER);
-	helpFor("Sharp keeps pixels square; Smooth blends them; LCD Grid draws the gaps between the console screen's pixels; "
-	        "Scanlines darkens lines as a TV did.");
+	helpFor("Sharp keeps pixels square; Smooth blends them; LCD Grid (GPU) draws the screen's gaps at any size, fainter below "
+	        "4x. On a small screen, LCD Grid (CPU) at 2x with Integer Scaling looks cleanest.");
 	uint32_t gap;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
 	if (settings.filter == FILTER_LCD && (!app.loaded || lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {

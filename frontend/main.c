@@ -513,11 +513,10 @@ static int coreGridScale(void) {
 	return scale > 1 ? scale : 1;
 }
 
-// A pattern over the picture. Scanlines: a CRT's dark line under each row, a source pixel to each 3x3
-// of it. LCD Grid: the gaps between the console screen's pixels, drawn at the size the picture is
-// shown, a gap that falls between output pixels shading each by how much of it is in the gap. The
-// first Game Boy's and the Pocket's show the screen's color while off there, the Color's and
-// Advance's a black matrix; lcd.h has each screen's values.
+// LCD Grid (GPU): the gaps between the console screen's pixels, drawn at the size the picture is
+// shown, a gap that falls between output pixels shading each by how much of it is in the gap, faded
+// at small sizes (lcd.h's libretroLcdFade). The first Game Boy's and the Pocket's show the screen's
+// color while off there, the Color's and Advance's a black matrix; lcd.h has each screen's values.
 static void makeOverlay(SDL_Rect to) {
 	uint32_t gap = 0;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
@@ -536,10 +535,10 @@ static void makeOverlay(SDL_Rect to) {
 	overlayShownWidth = to.w;
 	overlayShownHeight = to.h;
 	overlayGap = gap;
-	if ((!grid && settings.filter != FILTER_SCANLINES) || !app.gameWidth || to.w <= 0 || to.h <= 0) {
+	if (!grid || !app.gameWidth || to.w <= 0 || to.h <= 0) {
 		return;
 	}
-	int const w = grid ? to.w : app.gameWidth * 3, h = grid ? to.h : app.gameHeight * 3;
+	int const w = to.w, h = to.h;
 	uint32_t* pixels = calloc((size_t) w * h, 4);
 	int* across = calloc((size_t) w, sizeof(int));
 	if (!pixels || !across) {
@@ -547,31 +546,24 @@ static void makeOverlay(SDL_Rect to) {
 		free(across);
 		return;
 	}
-	if (grid) {
-		const struct LibretroLcdLook* const look = &libretroLcdLooks[lcd];
-		// Each column's and row's share of gap as an alpha, 0 to 255; a pixel takes either's.
-		float const pitchX = (float) w / app.gameWidth, pitchY = (float) h / app.gameHeight;
+	const struct LibretroLcdLook* const look = &libretroLcdLooks[lcd];
+	// Each column's and row's share of gap as an alpha, 0 to 255; a pixel takes either's.
+	float const pitchX = (float) w / app.gameWidth, pitchY = (float) h / app.gameHeight;
+	float const fade = libretroLcdFade(fminf(pitchX, pitchY));
+	for (int x = 0; x < w; ++x) {
+		across[x] = (int) lroundf(libretroLcdGapCoverage(x, pitchX, look->share * pitchX) * look->across * fade * 255);
+	}
+	for (int y = 0; y < h; ++y) {
+		int const down = (int) lroundf(libretroLcdGapCoverage(y, pitchY, look->share * pitchY) * look->down * fade * 255);
+		uint32_t* const row = pixels + (size_t) y * w;
 		for (int x = 0; x < w; ++x) {
-			across[x] = (int) lroundf(libretroLcdGapCoverage(x, pitchX, look->share * pitchX) * look->across * 255);
-		}
-		for (int y = 0; y < h; ++y) {
-			int const down = (int) lroundf(libretroLcdGapCoverage(y, pitchY, look->share * pitchY) * look->down * 255);
-			uint32_t* const row = pixels + (size_t) y * w;
-			for (int x = 0; x < w; ++x) {
-				row[x] = (uint32_t) (across[x] + down - (across[x] * down + 127) / 255) << 24 | (gap & 0xFFFFFF);
-			}
-		}
-	} else {
-		for (int y = 0; y < h; ++y) {
-			for (int x = 0; x < w; ++x) {
-				pixels[y * w + x] = y % 3 == 2 ? 0x80000000u : 0;
-			}
+			row[x] = (uint32_t) (across[x] + down - (across[x] * down + 127) / 255) << 24 | (gap & 0xFFFFFF);
 		}
 	}
 	overlay = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
 	SDL_UpdateTexture(overlay, NULL, pixels, w * 4);
 	SDL_SetTextureBlendMode(overlay, SDL_BLENDMODE_BLEND);
-	SDL_SetTextureScaleMode(overlay, grid ? SDL_ScaleModeNearest : SDL_ScaleModeLinear);
+	SDL_SetTextureScaleMode(overlay, SDL_ScaleModeNearest);
 	free(pixels);
 	free(across);
 }
