@@ -74,7 +74,7 @@ int gbShades;
 // On the Game Boy Advance model, a Game Boy game is shown as that console shows it: centered on its
 // screen, or stretched across it. When cropped, the black border is left out.
 bool gbOnAdvance;
-// Game Boy Advance Panel: a Game Boy game on the Advance model shows the Color's panel.
+// Game Boy on Advance Screen: a Game Boy game on the Advance model shows the Color's panel.
 bool gbColorPanel;
 static bool gbStretched;
 static bool gbCropped;

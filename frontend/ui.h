@@ -72,7 +72,7 @@ bool selectable(int i);
 int wrap(int value, int delta, int count);
 const char* onOff(bool on);
 const char* frames(int count);
-// The menus' look: each accent colour for titles and headers, the selection's fill and a held key;
+// The menus' look: each accent color for titles and headers, the selection's fill and a held key;
 // the sizes, in percent; how dark the game is behind the menus.
 struct Accent {
 	const char* name;

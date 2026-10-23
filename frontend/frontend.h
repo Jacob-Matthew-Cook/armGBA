@@ -58,7 +58,7 @@ enum Filter {
 	FILTERS,
 };
 
-// The menus' accent colours.
+// The menus' accent colors.
 enum { ACCENTS = 7 };
 
 // A controller binding: a button, or a trigger past half way.
@@ -109,7 +109,7 @@ struct Settings {
 	// Fast-Forward Speed: times as fast, 0 for as fast as it goes (up to 12).
 	int fastForward;
 	bool showMessages;
-	// The menus' look: the accent colour, their size as a percentage, and how far the game behind them
+	// The menus' look: the accent color, their size as a percentage, and how far the game behind them
 	// is dimmed (0 to 2).
 	int accent;
 	int menuSize;
@@ -154,7 +154,9 @@ extern char ownSystemDirectory[PATH_SIZE];
 extern char saveDirectory[PATH_SIZE];
 extern char ownSaveDirectory[PATH_SIZE];
 extern char stateDirectory[PATH_SIZE];
+extern char ownStateDirectory[PATH_SIZE];
 extern char shotDirectory[PATH_SIZE];
+extern char ownShotDirectory[PATH_SIZE];
 extern char cheatDirectory[PATH_SIZE];
 
 // main.c
@@ -192,7 +194,7 @@ void recreateRenderer(void);
 void applyWindowSize(void);
 void refreshShownOptions(void);
 void chooseFolders(void);
-bool retroarchFolder(const char* which);
+const char* retroarchFolder(const char* which);
 void writeSaves(void);
 void runFrames(void);
 void setPadForPort(void);

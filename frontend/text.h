@@ -23,5 +23,5 @@ bool textInit(void);
 void textReset(void);
 int textWidth(enum FaceId face, int size, const char* text);
 // Draws text whose line box starts at y; returns its width.
-int textDraw(enum FaceId face, int size, int x, int y, SDL_Color colour, const char* text);
+int textDraw(enum FaceId face, int size, int x, int y, SDL_Color color, const char* text);
 void textFit(enum FaceId face, int size, const char* text, int width, bool keepEnd, char* out, size_t outSize);

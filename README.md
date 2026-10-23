@@ -40,13 +40,13 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | System | Skip BIOS Intro | Game Boy Advance | Off, On |
 | | BIOS (applies on restart) | Game Boy Advance | Nintendo's (System Folder), armGBA's (Built In) |
 | | Game Boy Model (applies on restart) | Game Boy | Auto, Game Boy, Game Boy Pocket / Light, Game Boy Color, Game Boy Advance |
-| | Boot ROM (applies on restart) | Game Boy | Nintendo's (System Folder), armGBA's (Built In), Off |
+| | Game Boy Boot ROM (applies on restart) | Game Boy | Nintendo's (System Folder), armGBA's (Built In), Off |
 | Video | Threaded Video | Game Boy Advance | Off, On, One Frame Late |
 | | Color Correction | Game Boy Advance | Off, On |
 | | Game Boy Color Correction | Game Boy | Off, On |
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
-| | Game Boy Advance Border | Game Boy | Cropped, Shown |
-| | Game Boy Advance Panel | Game Boy | Game Boy Advance, Game Boy Color |
+| | Game Boy on Advance Border | Game Boy | Cropped, Shown (Game Boy Advance model) |
+| | Game Boy on Advance Screen | Game Boy | Game Boy Advance, Game Boy Color (Game Boy Advance model) |
 | | LCD Ghosting | Both | Off, Half, Full |
 | | Interleaved Rows | Both | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
@@ -143,21 +143,22 @@ screenshot, F9 starts and stops recording, F11 goes full screen. The menu change
 
 The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyboard; left and right
 too on a row without a value), and it opens again where it was left. General has the recent games,
-Load Game, Quit and the settings: Video (integer scaling, vsync, the frame rate and messages, and
-the core's screen options with its CPU LCD grid), Shaders for what the GPU draws (Sharp, Smooth, and
-its own LCD grid and Game Boy pixel shadow), LCD Rendering on both to pick the CPU's grid or the
-GPU's, the sound's volume and latency, controls and fast-forward speed, rewind and run-ahead, Saves
-and Folders, the menus' own look (accent colour, size, and how dark the game is behind them), and
-Reset Config. Game has the loaded game's ten state slots with Undo Load State, Restart, screenshots,
-recording and Close Game. Core has the core's options. Extras has cheats (RetroArch's `.cht` files
-can be added), netplay and RetroAchievements. The line under the menu says what the selected item
-does. With a controller, the buttons bound to A and B choose and go back, and in the game list L and
-R jump by letter; on the keyboard, typing a name's start finds it. Restart, Close Game, Quit, Reset
-Config and Reset Controls and Hotkeys ask for a second press. Netplay is armgba to armgba: Separate
-carries the link cable between two devices each running its own game; Together runs every player's
-console on every device, kept in step with rollback. `--host`, `--host-together` and `--connect
-ADDRESS` start it from the command line. Achievements need the system's libcurl, and recording its
-ffmpeg.
+Load Game, the AppImage's own settings and Quit: Video (window, scaling, vsync, and the frame rate
+and messages on screen), Shaders for what the GPU draws (Sharp, Smooth, and its LCD grid and Game
+Boy pixel shadow), the sound's volume and latency, controls and fast-forward speed, rewind and
+run-ahead, Saves and Folders (Auto Save State, and where games, BIOS files, saves, states and
+screenshots are), the menus' look (accent color, size, background), and Reset Config. Game has the
+loaded game's ten state slots with Undo Load State, Restart, screenshots, recording and Close Game.
+Core has the core's options, in RetroArch's categories, with LCD Rendering in Video and on Shaders
+to pick the CPU's grid or the GPU's. Extras has cheats (RetroArch's `.cht` files can be added),
+netplay and RetroAchievements. Rows ending in "..." open a page; rows with a value step through it.
+The line under the menu says what the selected item does. With a controller, the buttons bound to A
+and B choose and go back, and in the game list L and R jump by letter; on the keyboard, typing a
+name's start finds it. Restart, Close Game, Quit, Reset Config and Reset Controls and Hotkeys ask
+for a second press. Netplay is armgba to armgba: Separate carries the link cable between two devices
+each running its own game; Together runs every player's console on every device, kept in step with
+rollback. `--host`, `--host-together` and `--connect ADDRESS` start it from the command line.
+Achievements need the system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
 `~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`. BIOS and boot
@@ -188,7 +189,7 @@ armGBA's own boot ROMs (`gbboot/`, built into the core) are the size of Nintendo
 hardware: on the Game Boy and the Pocket, in 256 bytes, the cartridge's logo scrolls down as on
 Nintendo's; on the Game Boy Color and Game Boy Advance, in 2,304, "ARMGBC" comes in over the
 cartridge's logo, as Nintendo's title does. They last as long as Nintendo's, to the cycle, and leave
-the machine as Nintendo's do, and give original Game Boy games on a Game Boy Color the same colours,
+the machine as Nintendo's do, and give original Game Boy games on a Game Boy Color the same colors,
 chosen the same ways. These were found from what Nintendo's boot ROMs leave and show
 (`tests/gbcheck/`), never from their code.
 
