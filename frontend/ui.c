@@ -746,15 +746,6 @@ static int unitFor(int width, int height) {
 	return SDL_max(10, SDL_min(height / 24, width / 40) * settings.menuSize / 100);
 }
 
-// Section headers: small capitals, spaced out.
-static void drawSpaced(enum FaceId face, int size, int x, int y, SDL_Color colour, const char* label, int spacing) {
-	char one[2] = { 0, 0 };
-	for (const char* p = label; *p; ++p) {
-		one[0] = (char) (*p >= 'a' && *p <= 'z' ? *p - 32 : *p);
-		x += textDraw(face, size, x, y, colour, one) + spacing;
-	}
-}
-
 // A button or key in the footer's hints: a circle for a controller's buttons, a key cap otherwise.
 static int drawBadge(int x, int y, int u, const char* label, bool round) {
 	int const size = u * 3 / 5, h = u + u / 8;
@@ -948,7 +939,7 @@ static void drawMenu(int width, int height, int u) {
 		m->selected = -1;
 		moveSelection(1);
 	}
-	int const rowH = u * 7 / 4, size = u * 19 / 20, headerSize = u * 3 / 5;
+	int const rowH = u * 7 / 4, size = u * 19 / 20, headerSize = u;
 	// Two lines above the footer say what the selected item does, when this menu's items say.
 	bool anyHelp = false;
 	for (int i = 0; i < itemCount && !anyHelp; ++i) {
@@ -1015,9 +1006,11 @@ static void drawMenu(int width, int height, int u) {
 		int const y = top + shownCount * rowH;
 		itemRects[shownCount] = (SDL_Rect) { pillL, y, pillR - pillL, rowH };
 		arrowLeft[shownCount] = arrowRight[shownCount] = -1;
-		// A header: spaced capitals, at the foot of its row.
+		// A header: bold, a little larger than the rows under it, toward the foot of its row.
 		if (item->header) {
-			drawSpaced(FACE_STRONG, headerSize, textL, y + rowH - headerSize - u / 3, accent, item->label, SDL_max(1, u / 10));
+			char header[NAME_SIZE + 64];
+			textFit(FACE_STRONG, headerSize, item->label, textR - textL, false, header, sizeof(header));
+			textDraw(FACE_STRONG, headerSize, textL, y + rowH - headerSize - u / 4, accent, header);
 			continue;
 		}
 		bool const on = i == m->selected;
