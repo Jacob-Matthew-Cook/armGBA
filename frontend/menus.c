@@ -692,8 +692,8 @@ static void videoMenu(void) {
 	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
 	addHeader("Picture");
 	addValue("Filter", filters[settings.filter], changeSetting, SET_FILTER);
-	helpFor("Sharp keeps pixels square; Smooth blends them; LCD Grid (GPU) draws the screen's gaps at any size, fainter below "
-	        "4x. On a small screen, LCD Grid (CPU) at 2x with Integer Scaling looks cleanest.");
+	helpFor("Sharp keeps pixels square; Smooth blends them; LCD Grid (GPU) draws the screen's gaps at any size, fainter the "
+	        "smaller it is. On a small screen, LCD Grid (CPU) at 2x with Integer Scaling looks cleanest.");
 	uint32_t gap;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
 	if (settings.filter == FILTER_LCD && (!app.loaded || lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {

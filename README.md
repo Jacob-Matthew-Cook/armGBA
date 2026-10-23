@@ -91,9 +91,9 @@ more; on a Core i7-9700F, 0.07 ms and 0.02 ms. On a small screen, such as a 640x
 with integer scaling looks cleanest. `shaders/` holds RetroArch shader presets, `.slangp` and
 `.glslp`, that draw the same on the GPU at any size instead, one for each screen: `gb-green`,
 `gb-gray`, `gb-pocket` and `gb-light` (with the shadow), `gbc` and `gba`. The standalone frontend
-draws its own on the GPU, or the core's. Drawn at any size, the grid is half the photos' darkness,
-which reads too heavy on a lit screen, and fainter below about 4x, where its gaps would land
-unevenly.
+draws its own on the GPU, or the core's. Drawn at any size, the grid shows a tenth of the photos'
+darkness for each time larger the picture is, all of it from 10x: small, its gaps would land
+unevenly and read too heavy.
 
 ## Building
 
