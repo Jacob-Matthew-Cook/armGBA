@@ -53,6 +53,8 @@ void libretroGbSetColorPanel(bool color);
 // Sets the original Game Boy's screen: 0 plain grays, 1 the Pocket's, 2 the first model's green, 3
 // the Light's backlight.
 void libretroGbSetScreen(int);
+// Sets that screen's contrast wheel, -5 to 5.
+void libretroGbSetContrast(int);
 // That screen's color while the game has it off, as XRGB8888.
 uint32_t libretroGbOffColor(void);
 // Whether the game runs as on a Game Boy Advance, which shows it on its own larger screen.

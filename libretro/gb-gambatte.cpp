@@ -405,6 +405,8 @@ int screen;
 bool correction;
 // On the Game Boy Advance model, the Color's panel shown instead of the Advance's.
 bool colorPanel;
+// The contrast wheel of the first Game Boy, the Pocket and the Light, -5 to 5.
+int contrast;
 // What the color table was last built for: 0 uncorrected, 1 a Game Boy Color's screen, 2 a Game Boy
 // Advance's.
 int built = -1;
@@ -448,11 +450,25 @@ void setColors() {
 		{ 0x7FE2C3, 0x56B495, 0x357862, 0x0A1C15 },
 	};
 	s->gb->setDmgPaletteColor(0, 4, offColors[screen]);
+	// The wheel changes the voltage across the whole screen: each step moves every shade a twelfth
+	// of the way between the unlit screen and the darkest shade, darker up and lighter down. The
+	// darkest goes no darker, so turned up the dark shades merge, and down the lightest fades into
+	// the unlit screen.
+	auto const contrasted = [](unsigned long shade) {
+		unsigned long const off = offColors[screen], dark = shades[screen][3];
+		unsigned long color = 0;
+		for (int bits = 0; bits < 24; bits += 8) {
+			int const o = off >> bits & 0xFF, d = dark >> bits & 0xFF, v = shade >> bits & 0xFF;
+			double const t = std::min(std::max((o - v) / double(o - d) + contrast / 12.0, 0.0), 1.0);
+			color |= (unsigned long) std::lround(o - t * (o - d)) << bits;
+		}
+		return color;
+	};
 	// A Game Boy game started through a Game Boy Color's boot ROM keeps the colors the boot ROM
 	// gave it (a state stores them too), so they aren't replaced here.
 	if (!s->gb->isCgb() || (s->loadFlags & gambatte::GB::NO_BIOS)) {
 		for (int i = 0; i < 12; ++i) {
-			s->gb->setDmgPaletteColor(i / 4, i % 4, shades[screen][i % 4]);
+			s->gb->setDmgPaletteColor(i / 4, i % 4, contrast ? contrasted(shades[screen][i % 4]) : shades[screen][i % 4]);
 		}
 	}
 	// Game Boy screen shades are shown as they are; color correction is only for a Game Boy Color's
@@ -682,6 +698,13 @@ void libretroGbSetBootRom(enum LibretroGbBoot boot) {
 
 void libretroGbSetScreen(int which) {
 	screen = which;
+	if (s->gb) {
+		setColors();
+	}
+}
+
+void libretroGbSetContrast(int steps) {
+	contrast = steps;
 	if (s->gb) {
 		setColors();
 	}
