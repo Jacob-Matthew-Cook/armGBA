@@ -133,6 +133,8 @@ struct Option {
 struct Category {
 	char* key;
 	char* description;
+	// What it holds, a sentence, shown under the menu.
+	char* info;
 };
 
 extern struct Settings settings;
