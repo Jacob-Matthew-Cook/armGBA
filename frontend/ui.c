@@ -792,7 +792,10 @@ bool uiEvent(const SDL_Event* event) {
 // Drawing: the menus fill the window over the dimmed game, sized from a unit u that grows with the
 // window.
 
+// Help is lighter than muted, to read easily, and quieter than the rows; it and the footer sit on a
+// darker band.
 static const SDL_Color white = { 255, 255, 255, 255 }, text = { 214, 220, 234, 255 }, muted = { 143, 155, 181, 255 },
+                       helpText = { 186, 195, 214, 255 }, helpBand = { 10, 13, 20, 200 },
                        panelFill = { 20, 26, 38, 240 }, edge = { 42, 53, 80, 255 }, keyFill = { 34, 43, 63, 255 };
 // The accent color chosen, set as each frame is drawn.
 static SDL_Color accent, pillFill, keyHeld;
@@ -882,7 +885,7 @@ static void drawHelp(const char* help, int x, int y, int width, int size, int li
 		} else {
 			p = helpLineFrom(p, width, size, text);
 		}
-		textDraw(FACE_BODY, size, x, y + i * line, muted, text);
+		textDraw(FACE_BODY, size, x, y + i * line, helpText, text);
 	}
 }
 
@@ -907,9 +910,10 @@ static int footerTop(SDL_Rect panel, int u) {
 	return panel.y + panel.h - u * 9 / 4;
 }
 
-// The footer's line; returns where its hints go.
+// The footer: a darker band with a line along its top; returns where its hints go.
 static int drawFooter(SDL_Rect panel, int u) {
 	int const top = footerTop(panel, u);
+	fillRect(panel.x, top, panel.w, panel.y + panel.h - top, helpBand);
 	fillRect(panel.x + u, top, panel.w - 2 * u, 1, edge);
 	return top + (u * 9 / 4 - (u + u / 8)) / 2;
 }
@@ -1039,7 +1043,7 @@ static void drawMenu(int width, int height, int u) {
 	// Two lines above the footer say what the selected item does, when this menu's items say.
 	// Room above the footer for what the selected item does: as many lines, up to HELP_LINES, as this
 	// menu's longest help takes (worked out once for each menu and size), so the rows don't move.
-	int const helpSize = u * 13 / 20, helpLine = u * 9 / 10, helpWidth = width - u * 4;
+	int const helpSize = u * 3 / 4, helpLine = u * 21 / 20, helpWidth = width - u * 4;
 	static const void* helpMenu;
 	static int helpItems, helpU, helpW, helpLines;
 	if (helpMenu != (const void*) m->build || helpItems != itemCount || helpU != u || helpW != helpWidth) {
@@ -1175,6 +1179,8 @@ static void drawMenu(int width, int height, int u) {
 		fillRounded((SDL_Rect) { panel.x + panel.w - u, barY, SDL_max(3, u / 6), barH }, u, faded(accent, 110));
 	}
 	// The selected row's help, above the footer.
+	// The help shares the footer's darker band.
+	fillRect(panel.x, footerTop(panel, u) - helpH, panel.w, helpH, helpBand);
 	if (helpH && selectable(m->selected) && items[m->selected].help) {
 		drawHelp(items[m->selected].help, textL, footerTop(panel, u) - helpH + u / 4, textR - textL, helpSize, helpLine, helpLines);
 	}
