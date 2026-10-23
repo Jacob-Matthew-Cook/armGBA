@@ -12,7 +12,8 @@
 #include "gb.h"
 #include "gba.h"
 #include "libretro.h"
-#include "second.h"
+#include "games.h"
+#include "savefiles.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -30,7 +31,7 @@ enum {
 	// a stamp.
 	PATH_SIZE = 4096,
 	SAVE_PATH_SIZE = 8192,
-	BACKUP_PATH_SIZE = SAVE_PATH_SIZE + SECOND_STAMP,
+	BACKUP_PATH_SIZE = SAVE_PATH_SIZE + BACKUP_STAMP,
 	// Player 2's Game's choices.
 	SECOND_CHOICES = 125,
 	// Turbo Button Period's range, in frames.
@@ -73,7 +74,7 @@ extern char otherPaths[MAX_PLAYERS][PATH_SIZE];
 extern bool othersBare;
 extern bool pairFile;
 extern char pairPath[PATH_SIZE];
-extern struct SecondGame secondGames[SECOND_CHOICES];
+extern struct ListedGame secondGames[SECOND_CHOICES];
 extern size_t secondCount;
 // The game player runs, as a path.
 const char* gameOf(int player);

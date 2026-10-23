@@ -7,7 +7,7 @@
 // Save states, rewind, run-ahead, screenshots and recording.
 
 #include "frontend.h"
-#include "second.h"
+#include "games.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,7 +108,7 @@ bool loadState(int slot) {
 	char path[FILE_SIZE];
 	statePath(path, slot);
 	size_t size;
-	void* data = secondRead(path, &size);
+	void* data = gameRead(path, &size);
 	size_t const keptSize = data ? retro_serialize_size() : 0;
 	void* kept = keptSize ? malloc(keptSize) : NULL;
 	if (kept && !retro_serialize(kept, keptSize)) {
