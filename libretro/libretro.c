@@ -193,6 +193,7 @@ enum { SWITCH_OFF, SWITCH_L_R_A_B, SWITCH_L3_R3, SWITCH_START_L2_R2, SWITCH_STAR
 static int switchController = SWITCH_L_R_A_B;
 static int controllerFocus;
 static bool switchStick(unsigned button);
+static bool contrastClick(void);
 // In rollback netplay every device runs the host's session. Each device tags its session, and the
 // tag goes in every state. A device that loads a state with another device's tag has joined that
 // session and takes its tag, so the states on every device stay the same.
@@ -489,6 +490,9 @@ static void showButtons(void) {
 	}
 	if (forGameBoy && tiltControl != TILT_RIGHT_STICK && lcdCastsShadow()) {
 		BUTTON(RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y, "Contrast");
+		if (contrastClick()) {
+			BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3, "Contrast Reset");
+		}
 	}
 	for (port = 1; port < (unsigned) playersHere; ++port) {
 		static const unsigned ids[12] = {
@@ -1361,30 +1365,41 @@ static bool contrastStick(void) {
 	return lcdCastsShadow() && !(tiltCartridge && tiltControl == TILT_RIGHT_STICK);
 }
 
-// Pushing the right stick up or down turns the contrast wheel a step, the option keeping its place.
+// Whether clicking the right stick resets the contrast: R3 isn't a Restart Button or Switch Controller's.
+static bool contrastClick(void) {
+	return restartButtons != RESTART_STICKS && !switchStick(RETRO_DEVICE_ID_JOYPAD_R3);
+}
+
+// Pushing the right stick up or down turns the contrast wheel a step, and clicking it goes back to 0;
+// the option keeps its place.
 static void readContrast(void) {
-	static bool held;
+	static bool held, clicked;
 	if (rerunning() || !contrastStick()) {
 		return;
 	}
 	int const push = inputState(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
 	bool const up = push < -0x4000;
 	bool const down = push > 0x4000;
-	if ((up || down) && !held) {
-		gbContrast += up ? gbContrast < 5 : -(gbContrast > -5);
-		for (int i = playersHere - 1; i >= 0; --i) {
-			libretroGbSelect(i);
-			libretroGbSetContrast(gbContrast);
-		}
-		char value[4];
-		snprintf(value, sizeof(value), "%d", gbContrast);
-		struct retro_variable variable = { "armgba_gb_contrast", value };
-		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &variable);
-		char message[32];
-		snprintf(message, sizeof(message), gbContrast > 0 ? "Contrast +%d" : "Contrast %d", gbContrast);
-		notify(message, 120);
-	}
+	bool const click = contrastClick() && inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3);
+	bool const stepped = (up || down) && !held;
+	bool const reset = click && !clicked;
 	held = up || down;
+	clicked = click;
+	if (!stepped && !reset) {
+		return;
+	}
+	gbContrast = reset ? 0 : gbContrast + (up ? gbContrast < 5 : -(gbContrast > -5));
+	for (int i = playersHere - 1; i >= 0; --i) {
+		libretroGbSelect(i);
+		libretroGbSetContrast(gbContrast);
+	}
+	char value[4];
+	snprintf(value, sizeof(value), "%d", gbContrast);
+	struct retro_variable variable = { "armgba_gb_contrast", value };
+	environment(RETRO_ENVIRONMENT_SET_VARIABLE, &variable);
+	char message[32];
+	snprintf(message, sizeof(message), gbContrast > 0 ? "Contrast +%d" : "Contrast %d", gbContrast);
+	notify(message, 120);
 }
 
 // Feeds a Game Boy Advance cartridge's sensors before each frame. The tilt sensor and the gyro are

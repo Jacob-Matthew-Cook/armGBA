@@ -79,7 +79,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_gb_screen", "Game Boy Screen", NULL, "The colors original Game Boy games are shown in: plain grays, the first model's green, the Pocket's olive gray, or the Light's backlit teal.", NULL, "video",
 	  { { "grayscale", "Grayscale" }, { "original", "Game Boy (Green)" }, { "pocket", "Game Boy Pocket (Olive)" }, { "light", "Game Boy Light (Teal)" }, { NULL, NULL } }, "grayscale" },
 	{ "armgba_gb_contrast", "Game Boy Contrast", NULL,
-	  "The contrast wheel of the first Game Boy, the Pocket and the Light, a tenth of its turn a step: down fades the screen to blank, up darkens it to black. The right stick up or down turns it too.", NULL, "video",
+	  "The contrast wheel of the first Game Boy, the Pocket and the Light, a tenth of its turn a step: down fades the screen to blank, up darkens it to black. The right stick turns it; R3 resets it.", NULL, "video",
 	  { { "-5", NULL }, { "-4", NULL }, { "-3", NULL }, { "-2", NULL }, { "-1", NULL }, { "0", NULL },
 	    { "1", "+1" }, { "2", "+2" }, { "3", "+3" }, { "4", "+4" }, { "5", "+5" }, { NULL, NULL } }, "0" },
 	{ "armgba_gb_advance_border", "Game Boy on Advance Border", NULL,
