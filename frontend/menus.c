@@ -1033,6 +1033,14 @@ static void openRecent(int argument, int delta) {
 	}
 }
 
+// Core Options... and Settings..., near the top of the first menu.
+static void addOptionMenus(void) {
+	addItem("Core Options...", openCoreOptions, 0);
+	helpFor("The emulator's options for the console: model, BIOS, link play, saves and sensors.");
+	addItem("Settings...", openSettings, 0);
+	helpFor("The picture, sound, controls, rewind and states.");
+}
+
 // The first menu. With a game, its states, Restart and the game's menus first; without, the five most
 // recent games.
 static void rootMenu(void) {
@@ -1051,6 +1059,8 @@ static void rootMenu(void) {
 		addItem("Restart", restart, 0);
 		items[itemCount - 1].confirm = true;
 		helpFor("Starts the game again from the beginning; the game's own save is kept.");
+		addOptionMenus();
+		addItem("Cheats...", openCheats, 0);
 	} else if (recentCount) {
 		addHeader("Recent games");
 		for (int i = 0; i < recentCount && i < 5; ++i) {
@@ -1067,12 +1077,9 @@ static void rootMenu(void) {
 	if (app.loaded) {
 		addItem("Close Game", closeGame, 0);
 		items[itemCount - 1].confirm = true;
-		addItem("Cheats...", openCheats, 0);
+	} else {
+		addOptionMenus();
 	}
-	addItem("Core Options...", openCoreOptions, 0);
-	helpFor("The emulator's options for the console: model, BIOS, link play, saves and sensors.");
-	addItem("Settings...", openSettings, 0);
-	helpFor("The picture, sound, controls, rewind and states.");
 	addItem("Netplay...", openNetplay, 0);
 	addItem("Achievements...", openCheevos, 0);
 	if (app.loaded) {
