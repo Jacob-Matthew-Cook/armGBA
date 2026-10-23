@@ -468,16 +468,55 @@ static bool padHeld(SDL_GameController* pad, int binding) {
 	return SDL_GameControllerGetButton(pad, (SDL_GameControllerButton) binding);
 }
 
+// Whether a controller holds all of a hotkey's buttons.
+static bool comboHeld(SDL_GameController* pad, uint32_t combo) {
+	for (int b = 0; b < 32; ++b) {
+		if (combo >> b & 1 && !padHeld(pad, b == 30 ? PAD_LEFT_TRIGGER : b == 31 ? PAD_RIGHT_TRIGGER : b)) {
+			return false;
+		}
+	}
+	return combo != 0;
+}
+
+// The controller playing a port, by its joystick's id; -1 for none.
+static int portOf(SDL_JoystickID which) {
+	for (int port = 0; port < PORTS; ++port) {
+		if (app.pads[port] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(app.pads[port])) == which) {
+			return port;
+		}
+	}
+	return -1;
+}
+
+// A hotkey's buttons on each controller, held back from the game after the hotkey until they're let go.
+static uint32_t heldBack[PORTS];
+
+bool padHotkeyPressed(SDL_JoystickID which, uint32_t bit, uint32_t combo) {
+	int const port = portOf(which);
+	if (port < 0 || !(combo & bit) || !comboHeld(app.pads[port], combo)) {
+		return false;
+	}
+	if (combo & (combo - 1)) {
+		heldBack[port] |= combo;
+	}
+	return true;
+}
+
 // Player port's buttons here, as libretro's bits: the keyboard plays player 1, and each controller
 // its own player.
 uint16_t localButtons(unsigned port) {
 	if (port >= PORTS || app.menuOpen) {
 		return 0;
 	}
+	for (int b = 0; b < 32; ++b) {
+		if (heldBack[port] >> b & 1 && !padHeld(app.pads[port], b == 30 ? PAD_LEFT_TRIGGER : b == 31 ? PAD_RIGHT_TRIGGER : b)) {
+			heldBack[port] &= ~(1u << b);
+		}
+	}
 	const Uint8* keys = SDL_GetKeyboardState(NULL);
 	uint16_t bits = 0;
 	for (int id = 0; id < BUTTONS; ++id) {
-		bool held = padHeld(app.pads[port], settings.pad[id]);
+		bool held = !(padBit(settings.pad[id]) & heldBack[port]) && padHeld(app.pads[port], settings.pad[id]);
 		held |= port == 0 && settings.keys[id] && keys[settings.keys[id]];
 		bits |= held << id;
 	}
@@ -982,6 +1021,10 @@ static void doAction(enum Action action) {
 		}
 		return;
 	}
+	if (action == ACT_QUIT) {
+		app.running = false;
+		return;
+	}
 	if (action == ACT_FULLSCREEN) {
 		settings.fullscreen = !settings.fullscreen;
 		applyWindowSize();
@@ -1024,6 +1067,16 @@ static void doAction(enum Action action) {
 	}
 }
 
+// A controller button or trigger pressed: the hotkeys it completes, but Fast-Forward and Rewind,
+// which work while held.
+static void padPressed(SDL_JoystickID which, uint32_t bit) {
+	for (int a = 0; a < ACTIONS; ++a) {
+		if (a != ACT_FAST_FORWARD && a != ACT_REWIND && padHotkeyPressed(which, bit, settings.padHotkeys[a])) {
+			doAction((enum Action) a);
+		}
+	}
+}
+
 // An event the menus didn't take: quitting, a file dropped on the window to load, controllers
 // plugged in or out, hotkeys, and a right-click for the menu.
 static void handleEvent(const SDL_Event* event) {
@@ -1055,9 +1108,19 @@ static void handleEvent(const SDL_Event* event) {
 		}
 		break;
 	case SDL_CONTROLLERBUTTONDOWN:
-		for (int a = 0; a < ACTIONS; ++a) {
-			if (settings.padHotkeys[a] == event->cbutton.button && a != ACT_FAST_FORWARD && a != ACT_REWIND) {
-				doAction((enum Action) a);
+		padPressed(event->cbutton.which, padBit(event->cbutton.button));
+		break;
+	case SDL_CONTROLLERAXISMOTION:
+		if (event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT || event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
+			int const port = portOf(event->caxis.which);
+			int const side = event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
+			static bool down[PORTS][2];
+			bool const now = event->caxis.value > 16384;
+			if (port >= 0 && now != down[port][side]) {
+				down[port][side] = now;
+				if (now) {
+					padPressed(event->caxis.which, padBit(side ? PAD_RIGHT_TRIGGER : PAD_LEFT_TRIGGER));
+				}
 			}
 		}
 		break;
@@ -1077,7 +1140,7 @@ static bool actionHeld(enum Action action) {
 	const Uint8* keys = SDL_GetKeyboardState(NULL);
 	bool held = settings.hotkeys[action] && keys[settings.hotkeys[action]];
 	for (int port = 0; port < PORTS; ++port) {
-		held |= padHeld(app.pads[port], settings.padHotkeys[action]);
+		held |= comboHeld(app.pads[port], settings.padHotkeys[action]);
 	}
 	return held;
 }

@@ -49,6 +49,7 @@ enum Action {
 	ACT_RECORD,
 	ACT_FULLSCREEN,
 	ACT_RESET,
+	ACT_QUIT,
 	ACTIONS,
 };
 
@@ -91,7 +92,8 @@ struct Settings {
 	SDL_Scancode keys[BUTTONS];
 	int pad[BUTTONS];
 	SDL_Scancode hotkeys[ACTIONS];
-	int padHotkeys[ACTIONS];
+	// A controller's hotkeys: the buttons held together, as padBit()s.
+	uint32_t padHotkeys[ACTIONS];
 	char nickname[32];
 	char host[128];
 	int netPort;
@@ -217,6 +219,11 @@ struct Option* optionFind(const char* key);
 void optionSet(struct Option* option, const char* value);
 const char* scancodeName(SDL_Scancode code);
 const char* padName(int binding);
+uint32_t padBit(int binding);
+// Whether a button or trigger pressed on a controller completes a hotkey there; its buttons are then
+// kept from the game until let go.
+bool padHotkeyPressed(SDL_JoystickID which, uint32_t bit, uint32_t combo);
+const char* padComboName(uint32_t combo);
 
 // ui.c
 bool uiInit(void);
