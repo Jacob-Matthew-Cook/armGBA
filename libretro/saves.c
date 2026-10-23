@@ -346,7 +346,7 @@ void readOtherSaves(void) {
 
 // Writes the kept saves and clocks that have changed; in netplay only as the game closes, on the
 // device hosting it. A device that joined keeps the session's saves in armGBA/Remote.
-void writeSaves(bool closing) {
+void writeCoreSaves(bool closing) {
 	if (netplaySeen && closing && netplayJoined) {
 		keepSession();
 	}
@@ -976,6 +976,6 @@ void saveOptionsChanged(void) {
 void writeKeptSaves(void) {
 	if (savesKept() && ++keptCheck >= 300) {
 		keptCheck = 0;
-		writeSaves(false);
+		writeCoreSaves(false);
 	}
 }
