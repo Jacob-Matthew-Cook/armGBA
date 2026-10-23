@@ -16,7 +16,8 @@
 #include "lcd.h"
 #include "dolphin.h"
 #include "link.h"
-#include "second.h"
+#include "games.h"
+#include "savefiles.h"
 #include "patch.h"
 #include "workers.h"
 
@@ -172,7 +173,7 @@ static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game: the choices offered, and the game running (empty for player 1's).
 static struct retro_core_option_v2_definition* secondOption;
-struct SecondGame secondGames[SECOND_CHOICES];
+struct ListedGame secondGames[SECOND_CHOICES];
 size_t secondCount;
 char firstPath[PATH_SIZE];
 char secondPath[PATH_SIZE];
@@ -619,8 +620,8 @@ static void readOptions(void) {
 
 // Lists the games beside the loaded one as Player 2's Game's choices.
 static void offerSecondGames(const char* path, bool forGameBoy) {
-	secondFree(secondGames, secondCount);
-	secondCount = path ? secondList(path, forGameBoy, secondGames, SECOND_CHOICES) : 0;
+	gamesFree(secondGames, secondCount);
+	secondCount = path ? gamesList(path, forGameBoy, secondGames, SECOND_CHOICES) : 0;
 	// A game in an archive comes as "game.zip#game.gb"; the file is the archive.
 	snprintf(firstPath, sizeof(firstPath), "%s", path ? path : "");
 	firstPath[strcspn(firstPath, "#")] = '\0';
@@ -674,7 +675,7 @@ static void recallSecondChoice(void) {
 	char memory[PATH_SIZE];
 	char choice[PATH_SIZE];
 	secondMemoryFile(memory, sizeof(memory));
-	if (secondRecall(memory, firstPath, choice, sizeof(choice)) && offered(choice)) {
+	if (choiceRecall(memory, firstPath, choice, sizeof(choice)) && offered(choice)) {
 		struct retro_variable variable = { "armgba_player2_game", choice };
 		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &variable);
 	}
@@ -685,7 +686,7 @@ static void rememberSecondChoice(void) {
 	if (*firstPath && offered(value)) {
 		char memory[PATH_SIZE];
 		secondMemoryFile(memory, sizeof(memory));
-		secondRemember(memory, firstPath, value);
+		choiceRemember(memory, firstPath, value);
 	}
 }
 
@@ -858,7 +859,7 @@ static void stopOtherAdvances(void) {
 
 // A game the core reads itself, patched as RetroArch patches the games it reads (patch.h).
 static void* readPatched(const char* path, size_t* size) {
-	void* data = secondRead(path, size);
+	void* data = gameRead(path, size);
 	char name[256];
 	if (data && patchGame(path, &data, size, name, sizeof(name)) < 0) {
 		char message[320];
@@ -1168,7 +1169,7 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 
 static bool loadPairFile(const struct retro_game_info* file) {
 	char games[MAX_PLAYERS][PATH_SIZE];
-	pairCount = secondPairFile(file->path, file->data, file->size, games);
+	pairCount = pairFileGames(file->path, file->data, file->size, games);
 	if (!pairCount) {
 		showMessage("armGBA: a pair file needs two to four lines, one game each");
 		return false;

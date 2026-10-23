@@ -10,7 +10,7 @@
 
 #include "frontend.h"
 #include "lcd.h"
-#include "second.h"
+#include "games.h"
 #include "patch.h"
 
 #include <errno.h>
@@ -444,7 +444,7 @@ bool loadGame(const char* path) {
 		string_list_free(entries);
 	}
 	size_t size;
-	void* data = secondRead(named, &size);
+	void* data = gameRead(named, &size);
 	if (!data) {
 		osd("Can't read %s", path);
 		return false;

@@ -34,7 +34,7 @@ static unsigned keptCheck;
 enum { BACKUP_CHOICES = RETRO_NUM_CORE_OPTION_VALUES_MAX - 2 };
 struct SaveChoices {
 	struct retro_core_option_v2_definition* option;
-	char values[BACKUP_CHOICES][SECOND_STAMP + 4];
+	char values[BACKUP_CHOICES][BACKUP_STAMP + 4];
 	char labels[BACKUP_CHOICES][80];
 	int count;
 };
@@ -153,7 +153,7 @@ static const char* saveDirectoryFor(char unsorted[PATH_SIZE]) {
 	const char* saveDirectory = NULL;
 	environment(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &saveDirectory);
 	if (pairFile && saveDirectory) {
-		secondPairSaveDirectory(saveDirectory, pairPath, unsorted, PATH_SIZE);
+		pairFileSaveDirectory(saveDirectory, pairPath, unsorted, PATH_SIZE);
 		saveDirectory = unsorted;
 	}
 	return saveDirectory;
@@ -162,15 +162,15 @@ static const char* saveDirectoryFor(char unsorted[PATH_SIZE]) {
 void retroArchFiles(char file[SAVE_PATH_SIZE], char rtcFile[SAVE_PATH_SIZE]) {
 	char unsorted[PATH_SIZE];
 	const char* saveDirectory = saveDirectoryFor(unsorted);
-	secondSavePath(firstPath, "", "srm", firstPath, saveDirectory, file, SAVE_PATH_SIZE);
-	secondSavePath(firstPath, "", "rtc", firstPath, saveDirectory, rtcFile, SAVE_PATH_SIZE);
+	saveFilePath(firstPath, "", "srm", firstPath, saveDirectory, file, SAVE_PATH_SIZE);
+	saveFilePath(firstPath, "", "rtc", firstPath, saveDirectory, rtcFile, SAVE_PATH_SIZE);
 }
 
 static void folderFiles(int player, char file[SAVE_PATH_SIZE], char rtcFile[SAVE_PATH_SIZE]) {
 	char unsorted[PATH_SIZE];
 	const char* saveDirectory = saveDirectoryFor(unsorted);
-	secondPlayerSavePath(firstPath, player, "srm", saveDirectory, file, SAVE_PATH_SIZE);
-	secondPlayerSavePath(firstPath, player, "rtc", saveDirectory, rtcFile, SAVE_PATH_SIZE);
+	playerSaveFilePath(firstPath, player, "srm", saveDirectory, file, SAVE_PATH_SIZE);
+	playerSaveFilePath(firstPath, player, "rtc", saveDirectory, rtcFile, SAVE_PATH_SIZE);
 }
 
 // Where a player's save and clock are kept: the core's file for the save it keeps, or for player 1
@@ -203,15 +203,15 @@ static void* liveSave(int player, size_t* size, void** rtc, size_t* rtcSize) {
 static void remoteFiles(int player, char file[SAVE_PATH_SIZE], char rtcFile[SAVE_PATH_SIZE]) {
 	char unsorted[PATH_SIZE];
 	const char* saveDirectory = saveDirectoryFor(unsorted);
-	secondRemoteSavePath(firstPath, player, "srm", firstPath, saveDirectory, file, SAVE_PATH_SIZE);
-	secondRemoteSavePath(firstPath, player, "rtc", firstPath, saveDirectory, rtcFile, SAVE_PATH_SIZE);
+	remoteSaveFilePath(firstPath, player, "srm", firstPath, saveDirectory, file, SAVE_PATH_SIZE);
+	remoteSaveFilePath(firstPath, player, "rtc", firstPath, saveDirectory, rtcFile, SAVE_PATH_SIZE);
 }
 
 static void receivedFiles(char file[SAVE_PATH_SIZE], char rtcFile[SAVE_PATH_SIZE]) {
 	char unsorted[PATH_SIZE];
 	const char* saveDirectory = saveDirectoryFor(unsorted);
-	secondReceivedSavePath(firstPath, "srm", firstPath, saveDirectory, file, SAVE_PATH_SIZE);
-	secondReceivedSavePath(firstPath, "rtc", firstPath, saveDirectory, rtcFile, SAVE_PATH_SIZE);
+	receivedSaveFilePath(firstPath, "srm", firstPath, saveDirectory, file, SAVE_PATH_SIZE);
+	receivedSaveFilePath(firstPath, "rtc", firstPath, saveDirectory, rtcFile, SAVE_PATH_SIZE);
 }
 
 // Where a player's backups go: beside their save, and player 1's in the save folder's armGBA/Player
@@ -248,8 +248,8 @@ bool readSave(int player, const char* game) {
 	const char* saveDirectory = saveDirectoryFor(unsorted);
 	char file[PATH_SIZE];
 	char rtcFile[PATH_SIZE];
-	secondSavePath(game, "", "srm", firstPath, saveDirectory, file, sizeof(file));
-	secondSavePath(game, "", "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
+	saveFilePath(game, "", "srm", firstPath, saveDirectory, file, sizeof(file));
+	saveFilePath(game, "", "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
 	return keepSave(player, file, rtcFile, file, rtcFile);
 }
 
@@ -268,8 +268,8 @@ static bool readPlayerSave(int player) {
 	snprintf(suffix, sizeof(suffix), " (Player %d)", player + 1);
 	char older[PATH_SIZE];
 	char olderRtc[PATH_SIZE];
-	secondSavePath(firstPath, suffix, "srm", firstPath, saveDirectory, older, sizeof(older));
-	secondSavePath(firstPath, suffix, "rtc", firstPath, saveDirectory, olderRtc, sizeof(olderRtc));
+	saveFilePath(firstPath, suffix, "srm", firstPath, saveDirectory, older, sizeof(older));
+	saveFilePath(firstPath, suffix, "rtc", firstPath, saveDirectory, olderRtc, sizeof(olderRtc));
 	bool const found = keepSave(player, older, olderRtc, file, rtcFile);
 	// Written to the folder next time saves are written, though unchanged.
 	keptSaves[player].hash ^= found;
@@ -364,7 +364,7 @@ void writeSaves(bool closing) {
 			continue;
 		}
 		keptSaves[player].hash = hash;
-		secondMakeFolders(keptSaves[player].file);
+		makeFolders(keptSaves[player].file);
 		writeFile(keptSaves[player].file, save, size);
 		size_t rtcSize;
 		void* rtc = rtcMemory(player, &rtcSize);
@@ -435,24 +435,24 @@ static bool fileHolds(const char* path, const void* data, size_t size) {
 // Returns 1 if it wrote them, 0 if the newest backup already holds the save (stamp is then that
 // backup's), or -1 if the write failed.
 static int writeBackup(const char* file, const char* rtcFile, const void* save, size_t size, const void* rtc, size_t rtcSize,
-                       char stamp[SECOND_STAMP]) {
+                       char stamp[BACKUP_STAMP]) {
 	char out[BACKUP_PATH_SIZE];
-	char newest[1][SECOND_STAMP];
-	if (secondBackups(file, newest, 1)) {
-		secondBackupPath(file, newest[0], out, sizeof(out));
+	char newest[1][BACKUP_STAMP];
+	if (backupStamps(file, newest, 1)) {
+		backupFilePath(file, newest[0], out, sizeof(out));
 		if (fileHolds(out, save, size)) {
-			memcpy(stamp, newest[0], SECOND_STAMP);
+			memcpy(stamp, newest[0], BACKUP_STAMP);
 			return 0;
 		}
 	}
-	secondNewStamp(file, stamp);
-	secondBackupPath(file, stamp, out, sizeof(out));
-	secondMakeFolders(out);
+	newBackupStamp(file, stamp);
+	backupFilePath(file, stamp, out, sizeof(out));
+	makeFolders(out);
 	if (!writeFile(out, save, size)) {
 		return -1;
 	}
 	if (rtc && rtcSize) {
-		secondBackupPath(rtcFile, stamp, out, sizeof(out));
+		backupFilePath(rtcFile, stamp, out, sizeof(out));
 		writeFile(out, rtc, rtcSize);
 	}
 	return 1;
@@ -470,7 +470,7 @@ static bool blankSave(const void* save, size_t size) {
 // Backs up a player's save, and its clock, as they are in memory, which is newer than the file.
 // Returns 1 if it did, 2 if the newest backup already holds the save, 0 if there was nothing to
 // back up (no file and nothing saved yet), or -1 if the write failed.
-static int backUpPlayer(int player, char stamp[SECOND_STAMP]) {
+static int backUpPlayer(int player, char stamp[BACKUP_STAMP]) {
 	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE], base[SAVE_PATH_SIZE], rtcBase[SAVE_PATH_SIZE];
 	size_t size, rtcSize;
 	void* rtc;
@@ -489,16 +489,16 @@ static void pruneBackups(const char* saveFile, const char* rtcFile) {
 	const char* value = option("armgba_keep_saves");
 	size_t const keep = value ? (size_t) atoi(value) : 10;
 	enum { MOST = 1000 };
-	char (*stamps)[SECOND_STAMP] = keep ? malloc(MOST * SECOND_STAMP) : NULL;
+	char (*stamps)[BACKUP_STAMP] = keep ? malloc(MOST * BACKUP_STAMP) : NULL;
 	if (!stamps) {
 		return;
 	}
-	size_t const count = secondBackups(saveFile, stamps, MOST);
+	size_t const count = backupStamps(saveFile, stamps, MOST);
 	for (size_t i = keep; i < count; ++i) {
 		char file[BACKUP_PATH_SIZE];
-		secondBackupPath(saveFile, stamps[i], file, sizeof(file));
+		backupFilePath(saveFile, stamps[i], file, sizeof(file));
 		remove(file);
-		secondBackupPath(rtcFile, stamps[i], file, sizeof(file));
+		backupFilePath(rtcFile, stamps[i], file, sizeof(file));
 		remove(file);
 	}
 	free(stamps);
@@ -517,9 +517,9 @@ void keepSession(void) {
 			continue;
 		}
 		char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE];
-		char stamp[SECOND_STAMP];
-		secondRemoteSavePath(gameOf(player), player, "srm", firstPath, saveDirectory, file, sizeof(file));
-		secondRemoteSavePath(gameOf(player), player, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
+		char stamp[BACKUP_STAMP];
+		remoteSaveFilePath(gameOf(player), player, "srm", firstPath, saveDirectory, file, sizeof(file));
+		remoteSaveFilePath(gameOf(player), player, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
 		if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
 			pruneBackups(file, rtcFile);
 		}
@@ -578,12 +578,12 @@ static void addChoice(struct SaveChoices* list, const char* value, const char* l
 
 // Adds a save's newest backups to a list, as "<tag> <stamp>" named "<name>: <time>".
 static void addBackupChoices(struct SaveChoices* list, const char* file, int most, const char* tag, const char* name) {
-	char stamps[BACKUP_CHOICES][SECOND_STAMP];
-	size_t const count = secondBackups(file, stamps, most);
+	char stamps[BACKUP_CHOICES][BACKUP_STAMP];
+	size_t const count = backupStamps(file, stamps, most);
 	for (size_t i = 0; i < count; ++i) {
-		char value[SECOND_STAMP + 4], label[80], when[32];
+		char value[BACKUP_STAMP + 4], label[80], when[32];
 		stampLabel(stamps[i], when, sizeof(when));
-		snprintf(value, sizeof(value), "%.3s %.*s", tag, SECOND_STAMP - 1, stamps[i]);
+		snprintf(value, sizeof(value), "%.3s %.*s", tag, BACKUP_STAMP - 1, stamps[i]);
 		snprintf(label, sizeof(label), "%s: %s", name, when);
 		addChoice(list, value, label);
 	}
@@ -604,15 +604,15 @@ void fillSaveChoices(void) {
 	bool playing[MAX_PLAYERS];
 	bool remote[MAX_PLAYERS];
 	char received[SAVE_PATH_SIZE];
-	char stamp[1][SECOND_STAMP];
+	char stamp[1][BACKUP_STAMP];
 	receivedFiles(received, rtcFile);
-	bool const anyReceived = *firstPath && secondBackups(received, stamp, 1);
+	bool const anyReceived = *firstPath && backupStamps(received, stamp, 1);
 	int players = 0;
 	int groups = anyReceived;
 	for (int player = 0; player < MAX_PLAYERS; ++player) {
 		playing[player] = backupFiles(player, files[player], rtcFile);
 		remoteFiles(player, remotes[player], rtcFile);
-		remote[player] = *firstPath && secondBackups(remotes[player], stamp, 1);
+		remote[player] = *firstPath && backupStamps(remotes[player], stamp, 1);
 		players += playing[player];
 		groups += playing[player] + remote[player];
 	}
@@ -693,7 +693,7 @@ static void copyCurrentSave(int from, int to, const char* toFile, const char* to
 	void* fromRtc;
 	void* save = liveSave(to, &size, &rtc, &rtcSize);
 	memcpy(save, liveSave(from, &fromSize, &fromRtc, &fromRtcSize), size);
-	secondMakeFolders(toFile);
+	makeFolders(toFile);
 	writeFile(toFile, save, size);
 	if (rtc && fromRtc && rtcSize == fromRtcSize) {
 		memcpy(rtc, fromRtc, rtcSize);
@@ -708,7 +708,7 @@ static void loadBackup(int to, bool move, const char* file, const char* rtcFile,
 		rename(file, toFile);
 		rename(rtcFile, toRtc);
 	} else {
-		secondMakeFolders(toFile);
+		makeFolders(toFile);
 		copyFile(file, toFile);
 		copyFile(rtcFile, toRtc);
 	}
@@ -745,7 +745,7 @@ static void loadSave(int source, int from, const char* stamp, int to) {
 	char fromBase[SAVE_PATH_SIZE], fromRtcBase[SAVE_PATH_SIZE];
 	char toFile[SAVE_PATH_SIZE], toRtc[SAVE_PATH_SIZE], toBase[SAVE_PATH_SIZE], toRtcBase[SAVE_PATH_SIZE];
 	char file[BACKUP_PATH_SIZE], rtcFile[BACKUP_PATH_SIZE];
-	char replaced[SECOND_STAMP];
+	char replaced[BACKUP_STAMP];
 	bool const current = !strcmp(stamp, "now");
 	bool fromPlaying = true;
 	if (source == FROM_REMOTE) {
@@ -759,8 +759,8 @@ static void loadSave(int source, int from, const char* stamp, int to) {
 	bool const toPlaying = saveFiles(to, toFile, toRtc) && backupFiles(to, toBase, toRtcBase);
 	const char* fromGame = remote ? firstPath : gameOf(from);
 	if (fromPlaying) {
-		secondBackupPath(fromBase, stamp, file, sizeof(file));
-		secondBackupPath(fromRtcBase, stamp, rtcFile, sizeof(rtcFile));
+		backupFilePath(fromBase, stamp, file, sizeof(file));
+		backupFilePath(fromRtcBase, stamp, rtcFile, sizeof(rtcFile));
 	}
 	if (!fromPlaying || !toPlaying) {
 		snprintf(message, sizeof(message), "Load Save: player %d isn't playing", (fromPlaying ? to : from) + 1);
@@ -800,7 +800,7 @@ static void backUpSave(int player) {
 	char message[160];
 	char file[SAVE_PATH_SIZE];
 	char rtcFile[SAVE_PATH_SIZE];
-	char stamp[SECOND_STAMP];
+	char stamp[BACKUP_STAMP];
 	size_t size, rtcSize;
 	void* rtc;
 	if (!backupFiles(player, file, rtcFile)) {
@@ -834,7 +834,7 @@ static void sendSave(bool asked) {
 	void* rtc;
 	void* save = liveSave(0, &size, &rtc, &rtcSize);
 	char game[1024];
-	secondGameName(firstPath, game, sizeof(game));
+	gameName(firstPath, game, sizeof(game));
 	char const* problem = !save || !size || blankSave(save, size) ? "Send Save: nothing saved yet"
 	                    : !linkSendSave(game, save, size, rtc, rtcSize) ? "Send Save: no one is linked"
 	                                                                     : NULL;
@@ -856,9 +856,9 @@ static void sendBackup(int source, int from, const char* stamp) {
 	} else {
 		backupFiles(0, base, rtcBase);
 	}
-	secondBackupPath(base, stamp, file, sizeof(file));
-	secondBackupPath(rtcBase, stamp, rtcFile, sizeof(rtcFile));
-	secondGameName(firstPath, game, sizeof(game));
+	backupFilePath(base, stamp, file, sizeof(file));
+	backupFilePath(rtcBase, stamp, rtcFile, sizeof(rtcFile));
+	gameName(firstPath, game, sizeof(game));
 	size_t size, rtcSize;
 	void* save = readWholeFile(file, &size);
 	void* rtc = readWholeFile(rtcFile, &rtcSize);
@@ -875,10 +875,10 @@ void saveReceived(const char* game, const uint8_t* save, size_t size, const uint
 	// The game's file, for where its saves are: player 1's, a game beside it, or else beside player 1's.
 	char path[PATH_SIZE];
 	char name[1024];
-	secondGameName(firstPath, name, sizeof(name));
+	gameName(firstPath, name, sizeof(name));
 	snprintf(path, sizeof(path), "%s", firstPath);
 	for (size_t i = 0; strcmp(name, game) && i < secondCount; ++i) {
-		secondGameName(secondGames[i].path, name, sizeof(name));
+		gameName(secondGames[i].path, name, sizeof(name));
 		snprintf(path, sizeof(path), "%s", secondGames[i].path);
 	}
 	if (strcmp(name, game)) {
@@ -887,9 +887,9 @@ void saveReceived(const char* game, const uint8_t* save, size_t size, const uint
 	}
 	char unsorted[PATH_SIZE];
 	const char* saveDirectory = saveDirectoryFor(unsorted);
-	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE], stamp[SECOND_STAMP];
-	secondReceivedSavePath(path, "srm", firstPath, saveDirectory, file, sizeof(file));
-	secondReceivedSavePath(path, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
+	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE], stamp[BACKUP_STAMP];
+	receivedSaveFilePath(path, "srm", firstPath, saveDirectory, file, sizeof(file));
+	receivedSaveFilePath(path, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
 	if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
 		pruneBackups(file, rtcFile);
 		offerSaveChoices();
@@ -913,7 +913,7 @@ void readSaveActions(bool act) {
 	}
 	value = option("armgba_send_save");
 	if (value && strcmp(value, "off")) {
-		char send[SECOND_STAMP + 4];
+		char send[BACKUP_STAMP + 4];
 		snprintf(send, sizeof(send), "%s", value);
 		struct retro_variable off = { "armgba_send_save", "off" };
 		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
@@ -929,7 +929,7 @@ void readSaveActions(bool act) {
 	}
 	value = option("armgba_load_save");
 	if (value && strcmp(value, "off")) {
-		char load[SECOND_STAMP + 4];
+		char load[BACKUP_STAMP + 4];
 		snprintf(load, sizeof(load), "%s", value);
 		struct retro_variable off = { "armgba_load_save", "off" };
 		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
