@@ -828,10 +828,15 @@ static int drawHint(int x, int y, int u, const char* badge, bool round, const ch
 	return x + u;
 }
 
+// The header's height: room for ARMGBA, the tabs and where you are.
+static int headerHeight(int u) {
+	return u * 7 / 2;
+}
+
 // The header (ARMGBA and where you are) across the window, panel; returns where the content starts.
 static int drawPanel(SDL_Rect panel, int u, const char* where) {
-	int const headerH = u * 3, inset = u + u / 2;
-	int const titleSize = u * 3 / 2, whereSize = u * 4 / 5;
+	int const headerH = headerHeight(u), inset = u + u / 2;
+	int const titleSize = u * 9 / 5, whereSize = u * 9 / 10;
 	int const brand = textDraw(FACE_TITLE, titleSize, panel.x + inset, panel.y + (headerH - titleSize) / 2, accent, "ARMGBA");
 	char fitted[512];
 	textFit(FACE_BODY, whereSize, where, panel.w - 2 * inset - brand - u, true, fitted, sizeof(fitted));
@@ -891,7 +896,7 @@ static void drawHelp(const char* help, int x, int y, int width, int size, int li
 
 // The tabs, right of ARMGBA in the header: the one shown in the accent color and underlined.
 static void drawTabs(SDL_Rect panel, int u) {
-	int const size = u * 4 / 5, gap = u * 5 / 4, headerH = u * 3, inset = u + u / 2;
+	int const size = u, gap = u * 3 / 2, headerH = headerHeight(u), inset = u + u / 2;
 	int const y = panel.y + (headerH - size) / 2;
 	int x = panel.x + panel.w - inset;
 	for (int i = TABS - 1; i >= 0; --i) {
@@ -1059,7 +1064,7 @@ static void drawMenu(int width, int height, int u) {
 		}
 	}
 	int const helpH = helpLines ? helpLine * helpLines + u / 2 : 0;
-	int const chrome = u * 3 + u / 4 + u / 4 + u * 9 / 4 + helpH;
+	int const chrome = headerHeight(u) + u / 4 + u / 4 + u * 9 / 4 + helpH;
 	// A list longer than the room takes the nearest whole number of rows, a little shorter or taller
 	// to fill it to the help text.
 	int const room = height - chrome, fit = SDL_max(1, (room + rowH / 2) / rowH);
