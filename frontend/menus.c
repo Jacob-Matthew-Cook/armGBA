@@ -600,6 +600,8 @@ enum {
 	SET_REWIND_SIZE,
 	SET_RUNAHEAD,
 	SET_AUTO_STATE,
+	SET_FAST_FORWARD,
+	SET_MESSAGES,
 	SET_INPUT_DELAY,
 	SET_HARDCORE,
 	SET_ACCENT,
@@ -676,6 +678,19 @@ static void changeSetting(int which, int delta) {
 	case SET_AUTO_STATE:
 		settings.autoState = !settings.autoState;
 		break;
+	// As fast as it goes, then 2x to 8x.
+	case SET_FAST_FORWARD: {
+		static const int speeds[] = { 0, 2, 3, 4, 6, 8 };
+		int at = 0;
+		for (int i = 0; i < 6; ++i) {
+			at = speeds[i] == settings.fastForward ? i : at;
+		}
+		settings.fastForward = speeds[wrap(at, d, 6)];
+		break;
+	}
+	case SET_MESSAGES:
+		settings.showMessages = !settings.showMessages;
+		break;
 	case SET_INPUT_DELAY:
 		settings.inputDelay = wrap(settings.inputDelay, d, 9);
 		break;
@@ -728,6 +743,8 @@ static void videoMenu(void) {
 	addValue("VSync", onOff(settings.vsync), changeSetting, SET_VSYNC);
 	helpFor("Shows each frame as the display refreshes, so the picture doesn't tear.");
 	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
+	addValue("Show Messages", onOff(settings.showMessages), changeSetting, SET_MESSAGES);
+	helpFor("The notes at the bottom left, such as a state saved or a controller connected.");
 	addHeader("Picture");
 	addLcdRendering();
 	addOptions("video");
@@ -775,8 +792,6 @@ static void gameplayMenu(void) {
 	snprintf(text, sizeof(text), settings.runahead ? "%d %s" : "Off", settings.runahead, frames(settings.runahead));
 	addValue("Run-Ahead", text, changeSetting, SET_RUNAHEAD);
 	helpFor("Runs frames ahead and shows the last, so the game answers that many frames sooner. Costs speed.");
-	addValue("Save and Load State on Exit and Start", onOff(settings.autoState), changeSetting, SET_AUTO_STATE);
-	helpFor("Saves a state as the game closes and loads it as the game starts again.");
 }
 
 // which: the button's or hotkey's index, plus 1000 for a controller's, plus 2000 for a hotkey.
@@ -844,6 +859,10 @@ static void controlsMenu(void) {
 	helpFor("The buttons and hotkeys on a controller.");
 	addItem("Keyboard...", openControlsPage, 1);
 	helpFor("The keys and hotkeys on the keyboard.");
+	char text[32];
+	snprintf(text, sizeof(text), settings.fastForward ? "%dx" : "As Fast as It Goes", settings.fastForward);
+	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
+	helpFor("How fast the Fast Forward hotkey runs the game while it's held. As Fast as It Goes stops at 12x.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);
 	items[itemCount - 1].confirm = true;
 }
@@ -861,9 +880,11 @@ static void appearanceMenu(void) {
 	helpFor("How far the game is dimmed while the menus are open.");
 }
 
+static void foldersMenu(void);
+
 static void openSettingsPage(int which, int delta) {
-	static void (*const pages[])(void) = { videoMenu, shadersMenu, audioMenu, controlsMenu, gameplayMenu, appearanceMenu };
-	static const char* const titles[] = { "Video", "Shaders", "Audio", "Controls", "Rewind, Run-Ahead and States", "Appearance" };
+	static void (*const pages[])(void) = { videoMenu, shadersMenu, audioMenu, controlsMenu, gameplayMenu, foldersMenu, appearanceMenu };
+	static const char* const titles[] = { "Video", "Shaders", "Audio", "Controls", "Rewind and Run-Ahead", "Saves and Folders", "Appearance" };
 	if (!delta) {
 		pushMenu(pages[which], titles[which]);
 	}
@@ -876,55 +897,118 @@ static void addSettingsPages(void) {
 	helpFor("The filter, and the GPU's LCD grid and Game Boy pixel shadow.");
 	addItem("Audio...", openSettingsPage, 2);
 	addItem("Controls...", openSettingsPage, 3);
-	helpFor("Buttons and hotkeys, for controllers and the keyboard.");
-	addItem("Rewind, Run-Ahead and States...", openSettingsPage, 4);
-	addItem("Appearance...", openSettingsPage, 5);
+	helpFor("Buttons, hotkeys and fast-forward speed, for controllers and the keyboard.");
+	addItem("Rewind and Run-Ahead...", openSettingsPage, 4);
+	addItem("Saves and Folders...", openSettingsPage, 5);
+	helpFor("Saving a state on exit, and where games, BIOS files, saves, states and screenshots are.");
+	addItem("Appearance...", openSettingsPage, 6);
 	helpFor("The menus' colour and size, and how dark the game is behind them.");
 }
 
-// BIOS Folder: left and right step through Auto, armGBA's and RetroArch's; choosing it types a folder.
-static void biosFolderTyped(const char* text) {
-	snprintf(settings.biosFolder, sizeof(settings.biosFolder), "%s", text);
-	chooseSystemDirectory();
+// Saves and Folders: where games, BIOS files, saves, states and screenshots are. Left and right step
+// through a folder's kinds, Auto, armGBA's and RetroArch's, where it has them; choosing it types one.
+enum { FOLDER_GAMES, FOLDER_BIOS, FOLDER_SAVES, FOLDER_STATES, FOLDER_SHOTS, FOLDERS };
+static const struct {
+	const char* label;
+	char* setting;
+	// What retroarchFolder calls RetroArch's, or NULL; and whether "" is Auto rather than armGBA's.
+	const char* retroarch;
+	bool automatic;
+	const char* help;
+} folders[FOLDERS] = {
+	{ "Games", settings.directory, NULL, false, "Where Load Game opens; the folder of the last game loaded. Choose it to type one." },
+	{ "BIOS", settings.biosFolder, "bios", true,
+	  "Read as each game loads. Auto is armGBA's own folder if it has a BIOS or boot ROM, RetroArch's otherwise." },
+	{ "Saves", settings.saveFolder, "saves", true,
+	  "Games' saves, shared with RetroArch in RetroArch's. Auto is armGBA's own folder for a game with its save there, "
+	  "RetroArch's otherwise. Applies when a game loads." },
+	{ "States", settings.stateFolder, NULL, false, "Save states, kept apart from RetroArch's, which it compresses." },
+	{ "Screenshots", settings.shotFolder, "screenshots", false, "Screenshots and recordings." },
+};
+static int typingFolder;
+
+static void folderTyped(const char* text) {
+	snprintf(folders[typingFolder].setting, PATH_SIZE, "%s", text);
+	chooseFolders();
 	settingsWrite();
 }
 
-static void biosFolderChange(int argument, int delta) {
-	(void) argument;
+// The folder in use, for the help line; the save folder is the game's.
+static const char* folderPath(int which) {
+	switch (which) {
+	case FOLDER_GAMES:
+		return settings.directory;
+	case FOLDER_BIOS:
+		return systemDirectory;
+	case FOLDER_SAVES:
+		return app.loaded ? saveDirectory : NULL;
+	case FOLDER_STATES:
+		return stateDirectory;
+	default:
+		return shotDirectory;
+	}
+}
+
+static void folderChange(int which, int delta) {
 	if (!delta) {
-		openEntry("BIOS folder", systemDirectory, false, biosFolderTyped);
+		typingFolder = which;
+		const char* const path = folderPath(which);
+		openEntry(folders[which].label, path ? path : ownSaveDirectory, false, folderTyped);
 		return;
 	}
-	static const char* const kinds[3] = { "", "armgba", "retroarch" };
-	int at = 0;
-	for (int i = 0; i < 3; ++i) {
-		at = !strcmp(settings.biosFolder, kinds[i]) ? i : at;
+	const char* kinds[3];
+	int count = 0;
+	kinds[count++] = "";
+	if (folders[which].automatic) {
+		kinds[count++] = "armgba";
 	}
-	snprintf(settings.biosFolder, sizeof(settings.biosFolder), "%s", kinds[wrap(at, delta, 3)]);
-	chooseSystemDirectory();
+	if (folders[which].retroarch && retroarchFolder(folders[which].retroarch)) {
+		kinds[count++] = "retroarch";
+	}
+	int at = -1;
+	for (int i = 0; i < count; ++i) {
+		at = !strcmp(folders[which].setting, kinds[i]) ? i : at;
+	}
+	snprintf(folders[which].setting, PATH_SIZE, "%s", kinds[at < 0 ? 0 : wrap(at, delta, count)]);
+	chooseFolders();
 	settingsWrite();
 }
 
-static void addBiosFolder(void) {
-	const char* const chosen = settings.biosFolder;
-	const char* const whose = !strcmp(systemDirectory, ownSystemDirectory) ? "armGBA's" : "RetroArch's";
-	char value[64];
-	if (!chosen[0]) {
-		snprintf(value, sizeof(value), "Auto (%s)", whose);
+static void addFolder(int which) {
+	const char* const setting = folders[which].setting;
+	const char* const path = folderPath(which);
+	char value[NAME_SIZE];
+	if (which == FOLDER_GAMES || (setting[0] && strcmp(setting, "armgba") && strcmp(setting, "retroarch"))) {
+		// A folder typed in, by its own name.
+		const char* const slash = strrchr(setting, '/');
+		snprintf(value, sizeof(value), "%s", slash && slash[1] ? slash + 1 : setting);
+	} else if (setting[0] || !folders[which].automatic) {
+		snprintf(value, sizeof(value), "%s", !strcmp(setting, "retroarch") ? "RetroArch's" : "armGBA's");
+	} else if (path) {
+		bool const own = !strcmp(path, which == FOLDER_BIOS ? ownSystemDirectory : ownSaveDirectory);
+		snprintf(value, sizeof(value), "Auto (%s)", own ? "armGBA's" : "RetroArch's");
 	} else {
-		snprintf(value, sizeof(value), "%s", !strcmp(chosen, "armgba") || !strcmp(chosen, "retroarch") ? whose : "Typed In");
+		snprintf(value, sizeof(value), "Auto");
 	}
-	addValue("BIOS Folder", value, biosFolderChange, 0);
-	static char help[PATH_SIZE + 200];
-	snprintf(help, sizeof(help),
-	         "Read as each game loads: %s. Auto uses armGBA's own folder if it has a BIOS or boot ROM, RetroArch's otherwise; choose it "
-	         "to type another.",
-	         systemDirectory);
-	helpFor(help);
+	addValue(folders[which].label, value, folderChange, which);
+	items[itemCount - 1].adjustable = which != FOLDER_GAMES;
+	static char help[FOLDERS][PATH_SIZE + 300];
+	snprintf(help[which], sizeof(help[which]), "%s%s%s%s", path ? "Now: " : "", path ? path : "", path ? ". " : "", folders[which].help);
+	helpFor(help[which]);
+}
+
+static void foldersMenu(void) {
+	addHeader("Saves");
+	addValue("Save and Load State on Exit and Start", onOff(settings.autoState), changeSetting, SET_AUTO_STATE);
+	helpFor("Saves a state as the game closes and loads it as the game starts again.");
+	addHeader("Folders (choose one to type a folder)");
+	for (int i = 0; i < FOLDERS; ++i) {
+		addFolder(i);
+	}
 }
 
 // Reset Config: the settings and the core's options as they first were, but for the RetroAchievements
-// login, the netplay name and host, the games folder and the recent games.
+// login, the netplay name and host, the folders and the recent games.
 static void resetConfig(int argument, int delta) {
 	(void) argument;
 	if (delta) {
@@ -938,10 +1022,14 @@ static void resetConfig(int argument, int delta) {
 	memcpy(settings.host, kept.host, sizeof(settings.host));
 	settings.netPort = kept.netPort;
 	memcpy(settings.directory, kept.directory, sizeof(settings.directory));
+	memcpy(settings.biosFolder, kept.biosFolder, sizeof(settings.biosFolder));
+	memcpy(settings.saveFolder, kept.saveFolder, sizeof(settings.saveFolder));
+	memcpy(settings.stateFolder, kept.stateFolder, sizeof(settings.stateFolder));
+	memcpy(settings.shotFolder, kept.shotFolder, sizeof(settings.shotFolder));
 	for (int i = 0; i < optionCount; ++i) {
 		optionSet(&options[i], options[i].defaultValue);
 	}
-	chooseSystemDirectory();
+	chooseFolders();
 	cheevosSetHardcore(settings.hardcore);
 	rewindReset();
 	applyWindowSize();
@@ -1024,10 +1112,11 @@ static void netplayMenu(void) {
 	helpFor("How long each player's buttons wait in Together, so fewer corrections show. More suits a slow network.");
 	if (netMode == NET_OFF) {
 		addHeader("Host the loaded game");
-		addItem("Link Cable: each plays their own console (Separate)", netAction, 1);
+		addItem("Host: Separate", netAction, 1);
 		helpFor("Each device runs its own console and game, joined by the link cable over the network. Two players.");
-		addItem("Together: every console runs on every device, with rollback", netAction, 2);
-		helpFor("Every device runs every player's console, so the link never waits on the network. Everyone needs every game.");
+		addItem("Host: Together", netAction, 2);
+		helpFor("Every device runs every player's console, with rollback, so the link never waits on the network. Everyone needs every "
+		        "game.");
 		addHeader("Join");
 		addItem("Join a Host...", netAction, 3);
 		helpFor("Type the host's name or address.");
@@ -1075,7 +1164,7 @@ static void cheevosMenu(void) {
 	} else {
 		addItem("Log In...", cheevosAction, 0);
 	}
-	addValue("Hardcore Mode (no states, cheats, rewind or run-ahead)", onOff(settings.hardcore), changeSetting, SET_HARDCORE);
+	addValue("Hardcore Mode", onOff(settings.hardcore), changeSetting, SET_HARDCORE);
 	helpFor("Earns achievements as hardcore: save states, cheats, rewind and run-ahead are off, and turning it on restarts the game.");
 	static char lines[400][160];
 	int const n = cheevosList(lines, 400);
@@ -1170,10 +1259,9 @@ static void generalTab(void) {
 	items[itemCount - 1].confirm = app.loaded;
 	addHeader("Settings");
 	addSettingsPages();
-	addBiosFolder();
 	addItem("Reset Config", resetConfig, 0);
 	items[itemCount - 1].confirm = true;
-	helpFor("Puts every setting and emulator option back as it first was. Your RetroAchievements login, netplay name, games folder "
+	helpFor("Puts every setting and emulator option back as it first was. Your RetroAchievements login, netplay name, folders "
 	        "and recent games stay.");
 }
 

@@ -89,7 +89,8 @@ static struct {
 } held;
 
 
-// A message at the bottom left for a few seconds, the newest lowest; stderr gets it too.
+// A message at the bottom left for a few seconds, the newest lowest, unless Show Messages is off;
+// stderr gets it too.
 void osd(const char* format, ...) {
 	for (int i = MESSAGES - 1; i > 0; --i) {
 		messages[i] = messages[i - 1];
@@ -98,7 +99,7 @@ void osd(const char* format, ...) {
 	va_start(args, format);
 	vsnprintf(messages[0].text, sizeof(messages[0].text), format, args);
 	va_end(args);
-	messages[0].until = SDL_GetTicks() + MESSAGE_MS;
+	messages[0].until = settings.showMessages ? SDL_GetTicks() + MESSAGE_MS : 0;
 	fprintf(stderr, "armgba: %s\n", messages[0].text);
 }
 
