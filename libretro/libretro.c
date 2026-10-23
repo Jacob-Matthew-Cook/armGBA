@@ -1685,7 +1685,7 @@ static void fillSaveChoices(void) {
 		}
 	}
 	if (anyReceived) {
-		char name[32];
+		char name[48];
 		snprintf(name, sizeof(name), "Received into Player %d", receivedTarget() + 1);
 		addBackupChoices(&loadChoices, received, each, "x", name);
 		addBackupChoices(&sendChoices, received, each, "x", "Received");
