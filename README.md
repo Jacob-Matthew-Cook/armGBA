@@ -87,10 +87,12 @@ shared out among the cores, as LCD Ghosting's are: LCD Effect Threads says how m
 one core for the rest, or two with Threaded Video. Its shadow is one shade for each pixel's square,
 a close likeness of the smooth one the shaders and the standalone frontend draw, at a fraction of
 the cost. At 6x, a Game Boy game's grid adds about 1.5 ms a frame on an RG353M and its shadow 0.1 ms
-more; on a Core i7-9700F, 0.07 ms and 0.02 ms. `shaders/` holds RetroArch shader presets, `.slangp`
-and `.glslp`, that draw the same on the GPU at any size instead, one for each screen: `gb-green`,
+more; on a Core i7-9700F, 0.07 ms and 0.02 ms. On a small screen, such as a 640x480 handheld's, 2x
+with integer scaling looks cleanest. `shaders/` holds RetroArch shader presets, `.slangp` and
+`.glslp`, that draw the same on the GPU at any size instead, one for each screen: `gb-green`,
 `gb-gray`, `gb-pocket` and `gb-light` (with the shadow), `gbc` and `gba`. The standalone frontend
-draws its own on the GPU.
+draws its own on the GPU, or the core's. Drawn at any size, the grid fades below about 4x, where its
+gaps would land unevenly.
 
 ## Building
 
@@ -135,16 +137,16 @@ pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its slot,
 screenshot, F9 starts and stops recording, F11 goes full screen. The menu changes all of these.
 
 The menu also has recent games, the core's options, cheats (RetroArch's `.cht` files can be added),
-ten state slots with Undo Load State, the picture (integer scaling, Sharp, Smooth, LCD grid or
-scanlines, vsync, and the core's screen options), the sound's volume and latency, rewind, run-ahead,
-netplay, RetroAchievements, and the menus' own look: accent colour, size, and how dark the game is
-behind them. The line under the menu says what the selected item does. With a controller, the
-buttons bound to A and B choose and go back, and L and R jump by letter in the game list; on the
-keyboard, typing a name's start finds it. Restart, Close Game, Quit and Reset Controls and Hotkeys
-ask for a second press. Netplay is armgba to armgba: Separate carries the link cable between two
-devices each running its own game; Together runs every player's console on every device, kept in
-step with rollback. `--host`, `--host-together` and `--connect ADDRESS` start it from the command
-line. Achievements need the system's libcurl, and recording its ffmpeg.
+ten state slots with Undo Load State, the picture (integer scaling, Sharp, Smooth, the LCD grid
+drawn on the GPU or by the core on the CPU, vsync, and the core's screen options), the sound's
+volume and latency, rewind, run-ahead, netplay, RetroAchievements, and the menus' own look: accent
+colour, size, and how dark the game is behind them. The line under the menu says what the selected
+item does. With a controller, the buttons bound to A and B choose and go back, and L and R jump by
+letter in the game list; on the keyboard, typing a name's start finds it. Restart, Close Game, Quit
+and Reset Controls and Hotkeys ask for a second press. Netplay is armgba to armgba: Separate carries
+the link cable between two devices each running its own game; Together runs every player's console
+on every device, kept in step with rollback. `--host`, `--host-together` and `--connect ADDRESS`
+start it from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
 `~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`; BIOS and boot

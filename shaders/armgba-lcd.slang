@@ -63,6 +63,14 @@ float gapCoverage(float p, float size) {
 	return clamp((min(edge + size * 0.5, halfGap) - max(edge - size * 0.5, -halfGap)) / size, 0.0, 1.0);
 }
 
+// How much of the grid shows, a dot being pitch output pixels wide: none at 2 or less, all from 5 on,
+// smoothly between, as lcd.h's libretroLcdFade. A gap under a pixel wide lands unevenly; faded, it
+// reads as the screen's texture rather than as lines.
+float gridFade(float pitch) {
+	float t = clamp((pitch - 2.0) / 3.0, 0.0, 1.0);
+	return t * t * (3.0 - 2.0 * t);
+}
+
 float level(vec3 c) {
 	return dot(c, vec3(2.0, 5.0, 1.0));
 }
@@ -72,8 +80,9 @@ void main() {
 	vec2 size = params.SourceSize.xy * params.OutputSize.zw;
 	vec3 color = texture(Source, (floor(at) + 0.5) * params.SourceSize.zw).rgb;
 	vec3 gap = vec3(params.GAP_RED, params.GAP_GREEN, params.GAP_BLUE) / 255.0;
-	float across = gapCoverage(at.x, size.x) * params.GAP_ACROSS;
-	float down = gapCoverage(at.y, size.y) * params.GAP_DOWN;
+	float fade = gridFade(1.0 / max(size.x, size.y));
+	float across = gapCoverage(at.x, size.x) * params.GAP_ACROSS * fade;
+	float down = gapCoverage(at.y, size.y) * params.GAP_DOWN * fade;
 	color = mix(color, gap, across + down - across * down);
 	if (params.SHADOW > 0.0) {
 		float way = (params.SHADOW_WAY - 1.0) * 0.785398;
