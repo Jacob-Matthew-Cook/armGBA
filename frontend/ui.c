@@ -936,7 +936,8 @@ static void drawMenu(int width, int height, int u) {
 		m->selected = -1;
 		moveSelection(1);
 	}
-	int const rowH = u * 7 / 4, size = u * 19 / 20, headerSize = u;
+	int const size = u * 19 / 20, headerSize = u;
+	int rowH = u * 13 / 8;
 	// Two lines above the footer say what the selected item does, when this menu's items say.
 	bool anyHelp = false;
 	for (int i = 0; i < itemCount && !anyHelp; ++i) {
@@ -944,7 +945,13 @@ static void drawMenu(int width, int height, int u) {
 	}
 	int const helpSize = u * 13 / 20, helpLine = u * 9 / 10, helpH = anyHelp ? helpLine * 2 + u / 2 : 0;
 	int const chrome = u * 3 + u / 4 + u / 4 + u * 9 / 4 + helpH;
-	int const rows = SDL_max(1, SDL_min(SDL_min(itemCount, ROWS_MAX), (height - chrome) / rowH));
+	// A list longer than the room takes the nearest whole number of rows, a little shorter or taller
+	// to fill it to the help text.
+	int const room = height - chrome, fit = SDL_max(1, (room + rowH / 2) / rowH);
+	int const rows = SDL_min(SDL_min(itemCount, ROWS_MAX), fit);
+	if (rows == fit) {
+		rowH = room / rows;
+	}
 	SDL_Rect const panel = { 0, 0, width, height };
 	// Where you are: the menu before and this one.
 	char where[512];
