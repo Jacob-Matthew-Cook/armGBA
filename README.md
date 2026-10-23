@@ -17,7 +17,7 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | --- | --- | --- |
 | L2, R2 (held) | Fast-forward, up to RetroArch's Maximum Run Speed | Same |
 | X, Y (held) | Turbo A, turbo B | Same |
-| L3, R3 (held) | Turbo L, turbo R | Click of the tilt stick: flick (motion sensor) |
+| L3, R3 (held) | Turbo L, turbo R | Click of the tilt stick: flick (motion sensor); R3 otherwise resets the contrast |
 | L, R | L, R | Stretch the picture (Game Boy Advance model) |
 | Tilt stick | Tilt and turn (motion sensor games) | Tilt (motion sensor games) |
 | Left stick, with Left Stick as D-Pad | D-pad, except while it tilts | Same |
