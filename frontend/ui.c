@@ -37,7 +37,7 @@ enum {
 	// How long a tab takes to slide in.
 	SLIDE_MS = 180,
 	// The most lines the help above the footer takes.
-	HELP_LINES = 3,
+	HELP_LINES = 4,
 };
 
 // The menu shown, built again each frame, and the menus opened to reach it.
@@ -361,7 +361,7 @@ const struct Accent accents[ACCENTS] = {
 const struct MenuSize menuSizes[MENU_SIZES] = { { "Small", 100 }, { "Normal", 120 }, { "Large", 140 }, { "Larger", 160 } };
 const char* const dims[3] = { "Light", "Medium", "Dark" };
 // Dark enough, as the menus' own background, for their text to read over a bright game.
-static const Uint8 dimAlphas[3] = { 175, 210, 240 };
+static const Uint8 dimAlphas[3] = { 205, 230, 248 };
 
 // Back to the game, closing the keyboard and any binding waited for.
 void uiCloseMenu(void) {
@@ -1065,7 +1065,7 @@ static void drawMenu(int width, int height, int u) {
 	// Two lines above the footer say what the selected item does, when this menu's items say.
 	// Room above the footer for what the selected item does: as many lines, up to HELP_LINES, as this
 	// menu's longest help takes (worked out once for each menu and size), so the rows don't move.
-	int const helpSize = u * 3 / 4, helpLine = u * 21 / 20, helpWidth = width - u * 4;
+	int const helpSize = u * 17 / 20, helpLine = u * 23 / 20, helpWidth = width - u * 4;
 	// Pages built by one function (Core's categories, the folders) differ by their help.
 	uintptr_t helpTexts = 0;
 	for (int i = 0; i < itemCount; ++i) {
@@ -1193,7 +1193,7 @@ static void drawMenu(int width, int height, int u) {
 				arrowLeft[shownCount] = valueL + aw + u / 4;
 			} else {
 				valueL = textR - vw;
-				textDraw(face, size, valueL, ty, item->adjustable && !on ? muted : color, value);
+				textDraw(face, size, valueL, ty, item->adjustable && !on ? helpText : color, value);
 			}
 		}
 		char label[NAME_SIZE + 64];
