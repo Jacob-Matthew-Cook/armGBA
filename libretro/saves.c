@@ -11,10 +11,12 @@
 #include "gb.h"
 #include "link.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 // Saves the core reads and writes itself: the other players' saves (where RetroArch keeps their
 // game's save, or in armGBA/Player N), and player 1's save with a pair file or Player 1's Save
@@ -103,11 +105,41 @@ bool readFileInto(const char* path, void* data, size_t size) {
 	return read > 0;
 }
 
-static bool writeFile(const char* path, const void* data, size_t size) {
-	FILE* f = fopen(path, "wb");
-	bool const written = f && fwrite(data, 1, size, f) == size;
+// Flushes a folder's list of files to the card, so a file just put in place stays there.
+static void syncFolder(const char* path) {
+	char folder[SAVE_PATH_SIZE];
+	snprintf(folder, sizeof(folder), "%s", path);
+	char* const slash = strrchr(folder, '/');
+	if (!slash) {
+		return;
+	}
+	*slash = '\0';
+	int const fd = open(*folder ? folder : "/", O_RDONLY);
+	if (fd >= 0) {
+		fsync(fd);
+		close(fd);
+	}
+}
+
+// Writes a whole file. With Safe Saves on, it goes to a new file beside it first, flushed to the card,
+// which then takes the old one's place in one step: a write cut off by power loss or a crash leaves
+// the old file whole.
+bool writeWholeFile(const char* path, const void* data, size_t size) {
+	bool const safe = !optionIs("armgba_safe_saves", "disabled");
+	char temporary[SAVE_PATH_SIZE + 8];
+	bool const fits = snprintf(temporary, sizeof(temporary), "%s.tmp", path) < (int) sizeof(temporary);
+	FILE* f = !safe || fits ? fopen(safe ? temporary : path, "wb") : NULL;
+	bool written = f && fwrite(data, 1, size, f) == size && fflush(f) == 0 && (!safe || fsync(fileno(f)) == 0);
 	if (f) {
-		fclose(f);
+		written &= fclose(f) == 0;
+	}
+	if (safe && written && rename(temporary, path) == 0) {
+		syncFolder(path);
+	} else if (safe) {
+		written = false;
+		if (fits) {
+			remove(temporary);
+		}
 	}
 	if (!written) {
 		char message[160];
@@ -142,7 +174,7 @@ static bool copyFile(const char* from, const char* to) {
 	size_t size;
 	void* data = readWholeFile(from, &size);
 	if (data) {
-		writeFile(to, data, size);
+		writeWholeFile(to, data, size);
 	}
 	free(data);
 	return data != NULL;
@@ -365,11 +397,11 @@ void writeCoreSaves(bool closing) {
 		}
 		keptSaves[player].hash = hash;
 		makeFolders(keptSaves[player].file);
-		writeFile(keptSaves[player].file, save, size);
+		writeWholeFile(keptSaves[player].file, save, size);
 		size_t rtcSize;
 		void* rtc = rtcMemory(player, &rtcSize);
 		if (rtc && rtcSize) {
-			writeFile(keptSaves[player].rtcFile, rtc, rtcSize);
+			writeWholeFile(keptSaves[player].rtcFile, rtc, rtcSize);
 		}
 	}
 }
@@ -448,12 +480,12 @@ static int writeBackup(const char* file, const char* rtcFile, const void* save, 
 	newBackupStamp(file, stamp);
 	backupFilePath(file, stamp, out, sizeof(out));
 	makeFolders(out);
-	if (!writeFile(out, save, size)) {
+	if (!writeWholeFile(out, save, size)) {
 		return -1;
 	}
 	if (rtc && rtcSize) {
 		backupFilePath(rtcFile, stamp, out, sizeof(out));
-		writeFile(out, rtc, rtcSize);
+		writeWholeFile(out, rtc, rtcSize);
 	}
 	return 1;
 }
@@ -694,10 +726,10 @@ static void copyCurrentSave(int from, int to, const char* toFile, const char* to
 	void* save = liveSave(to, &size, &rtc, &rtcSize);
 	memcpy(save, liveSave(from, &fromSize, &fromRtc, &fromRtcSize), size);
 	makeFolders(toFile);
-	writeFile(toFile, save, size);
+	writeWholeFile(toFile, save, size);
 	if (rtc && fromRtc && rtcSize == fromRtcSize) {
 		memcpy(rtc, fromRtc, rtcSize);
-		writeFile(toRtc, rtc, rtcSize);
+		writeWholeFile(toRtc, rtc, rtcSize);
 	}
 }
 

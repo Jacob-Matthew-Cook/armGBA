@@ -43,11 +43,7 @@ bool saveState(int slot) {
 	void* data = size ? malloc(size) : NULL;
 	char path[FILE_SIZE];
 	statePath(path, slot);
-	FILE* f = data && retro_serialize(data, size) ? fopen(path, "wb") : NULL;
-	bool const saved = f && fwrite(data, 1, size, f) == size;
-	if (f) {
-		fclose(f);
-	}
+	bool const saved = data && retro_serialize(data, size) && writeWholeFile(path, data, size);
 	free(data);
 	return saved;
 }

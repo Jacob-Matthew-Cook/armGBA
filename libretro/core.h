@@ -139,6 +139,8 @@ bool optionsGive(retro_environment_t callback);
 struct retro_core_option_v2_definition* optionDefinition(const char* key);
 const char* option(const char* key);
 bool optionIs(const char* key, const char* wanted);
+// Writes a whole file, the old one kept whole until the new one is (Safe Saves); false if it couldn't.
+bool writeWholeFile(const char* path, const void* data, size_t size);
 int optionChoice(const char* key, const struct Choice* choices, size_t count, int fallback);
 bool togetherWanted(void);
 bool separateWanted(void);

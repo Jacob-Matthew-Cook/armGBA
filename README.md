@@ -79,6 +79,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Player 1's Save Folder (applies when a game starts) | Both | Save Folder, armGBA/Player 1 Folder |
 | | Backups Kept | Both | 10, 5, 20, All |
 | | Backups Listed | Both | 10, 20, 40, 80, 126 |
+| | Safe Saves | Both | Off, On; On by default |
 
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy on Advance
 Border set to Shown, the black around it shows too, as on that console's screen. Game Boy on Advance
