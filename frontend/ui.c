@@ -63,6 +63,7 @@ static struct {
 static struct {
 	bool open;
 	char title[128];
+	char hint[200];
 	char text[256];
 	bool hidden;
 	void (*done)(const char* text);
@@ -313,9 +314,10 @@ void popMenu(void) {
 
 // The on-screen keyboard, to type text, starting from text: done gets what was typed if it's accepted.
 // hidden shows stars for a password.
-void openEntry(const char* title, const char* text, bool hidden, void (*done)(const char* text)) {
+void openEntry(const char* title, const char* hint, const char* text, bool hidden, void (*done)(const char* text)) {
 	entry.open = true;
 	snprintf(entry.title, sizeof(entry.title), "%s", title);
+	snprintf(entry.hint, sizeof(entry.hint), "%s", hint ? hint : "");
 	snprintf(entry.text, sizeof(entry.text), "%s", text ? text : "");
 	entry.hidden = hidden;
 	entry.done = done;
@@ -943,15 +945,15 @@ static void drawMessages(int width, int height, int u) {
 	}
 }
 
-// The on-screen keyboard: the text typed, as stars for a password, with a blinking caret, then the
-// keys. The last row's four keys are three wide.
+// The on-screen keyboard: the text typed, as stars for a password, with a blinking caret, what goes
+// there, then the keys. The last row's four keys are three wide.
 static void drawEntry(int width, int height, int u) {
-	int const fieldH = u * 2, keyH = u * 7 / 4, keySize = u * 4 / 5;
+	int const fieldH = u * 2, keyH = u * 7 / 4, keySize = u * 4 / 5, hintSize = u * 3 / 4, hintH = entry.hint[0] ? u * 5 / 4 : 0;
 	SDL_Rect const panel = { 0, 0, width, height };
 	int const top = drawPanel(panel, u, entry.title);
 	// The field and keys, as wide as 28 units, in the middle of the room between header and footer.
 	int const inner = SDL_min(width - 2 * u, u * 28), left = (width - inner) / 2;
-	int y = top + SDL_max(u / 4, (footerTop(panel, u) - top - (fieldH + u / 2 + 5 * keyH)) / 2);
+	int y = top + SDL_max(u / 4, (footerTop(panel, u) - top - (fieldH + hintH + u / 2 + 5 * keyH)) / 2);
 	fillBordered((SDL_Rect) { left, y, inner, fieldH }, u / 2, (SDL_Color) { 13, 18, 28, 255 }, accent, 2);
 	// The text, as stars when hidden, its start cut off if it's too long.
 	char shown[300];
@@ -970,6 +972,12 @@ static void drawEntry(int width, int height, int u) {
 		fillRect(left + u * 2 / 3 + tw + 1, y + (fieldH - keySize) / 2, 2, keySize, accent);
 	}
 	y += fieldH + u / 2;
+	if (hintH) {
+		char hint[sizeof(entry.hint) + 8];
+		textFit(FACE_BODY, hintSize, entry.hint, inner, false, hint, sizeof(hint));
+		textDraw(FACE_BODY, hintSize, left + u / 3, y - u / 4, helpText, hint);
+		y += hintH;
+	}
 	// Each key's rectangle is kept for the mouse, the last row's for each of the columns it spans.
 	int const keyW = inner / 12, gap = SDL_max(2, u / 8);
 	for (int r = 0; r < 5; ++r) {

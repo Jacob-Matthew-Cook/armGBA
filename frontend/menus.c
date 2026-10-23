@@ -376,9 +376,9 @@ static void cheatEdit(int which, int delta) {
 		return;
 	}
 	if (which == 0) {
-		openEntry("Cheat code (Action Replay, GameShark, CodeBreaker, Game Genie)", cheats[cheatShown].code, false, cheatCodeDone);
+		openEntry("Cheat Code", "Action Replay, GameShark, CodeBreaker or Game Genie.", cheats[cheatShown].code, false, cheatCodeDone);
 	} else if (which == 1) {
-		openEntry("Cheat name", cheats[cheatShown].description, false, cheatNameDone);
+		openEntry("Cheat Name", NULL, cheats[cheatShown].description, false, cheatNameDone);
 	} else {
 		cheatListRemove(cheatShown);
 		cheatListApply();
@@ -424,13 +424,13 @@ static void newCheatCode(const char* text) {
 
 static void newCheatNamed(const char* text) {
 	snprintf(newCheatName, sizeof(newCheatName), "%s", *text ? text : "Cheat");
-	openEntry("Cheat code (several lines' codes may be joined with +)", "", false, newCheatCode);
+	openEntry("Cheat Code", "Action Replay, GameShark, CodeBreaker or Game Genie; join several lines with +.", "", false, newCheatCode);
 }
 
 static void cheatNew(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
-		openEntry("New cheat's name", "", false, newCheatNamed);
+		openEntry("Cheat Name", "What the cheat list calls it.", "", false, newCheatNamed);
 	}
 }
 
@@ -985,7 +985,9 @@ static void folderPick(int kind, int delta) {
 	}
 	if (kind == 3) {
 		const char* const path = folderPath(folderShown);
-		openEntry(folders[folderShown].label, path ? path : folders[folderShown].own, false, folderTyped);
+		char folderTitle[64];
+		snprintf(folderTitle, sizeof(folderTitle), "%s Folder", folders[folderShown].label);
+		openEntry(folderTitle, "The folder's full path.", path ? path : folders[folderShown].own, false, folderTyped);
 		return;
 	}
 	const char* const kinds[3] = { "", folders[folderShown].automatic ? "armgba" : "", "retroarch" };
@@ -1007,13 +1009,13 @@ static void folderMenu(void) {
 	if (folders[which].own) {
 		bool const own = folders[which].automatic ? !strcmp(setting, "armgba") : !setting[0];
 		addChoice("armGBA's", own ? "In Use" : "", folderPick, 1);
-		snprintf(help[1], sizeof(help[1]), "%s", folders[which].own);
+		snprintf(help[1], sizeof(help[1]), "armGBA's own: %s", folders[which].own);
 		helpFor(help[1]);
 	}
 	const char* const theirs = folders[which].retroarch ? retroarchFolder(folders[which].retroarch) : NULL;
 	if (theirs) {
 		addChoice("RetroArch's", !strcmp(setting, "retroarch") ? "In Use" : "", folderPick, 2);
-		snprintf(help[2], sizeof(help[2]), "%s, read from RetroArch's retroarch.cfg.", theirs);
+		snprintf(help[2], sizeof(help[2]), "RetroArch's, from its retroarch.cfg: %s", theirs);
 		helpFor(help[2]);
 	}
 	addChoice("Type a Folder...", typed ? folderName(setting) : "", folderPick, 3);
@@ -1127,18 +1129,18 @@ static void netAction(int which, int delta) {
 	}
 	switch (which) {
 	case 0:
-		openEntry("Your name", settings.nickname, false, nicknameDone);
+		openEntry("Your Name", "Shown to the other players.", settings.nickname, false, nicknameDone);
 		break;
 	case 1:
 	case 2:
 		if (!app.loaded) {
-			osd("Load the game to play first");
+			osd("Netplay: load your game first");
 		} else if (netHost(which == 2)) {
 			uiCloseMenu();
 		}
 		break;
 	case 3:
-		openEntry("Host's address (name or IP, and :port if not the usual one)", settings.host, false, joinDone);
+		openEntry("Host Address", "The host's name or IP address, and :port if it isn't the usual one.", settings.host, false, joinDone);
 		break;
 	case 4:
 		netStop();
@@ -1146,7 +1148,7 @@ static void netAction(int which, int delta) {
 	case 5: {
 		char port[16];
 		snprintf(port, sizeof(port), "%d", settings.netPort);
-		openEntry("Port (1 to 65535)", port, false, portDone);
+		openEntry("Port", "A number from 1 to 65535.", port, false, portDone);
 		break;
 	}
 	}
@@ -1197,7 +1199,7 @@ static void passwordDone(const char* text) {
 // Logging in asks for the user name, then the password; cheevos.c keeps the token, not the password.
 static void userDone(const char* text) {
 	snprintf(loginUser, sizeof(loginUser), "%s", text);
-	openEntry("RetroAchievements password (sent only to retroachievements.org)", "", true, passwordDone);
+	openEntry("RetroAchievements Password", "Sent only to retroachievements.org; only a token is kept.", "", true, passwordDone);
 }
 
 static void cheevosAction(int which, int delta) {
@@ -1205,7 +1207,7 @@ static void cheevosAction(int which, int delta) {
 		return;
 	}
 	if (which == 0) {
-		openEntry("RetroAchievements user name", settings.cheevosUser, false, userDone);
+		openEntry("RetroAchievements User Name", NULL, settings.cheevosUser, false, userDone);
 	} else {
 		cheevosLogout();
 	}
