@@ -292,6 +292,7 @@ bool showOptions(void) {
 		{ "armgba_gamecube_address", advance && gamecubeWanted() },
 	};
 	enum { OPTIONS = COUNT(options) };
+	_Static_assert(OPTIONS <= COUNT(optionsShown), "optionsShown has room for every option shown and hidden here");
 	bool changed = false;
 	for (int i = 0; i < OPTIONS; ++i) {
 		if (!optionsShownSet || optionsShown[i] != options[i].shown) {
