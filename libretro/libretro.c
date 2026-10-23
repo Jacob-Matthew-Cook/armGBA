@@ -187,9 +187,10 @@ static int pairCount;
 bool netplaySeen;
 // The Switch Controller buttons move controller 1 to the next console here; controllerFocus is the
 // console it plays, the other controllers moving along with it.
-enum { SWITCH_OFF, SWITCH_L_R_A_B, SWITCH_START_L2_R2 };
+enum { SWITCH_OFF, SWITCH_L_R_A_B, SWITCH_L3_R3, SWITCH_START_L2_R2, SWITCH_START_L3, SWITCH_START_R3 };
 static int switchController = SWITCH_L_R_A_B;
 static int controllerFocus;
+static bool switchStick(unsigned button);
 // In rollback netplay every device runs the host's session. Each device tags its session, and the
 // tag goes in every state. A device that loads a state with another device's tag has joined that
 // session and takes its tag, so the states on every device stay the same.
@@ -580,7 +581,10 @@ static void readOptions(void) {
 		}
 	}
 	static const struct Choice switchChoices[] = {
+		{ "l3 r3", SWITCH_L3_R3 },
 		{ "start l2 r2", SWITCH_START_L2_R2 },
+		{ "start l3", SWITCH_START_L3 },
+		{ "start r3", SWITCH_START_R3 },
 		{ "off", SWITCH_OFF },
 	};
 	switchController = optionChoice("armgba_switch_controller", switchChoices, COUNT(switchChoices), SWITCH_L_R_A_B);
@@ -1322,7 +1326,8 @@ static void readMotion(uint16_t keys, int* x, int* y, bool* click) {
 		unsigned stick = tiltControl == TILT_RIGHT_STICK ? RETRO_DEVICE_INDEX_ANALOG_RIGHT : RETRO_DEVICE_INDEX_ANALOG_LEFT;
 		*x = inputState(0, RETRO_DEVICE_ANALOG, stick, RETRO_DEVICE_ID_ANALOG_X);
 		*y = inputState(0, RETRO_DEVICE_ANALOG, stick, RETRO_DEVICE_ID_ANALOG_Y);
-		*click = inputState(0, RETRO_DEVICE_JOYPAD, 0, tiltControl == TILT_RIGHT_STICK ? RETRO_DEVICE_ID_JOYPAD_R3 : RETRO_DEVICE_ID_JOYPAD_L3);
+		unsigned const button = tiltControl == TILT_RIGHT_STICK ? RETRO_DEVICE_ID_JOYPAD_R3 : RETRO_DEVICE_ID_JOYPAD_L3;
+		*click = !switchStick(button) && inputState(0, RETRO_DEVICE_JOYPAD, 0, button);
 	}
 }
 
@@ -1388,7 +1393,9 @@ static bool turbo(unsigned port, unsigned button, unsigned* counter) {
 // Turbo L and R: L3 and R3 held press a Game Boy Advance game's L and R.
 static uint16_t readTurboShoulders(void) {
 	static unsigned turboL, turboR;
-	return (turbo(0, RETRO_DEVICE_ID_JOYPAD_L3, &turboL) ? KEY_L : 0) | (turbo(0, RETRO_DEVICE_ID_JOYPAD_R3, &turboR) ? KEY_R : 0);
+	bool const l = !switchStick(RETRO_DEVICE_ID_JOYPAD_L3) && turbo(0, RETRO_DEVICE_ID_JOYPAD_L3, &turboL);
+	bool const r = !switchStick(RETRO_DEVICE_ID_JOYPAD_R3) && turbo(0, RETRO_DEVICE_ID_JOYPAD_R3, &turboR);
+	return (l ? KEY_L : 0) | (r ? KEY_R : 0);
 }
 
 static bool allHeld(uint16_t keys, uint16_t wanted) {
@@ -1419,6 +1426,11 @@ static uint16_t readKeys(unsigned port) {
 	static unsigned turboA[MAX_PLAYERS], turboB[MAX_PLAYERS];
 	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_X, &turboA[port]) ? KEY_A : 0;
 	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_Y, &turboB[port]) ? KEY_B : 0;
+	// Start + L3 or R3 switches controllers: with the stick clicked first, the game doesn't see Start.
+	unsigned const stick = switchController == SWITCH_START_L3 ? RETRO_DEVICE_ID_JOYPAD_L3 : RETRO_DEVICE_ID_JOYPAD_R3;
+	if (port == 0 && switchController >= SWITCH_START_L3 && switchStick(stick) && inputState(0, RETRO_DEVICE_JOYPAD, 0, stick)) {
+		keys &= ~KEY_START;
+	}
 	// As in mGBA's core by default, pressing opposite directions together presses neither.
 	if (allHeld(keys, KEY_LEFT | KEY_RIGHT)) {
 		keys &= ~(KEY_LEFT | KEY_RIGHT);
@@ -1451,20 +1463,39 @@ bool rerunning(void) {
 	return environment(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &enabled) && !(enabled & RETRO_AV_ENABLE_VIDEO);
 }
 
+// Whether Switch Controller works now: on, with the consoles here and not in netplay.
+static bool switchOn(void) {
+	return switchController != SWITCH_OFF && togetherRunning() && !netplaySeen && playersHere > 1;
+}
+
 // Whether controller 1 holds the Switch Controller buttons.
 static bool switchHeld(int port) {
-	static unsigned const lrab[] = { RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B };
-	static unsigned const startL2R2[] = { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_L2, RETRO_DEVICE_ID_JOYPAD_R2 };
-	if (switchController == SWITCH_OFF || port != 0 || !togetherRunning() || netplaySeen || playersHere < 2) {
+	static struct {
+		size_t count;
+		unsigned buttons[4];
+	} const combos[] = {
+		[SWITCH_L_R_A_B] = { 4, { RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B } },
+		[SWITCH_L3_R3] = { 2, { RETRO_DEVICE_ID_JOYPAD_L3, RETRO_DEVICE_ID_JOYPAD_R3 } },
+		[SWITCH_START_L2_R2] = { 3, { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_L2, RETRO_DEVICE_ID_JOYPAD_R2 } },
+		[SWITCH_START_L3] = { 2, { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_L3 } },
+		[SWITCH_START_R3] = { 2, { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_R3 } },
+	};
+	if (port != 0 || !switchOn()) {
 		return false;
 	}
-	bool const isLrab = switchController == SWITCH_L_R_A_B;
-	for (size_t k = 0; k < (isLrab ? COUNT(lrab) : COUNT(startL2R2)); ++k) {
-		if (!inputState(0, RETRO_DEVICE_JOYPAD, 0, isLrab ? lrab[k] : startL2R2[k])) {
+	for (size_t k = 0; k < combos[switchController].count; ++k) {
+		if (!inputState(0, RETRO_DEVICE_JOYPAD, 0, combos[switchController].buttons[k])) {
 			return false;
 		}
 	}
 	return true;
+}
+
+// Whether controller 1's L3 or R3 is one of the Switch Controller buttons now, so it only switches.
+static bool switchStick(unsigned button) {
+	return switchOn() && (switchController == SWITCH_L3_R3 ||
+	                      (switchController == SWITCH_START_L3 && button == RETRO_DEVICE_ID_JOYPAD_L3) ||
+	                      (switchController == SWITCH_START_R3 && button == RETRO_DEVICE_ID_JOYPAD_R3));
 }
 
 // The controller that plays console i: controller 1 plays controllerFocus's.
@@ -1477,7 +1508,7 @@ static int portFor(int i) {
 
 // Whether controller 1 holds Start with Switch Controller on Start + L2 + R2, so its L2 and R2 only switch.
 static bool switchStart(int port) {
-	return switchController == SWITCH_START_L2_R2 && port == 0 && togetherRunning() && !netplaySeen && playersHere > 1 &&
+	return switchController == SWITCH_START_L2_R2 && port == 0 && switchOn() &&
 	       inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START);
 }
 
