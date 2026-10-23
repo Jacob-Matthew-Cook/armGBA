@@ -20,6 +20,7 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | L3, R3 (held) | Turbo L, turbo R | Click of the tilt stick: flick (motion sensor) |
 | L, R | L, R | Stretch the picture (Game Boy Advance model) |
 | Tilt stick | Tilt and turn (motion sensor games) | Tilt (motion sensor games) |
+| Left stick, with Left Stick as D-Pad | D-pad, except while it tilts | Same |
 | Right stick up, down | Sunlight up, down (solar sensor games) | Contrast up, down (original Game Boy screens) |
 | L, R, Start (held 1 s) | Restart that player's console (the Restart Buttons option) | Same |
 
@@ -54,7 +55,8 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left |
 | | CPU Effect Threads | Both | Auto, 1, 2, 3, 4 |
 | Audio | Low-Pass Filter | Both | Off, 20%, 40%, 60%, 80% |
-| Input | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
+| Input | Left Stick as D-Pad | Both | Off, On |
+| | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
 | | Restart Buttons | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |

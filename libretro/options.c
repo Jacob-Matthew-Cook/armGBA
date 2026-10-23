@@ -111,6 +111,9 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_low_pass_filter", "Low-Pass Filter", NULL,
 	  "Softens the sound's high notes, as the consoles' small speakers did. Higher is softer.", NULL, "audio",
 	  { { "disabled", "Off" }, { "20", "20%" }, { "40", "40%" }, { "60", "60%" }, { "80", "80%" }, { NULL, NULL } }, "disabled" },
+	{ "armgba_left_stick_dpad", "Left Stick as D-Pad", NULL,
+	  "The left stick presses the D-pad too, pushed past halfway. Not while it tilts a motion sensor cartridge.", NULL, "input",
+	  { { "disabled", "Off" }, { "enabled", "On" }, { NULL, NULL } }, "disabled" },
 	{ "armgba_turbo_period", "Turbo Button Period", NULL,
 	  "Frames per press while a turbo button is held: X and Y for A and B, and L3 and R3 for L and R on the Game Boy Advance.", NULL, "input",
 	  { { NULL, NULL } }, "4" },
@@ -198,7 +201,7 @@ static struct retro_core_option_v2_category optionCategories[] = {
 	// page, under their names.
 	{ "video_lcd", "Video: LCD Effects", "The screen's ghosting, its grid and the Game Boy's pixel shadow, drawn on the CPU." },
 	{ "audio", "Audio", "How the sound is filtered." },
-	{ "input", "Input", "Turbo, restart buttons and cartridge sensors." },
+	{ "input", "Input", "The left stick, turbo, restart buttons and cartridge sensors." },
 	{ "link", "Link", "Playing together: Link Mode, and the link's players, connection, screens and controls." },
 	{ "link_players", "Link: Players", "How many consoles, and player 2's game." },
 	{ "link_connection", "Link: Connection", "The link cable, the Wireless Adapter, the Four Player Adapter and the GameCube." },
