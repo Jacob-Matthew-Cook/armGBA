@@ -1030,18 +1030,19 @@ static void drawCapture(int width, int height, int u) {
 	const char* what = capture.hotkey ? actionNames[capture.which] : buttonNames[capture.which];
 	char line[256];
 	snprintf(line, sizeof(line), capture.controller ? "Press a button for %s" : "Press a key for %s", what);
-	int const size = u, small = u * 7 / 10;
+	int const size = u, small = u * 17 / 20;
 	SDL_Rect panel;
-	panel.w = SDL_min(width - u, SDL_max(u * 20, textWidth(FACE_STRONG, size, line) + u * 3));
+	panel.w = SDL_min(width - u, SDL_max(u * 22, textWidth(FACE_STRONG, size, line) + u * 3));
 	panel.h = u * 5;
 	panel.x = (width - panel.w) / 2;
 	panel.y = (height - panel.h) / 2;
 	fillBordered(panel, u * 3 / 4, panelFill, accent, 2);
 	int const lw = textWidth(FACE_STRONG, size, line);
 	textDraw(FACE_STRONG, size, panel.x + (panel.w - lw) / 2, panel.y + u + u / 4, white, line);
-	const char* hint = "Esc cancels \xC2\xB7 Delete clears it";
+	// Esc and Delete are a keyboard's, so for a controller's button they're said to be.
+	const char* hint = capture.controller ? "On a keyboard, Esc cancels \xC2\xB7 Delete clears it" : "Esc cancels \xC2\xB7 Delete clears it";
 	int const hw = textWidth(FACE_BODY, small, hint);
-	textDraw(FACE_BODY, small, panel.x + (panel.w - hw) / 2, panel.y + u * 3, muted, hint);
+	textDraw(FACE_BODY, small, panel.x + (panel.w - hw) / 2, panel.y + u * 3, helpText, hint);
 }
 
 // The menu on top: its rows, the help for the selected one and the footer's hints.
