@@ -109,7 +109,7 @@ void readOtherSaves(void);
 void copyFirstSave(void);
 // Writes the kept saves that changed (in netplay only as the game closes, on the host); forgets
 // them; writeKeptSaves checks every few seconds.
-void writeSaves(bool closing);
+void writeCoreSaves(bool closing);
 void forgetSaves(void);
 void forgetOtherSaves(void);
 void writeKeptSaves(void);

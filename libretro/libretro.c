@@ -942,7 +942,7 @@ static void startOthers(const struct retro_game_info* second, const void* sameDa
 }
 
 static void stopOthers(void) {
-	writeSaves(false);
+	writeCoreSaves(false);
 	forgetOtherSaves();
 	if (gbTogether) {
 		stopOtherGameBoys();
@@ -1237,7 +1237,7 @@ void retro_unload_game(void) {
 	if (!secondFromFrontend) {
 		rememberSecondChoice();
 	}
-	writeSaves(true);
+	writeCoreSaves(true);
 	forgetSaves();
 	pairFile = false;
 	secondFromFrontend = false;

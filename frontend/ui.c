@@ -11,6 +11,7 @@
 // change a value, Esc or B or a right-click goes back.
 
 #include "frontend.h"
+#include "ui.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -27,7 +28,6 @@
 enum {
 	// Rows a menu shows at once, at most.
 	ROWS_MAX = 128,
-	DEPTH_MAX = 8,
 	MESSAGES = 4,
 	MESSAGE_MS = 3000,
 	// Holding a direction on a controller repeats it after this long, then this often.
@@ -36,35 +36,12 @@ enum {
 	CIRCLES = 16,
 };
 
-// An item calls its function with 0 when chosen, and with -1 or 1 when its value is changed.
-typedef void (*ItemFunction)(int argument, int delta);
-
-struct Item {
-	char label[NAME_SIZE + 64];
-	char value[NAME_SIZE + 64];
-	ItemFunction function;
-	int argument;
-	bool header;
-	bool adjustable;
-	// Asks to be chosen twice, as it ends or throws away the game's progress.
-	bool confirm;
-	// What it does, shown under the menu while it's selected.
-	const char* help;
-};
-
-struct Menu {
-	void (*build)(void);
-	char title[NAME_SIZE + 64];
-	int selected;
-	int scroll;
-};
-
 // The menu shown, built again each frame, and the menus opened to reach it.
-static struct Item* items;
+struct Item* items;
 static int itemCapacity;
-static int itemCount;
-static struct Menu stack[DEPTH_MAX];
-static int depth;
+int itemCount;
+struct Menu stack[DEPTH_MAX];
+int depth;
 // Where each item was last drawn, for the mouse.
 static SDL_Rect itemRects[ROWS_MAX];
 static int firstShown, shownCount;
@@ -109,10 +86,6 @@ static struct {
 	Uint32 next;
 } held;
 
-static char browserPath[PATH_SIZE];
-// Recent games, read as the menu opens.
-static char recentGames[RECENT_MAX][PATH_SIZE];
-static int recentCount;
 
 // A message at the bottom left for a few seconds, the newest lowest; stderr gets it too.
 void osd(const char* format, ...) {
@@ -220,7 +193,7 @@ static void fillBordered(SDL_Rect r, int radius, SDL_Color fill, SDL_Color edge,
 // The menus' building blocks.
 
 // A row added to the menu being built. If the list can't grow, it goes to a spare that isn't shown.
-static struct Item* addItem(const char* label, ItemFunction function, int argument) {
+struct Item* addItem(const char* label, ItemFunction function, int argument) {
 	static struct Item spare;
 	if (itemCount == itemCapacity) {
 		int const capacity = itemCapacity ? itemCapacity * 2 : 64;
@@ -240,27 +213,26 @@ static struct Item* addItem(const char* label, ItemFunction function, int argume
 }
 
 // A section's title, not selectable.
-static void addHeader(const char* label) {
+void addHeader(const char* label) {
 	addItem(label, NULL, 0)->header = true;
 }
 
 // A value that left and right step through.
-static void addValue(const char* label, const char* value, ItemFunction function, int argument) {
+void addValue(const char* label, const char* value, ItemFunction function, int argument) {
 	struct Item* item = addItem(label, function, argument);
 	snprintf(item->value, sizeof(item->value), "%s", value);
 	item->adjustable = true;
 }
 
 // A value that is chosen, not stepped through.
-static void addChoice(const char* label, const char* value, ItemFunction function, int argument) {
+void addChoice(const char* label, const char* value, ItemFunction function, int argument) {
 	struct Item* item = addItem(label, function, argument);
 	snprintf(item->value, sizeof(item->value), "%s", value);
 }
 
-static bool selectable(int i);
 
 // What the item just added does.
-static void helpFor(const char* help) {
+void helpFor(const char* help) {
 	if (itemCount) {
 		items[itemCount - 1].help = help;
 	}
@@ -277,13 +249,13 @@ static void disarm(void) {
 }
 
 // A row that only shows something, not selectable.
-static void addInfo(const char* label, const char* value) {
+void addInfo(const char* label, const char* value) {
 	struct Item* item = addItem(label, NULL, 0);
 	snprintf(item->value, sizeof(item->value), "%s", value ? value : "");
 }
 
 // Opens a menu over the one shown; build makes its rows each frame.
-static void pushMenu(void (*build)(void), const char* title) {
+void pushMenu(void (*build)(void), const char* title) {
 	disarm();
 	if (depth < DEPTH_MAX) {
 		stack[depth].build = build;
@@ -295,7 +267,7 @@ static void pushMenu(void (*build)(void), const char* title) {
 }
 
 // Back to the menu before, or out of the menus from the first.
-static void popMenu(void) {
+void popMenu(void) {
 	disarm();
 	if (depth > 1) {
 		--depth;
@@ -306,7 +278,7 @@ static void popMenu(void) {
 
 // The on-screen keyboard, to type text, starting from text: done gets what was typed if it's accepted.
 // hidden shows stars for a password.
-static void openEntry(const char* title, const char* text, bool hidden, void (*done)(const char* text)) {
+void openEntry(const char* title, const char* text, bool hidden, void (*done)(const char* text)) {
 	entry.open = true;
 	snprintf(entry.title, sizeof(entry.title), "%s", title);
 	snprintf(entry.text, sizeof(entry.text), "%s", text ? text : "");
@@ -325,25 +297,22 @@ static void closeEntry(bool accept) {
 	}
 }
 
-static const char* onOff(bool on) {
+const char* onOff(bool on) {
 	return on ? "On" : "Off";
 }
 
-static const char* frames(int count) {
+const char* frames(int count) {
 	return count == 1 ? "frame" : "frames";
 }
 
 // value + delta, wrapped round into 0 to count - 1.
-static int wrap(int value, int delta, int count) {
+int wrap(int value, int delta, int count) {
 	return ((value + delta) % count + count) % count;
 }
 
 // The menus' look: each accent colour for titles and headers, the selection's fill and a held key;
 // the sizes, in percent; how dark the game is behind the menus.
-static const struct {
-	const char* name;
-	SDL_Color accent, fill, held;
-} accents[ACCENTS] = {
+const struct Accent accents[ACCENTS] = {
 	{ "Blue", { 111, 168, 255, 255 }, { 58, 120, 232, 255 }, { 47, 74, 122, 255 } },
 	{ "Purple", { 182, 146, 255, 255 }, { 120, 84, 220, 255 }, { 76, 58, 124, 255 } },
 	{ "Pink", { 255, 136, 196, 255 }, { 206, 62, 138, 255 }, { 118, 46, 86, 255 } },
@@ -352,1084 +321,9 @@ static const struct {
 	{ "Green", { 116, 222, 152, 255 }, { 36, 146, 88, 255 }, { 40, 94, 66, 255 } },
 	{ "Teal", { 96, 214, 222, 255 }, { 22, 136, 148, 255 }, { 30, 90, 100, 255 } },
 };
-static const struct {
-	const char* name;
-	int percent;
-} menuSizes[] = { { "Small", 85 }, { "Normal", 100 }, { "Large", 120 }, { "Larger", 140 } };
-static const char* const dims[3] = { "Light", "Medium", "Dark" };
+const struct MenuSize menuSizes[MENU_SIZES] = { { "Small", 85 }, { "Normal", 100 }, { "Large", 120 }, { "Larger", 140 } };
+const char* const dims[3] = { "Light", "Medium", "Dark" };
 static const Uint8 dimAlphas[3] = { 110, 165, 215 };
-
-// The menus.
-
-static void rootMenu(void);
-
-static void resume(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		uiCloseMenu();
-	}
-}
-
-// Save State and Load State: left and right change the slot.
-static void stateItem(int load, int delta) {
-	if (delta) {
-		app.slot = wrap(app.slot, delta, SLOTS);
-		return;
-	}
-	if (stateCommand(load)) {
-		uiCloseMenu();
-	}
-}
-
-static void undoLoad(int argument, int delta) {
-	(void) argument;
-	if (!delta && undoLoadState()) {
-		osd("Back to before the state loaded");
-		uiCloseMenu();
-	}
-}
-
-// Not during netplay, where every device runs the same game from the same start.
-static void restart(int argument, int delta) {
-	(void) argument;
-	if (!delta && !netRunning()) {
-		retro_reset();
-		cheevosReset();
-		uiCloseMenu();
-	}
-}
-
-// The files the game list shows: games, and archives that may hold one.
-static bool gameFile(const char* name) {
-	static const char* const extensions[] = { ".gba", ".gb", ".gbc", ".zip", ".7z", ".gba2", ".gb2", ".bin" };
-	const char* dot = strrchr(name, '.');
-	for (size_t i = 0; dot && i < sizeof(extensions) / sizeof(*extensions); ++i) {
-		if (!strcasecmp(dot, extensions[i])) {
-			return true;
-		}
-	}
-	return false;
-}
-
-static bool cheatFile(const char* name) {
-	const char* dot = strrchr(name, '.');
-	return dot && !strcasecmp(dot, ".cht");
-}
-
-// The list lists RetroArch cheat files to add to the game's instead of games; the game list's folder
-// is kept meanwhile.
-static bool browserCheats;
-static char browserGamesPath[PATH_SIZE];
-// A folder's name to select once the list shows it: the one just left by "..".
-static char browserReselect[NAME_SIZE];
-
-// The game list: the folders, then the games, in browserPath, read once as the folder is entered.
-struct BrowserEntry {
-	char name[NAME_SIZE];
-	bool directory;
-};
-static struct BrowserEntry* browserEntries;
-static int browserCount, browserCapacity;
-// The folder browserEntries lists; emptied to read it again.
-static char browserListed[PATH_SIZE];
-
-// Folders first, then by name, case ignored.
-static int compareEntries(const void* a, const void* b) {
-	const struct BrowserEntry* const x = a;
-	const struct BrowserEntry* const y = b;
-	if (x->directory != y->directory) {
-		return x->directory ? -1 : 1;
-	}
-	return strcasecmp(x->name, y->name);
-}
-
-// Reads browserPath's folders and games (or cheat files), sorted, unless it's the folder read last.
-// File systems that don't say what an entry is, and symbolic links, are asked with stat.
-static void readBrowser(void) {
-	if (!strcmp(browserListed, browserPath)) {
-		return;
-	}
-	snprintf(browserListed, sizeof(browserListed), "%s", browserPath);
-	browserCount = 0;
-	DIR* dir = opendir(browserPath);
-	if (!dir) {
-		return;
-	}
-	struct dirent* e;
-	while ((e = readdir(dir))) {
-		if (e->d_name[0] == '.') {
-			continue;
-		}
-		bool directory = e->d_type == DT_DIR;
-		if (e->d_type == DT_UNKNOWN || e->d_type == DT_LNK) {
-			char path[FILE_SIZE];
-			snprintf(path, sizeof(path), "%s/%s", browserPath, e->d_name);
-			struct stat st;
-			if (stat(path, &st)) {
-				continue;
-			}
-			directory = S_ISDIR(st.st_mode);
-		}
-		// Only folders and the files the list is for.
-		if (!directory && !(browserCheats ? cheatFile(e->d_name) : gameFile(e->d_name))) {
-			continue;
-		}
-		if (browserCount == browserCapacity) {
-			int const capacity = browserCapacity ? browserCapacity * 2 : 256;
-			struct BrowserEntry* const grown = realloc(browserEntries, (size_t) capacity * sizeof(*grown));
-			if (!grown) {
-				break;
-			}
-			browserEntries = grown;
-			browserCapacity = capacity;
-		}
-		snprintf(browserEntries[browserCount].name, NAME_SIZE, "%s", e->d_name);
-		browserEntries[browserCount++].directory = directory;
-	}
-	closedir(dir);
-	qsort(browserEntries, (size_t) browserCount, sizeof(*browserEntries), compareEntries);
-}
-
-static void browse(int index, int delta);
-
-// "3,753" for 3753.
-static void grouped(char* out, size_t size, int n) {
-	if (n >= 1000) {
-		snprintf(out, size, "%d,%03d", n / 1000, n % 1000);
-	} else {
-		snprintf(out, size, "%d", n);
-	}
-}
-
-// The game list: the folder's name and counts, "..", then each folder and game.
-static void browserMenu(void) {
-	readBrowser();
-	// The folder's name, and how many games and folders it holds.
-	const char* slash = strrchr(browserPath, '/');
-	const char* name = slash && slash[1] ? slash + 1 : browserPath;
-	int folders = 0;
-	for (int i = 0; i < browserCount; ++i) {
-		folders += browserEntries[i].directory;
-	}
-	char games[16], folderCount[32] = "", counts[80];
-	grouped(games, sizeof(games), browserCount - folders);
-	if (folders) {
-		snprintf(folderCount, sizeof(folderCount), ", %d %s", folders, folders == 1 ? "folder" : "folders");
-	}
-	snprintf(counts, sizeof(counts), "%s %s%s", games, browserCheats ? "cheat files" : browserCount - folders == 1 ? "game" : "games", folderCount);
-	addInfo(name, counts);
-	addItem("..", browse, -1);
-	helpFor(browserPath);
-	if (!browserCount && access(browserPath, R_OK)) {
-		addInfo("Can't open this folder", "");
-		return;
-	}
-	for (int i = 0; i < browserCount; ++i) {
-		if (browserEntries[i].directory) {
-			char label[NAME_SIZE + 2];
-			snprintf(label, sizeof(label), "%s/", browserEntries[i].name);
-			addItem(label, browse, i);
-			if (browserReselect[0] && !strcmp(browserReselect, browserEntries[i].name)) {
-				stack[depth - 1].selected = itemCount - 1;
-				browserReselect[0] = '\0';
-			}
-		} else {
-			addItem(browserEntries[i].name, browse, i);
-		}
-	}
-	browserReselect[0] = '\0';
-}
-
-// A name's first letter, upper case, with digits and the rest as '#'.
-static char initialOf(const char* name) {
-	char const c = (char) toupper((unsigned char) name[0]);
-	return c >= 'A' && c <= 'Z' ? c : '#';
-}
-
-// Selects the row of the game list's entry index.
-static void selectEntry(int index) {
-	for (int i = 0; i < itemCount; ++i) {
-		if (items[i].function == browse && items[i].argument == index) {
-			stack[depth - 1].selected = i;
-			return;
-		}
-	}
-}
-
-// Folders, then games, by first letter.
-static int groupOf(int index) {
-	return browserEntries[index].directory * 256 + initialOf(browserEntries[index].name);
-}
-
-// Moves to the first game or folder of the next letter, or back to the start of this one or the one
-// before.
-static void browserJump(int delta) {
-	struct Menu* m = &stack[depth - 1];
-	if (!browserCount) {
-		return;
-	}
-	int at = selectable(m->selected) && items[m->selected].function == browse ? items[m->selected].argument : -1;
-	// With nothing selected: the first entry, or the last going back.
-	if (at < 0) {
-		selectEntry(delta > 0 ? 0 : browserCount - 1);
-		return;
-	}
-	int const group = groupOf(at);
-	if (delta > 0) {
-		while (at < browserCount && groupOf(at) == group) {
-			++at;
-		}
-		selectEntry(at < browserCount ? at : 0);
-		return;
-	}
-	// Going back: to this letter's first entry, or the letter before's if already there.
-	int start = at;
-	while (start > 0 && groupOf(start - 1) == group) {
-		--start;
-	}
-	if (start == at) {
-		start = at > 0 ? at - 1 : browserCount - 1;
-		int const before = groupOf(start);
-		while (start > 0 && groupOf(start - 1) == before) {
-			--start;
-		}
-	}
-	selectEntry(start);
-}
-
-// Typing a name's start selects the first game or folder that begins so; a pause starts it again.
-static void browserFind(char c) {
-	static char typed[32];
-	static Uint32 typedAt;
-	Uint32 const now = SDL_GetTicks();
-	size_t length = now - typedAt > 1000 ? 0 : strlen(typed);
-	typedAt = now;
-	if (length + 1 < sizeof(typed)) {
-		typed[length++] = c;
-		typed[length] = '\0';
-	}
-	for (int i = 0; i < browserCount; ++i) {
-		if (!strncasecmp(browserEntries[i].name, typed, length)) {
-			selectEntry(i);
-			return;
-		}
-	}
-}
-
-// A game list row: ".." (index -1) goes up, selecting the folder left; a folder opens; a game loads; a
-// cheat file's cheats are added to the game's.
-static void browse(int index, int delta) {
-	if (delta) {
-		return;
-	}
-	if (index < 0) {
-		char* slash = strrchr(browserPath, '/');
-		snprintf(browserReselect, sizeof(browserReselect), "%s", slash ? slash + 1 : "");
-		if (slash && slash != browserPath) {
-			*slash = '\0';
-		} else {
-			snprintf(browserPath, sizeof(browserPath), "/");
-		}
-		stack[depth - 1].selected = -1;
-		return;
-	}
-	char path[FILE_SIZE];
-	snprintf(path, sizeof(path), "%s%s%s", browserPath, strcmp(browserPath, "/") ? "/" : "", browserEntries[index].name);
-	if (browserEntries[index].directory) {
-		snprintf(browserPath, sizeof(browserPath), "%s", path);
-		stack[depth - 1].selected = -1;
-	} else if (browserCheats) {
-		int const added = cheatListImport(path);
-		if (added < 0) {
-			osd("Can't read %s", browserEntries[index].name);
-		} else {
-			cheatListApply();
-			cheatListSave();
-			osd(added == 1 ? "Added 1 cheat" : "Added %d cheats", added);
-			popMenu();
-		}
-	} else if (loadGame(path)) {
-		uiCloseMenu();
-	}
-}
-
-// The game list, for games: back in the games folder if it was showing cheat files.
-static void openBrowser(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		if (browserCheats) {
-			browserCheats = false;
-			snprintf(browserPath, sizeof(browserPath), "%s", browserGamesPath);
-		}
-		browserListed[0] = '\0';
-		pushMenu(browserMenu, "Load Game");
-	}
-}
-
-// The first menu then shows the recent games.
-static void closeGame(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		unloadGame();
-		SDL_SetWindowTitle(app.window, "armGBA");
-		depth = 0;
-		recentCount = recentList(recentGames, RECENT_MAX);
-		pushMenu(rootMenu, "No game loaded");
-	}
-}
-
-// Cheats.
-
-static int cheatShown;
-
-static void cheatMenu(void);
-
-static void cheatToggle(int index, int delta) {
-	(void) delta;
-	if (index < cheatCount) {
-		cheats[index].enabled = !cheats[index].enabled;
-		cheatListApply();
-		cheatListSave();
-	}
-}
-
-static void cheatCodeDone(const char* text) {
-	if (cheatShown < cheatCount) {
-		snprintf(cheats[cheatShown].code, sizeof(cheats[cheatShown].code), "%s", text);
-		cheatListApply();
-		cheatListSave();
-	}
-}
-
-static void cheatNameDone(const char* text) {
-	if (cheatShown < cheatCount) {
-		snprintf(cheats[cheatShown].description, sizeof(cheats[cheatShown].description), "%s", text);
-		cheatListSave();
-	}
-}
-
-// A cheat's Code (0), Name (1) and Delete (2).
-static void cheatEdit(int which, int delta) {
-	if (delta || cheatShown >= cheatCount) {
-		return;
-	}
-	if (which == 0) {
-		openEntry("Cheat code (Action Replay, GameShark, CodeBreaker, Game Genie)", cheats[cheatShown].code, false, cheatCodeDone);
-	} else if (which == 1) {
-		openEntry("Cheat name", cheats[cheatShown].description, false, cheatNameDone);
-	} else {
-		cheatListRemove(cheatShown);
-		cheatListApply();
-		cheatListSave();
-		popMenu();
-	}
-}
-
-static void cheatMenu(void) {
-	if (cheatShown >= cheatCount) {
-		addInfo("This cheat was deleted", "");
-		return;
-	}
-	struct Cheat* c = &cheats[cheatShown];
-	addValue("Enabled", onOff(c->enabled), cheatToggle, cheatShown);
-	addChoice("Code", c->code, cheatEdit, 0);
-	addChoice("Name", c->description, cheatEdit, 1);
-	addItem("Delete", cheatEdit, 2);
-}
-
-// A cheat's row: left and right turn it on or off; choosing it opens its menu.
-static void cheatOpen(int index, int delta) {
-	if (delta) {
-		cheatToggle(index, delta);
-		return;
-	}
-	cheatShown = index;
-	pushMenu(cheatMenu, cheats[index].description);
-}
-
-// Adding a cheat asks for its name, then its code.
-static char newCheatName[128];
-
-static void newCheatCode(const char* text) {
-	cheatListAdd(newCheatName, text);
-	cheatListApply();
-	cheatListSave();
-}
-
-static void newCheatNamed(const char* text) {
-	snprintf(newCheatName, sizeof(newCheatName), "%s", *text ? text : "Cheat");
-	openEntry("Cheat code (several lines' codes may be joined with +)", "", false, newCheatCode);
-}
-
-static void cheatNew(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		openEntry("New cheat's name", "", false, newCheatNamed);
-	}
-}
-
-// The game list, for RetroArch cheat files; where it was in the games is kept for when it goes back.
-static void openCheatFiles(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		if (!browserCheats) {
-			snprintf(browserGamesPath, sizeof(browserGamesPath), "%s", browserPath);
-			browserCheats = true;
-		}
-		browserListed[0] = '\0';
-		pushMenu(browserMenu, "Load Cheat File");
-	}
-}
-
-static void cheatsMenu(void) {
-	static char fileHelp[PATH_SIZE + 128];
-	if (cheevosHardcore()) {
-		addInfo("Hardcore mode: cheats are off", "");
-		return;
-	}
-	addItem("Add Cheat...", cheatNew, 0);
-	helpFor("Type a code: Action Replay, GameShark, CodeBreaker or Game Genie.");
-	addItem("Load Cheat File...", openCheatFiles, 0);
-	snprintf(fileHelp, sizeof(fileHelp), "Adds the cheats in a RetroArch .cht file. This game's cheats are kept in %s.", cheatDirectory);
-	helpFor(fileHelp);
-	if (!cheatCount) {
-		addInfo("No cheats for this game yet", "");
-	} else {
-		addHeader("Cheats (left / right turns one on or off)");
-	}
-	for (int i = 0; i < cheatCount; ++i) {
-		addValue(cheats[i].description, onOff(cheats[i].enabled), cheatOpen, i);
-	}
-}
-
-static void openSimple(void (*build)(void), const char* title) {
-	pushMenu(build, title);
-}
-
-static void openCheats(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		openSimple(cheatsMenu, "Cheats");
-	}
-}
-
-// Core options.
-
-static int categoryShown;
-
-// A core option's row: left and right step through its values; choosing it steps forward.
-static void optionChange(int index, int delta) {
-	struct Option* o = &options[index];
-	int at = 0;
-	for (int v = 0; v < o->valueCount; ++v) {
-		if (!strcmp(o->values[v], o->value)) {
-			at = v;
-		}
-	}
-	optionSet(o, o->values[wrap(at, delta ? delta : 1, o->valueCount)]);
-	optionsWrite();
-}
-
-// The visible core options in category, or those in none when category is NULL.
-static void addOptions(const char* category) {
-	for (int i = 0; i < optionCount; ++i) {
-		struct Option* o = &options[i];
-		bool const here = category ? o->category && !strcmp(o->category, category) : !o->category;
-		if (!here || !o->visible) {
-			continue;
-		}
-		const char* label = o->value;
-		for (int v = 0; v < o->valueCount; ++v) {
-			if (!strcmp(o->values[v], o->value)) {
-				label = o->labels[v];
-			}
-		}
-		addValue(o->description ? o->description : o->key, label, optionChange, i);
-		helpFor(o->info);
-	}
-}
-
-// The core's Video options are shown in Settings > Video, with the rest of the picture's.
-static bool shownInSettings(const char* category) {
-	return category && !strcmp(category, "video");
-}
-
-static void categoryMenu(void) {
-	addOptions(categories[categoryShown].key);
-}
-
-static void openCategory(int index, int delta) {
-	if (!delta) {
-		categoryShown = index;
-		pushMenu(categoryMenu, categories[index].description ? categories[index].description : categories[index].key);
-	}
-}
-
-// A row for each category with options to show, then the options in none.
-static void coreOptionsMenu(void) {
-	if (!optionCount) {
-		addInfo("The core's options appear once it has started", "");
-		return;
-	}
-	for (int c = 0; c < categoryCount; ++c) {
-		if (shownInSettings(categories[c].key)) {
-			continue;
-		}
-		bool any = false;
-		for (int i = 0; i < optionCount; ++i) {
-			any |= options[i].visible && options[i].category && !strcmp(options[i].category, categories[c].key);
-		}
-		if (any) {
-			char label[160];
-			snprintf(label, sizeof(label), "%s...", categories[c].description ? categories[c].description : categories[c].key);
-			addItem(label, openCategory, c);
-		}
-	}
-	addOptions(NULL);
-}
-
-static void openCoreOptions(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		pushMenu(coreOptionsMenu, "Core Options");
-	}
-}
-
-// Settings.
-
-enum {
-	SET_SCALE,
-	SET_FULLSCREEN,
-	SET_INTEGER,
-	SET_STRETCH,
-	SET_FILTER,
-	SET_SHADOW,
-	SET_VSYNC,
-	SET_FPS,
-	SET_VOLUME,
-	SET_LATENCY,
-	SET_REWIND,
-	SET_REWIND_SIZE,
-	SET_RUNAHEAD,
-	SET_AUTO_STATE,
-	SET_INPUT_DELAY,
-	SET_HARDCORE,
-	SET_ACCENT,
-	SET_MENU_SIZE,
-	SET_DIM,
-};
-
-// A setting's row (SET_*): left and right step a value or turn it over, as choosing it does. The
-// settings file is written each time.
-static void changeSetting(int which, int delta) {
-	int const d = delta ? delta : 1;
-	switch (which) {
-	case SET_SCALE:
-		settings.scale = wrap(settings.scale - 1, d, 8) + 1;
-		applyWindowSize();
-		break;
-	case SET_FULLSCREEN:
-		settings.fullscreen = !settings.fullscreen;
-		applyWindowSize();
-		break;
-	case SET_INTEGER:
-		settings.integerScale = !settings.integerScale;
-		break;
-	case SET_STRETCH:
-		settings.stretch = !settings.stretch;
-		break;
-	case SET_FILTER:
-		settings.filter = wrap(settings.filter, d, FILTERS);
-		break;
-	// Off, then the eight directions.
-	case SET_SHADOW:
-		settings.shadow = wrap(settings.shadow, d, 9);
-		break;
-	case SET_VSYNC:
-		settings.vsync = !settings.vsync;
-		recreateRenderer();
-		break;
-	case SET_FPS:
-		settings.showFps = !settings.showFps;
-		break;
-	case SET_VOLUME:
-		settings.volume = SDL_max(0, SDL_min(100, settings.volume + d * 10));
-		break;
-	case SET_LATENCY:
-		settings.latency = wrap(settings.latency - 1, d, 8) + 1;
-		break;
-	case SET_REWIND:
-		settings.rewind = !settings.rewind;
-		rewindReset();
-		break;
-	// 16 to 512 MB, doubling.
-	case SET_REWIND_SIZE: {
-		static const int sizes[] = { 16, 32, 64, 128, 256, 512 };
-		int at = 0;
-		for (int i = 0; i < 6; ++i) {
-			at = sizes[i] == settings.rewindMegabytes ? i : at;
-		}
-		settings.rewindMegabytes = sizes[wrap(at, d, 6)];
-		rewindReset();
-		break;
-	}
-	case SET_RUNAHEAD:
-		settings.runahead = wrap(settings.runahead, d, 5);
-		break;
-	case SET_AUTO_STATE:
-		settings.autoState = !settings.autoState;
-		break;
-	case SET_INPUT_DELAY:
-		settings.inputDelay = wrap(settings.inputDelay, d, 9);
-		break;
-	case SET_HARDCORE:
-		settings.hardcore = !settings.hardcore;
-		cheevosSetHardcore(settings.hardcore);
-		break;
-	case SET_ACCENT:
-		settings.accent = wrap(settings.accent, d, ACCENTS);
-		break;
-	case SET_MENU_SIZE: {
-		int const count = (int) (sizeof(menuSizes) / sizeof(*menuSizes));
-		int at = 1;
-		for (int i = 0; i < count; ++i) {
-			at = menuSizes[i].percent == settings.menuSize ? i : at;
-		}
-		settings.menuSize = menuSizes[wrap(at, d, count)].percent;
-		break;
-	}
-	case SET_DIM:
-		settings.dim = wrap(settings.dim, d, 3);
-		break;
-	}
-	settingsWrite();
-}
-
-// Settings > Video. Pixel Shadow shows only with LCD Grid on the first Game Boy's and the Pocket's
-// screens, or before a game is loaded.
-static void videoMenu(void) {
-	static const char* const filters[FILTERS] = { "Sharp", "Smooth", "LCD Grid", "Scanlines" };
-	char text[32];
-	addHeader("Window");
-	if (!settings.fullscreen) {
-		snprintf(text, sizeof(text), "%dx", settings.scale);
-		addValue("Window Size", text, changeSetting, SET_SCALE);
-		helpFor("The window's size, in times the console's screen.");
-	}
-	addValue("Full Screen", onOff(settings.fullscreen), changeSetting, SET_FULLSCREEN);
-	helpFor("Fills the display. On a handheld it's on from the start.");
-	addValue("Integer Scaling", onOff(settings.integerScale), changeSetting, SET_INTEGER);
-	helpFor("Scales by whole numbers only, so every pixel is the same size; leaves a border.");
-	addValue("Aspect Ratio", settings.stretch ? "Fill the Window" : "The Console's", changeSetting, SET_STRETCH);
-	helpFor("The Console's keeps the screen's shape; Fill the Window stretches it.");
-	addValue("VSync", onOff(settings.vsync), changeSetting, SET_VSYNC);
-	helpFor("Shows each frame as the display refreshes, so the picture doesn't tear.");
-	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
-	addHeader("Picture");
-	addValue("Filter", filters[settings.filter], changeSetting, SET_FILTER);
-	helpFor("Sharp keeps pixels square; Smooth blends them; LCD Grid draws the gaps between the console screen's pixels; "
-	        "Scanlines darkens lines as a TV did.");
-	uint32_t gap;
-	enum LibretroLcd const lcd = libretroLcd(&gap);
-	if (settings.filter == FILTER_LCD && (!app.loaded || lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
-		static const char* const shadows[9] = { "Off", "Up", "Up Right", "Right", "Down Right", "Down", "Down Left", "Left", "Up Left" };
-		addValue("Game Boy Pixel Shadow", shadows[settings.shadow], changeSetting, SET_SHADOW);
-		helpFor("On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls.");
-	}
-	addOptions("video");
-}
-
-static void audioMenu(void) {
-	char text[32];
-	snprintf(text, sizeof(text), "%d%%", settings.volume);
-	addValue("Volume", text, changeSetting, SET_VOLUME);
-	snprintf(text, sizeof(text), "%d %s (%d ms)", settings.latency, frames(settings.latency), (int) (settings.latency * 1000 / FRAME_RATE));
-	addValue("Latency", text, changeSetting, SET_LATENCY);
-	helpFor("How much sound waits to play. Less answers sooner but may crackle on a slow device.");
-}
-
-static void gameplayMenu(void) {
-	char text[32];
-	addValue("Rewind", onOff(settings.rewind), changeSetting, SET_REWIND);
-	helpFor("Hold the Rewind hotkey to go back in time.");
-	snprintf(text, sizeof(text), "%d MB", settings.rewindMegabytes);
-	addValue("Rewind Buffer", text, changeSetting, SET_REWIND_SIZE);
-	helpFor("Memory kept for rewinding: more goes further back.");
-	snprintf(text, sizeof(text), settings.runahead ? "%d %s" : "Off", settings.runahead, frames(settings.runahead));
-	addValue("Run-Ahead", text, changeSetting, SET_RUNAHEAD);
-	helpFor("Runs frames ahead and shows the last, so the game answers that many frames sooner. Costs speed.");
-	addValue("Save and Load State on Exit and Start", onOff(settings.autoState), changeSetting, SET_AUTO_STATE);
-	helpFor("Saves a state as the game closes and loads it as the game starts again.");
-}
-
-// which: the button's or hotkey's index, plus 1000 for a controller's, plus 2000 for a hotkey.
-static void bind(int which, int delta) {
-	if (delta) {
-		return;
-	}
-	int const kind = which / 1000, index = which % 1000;
-	uiCaptureBinding(index, kind == 1 || kind == 3, kind >= 2);
-}
-
-// The default keys, buttons and hotkeys; the other settings are kept.
-static void resetControls(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		struct Settings kept = settings;
-		settingsDefaults();
-		memcpy(kept.keys, settings.keys, sizeof(kept.keys));
-		memcpy(kept.pad, settings.pad, sizeof(kept.pad));
-		memcpy(kept.hotkeys, settings.hotkeys, sizeof(kept.hotkeys));
-		memcpy(kept.padHotkeys, settings.padHotkeys, sizeof(kept.padHotkeys));
-		settings = kept;
-		settingsWrite();
-		osd("Controls reset");
-	}
-}
-
-// The buttons as listed: the face buttons and shoulders first, then the turbo buttons and extra
-// shoulders.
-static const int buttonOrder[BUTTONS] = { BUTTON_A, BUTTON_B, 10, 11, 3, 2, 4, 5, 6, 7, 9, 1, 12, 13, 14, 15 };
-
-static void padControlsMenu(void) {
-	addHeader("Buttons (a controller for each player)");
-	for (int k = 0; k < BUTTONS; ++k) {
-		int const i = buttonOrder[k];
-		addChoice(buttonNames[i], padName(settings.pad[i]), bind, 1000 + i);
-		helpFor(i == BUTTON_A ? "A also chooses in these menus." : i == BUTTON_B ? "B also goes back in these menus." : NULL);
-	}
-	addHeader("Hotkeys");
-	for (int i = 0; i < ACTIONS; ++i) {
-		addChoice(actionNames[i], padName(settings.padHotkeys[i]), bind, 3000 + i);
-	}
-}
-
-static void keyControlsMenu(void) {
-	addHeader("Buttons (player 1)");
-	for (int k = 0; k < BUTTONS; ++k) {
-		int const i = buttonOrder[k];
-		addChoice(buttonNames[i], scancodeName(settings.keys[i]), bind, i);
-	}
-	addHeader("Hotkeys");
-	for (int i = 0; i < ACTIONS; ++i) {
-		addChoice(actionNames[i], scancodeName(settings.hotkeys[i]), bind, 2000 + i);
-	}
-}
-
-static void openControlsPage(int which, int delta) {
-	if (!delta) {
-		pushMenu(which ? keyControlsMenu : padControlsMenu, which ? "Keyboard" : "Controller");
-	}
-}
-
-static void controlsMenu(void) {
-	addItem("Controller...", openControlsPage, 0);
-	helpFor("The buttons and hotkeys on a controller.");
-	addItem("Keyboard...", openControlsPage, 1);
-	helpFor("The keys and hotkeys on the keyboard.");
-	addItem("Reset Controls and Hotkeys", resetControls, 0);
-	items[itemCount - 1].confirm = true;
-}
-
-static void appearanceMenu(void) {
-	addValue("Accent Colour", accents[settings.accent].name, changeSetting, SET_ACCENT);
-	helpFor("The colour of the title, the headers and the selection.");
-	const char* size = "Normal";
-	for (size_t i = 0; i < sizeof(menuSizes) / sizeof(*menuSizes); ++i) {
-		size = menuSizes[i].percent == settings.menuSize ? menuSizes[i].name : size;
-	}
-	addValue("Menu Size", size, changeSetting, SET_MENU_SIZE);
-	helpFor("The menus' text and rows, larger for a TV across the room or smaller for more rows.");
-	addValue("Game Behind the Menus", dims[settings.dim], changeSetting, SET_DIM);
-	helpFor("How far the game is dimmed while the menus are open.");
-}
-
-static void openSettingsPage(int which, int delta) {
-	static void (*const pages[])(void) = { videoMenu, audioMenu, controlsMenu, gameplayMenu, appearanceMenu };
-	static const char* const titles[] = { "Video", "Audio", "Controls", "Rewind, Run-Ahead and States", "Appearance" };
-	if (!delta) {
-		pushMenu(pages[which], titles[which]);
-	}
-}
-
-static void settingsMenu(void) {
-	addItem("Video...", openSettingsPage, 0);
-	helpFor("The window, the filter and LCD grid, and the console screen's colours and ghosting.");
-	addItem("Audio...", openSettingsPage, 1);
-	addItem("Controls...", openSettingsPage, 2);
-	helpFor("Buttons and hotkeys, for controllers and the keyboard.");
-	addItem("Rewind, Run-Ahead and States...", openSettingsPage, 3);
-	addItem("Appearance...", openSettingsPage, 4);
-	helpFor("The menus' colour and size, and how dark the game is behind them.");
-}
-
-static void openSettings(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		pushMenu(settingsMenu, "Settings");
-	}
-}
-
-// Netplay.
-
-static void nicknameDone(const char* text) {
-	snprintf(settings.nickname, sizeof(settings.nickname), "%s", *text ? text : "Player");
-	settingsWrite();
-}
-
-// The host's address, kept for the next time.
-static void joinDone(const char* text) {
-	snprintf(settings.host, sizeof(settings.host), "%s", text);
-	settingsWrite();
-	if (netJoin(text)) {
-		uiCloseMenu();
-	}
-}
-
-static void portDone(const char* text) {
-	int const port = atoi(text);
-	if (port < 1 || port > 65535) {
-		osd("A port is a number from 1 to 65535");
-		return;
-	}
-	settings.netPort = port;
-	settingsWrite();
-}
-
-// Netplay's rows: Your Name (0), hosting Separate (1) or Together (2), Join (3), Disconnect (4) and
-// Port (5).
-static void netAction(int which, int delta) {
-	if (delta) {
-		return;
-	}
-	switch (which) {
-	case 0:
-		openEntry("Your name", settings.nickname, false, nicknameDone);
-		break;
-	case 1:
-	case 2:
-		if (!app.loaded) {
-			osd("Load the game to play first");
-		} else if (netHost(which == 2)) {
-			uiCloseMenu();
-		}
-		break;
-	case 3:
-		openEntry("Host's address (name or IP, and :port if not the usual one)", settings.host, false, joinDone);
-		break;
-	case 4:
-		netStop();
-		break;
-	case 5: {
-		char port[16];
-		snprintf(port, sizeof(port), "%d", settings.netPort);
-		openEntry("Port (1 to 65535)", port, false, portDone);
-		break;
-	}
-	}
-}
-
-static void netplayMenu(void) {
-	addInfo("Status", netStatus[0] ? netStatus : "Not connected");
-	addChoice("Your Name", settings.nickname, netAction, 0);
-	helpFor("Shown to the other players.");
-	char text[32];
-	snprintf(text, sizeof(text), "%d", settings.netPort);
-	addChoice("Port", text, netAction, 5);
-	helpFor("The network port the host listens on; everyone uses the same one.");
-	snprintf(text, sizeof(text), "%d %s", settings.inputDelay, frames(settings.inputDelay));
-	addValue("Input Delay (Together)", text, changeSetting, SET_INPUT_DELAY);
-	helpFor("How long each player's buttons wait in Together, so fewer corrections show. More suits a slow network.");
-	if (netMode == NET_OFF) {
-		addHeader("Host the loaded game");
-		addItem("Link Cable: each plays their own console (Separate)", netAction, 1);
-		helpFor("Each device runs its own console and game, joined by the link cable over the network. Two players.");
-		addItem("Together: every console runs on every device, with rollback", netAction, 2);
-		helpFor("Every device runs every player's console, so the link never waits on the network. Everyone needs every game.");
-		addHeader("Join");
-		addItem("Join a Host...", netAction, 3);
-		helpFor("Type the host's name or address.");
-	} else {
-		addItem("Disconnect", netAction, 4);
-	}
-}
-
-static void openNetplay(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		pushMenu(netplayMenu, "Netplay");
-	}
-}
-
-// Achievements.
-
-static char loginUser[64];
-
-static void passwordDone(const char* text) {
-	cheevosLogin(loginUser, text);
-}
-
-// Logging in asks for the user name, then the password; cheevos.c keeps the token, not the password.
-static void userDone(const char* text) {
-	snprintf(loginUser, sizeof(loginUser), "%s", text);
-	openEntry("RetroAchievements password (sent only to retroachievements.org)", "", true, passwordDone);
-}
-
-static void cheevosAction(int which, int delta) {
-	if (delta) {
-		return;
-	}
-	if (which == 0) {
-		openEntry("RetroAchievements user name", settings.cheevosUser, false, userDone);
-	} else {
-		cheevosLogout();
-	}
-}
-
-static void cheevosMenu(void) {
-	addInfo("Status", cheevosStatus());
-	if (settings.cheevosToken[0]) {
-		addItem("Log Out", cheevosAction, 1);
-	} else {
-		addItem("Log In...", cheevosAction, 0);
-	}
-	addValue("Hardcore Mode (no states, cheats, rewind or run-ahead)", onOff(settings.hardcore), changeSetting, SET_HARDCORE);
-	helpFor("Earns achievements as hardcore: save states, cheats, rewind and run-ahead are off, and turning it on restarts the game.");
-	static char lines[400][160];
-	int const n = cheevosList(lines, 400);
-	if (n) {
-		addHeader("This game's achievements");
-	}
-	for (int i = 0; i < n; ++i) {
-		addInfo(lines[i], "");
-	}
-}
-
-static void openCheevos(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		pushMenu(cheevosMenu, "Achievements");
-	}
-}
-
-// Screenshot (0), recording (1) and Quit (2).
-static void misc(int which, int delta) {
-	if (delta) {
-		return;
-	}
-	if (which == 0) {
-		takeScreenshot();
-	} else if (which == 1) {
-		recordToggle();
-	} else {
-		app.running = false;
-	}
-	uiCloseMenu();
-}
-
-static void recentChoose(int index, int delta) {
-	if (!delta && index < recentCount && loadGame(recentGames[index])) {
-		uiCloseMenu();
-	}
-}
-
-// A recent game's row: its name without the extension, and the folder it's in.
-static void addRecent(int index) {
-	const char* path = recentGames[index];
-	const char* slash = strrchr(path, '/');
-	char name[NAME_SIZE], folder[NAME_SIZE] = "";
-	snprintf(name, sizeof(name), "%s", slash ? slash + 1 : path);
-	char* dot = strrchr(name, '.');
-	if (dot && dot != name) {
-		*dot = '\0';
-	}
-	// The folder's own name, not its path.
-	if (slash && slash != path) {
-		int const length = (int) (slash - path);
-		const char* start = path + length;
-		while (start > path && start[-1] != '/') {
-			--start;
-		}
-		snprintf(folder, sizeof(folder), "%.*s", (int) (path + length - start), start);
-	}
-	addChoice(name, folder, recentChoose, index);
-}
-
-static void recentMenu(void) {
-	for (int i = 0; i < recentCount; ++i) {
-		addRecent(i);
-	}
-}
-
-static void openRecent(int argument, int delta) {
-	(void) argument;
-	if (!delta) {
-		pushMenu(recentMenu, "Recent Games");
-	}
-}
-
-// The first menu. With a game, its states, Restart and the game's menus first; without, the five most
-// recent games.
-static void rootMenu(void) {
-	char text[32];
-	if (app.loaded) {
-		addItem("Resume", resume, 0);
-		snprintf(text, sizeof(text), stateExists(app.slot) ? "Slot %d" : "Slot %d \xC2\xB7 Empty", app.slot);
-		addValue("Save State", text, stateItem, 0);
-		helpFor("Saves the game as it is now in the slot shown; left and right change the slot.");
-		addValue("Load State", text, stateItem, 1);
-		helpFor("Goes back to the state in the slot shown. Undo Load State brings back what you had.");
-		if (canUndoLoad()) {
-			addItem("Undo Load State", undoLoad, 0);
-			helpFor("Goes back to the game as it was before the last state loaded.");
-		}
-		addItem("Restart", restart, 0);
-		items[itemCount - 1].confirm = true;
-		helpFor("Starts the game again from the beginning; the game's own save is kept.");
-	} else if (recentCount) {
-		addHeader("Recent games");
-		for (int i = 0; i < recentCount && i < 5; ++i) {
-			addRecent(i);
-		}
-	}
-	// With a game, Recent Games...; without, More Recent Games... when there are more than five.
-	if (app.loaded && recentCount) {
-		addItem("Recent Games...", openRecent, 0);
-	} else if (recentCount > 5) {
-		addItem("More Recent Games...", openRecent, 0);
-	}
-	addItem("Load Game...", openBrowser, 0);
-	if (app.loaded) {
-		addItem("Close Game", closeGame, 0);
-		items[itemCount - 1].confirm = true;
-		addItem("Cheats...", openCheats, 0);
-	}
-	addItem("Core Options...", openCoreOptions, 0);
-	helpFor("The emulator's options for the console: model, BIOS, link play, saves and sensors.");
-	addItem("Settings...", openSettings, 0);
-	helpFor("The picture, sound, controls, rewind and states.");
-	addItem("Netplay...", openNetplay, 0);
-	addItem("Achievements...", openCheevos, 0);
-	if (app.loaded) {
-		addItem("Screenshot", misc, 0);
-		addItem(recording() ? "Stop Recording" : "Start Recording", misc, 1);
-	}
-	addItem("Quit", misc, 2);
-	items[itemCount - 1].confirm = app.loaded;
-}
-
-// Opens the first menu, the game list back in the games folder.
-void uiOpenMenu(void) {
-	if (app.menuOpen) {
-		return;
-	}
-	app.menuOpen = true;
-	depth = 0;
-	recentCount = recentList(recentGames, RECENT_MAX);
-	pushMenu(rootMenu, app.loaded ? app.gameName : "No game loaded");
-	snprintf(browserPath, sizeof(browserPath), "%s", settings.directory);
-	browserCheats = false;
-}
 
 // Back to the game, closing the keyboard and any binding waited for.
 void uiCloseMenu(void) {
@@ -1472,7 +366,7 @@ static void captured(int value) {
 // Moving through a menu.
 
 // Headers and rows that only show something can't be selected.
-static bool selectable(int i) {
+bool selectable(int i) {
 	return i >= 0 && i < itemCount && !items[i].header && items[i].function;
 }
 
