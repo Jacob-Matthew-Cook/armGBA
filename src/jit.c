@@ -2314,6 +2314,10 @@ bool jitInit(struct GBA* gba) {
 	}
 	jit->codeEnd = jit->code + CODE_SIZE;
 	jit->lookup = calloc(LOOKUP_SIZE, sizeof(*jit->lookup));
+	if (!jit->lookup) {
+		jitDeinit(gba);
+		return false;
+	}
 	for (int i = 0; i < LOOKUP_SIZE; ++i) {
 		jit->lookup[i].key = ~0u;
 	}
@@ -2322,6 +2326,10 @@ bool jitInit(struct GBA* gba) {
 		if (codeKindSpan[kind]) {
 			jit->pageCount[kind] = codeKindSpan[kind] >> PAGE_SHIFT;
 			jit->pages[kind] = calloc(jit->pageCount[kind], sizeof(struct PageNode*));
+			if (!jit->pages[kind]) {
+				jitDeinit(gba);
+				return false;
+			}
 		}
 	}
 	// prefetcherStop's rule: a stop costs one more cycle when a read is about to finish, which in

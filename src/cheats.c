@@ -239,11 +239,21 @@ void cheatsClear(struct CheatSet* set, struct GBA* gba) {
 	cheatsInit(set);
 }
 
+// Where an operation or patch goes when the list can't grow: outside the list, so it is dropped.
+static struct Cheat spareCheat;
+static struct CheatPatch sparePatch;
+
 // Adds a new operation, all zero, and returns where it is in the list.
 static struct Cheat* append(struct CheatSet* set) {
 	if (set->count == set->capacity) {
-		set->capacity = set->capacity ? set->capacity * 2 : 16;
-		set->list = realloc(set->list, set->capacity * sizeof(*set->list));
+		size_t const capacity = set->capacity ? set->capacity * 2 : 16;
+		struct Cheat* const grown = realloc(set->list, capacity * sizeof(*grown));
+		if (!grown) {
+			memset(&spareCheat, 0, sizeof(spareCheat));
+			return &spareCheat;
+		}
+		set->list = grown;
+		set->capacity = capacity;
 	}
 	struct Cheat* cheat = &set->list[set->count++];
 	memset(cheat, 0, sizeof(*cheat));
@@ -251,13 +261,19 @@ static struct Cheat* append(struct CheatSet* set) {
 }
 
 static size_t indexOf(struct CheatSet* set, struct Cheat* cheat) {
-	return cheat - set->list;
+	return cheat == &spareCheat ? COMPLETE : (size_t) (cheat - set->list);
 }
 
 static struct CheatPatch* appendPatch(struct CheatSet* set) {
 	if (set->patchCount == set->patchCapacity) {
-		set->patchCapacity = set->patchCapacity ? set->patchCapacity * 2 : 4;
-		set->patches = realloc(set->patches, set->patchCapacity * sizeof(*set->patches));
+		size_t const capacity = set->patchCapacity ? set->patchCapacity * 2 : 4;
+		struct CheatPatch* const grown = realloc(set->patches, capacity * sizeof(*grown));
+		if (!grown) {
+			memset(&sparePatch, 0, sizeof(sparePatch));
+			return &sparePatch;
+		}
+		set->patches = grown;
+		set->patchCapacity = capacity;
 	}
 	struct CheatPatch* patch = &set->patches[set->patchCount++];
 	memset(patch, 0, sizeof(*patch));
@@ -690,7 +706,7 @@ static bool addParSpecial(struct CheatSet* set, uint32_t op2) {
 		struct CheatPatch* patch = appendPatch(set);
 		patch->address = BASE_ROM0 | ((op2 & 0xFFFFFF) << 1);
 		patch->width = 2;
-		set->incompletePatch = set->patchCount - 1;
+		set->incompletePatch = patch == &sparePatch ? COMPLETE : set->patchCount - 1;
 	}
 	return true;
 }
@@ -1164,6 +1180,8 @@ static bool addCodeBreaker(struct CheatSet* set, uint32_t op1, uint16_t op2) {
 		cheat->type = CHEAT_IF_AND;
 		cheat->width = 2;
 		break;
+	default:
+		return false;
 	}
 
 	cheat->address = op1 & 0x0FFFFFFF;
