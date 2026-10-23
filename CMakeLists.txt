@@ -10,48 +10,48 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 
 set(CORE_SOURCES
-	src/arm.c
 	src/bios-image.c
-	src/audio.c
 	src/bus.c
-	src/cart.c
 	src/cheats.c
-	src/decode.c
-	src/dma.c
 	src/gba.c
-	src/gpio.c
-	src/io.c
 	src/memory.c
-	src/overrides.c
-	src/psg.c
-	src/render.c
-	src/render-thread.c
-	src/savedata.c
-	src/step.c
-	src/rfu.c
-	src/sio.c
 	src/state.c
-	src/timer.c
 	src/timing.c
-	src/video.c
+	src/audio/audio.c
+	src/audio/psg.c
+	src/cart/cart.c
+	src/cart/gpio.c
+	src/cart/overrides.c
+	src/cart/savedata.c
+	src/cpu/arm.c
+	src/cpu/decode.c
+	src/cpu/step.c
+	src/io/dma.c
+	src/io/io.c
+	src/io/rfu.c
+	src/io/sio.c
+	src/io/timer.c
+	src/video/render-thread.c
+	src/video/render.c
+	src/video/video.c
 )
 
 option(ARMGBA_JIT "Build the recompiler, where there is a backend for the CPU" ON)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-	list(APPEND CORE_SOURCES src/render-x86.c)
-	set(BACKEND src/x64/backend.c)
+	list(APPEND CORE_SOURCES src/video/render-x86.c)
+	set(BACKEND src/cpu/x64/backend.c)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-	list(APPEND CORE_SOURCES src/render-neon.c)
-	set(BACKEND src/a64/backend.c)
+	list(APPEND CORE_SOURCES src/video/render-neon.c)
+	set(BACKEND src/cpu/a64/backend.c)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
-	list(APPEND CORE_SOURCES src/render-neon.c)
-	set(BACKEND src/a32/backend.c)
+	list(APPEND CORE_SOURCES src/video/render-neon.c)
+	set(BACKEND src/cpu/a32/backend.c)
 endif()
 if(ARMGBA_JIT AND BACKEND)
-	list(APPEND CORE_SOURCES src/jit.c ${BACKEND})
+	list(APPEND CORE_SOURCES src/cpu/jit.c ${BACKEND})
 else()
 	message(STATUS "No recompiler: every instruction runs on the exact CPU")
-	list(APPEND CORE_SOURCES src/nojit.c)
+	list(APPEND CORE_SOURCES src/cpu/nojit.c)
 endif()
 
 add_library(armgba STATIC ${CORE_SOURCES})

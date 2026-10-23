@@ -7,7 +7,7 @@
 #include "cheats.h"
 
 #include "gba.h"
-#include "jit.h"
+#include "cpu/jit.h"
 
 #include <ctype.h>
 #include <limits.h>

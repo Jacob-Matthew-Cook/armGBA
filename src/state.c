@@ -10,7 +10,7 @@
 // loading, and the event queue is stored as the order of its events.
 
 #include "gba.h"
-#include "jit-internal.h"
+#include "cpu/jit-internal.h"
 
 #include <stdlib.h>
 #include <string.h>
