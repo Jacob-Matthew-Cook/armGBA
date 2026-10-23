@@ -321,9 +321,10 @@ const struct Accent accents[ACCENTS] = {
 	{ "Green", { 116, 222, 152, 255 }, { 36, 146, 88, 255 }, { 40, 94, 66, 255 } },
 	{ "Teal", { 96, 214, 222, 255 }, { 22, 136, 148, 255 }, { 30, 90, 100, 255 } },
 };
-const struct MenuSize menuSizes[MENU_SIZES] = { { "Small", 85 }, { "Normal", 100 }, { "Large", 120 }, { "Larger", 140 } };
+const struct MenuSize menuSizes[MENU_SIZES] = { { "Small", 100 }, { "Normal", 120 }, { "Large", 140 }, { "Larger", 160 } };
 const char* const dims[3] = { "Light", "Medium", "Dark" };
-static const Uint8 dimAlphas[3] = { 110, 165, 215 };
+// Dark enough, as the menus' own background, for their text to read over a bright game.
+static const Uint8 dimAlphas[3] = { 175, 210, 240 };
 
 // Back to the game, closing the keyboard and any binding waited for.
 void uiCloseMenu(void) {
@@ -728,8 +729,8 @@ bool uiEvent(const SDL_Event* event) {
 	}
 }
 
-// Drawing: a rounded panel in the middle of the window over the dimmed game, sized from a unit u
-// that grows with the window.
+// Drawing: the menus fill the window over the dimmed game, sized from a unit u that grows with the
+// window.
 
 static const SDL_Color white = { 255, 255, 255, 255 }, text = { 214, 220, 234, 255 }, muted = { 143, 155, 181, 255 },
                        panelFill = { 20, 26, 38, 240 }, edge = { 42, 53, 80, 255 }, keyFill = { 34, 43, 63, 255 };
@@ -764,10 +765,8 @@ static int drawHint(int x, int y, int u, const char* badge, bool round, const ch
 	return x + u;
 }
 
-// The panel, its header (ARMGBA and where you are) and its footer's hints; returns where its
-// content starts.
+// The header (ARMGBA and where you are) across the window, panel; returns where the content starts.
 static int drawPanel(SDL_Rect panel, int u, const char* where) {
-	fillBordered(panel, u * 3 / 4, panelFill, edge, 1);
 	int const headerH = u * 3, inset = u + u / 2;
 	int const titleSize = u * 3 / 2, whereSize = u * 4 / 5;
 	int const brand = textDraw(FACE_TITLE, titleSize, panel.x + inset, panel.y + (headerH - titleSize) / 2, accent, "ARMGBA");
@@ -841,13 +840,11 @@ static void drawMessages(int width, int height, int u) {
 // keys. The last row's four keys are three wide.
 static void drawEntry(int width, int height, int u) {
 	int const fieldH = u * 2, keyH = u * 7 / 4, keySize = u * 4 / 5;
-	SDL_Rect panel;
-	panel.w = SDL_min(width - u, u * 30);
-	panel.h = u * 3 + u / 2 + fieldH + u / 2 + 5 * keyH + u / 2 + u * 9 / 4;
-	panel.x = (width - panel.w) / 2;
-	panel.y = SDL_max(0, (height - panel.h) / 2);
-	int y = drawPanel(panel, u, entry.title) + u / 4;
-	int const left = panel.x + u, inner = panel.w - 2 * u;
+	SDL_Rect const panel = { 0, 0, width, height };
+	int const top = drawPanel(panel, u, entry.title);
+	// The field and keys, as wide as 28 units, in the middle of the room between header and footer.
+	int const inner = SDL_min(width - 2 * u, u * 28), left = (width - inner) / 2;
+	int y = top + SDL_max(u / 4, (footerTop(panel, u) - top - (fieldH + u / 2 + 5 * keyH)) / 2);
 	fillBordered((SDL_Rect) { left, y, inner, fieldH }, u / 2, (SDL_Color) { 13, 18, 28, 255 }, accent, 2);
 	// The text, as stars when hidden, its start cut off if it's too long.
 	char shown[300];
@@ -947,13 +944,8 @@ static void drawMenu(int width, int height, int u) {
 	}
 	int const helpSize = u * 13 / 20, helpLine = u * 9 / 10, helpH = anyHelp ? helpLine * 2 + u / 2 : 0;
 	int const chrome = u * 3 + u / 4 + u / 4 + u * 9 / 4 + helpH;
-	int const rows = SDL_max(1, SDL_min(SDL_min(itemCount, ROWS_MAX), (height - u - chrome) / rowH));
-	SDL_Rect panel;
-	panel.w = SDL_min(width - u, u * 30);
-	// The panel fits the rows shown, in the middle of the window.
-	panel.h = chrome + rows * rowH;
-	panel.x = (width - panel.w) / 2;
-	panel.y = SDL_max(0, (height - panel.h) / 2);
+	int const rows = SDL_max(1, SDL_min(SDL_min(itemCount, ROWS_MAX), (height - chrome) / rowH));
+	SDL_Rect const panel = { 0, 0, width, height };
 	// Where you are: the menu before and this one.
 	char where[512];
 	if (depth > 1) {
@@ -1104,7 +1096,7 @@ void uiDraw(void) {
 		held.next = SDL_GetTicks() + REPEAT_MS;
 	}
 	if (app.menuOpen && depth) {
-		fillRect(0, 0, width, height, app.loaded ? (SDL_Color) { 4, 6, 12, dimAlphas[settings.dim] } : (SDL_Color) { 11, 15, 24, 255 });
+		fillRect(0, 0, width, height, app.loaded ? (SDL_Color) { panelFill.r, panelFill.g, panelFill.b, dimAlphas[settings.dim] } : (SDL_Color) { 11, 15, 24, 255 });
 		if (entry.open) {
 			drawEntry(width, height, u);
 		} else {
