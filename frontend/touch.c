@@ -47,6 +47,9 @@ struct Control {
 };
 
 enum { MENU = -1, CONTROLS = 16 };
+// The menu button shows for a while after a tap near it, then fades.
+enum { MENU_SHOWN_MS = 3000, MENU_FADE_MS = 300 };
+static Uint32 menuShownUntil;
 
 static int layout(struct Control out[CONTROLS], int width, int height) {
 	float const s = (float) SDL_min(width, height);
@@ -69,7 +72,7 @@ static int layout(struct Control out[CONTROLS], int width, int height) {
 		{ PILL, SDL_CONTROLLER_BUTTON_START, "Start", width / 2.0f + 0.10f * s, height - 0.05f * s, smallW, smallH },
 		{ STICK, 0, NULL, stickX, stickY, stick, stick },
 		{ STICK, 1, NULL, width - stickX, stickY, stick, stick },
-		{ ROUND, MENU, NULL, width / 2.0f, 0.045f * s, 0.06f * s, 0.06f * s },
+		{ ROUND, MENU, NULL, width / 2.0f, 0.07f * s, 0.06f * s, 0.06f * s },
 	};
 	memcpy(out, c, sizeof(c));
 	return CONTROLS;
@@ -200,13 +203,18 @@ bool touchEvent(const SDL_Event* event) {
 	float const x = event->tfinger.x * width, y = event->tfinger.y * height;
 	struct Control controls[CONTROLS];
 	layout(controls, width, height);
-	if (event->type == SDL_FINGERDOWN) {
-		struct Control const* const menu = &controls[CONTROLS - 1];
-		if ((x - menu->x) * (x - menu->x) + (y - menu->y) * (y - menu->y) < menu->w * menu->w * 1.5f) {
+	// The top middle, between the shoulder buttons: a tap shows the menu button, and another while
+	// it shows opens the menu.
+	float const s = (float) SDL_min(width, height);
+	if (event->type == SDL_FINGERDOWN && y < 0.16f * s && x > 0.34f * s && x < width - 0.34f * s) {
+		if (SDL_TICKS_PASSED(SDL_GetTicks(), menuShownUntil)) {
+			menuShownUntil = SDL_GetTicks() + MENU_SHOWN_MS;
+		} else {
+			menuShownUntil = 0;
 			release();
 			uiOpenMenu();
-			return true;
 		}
+		return true;
 	}
 	int slot = -1;
 	for (int i = 0; i < FINGERS; ++i) {
@@ -358,10 +366,17 @@ void touchDraw(void) {
 			float const knob = c->w * 0.46f, reach = c->w * 0.4f - knob / 2 + c->w * 0.1f;
 			drawShape(c->x + sticks[c->button][0] * reach, c->y + sticks[c->button][1] * reach, knob, knob, moved ? down : faint, faintEdge, e);
 		} else if (c->button == MENU) {
-			// Three lines.
-			drawShape(c->x, c->y, c->w, c->h, up, edge, e);
+			// Three lines, while shown.
+			Uint32 const now = SDL_GetTicks();
+			if (SDL_TICKS_PASSED(now, menuShownUntil)) {
+				continue;
+			}
+			float const fade = SDL_min(1.0f, (float) (menuShownUntil - now) / MENU_FADE_MS);
+			SDL_Color const fill = { up.r, up.g, up.b, (Uint8) (up.a * fade) }, line = { edge.r, edge.g, edge.b, (Uint8) (edge.a * fade) },
+			                bar = { text.r, text.g, text.b, (Uint8) (text.a * fade) };
+			drawShape(c->x, c->y, c->w * 1.4f, c->h * 1.4f, fill, line, e);
 			for (int k = -1; k <= 1; ++k) {
-				fillRectF(c->x - c->w * 0.24f, c->y + k * c->h * 0.18f - c->h * 0.04f, c->w * 0.48f, c->h * 0.08f, text);
+				fillRectF(c->x - c->w * 0.34f, c->y + k * c->h * 0.25f - c->h * 0.055f, c->w * 0.68f, c->h * 0.11f, bar);
 			}
 		} else {
 			drawShape(c->x, c->y, c->w, c->h, held[c->button] ? down : up, edge, e);
