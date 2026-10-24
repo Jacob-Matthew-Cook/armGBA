@@ -369,7 +369,7 @@ AVX2 void renderSpritesSimd(struct GBA* gba, unsigned priority, int from, int to
 	struct Renderer* renderer = &gba->renderer;
 	const __m256i unwritten = _mm256_set1_epi32(FLAG_UNWRITTEN);
 	const __m256i priorityMask = _mm256_set1_epi32(FLAG_PRIORITY);
-	const __m256i wanted = _mm256_set1_epi32(priority << OFFSET_PRIORITY);
+	const __m256i wanted = _mm256_set1_epi32((int) ((uint32_t) priority << OFFSET_PRIORITY));
 	const __m256i objwin = _mm256_set1_epi32(FLAG_OBJWIN);
 	const __m256i flags = _mm256_set1_epi32(FLAG_TARGET_2 * renderer->target2Obj);
 	const __m256i laneIndex = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);

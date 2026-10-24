@@ -609,7 +609,7 @@ void renderSpritesSimd(struct GBA* gba, unsigned priority, int from, int to) {
 	struct Renderer* renderer = &gba->renderer;
 	const uint16x8_t unwritten = vdupq_n_u16(FLAG_UNWRITTEN >> 16);
 	const uint16x8_t priorityMask = vdupq_n_u16(FLAG_PRIORITY >> 16);
-	const uint16x8_t wanted = vdupq_n_u16((priority << OFFSET_PRIORITY) >> 16);
+	const uint16x8_t wanted = vdupq_n_u16(((uint32_t) priority << OFFSET_PRIORITY) >> 16);
 	const uint16x8_t objwin = vdupq_n_u16(FLAG_OBJWIN >> 16);
 	const uint16x8_t flags = vdupq_n_u16((FLAG_TARGET_2 * renderer->target2Obj) >> 16);
 	const uint16_t laneNumbers16[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
