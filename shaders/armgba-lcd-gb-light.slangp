@@ -1,4 +1,4 @@
-# armGBA LCD Grid: the Game Boy Light.
+# armGBA LCD Grid: the Game Boy Light, backlit.
 shaders = 1
 shader0 = armgba-lcd.slang
 filter_linear0 = true
@@ -8,8 +8,8 @@ parameters = "GAP_SHARE;GAP_ACROSS;GAP_DOWN;GAP_RED;GAP_GREEN;GAP_BLUE;SHADOW;SH
 GAP_SHARE = 0.15
 GAP_ACROSS = 1
 GAP_DOWN = 1
-GAP_RED = 145
-GAP_GREEN = 234
-GAP_BLUE = 208
+GAP_RED = 94
+GAP_GREEN = 235
+GAP_BLUE = 211
 SHADOW = 0.2
 SHADOW_WAY = 4

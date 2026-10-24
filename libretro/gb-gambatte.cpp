@@ -399,8 +399,8 @@ size_t stall() {
 	return (s->loadFlags & gambatte::GB::GBA_FLAG) && !(s->loadFlags & gambatte::GB::NO_BIOS) ? 485808 : 0;
 }
 
-// The original Game Boy screen chosen: 0 plain grays, 1 the Pocket's, 2 the first model's green, 3
-// the Light's with its backlight on, 4 the first model measured, 5 the Pocket measured.
+// The original Game Boy screen chosen: 0 plain grays, 1 the first model's, 2 the Pocket's, 3 the
+// Light's with its backlight on.
 int screen;
 bool correction;
 // On the Game Boy Advance model, the Color's panel shown instead of the Advance's.
@@ -437,24 +437,23 @@ void correctedColors(bool advance) {
 // Installs the colors: the chosen screen's four shades for original Game Boy games, and the table
 // that turns Game Boy Color 15-bit colors into the frontend's, corrected or not.
 // Each screen: its color while the game has it off, its four shades, and the color its pixels go
-// toward driven harder than the darkest shade. The plain grays are gambatte-libretro's; the Pocket's,
-// the first model's and the Light's are SameBoy's, past the darkest shade only darker. The measured
-// ones are BGB's (bgb.bircd.org/reality): a first Game Boy and a Pocket photographed under
-// color-accurate light and corrected with a ColorChecker, the lightest shade about as bright as the
-// screen switched off. A first Game Boy's pixels go toward dark blue at the most contrast, as in
-// BGB's contrast wheel; the measured Pocket's only darker.
+// toward driven harder than the darkest shade. The plain grays are gambatte-libretro's. The first
+// model's and the Pocket's are BGB's (bgb.bircd.org/reality): real ones photographed under
+// color-accurate light and corrected with a ColorChecker. A first Game Boy's pixels go toward dark
+// blue at the most contrast, as in BGB's contrast wheel; the Pocket's only darker. The Light is the
+// Pocket's screen lit from behind: light crosses it once rather than twice, so each shade passes the
+// square root of the Pocket's share of the screen switched off, in the backlight's teal (hue 170, the
+// middle of photographed Lights, which run from about 157 to 180).
 struct Screen {
 	unsigned long off;
 	unsigned long shades[4];
 	unsigned long full;
 };
-const Screen screens[6] = {
+const Screen screens[4] = {
 	{ 0xFFFFFF, { 0xFFFFFF, 0xA5A5A5, 0x525252, 0x000000 }, 0x000000 },
-	{ 0xCFDAAC, { 0xC2CE93, 0x818D66, 0x3A4C3A, 0x07100E }, 0x000000 },
-	{ 0xD2E6A6, { 0xC6DE8C, 0x84A563, 0x396139, 0x081810 }, 0x000000 },
-	{ 0x91EAD0, { 0x7FE2C3, 0x56B495, 0x357862, 0x0A1C15 }, 0x000000 },
 	{ 0x948A04, { 0x759833, 0x588F51, 0x3B7560, 0x2E615A }, 0x00005E },
 	{ 0xC2CFA8, { 0xADBF92, 0x96A67C, 0x727E64, 0x5A635C }, 0x2C322E },
+	{ 0x5EEBD3, { 0x5AE1CA, 0x53D2BC, 0x48B8A5, 0x3FA493 }, 0x2C786B },
 };
 
 void setColors() {

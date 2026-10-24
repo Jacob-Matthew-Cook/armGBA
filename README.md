@@ -45,7 +45,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | Video | Threaded Video | Game Boy Advance | Off, On, One Frame Late |
 | | Color Correction | Game Boy Advance | Off, On |
 | | Game Boy Color Correction | Game Boy | Off, On |
-| | Game Boy Screen | Game Boy | Game Boy (Measured), Game Boy Pocket (Measured), Grayscale, Game Boy (Green), Game Boy Pocket (Olive), Game Boy Light (Teal) |
+| | Game Boy Screen | Game Boy | Grayscale, Game Boy, Game Boy Pocket (both measured from real ones), Game Boy Light (Backlit) |
 | | Game Boy Contrast | Game Boy | 0% to 100% of the wheel in tenths, 50% by default (original Game Boy screens) |
 | | Game Boy on Advance Border | Game Boy | Cropped, Shown (Game Boy Advance model) |
 | | Game Boy on Advance Screen | Game Boy | Game Boy Advance, Game Boy Color (Game Boy Advance model) |
@@ -98,7 +98,7 @@ the cost. At 6x, a Game Boy game's grid adds about 1.5 ms a frame on an RG353M a
 more; on a Core i7-9700F, 0.07 ms and 0.02 ms. On a small screen, such as a 640x480 handheld's, 2x
 with integer scaling looks cleanest. `shaders/` holds RetroArch shader presets, `.slangp` and
 `.glslp`, that draw the same on the GPU at any size instead, one for each screen: `gb-measured`,
-`gb-pocket-measured`, `gb-green`, `gb-gray`, `gb-pocket` and `gb-light` (with the shadow), `gbc` and `gba`. The standalone frontend
+`gb-pocket-measured`, `gb-light` and `gb-gray` (with the shadow), `gbc` and `gba`. The standalone frontend
 draws its own on the GPU or the core's, never both: its LCD Rendering setting picks one. Drawn at
 any size, the grid shows a tenth of the photos' darkness for each time larger the picture is, all of
 it from 10x: small, its gaps would land unevenly and read too heavy.
@@ -226,8 +226,10 @@ mGBA's SDL frontend scales a stick.
 
 **Game Boy and Game Boy Color.** Gambatte-Speedrun's core (`gambatte/`), plus mappers for unlicensed
 cartridges: Sachen, TAMA5, MBC6, MBC7, Vast Fame, and the BBD, Hitek, Sintax, Li Cheng, NT and Makon
-families. The screen palettes, apart from Grayscale (gambatte-libretro's), are SameBoy's. So is the
-Game Boy Color and Game Boy Advance color correction. The boot ROMs built in are armGBA's own.
+families. The Game Boy and Game Boy Pocket screens are BGB's measurements of real ones
+(bgb.bircd.org/reality); the Light's is the Pocket's lit by a teal backlight, its color from photos
+of real ones; Grayscale is gambatte-libretro's. The Game Boy Color and Game Boy Advance color
+correction is SameBoy's. The boot ROMs built in are armGBA's own.
 
 **Link play.** Link Mode picks how consoles link. Off, the default, is one console, with RetroArch's
 usual netplay.
