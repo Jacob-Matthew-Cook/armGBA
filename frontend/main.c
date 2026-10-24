@@ -875,8 +875,9 @@ static void makeOverlay(SDL_Rect to) {
 	free(across);
 }
 
-// Tilt: the shadow falls the way gravity pulls across the screen, 1.4 dots with the screen upright and
-// none with it lying flat, from the accelerometer (open only while it's used), smoothed.
+// Tilt: the shadow falls the way gravity pulls across the screen, TILT_REACH dots with the screen
+// upright and none with it lying flat, from the accelerometer (open only while it's used), smoothed.
+#define TILT_REACH 3.0f
 static int accelerometerIndex = -1;
 static SDL_Sensor* accelerometer;
 static float tiltX, tiltY;
@@ -935,12 +936,12 @@ static void followTilt(bool on) {
 		x = -a[0], y = a[1];
 		break;
 	}
-	x *= 1.4f / SDL_STANDARD_GRAVITY;
-	y *= 1.4f / SDL_STANDARD_GRAVITY;
+	x *= TILT_REACH / SDL_STANDARD_GRAVITY;
+	y *= TILT_REACH / SDL_STANDARD_GRAVITY;
 	float const length = sqrtf(x * x + y * y);
-	if (length > 1.4f) {
-		x *= 1.4f / length;
-		y *= 1.4f / length;
+	if (length > TILT_REACH) {
+		x *= TILT_REACH / length;
+		y *= TILT_REACH / length;
 	}
 	tiltX += (x - tiltX) * 0.1f;
 	tiltY += (y - tiltY) * 0.1f;
