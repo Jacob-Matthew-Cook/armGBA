@@ -478,11 +478,27 @@ static void audioSample(int16_t left, int16_t right) {
 static void inputPoll(void) {
 }
 
+// Android handhelds with a Nintendo layout name their face buttons by label, A on the right, where
+// SDL means places, A at the bottom, so their A and B, and X and Y, are swapped back. Controllers SDL
+// knows (Xbox, PlayStation, Switch and others) give places already, as do the On-Screen Controls.
+static int facePlace(SDL_GameController* pad, int button) {
+#ifdef __ANDROID__
+	if (pad && SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_UNKNOWN && button >= SDL_CONTROLLER_BUTTON_A &&
+	    button <= SDL_CONTROLLER_BUTTON_Y) {
+		return button ^ 1;
+	}
+#else
+	(void) pad;
+#endif
+	return button;
+}
+
 // A controller binding's state.
 static bool padHeld(SDL_GameController* pad, int binding) {
 	if (!pad || binding == PAD_NONE) {
 		return false;
 	}
+	binding = facePlace(pad, binding);
 	if (binding == PAD_LEFT_TRIGGER || binding == PAD_RIGHT_TRIGGER) {
 		SDL_GameControllerAxis axis = binding == PAD_LEFT_TRIGGER ? SDL_CONTROLLER_AXIS_TRIGGERLEFT : SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
 		return SDL_GameControllerGetAxis(pad, axis) > 16384;
@@ -1323,7 +1339,12 @@ static void padPressed(SDL_JoystickID which, int binding) {
 
 // An event the menus didn't take: quitting, a file dropped on the window to load, controllers
 // plugged in or out, hotkeys, and a right-click for the menu.
-static void handleEvent(const SDL_Event* event) {
+static void handleEvent(const SDL_Event* given) {
+	SDL_Event placed = *given;
+	if (given->type == SDL_CONTROLLERBUTTONDOWN || given->type == SDL_CONTROLLERBUTTONUP) {
+		placed.cbutton.button = (Uint8) facePlace(SDL_GameControllerFromInstanceID(given->cbutton.which), given->cbutton.button);
+	}
+	SDL_Event const* const event = &placed;
 	if (uiEvent(event) || touchEvent(event)) {
 		return;
 	}
