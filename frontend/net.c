@@ -527,7 +527,7 @@ static void takeState(const uint8_t* p, size_t size) {
 	}
 	void* state = roll.states[frame % STATES];
 	if (uncompress(state, &length, p + header, size - header) != Z_OK || !retro_unserialize(state, roll.stateSize)) {
-		osd("Netplay: the host's state didn't load");
+		osd("Netplay: the host's state didn't load; its armGBA may be another build");
 		netStop();
 		return;
 	}
