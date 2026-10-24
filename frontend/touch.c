@@ -9,7 +9,8 @@
 // On-Screen Controls (Android): a controller of their own, one of SDL's virtual joysticks, played by
 // touch and drawn over the game, there while no other controller is connected; the controller's
 // buttons, hotkeys and menus work with it as with any. Placed and named as on a Nintendo controller:
-// A on the right, B below, X above, Y on the left.
+// A on the right, B below, X above, Y on the left, L2 above L and R2 above R, the D-pad and the
+// buttons half-way down, L3 and R3 in the lower corners and the sticks beside them.
 
 #include "frontend.h"
 
@@ -19,16 +20,22 @@
 #include "text.h"
 
 static SDL_Joystick* joystick;
-static bool held[SDL_CONTROLLER_BUTTON_MAX];
+// The buttons, then L2 and R2, which are the triggers' axes.
+enum { L2 = SDL_CONTROLLER_BUTTON_MAX, R2, HELD };
+static bool held[HELD];
 
 enum { FINGERS = 10 };
+// A finger that comes down on a stick moves it until it lifts, wherever it goes.
 static struct {
 	SDL_FingerID id;
 	float x, y;
 	bool down;
+	int stick;
 } fingers[FINGERS];
+// Where each stick is pushed, -1 to 1 each way.
+static float sticks[2][2];
 
-enum Shape { ROUND, PILL, CROSS };
+enum Shape { ROUND, PILL, CROSS, STICK };
 
 // The controls, by the shorter side s of the window: where, how big and what they press.
 struct Control {
@@ -38,22 +45,29 @@ struct Control {
 	float x, y, w, h;
 };
 
-enum { MENU = -1, CONTROLS = 10 };
+enum { MENU = -1, CONTROLS = 16 };
 
 static int layout(struct Control out[CONTROLS], int width, int height) {
 	float const s = (float) SDL_min(width, height);
-	float const pad = 0.20f * s, low = height - 0.30f * s, face = 0.105f * s, round = 0.12f * s;
-	float const pillW = 0.26f * s, pillH = 0.09f * s, smallW = 0.15f * s, smallH = 0.06f * s;
+	float const pad = 0.20f * s, low = height / 2.0f - 0.03f * s, face = 0.105f * s, round = 0.12f * s;
+	float const pillW = 0.26f * s, pillH = 0.08f * s, smallW = 0.15f * s, smallH = 0.06f * s, stickX = 0.20f * s, stickY = height - 0.21f * s, stick = 0.24f * s;
+	float const top = 0.03f * s + pillH / 2, under = top + 0.10f * s, click = 0.085f * s;
 	struct Control const c[CONTROLS] = {
 		{ CROSS, SDL_CONTROLLER_BUTTON_DPAD_UP, NULL, pad, low, 0.30f * s, 0.30f * s },
 		{ ROUND, SDL_CONTROLLER_BUTTON_B, "A", width - pad + face, low, round, round },
 		{ ROUND, SDL_CONTROLLER_BUTTON_A, "B", width - pad, low + face, round, round },
 		{ ROUND, SDL_CONTROLLER_BUTTON_Y, "X", width - pad, low - face, round, round },
 		{ ROUND, SDL_CONTROLLER_BUTTON_X, "Y", width - pad - face, low, round, round },
-		{ PILL, SDL_CONTROLLER_BUTTON_LEFTSHOULDER, "L", 0.04f * s + pillW / 2, 0.06f * s + pillH / 2, pillW, pillH },
-		{ PILL, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, "R", width - 0.04f * s - pillW / 2, 0.06f * s + pillH / 2, pillW, pillH },
+		{ PILL, L2, "L2", 0.04f * s + pillW / 2, top, pillW, pillH },
+		{ PILL, R2, "R2", width - 0.04f * s - pillW / 2, top, pillW, pillH },
+		{ PILL, SDL_CONTROLLER_BUTTON_LEFTSHOULDER, "L", 0.04f * s + pillW / 2, under, pillW, pillH },
+		{ PILL, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, "R", width - 0.04f * s - pillW / 2, under, pillW, pillH },
+		{ ROUND, SDL_CONTROLLER_BUTTON_LEFTSTICK, "L3", 0.065f * s, height - 0.065f * s, click, click },
+		{ ROUND, SDL_CONTROLLER_BUTTON_RIGHTSTICK, "R3", width - 0.065f * s, height - 0.065f * s, click, click },
 		{ PILL, SDL_CONTROLLER_BUTTON_BACK, "Select", width / 2.0f - 0.10f * s, height - 0.05f * s, smallW, smallH },
 		{ PILL, SDL_CONTROLLER_BUTTON_START, "Start", width / 2.0f + 0.10f * s, height - 0.05f * s, smallW, smallH },
+		{ STICK, 0, NULL, stickX, stickY, stick, stick },
+		{ STICK, 1, NULL, width - stickX, stickY, stick, stick },
 		{ ROUND, MENU, NULL, width / 2.0f, 0.045f * s, 0.06f * s, 0.06f * s },
 	};
 	memcpy(out, c, sizeof(c));
@@ -62,7 +76,7 @@ static int layout(struct Control out[CONTROLS], int width, int height) {
 
 // What a finger at x, y presses: the D-pad's directions by angle, diagonals between, outside a small
 // middle; a round button within a little more than its size, two between two; a pill a little past it.
-static void pressedAt(const struct Control* c, float x, float y, bool out[SDL_CONTROLLER_BUTTON_MAX]) {
+static void pressedAt(const struct Control* c, float x, float y, bool out[HELD]) {
 	float const dx = x - c->x, dy = y - c->y;
 	switch (c->shape) {
 	case CROSS: {
@@ -83,20 +97,43 @@ static void pressedAt(const struct Control* c, float x, float y, bool out[SDL_CO
 		}
 		break;
 	case PILL:
-		if (fabsf(dx) < c->w * 0.65f && fabsf(dy) < c->h * 0.9f) {
+		if (fabsf(dx) < c->w * 0.65f && fabsf(dy) < c->h * 0.62f) {
 			out[c->button] = true;
 		}
 		break;
+	case STICK:
+		break;
+	}
+}
+
+static void moveStick(int which, float x, float y) {
+	sticks[which][0] = x;
+	sticks[which][1] = y;
+	if (joystick) {
+		SDL_JoystickSetVirtualAxis(joystick, 2 * which, (Sint16) (x * 32767));
+		SDL_JoystickSetVirtualAxis(joystick, 2 * which + 1, (Sint16) (y * 32767));
+	}
+}
+
+// A button, or L2 or R2 as a trigger all the way in or out.
+static void press(int b, bool down) {
+	held[b] = down;
+	if (b < SDL_CONTROLLER_BUTTON_MAX) {
+		SDL_JoystickSetVirtualButton(joystick, b, down ? SDL_PRESSED : SDL_RELEASED);
+	} else {
+		SDL_JoystickSetVirtualAxis(joystick, b == L2 ? SDL_CONTROLLER_AXIS_TRIGGERLEFT : SDL_CONTROLLER_AXIS_TRIGGERRIGHT,
+		                           down ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
 	}
 }
 
 static void release(void) {
 	memset(fingers, 0, sizeof(fingers));
-	for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; ++b) {
-		if (held[b] && joystick) {
-			SDL_JoystickSetVirtualButton(joystick, b, SDL_RELEASED);
+	if (joystick) {
+		moveStick(0, 0, 0);
+		moveStick(1, 0, 0);
+		for (int b = 0; b < HELD; ++b) {
+			press(b, false);
 		}
-		held[b] = false;
 	}
 }
 
@@ -118,9 +155,12 @@ void touchUpdate(void) {
 		// Its buttons in SDL's order, through the D-pad, so each is the controller's of the same number.
 		desc.nbuttons = SDL_CONTROLLER_BUTTON_DPAD_RIGHT + 1;
 		desc.button_mask = (1u << desc.nbuttons) - 1;
+		desc.naxes = SDL_CONTROLLER_AXIS_MAX;
+		desc.axis_mask = (1u << desc.naxes) - 1;
 		desc.name = "On-Screen Controls";
 		int const index = SDL_JoystickAttachVirtualEx(&desc);
 		joystick = index >= 0 ? SDL_JoystickOpen(index) : NULL;
+		release();
 	} else if (!wanted && joystick) {
 		release();
 		SDL_JoystickID const id = SDL_JoystickInstanceID(joystick);
@@ -177,21 +217,45 @@ bool touchEvent(const SDL_Event* event) {
 		slot = fingers[i].down ? -1 : i;
 	}
 	if (slot >= 0) {
+		if (event->type == SDL_FINGERDOWN) {
+			fingers[slot].stick = -1;
+			for (int c = 0; c < CONTROLS; ++c) {
+				float const dx = x - controls[c].x, dy = y - controls[c].y;
+				if (controls[c].shape == STICK && dx * dx + dy * dy < controls[c].w * controls[c].w * 0.36f) {
+					fingers[slot].stick = controls[c].button;
+				}
+			}
+		}
 		fingers[slot].id = event->tfinger.fingerId;
 		fingers[slot].x = x;
 		fingers[slot].y = y;
 		fingers[slot].down = event->type != SDL_FINGERUP;
+		// Full over most of the way to the base's edge, and round.
+		int const which = fingers[slot].stick;
+		if (which >= 0) {
+			struct Control const* const c = &controls[CONTROLS - 3 + which];
+			float dx = 0, dy = 0;
+			if (fingers[slot].down) {
+				dx = (x - c->x) / (c->w * 0.4f);
+				dy = (y - c->y) / (c->w * 0.4f);
+				float const length = sqrtf(dx * dx + dy * dy);
+				if (length > 1) {
+					dx /= length;
+					dy /= length;
+				}
+			}
+			moveStick(which, dx, dy);
+		}
 	}
-	bool now[SDL_CONTROLLER_BUTTON_MAX] = { false };
+	bool now[HELD] = { false };
 	for (int i = 0; i < FINGERS; ++i) {
-		for (int c = 0; c < CONTROLS && fingers[i].down; ++c) {
+		for (int c = 0; c < CONTROLS && fingers[i].down && fingers[i].stick < 0; ++c) {
 			pressedAt(&controls[c], fingers[i].x, fingers[i].y, now);
 		}
 	}
-	for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; ++b) {
+	for (int b = 0; b < HELD; ++b) {
 		if (now[b] != held[b]) {
-			held[b] = now[b];
-			SDL_JoystickSetVirtualButton(joystick, b, now[b] ? SDL_PRESSED : SDL_RELEASED);
+			press(b, now[b]);
 		}
 	}
 	return true;
@@ -285,6 +349,12 @@ void touchDraw(void) {
 					fillRectF(ax + half - e, from, e, arm - e, edge);
 				}
 			}
+		} else if (c->shape == STICK) {
+			// The base, and the knob where it's pushed.
+			bool const moved = sticks[c->button][0] || sticks[c->button][1];
+			drawShape(c->x, c->y, c->w, c->h, up, edge, e);
+			float const knob = c->w * 0.46f, reach = c->w * 0.4f - knob / 2 + c->w * 0.1f;
+			drawShape(c->x + sticks[c->button][0] * reach, c->y + sticks[c->button][1] * reach, knob, knob, moved ? down : up, edge, e);
 		} else if (c->button == MENU) {
 			// Three lines.
 			drawShape(c->x, c->y, c->w, c->h, up, edge, e);
@@ -293,7 +363,7 @@ void touchDraw(void) {
 			}
 		} else {
 			drawShape(c->x, c->y, c->w, c->h, held[c->button] ? down : up, edge, e);
-			label(c->label, c->x, c->y, (int) (c->h * (c->shape == ROUND ? 0.5f : 0.55f)), text);
+			label(c->label, c->x, c->y, (int) (c->h * (c->shape == ROUND && c->label[1] ? 0.4f : c->shape == ROUND ? 0.5f : 0.55f)), text);
 		}
 	}
 }
