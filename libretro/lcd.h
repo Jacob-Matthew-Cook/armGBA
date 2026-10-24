@@ -28,16 +28,17 @@ enum LibretroLcd libretroLcd(uint32_t* gap);
 
 // Keeping the Game Boy screens' and the Color's brightness under the grid (lcd.c has why). The caller
 // gives the shares of gap, 0 to 1, a square's pixels are blended with, and how many pixels take each,
-// and sets stale when they change. The gap to draw instead and a table for each channel (red, green,
-// blue) that darkens the picture are solved again when stale or the screen or its colors change,
-// counted in solved. Returns whether the screen's brightness is kept.
+// and sets stale when they change. The gap to draw instead, a table for each channel (red, green,
+// blue) that darkens the picture, and one of each pixel's own gap color for the ones the gap can't
+// keep, are solved again when stale or the screen or its colors change, counted in solved. Returns
+// whether the screen's brightness is kept.
 struct LibretroLcdKeep {
 	float shares[256], weights[256];
 	int count;
 	bool stale;
 	int lcd;
 	uint32_t colors[5], gap;
-	uint8_t table[3][256];
+	uint8_t table[3][256], gaps[3][256];
 	unsigned solved;
 };
 bool libretroLcdKeep(struct LibretroLcdKeep* keep);

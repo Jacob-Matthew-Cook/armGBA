@@ -10,10 +10,10 @@
 // console screen's pixels, and the shadow the first Game Boy's and the Pocket's pixels cast on the
 // reflector behind them. A gap is centered on the edge between two pixels; an output pixel takes the
 // gap's color by how much of it the gap covers, across (between columns) and down (between rows). The
-// Color's and Advance's gaps are black. The first Game Boy's, the Pocket's and the Light's colors are
-// each pixel seen with the gaps around it, so Keep the Screen's Brightness darkens the pixels until
-// each square averages its color, in linear light; their gap is the unlit screen's color, darker only
-// as far as the darkest shade needs at 50% contrast (libretro/lcd.c's libretroLcdKeep). The shadow
+// Color's and Advance's gaps are black. The Game Boy screens' colors are each pixel seen with the
+// gaps around it, so Keep the Screen's Brightness sets each pixel, and beside the darkest ones the
+// gaps, until each square averages its color, in linear light (libretro/lcd.c's libretroLcdKeep has
+// the gaps' colors); on the Color and the Advance the gaps lighten beside their brightest colors. The shadow
 // darkens the screen 1.4 dots from each pixel the chosen way, softly, by up to Shadow at a pixel as
 // dark as the screen goes, counting from the unlit screen's color. The presets beside this hold each
 // screen's values, measured from photos of the consoles (see libretro/lcd.h).
@@ -113,14 +113,21 @@ void main() {
 	float across = gapCoverage(at.x, size.x) * params.GAP_ACROSS * fade;
 	float down = gapCoverage(at.y, size.y) * params.GAP_DOWN * fade;
 	float covered = across + down - across * down;
+	vec3 unlit = vec3(params.UNLIT_RED, params.UNLIT_GREEN, params.UNLIT_BLUE) / 255.0;
 	if (params.KEEP_BRIGHTNESS > 0.5) {
-		// The pixel darkened, in linear light, so its square with the gaps around it averages the color
-		// it had: the first Game Boy's, the Pocket's and the Light's colors are measured that way.
+		// The pixel set, in linear light, so its square with the gaps around it averages the color it
+		// had: the Game Boy screens' colors are measured that way. Beside a pixel too dark for the gap,
+		// the gaps darken; on a black matrix, beside one too bright, they lighten.
 		float acrossAll = params.GAP_SHARE * params.GAP_ACROSS * fade, downAll = params.GAP_SHARE * params.GAP_DOWN * fade;
-		float shown = acrossAll + downAll - acrossAll * downAll;
+		float shown = max(acrossAll + downAll - acrossAll * downAll, 0.0001);
+		vec3 want = toLinear(color);
 		vec3 lit = toLinear(gap);
-		vec3 inside = clamp((toLinear(color) - shown * lit) / (1.0 - shown), 0.0, 1.0);
-		color = fromLinear(mix(inside, lit, covered));
+		vec3 inside = (want - shown * lit) / (1.0 - shown);
+		lit = mix(lit, want / shown, step(inside, vec3(0.0)));
+		if (level(unlit) == 0.0) {
+			lit = mix(lit, (want - (1.0 - shown)) / shown, step(vec3(1.0), inside));
+		}
+		color = fromLinear(mix(clamp(inside, 0.0, 1.0), clamp(lit, 0.0, 1.0), covered));
 	} else {
 		color = mix(color, gap, covered);
 	}
@@ -130,7 +137,7 @@ void main() {
 		toward /= max(abs(toward.x), abs(toward.y));
 		toward *= abs(toward.x) > 0.5 && abs(toward.y) > 0.5 ? 1.0 : 1.4;
 		vec3 caster = texture(Source, (at - toward) * params.SourceSize.zw).rgb;
-		float start = level(vec3(params.UNLIT_RED, params.UNLIT_GREEN, params.UNLIT_BLUE) / 255.0) * 0.9375;
+		float start = level(unlit) * 0.9375;
 		float dark = clamp((start - level(caster)) / max(start, 0.001), 0.0, 1.0);
 		color *= 1.0 - params.SHADOW * dark;
 	}

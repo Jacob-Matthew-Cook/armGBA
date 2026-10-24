@@ -149,14 +149,21 @@ void main() {
 	float across = gapCoverage(at.x, size.x) * GAP_ACROSS * fade;
 	float down = gapCoverage(at.y, size.y) * GAP_DOWN * fade;
 	float covered = across + down - across * down;
+	vec3 unlit = vec3(UNLIT_RED, UNLIT_GREEN, UNLIT_BLUE) / 255.0;
 	if (KEEP_BRIGHTNESS > 0.5) {
-		// The pixel darkened, in linear light, so its square with the gaps around it averages the color
-		// it had: the first Game Boy's, the Pocket's and the Light's colors are measured that way.
+		// The pixel set, in linear light, so its square with the gaps around it averages the color it
+		// had: the Game Boy screens' colors are measured that way. Beside a pixel too dark for the gap,
+		// the gaps darken; on a black matrix, beside one too bright, they lighten.
 		float acrossAll = GAP_SHARE * GAP_ACROSS * fade, downAll = GAP_SHARE * GAP_DOWN * fade;
-		float shown = acrossAll + downAll - acrossAll * downAll;
+		float shown = max(acrossAll + downAll - acrossAll * downAll, 0.0001);
+		vec3 want = toLinear(color);
 		vec3 lit = toLinear(gap);
-		vec3 inside = clamp((toLinear(color) - shown * lit) / (1.0 - shown), 0.0, 1.0);
-		color = fromLinear(mix(inside, lit, covered));
+		vec3 inside = (want - shown * lit) / (1.0 - shown);
+		lit = mix(lit, want / shown, step(inside, vec3(0.0)));
+		if (level(unlit) == 0.0) {
+			lit = mix(lit, (want - (1.0 - shown)) / shown, step(vec3(1.0), inside));
+		}
+		color = fromLinear(mix(clamp(inside, 0.0, 1.0), clamp(lit, 0.0, 1.0), covered));
 	} else {
 		color = mix(color, gap, covered);
 	}
@@ -166,7 +173,7 @@ void main() {
 		toward /= max(abs(toward.x), abs(toward.y));
 		toward *= abs(toward.x) > 0.5 && abs(toward.y) > 0.5 ? 1.0 : 1.4;
 		vec3 caster = COMPAT_TEXTURE(Texture, (at - toward) / TextureSize).rgb;
-		float start = level(vec3(UNLIT_RED, UNLIT_GREEN, UNLIT_BLUE) / 255.0) * 0.9375;
+		float start = level(unlit) * 0.9375;
 		float dark = clamp((start - level(caster)) / max(start, 0.001), 0.0, 1.0);
 		color *= 1.0 - SHADOW * dark;
 	}

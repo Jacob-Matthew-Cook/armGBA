@@ -44,6 +44,10 @@ static unsigned bytesPerFrame;
 static int16_t frameSound[2 * 4096];
 static size_t frameSoundCount;
 static SDL_Texture* overlay;
+// For pixels whose own gaps differ (lcd.h's libretroLcdKeep): the overlay's alphas as grays and the
+// rest of each pixel's, to multiply by, a picture of each pixel's gap color, and where its gaps are
+// made at the size shown.
+static SDL_Texture *gapMask, *insideMask, *gapLayer, *gapsPicture;
 static int overlayWidth, overlayHeight, overlayShownWidth, overlayShownHeight, overlayLcd = -1;
 // The overlay's shares of gap, for keeping a Game Boy screen's brightness under it; whether the game's
 // texture holds the picture darkened through its tables, from which solve, and whether a newer
@@ -51,7 +55,7 @@ static int overlayWidth, overlayHeight, overlayShownWidth, overlayShownHeight, o
 static struct LibretroLcdKeep overlayKeep;
 static bool gameKept, gameKeptStale;
 static unsigned gameKeptSolved;
-static uint8_t* keptPicture;
+static uint8_t *keptPicture, *keptGaps;
 static size_t keptSize;
 static SDL_Texture* shadow;
 static bool shadowStale;
@@ -769,6 +773,26 @@ static int coreGridScale(void) {
 // blend gives with alpha 1 - (1 - a)^(1 / 2.2); the Game Boy's gaps, near its pixels' colors, take
 // the same. It is white, tinted the gap's color as it's drawn, and how many of its pixels take each
 // alpha goes to overlayKeep.
+static void dropOverlay(void) {
+	SDL_Texture** const all[] = { &overlay, &gapMask, &insideMask, &gapLayer };
+	for (size_t i = 0; i < sizeof(all) / sizeof(*all); ++i) {
+		if (*all[i]) {
+			SDL_DestroyTexture(*all[i]);
+			*all[i] = NULL;
+		}
+	}
+}
+
+static SDL_Texture* makeMask(const uint32_t* pixels, int w, int h, SDL_BlendMode mode) {
+	SDL_Texture* const t = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
+	if (t) {
+		SDL_UpdateTexture(t, NULL, pixels, w * 4);
+		SDL_SetTextureBlendMode(t, mode);
+		SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
+	}
+	return t;
+}
+
 static void makeOverlay(SDL_Rect to) {
 	uint32_t gap = 0;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
@@ -777,10 +801,7 @@ static void makeOverlay(SDL_Rect to) {
 	    overlayShownHeight == to.h && overlayLcd == (int) lcd) {
 		return;
 	}
-	if (overlay) {
-		SDL_DestroyTexture(overlay);
-		overlay = NULL;
-	}
+	dropOverlay();
 	overlayWidth = app.gameWidth;
 	overlayHeight = app.gameHeight;
 	overlayShownWidth = to.w;
@@ -823,10 +844,19 @@ static void makeOverlay(SDL_Rect to) {
 	}
 	overlayKeep.count = 256;
 	overlayKeep.stale = true;
-	overlay = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
-	SDL_UpdateTexture(overlay, NULL, pixels, w * 4);
-	SDL_SetTextureBlendMode(overlay, SDL_BLENDMODE_BLEND);
-	SDL_SetTextureScaleMode(overlay, SDL_ScaleModeNearest);
+	overlay = makeMask(pixels, w, h, SDL_BLENDMODE_BLEND);
+	for (size_t i = 0; i < (size_t) w * h; ++i) {
+		pixels[i] = 0xFF000000 | (pixels[i] >> 24) * 0x010101;
+	}
+	gapMask = makeMask(pixels, w, h, SDL_BLENDMODE_MOD);
+	for (size_t i = 0; i < (size_t) w * h; ++i) {
+		pixels[i] ^= 0xFFFFFF;
+	}
+	insideMask = makeMask(pixels, w, h, SDL_BLENDMODE_MOD);
+	gapLayer = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
+	if (gapLayer) {
+		SDL_SetTextureBlendMode(gapLayer, SDL_BLENDMODE_ADD);
+	}
 	free(pixels);
 	free(across);
 }
@@ -883,25 +913,62 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 	SDL_RenderSetClipRect(app.renderer, NULL);
 }
 
+// 8-bit channels to RGB565, rounded.
+static uint16_t pack565(unsigned r, unsigned g, unsigned b) {
+	return (uint16_t) ((r * 31 + 127) / 255 << 11 | (g * 63 + 127) / 255 << 5 | (b * 31 + 127) / 255);
+}
+
 // The game's texture from the picture, darkened through overlayKeep's tables when keeping.
 static void uploadGame(bool keeping) {
 	const uint8_t* data = app.picture;
 	size_t const size = app.picturePitch * (size_t) app.gameHeight;
 	if (keeping && size > keptSize) {
 		uint8_t* const more = realloc(keptPicture, size);
-		keeping = more != NULL;
-		if (more) {
-			keptPicture = more;
-			keptSize = size;
-		}
+		keptPicture = more ? more : keptPicture;
+		uint8_t* const moreGaps = realloc(keptGaps, size);
+		keptGaps = moreGaps ? moreGaps : keptGaps;
+		keeping = more && moreGaps;
+		keptSize = keeping ? size : keptSize;
 	}
-	if (keeping) {
+	bool const wide = app.format == RETRO_PIXEL_FORMAT_XRGB8888;
+	if (keeping && !wide) {
+		// RGB565: each channel widened to 8 bits for the tables, then narrowed again.
+		for (size_t i = 0; i < size; i += 2) {
+			unsigned const c = *(const uint16_t*) (data + i);
+			unsigned const r = (c >> 11) << 3 | c >> 13, g = (c >> 5 & 0x3F) << 2 | (c >> 9 & 3), b = (c & 0x1F) << 3 | (c >> 2 & 7);
+			*(uint16_t*) (keptPicture + i) = pack565(overlayKeep.table[0][r], overlayKeep.table[1][g], overlayKeep.table[2][b]);
+			*(uint16_t*) (keptGaps + i) = pack565(overlayKeep.gaps[0][r], overlayKeep.gaps[1][g], overlayKeep.gaps[2][b]);
+		}
+	} else if (keeping) {
 		// ARGB8888, blue first in memory.
 		for (size_t i = 0; i < size; i += 4) {
 			keptPicture[i] = overlayKeep.table[2][data[i]];
 			keptPicture[i + 1] = overlayKeep.table[1][data[i + 1]];
 			keptPicture[i + 2] = overlayKeep.table[0][data[i + 2]];
 			keptPicture[i + 3] = data[i + 3];
+			keptGaps[i] = overlayKeep.gaps[2][data[i]];
+			keptGaps[i + 1] = overlayKeep.gaps[1][data[i + 1]];
+			keptGaps[i + 2] = overlayKeep.gaps[0][data[i + 2]];
+			keptGaps[i + 3] = 0xFF;
+		}
+	}
+	if (keeping) {
+		Uint32 const format = wide ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_RGB565;
+		Uint32 now = 0;
+		int w = 0, h = 0;
+		if (gapsPicture) {
+			SDL_QueryTexture(gapsPicture, &now, NULL, &w, &h);
+		}
+		if (!gapsPicture || now != format || w != app.gameWidth || h != app.gameHeight) {
+			if (gapsPicture) {
+				SDL_DestroyTexture(gapsPicture);
+			}
+			gapsPicture = SDL_CreateTexture(app.renderer, format, SDL_TEXTUREACCESS_STREAMING, app.gameWidth, app.gameHeight);
+		}
+		if (gapsPicture) {
+			SDL_SetTextureBlendMode(gapsPicture, SDL_BLENDMODE_NONE);
+			SDL_SetTextureScaleMode(gapsPicture, gameSmooth ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+			SDL_UpdateTexture(gapsPicture, NULL, keptGaps, (int) app.picturePitch);
 		}
 		data = keptPicture;
 	}
@@ -941,12 +1008,21 @@ static void present(void) {
 		makeOverlay(to);
 		uint32_t lit = 0;
 		libretroLcd(&lit);
-		bool const keeping = overlay && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 && libretroLcdKeep(&overlayKeep);
+		bool const keeping = overlay && app.picture && libretroLcdKeep(&overlayKeep);
 		if (keeping ? !gameKept || gameKeptStale || gameKeptSolved != overlayKeep.solved : gameKept) {
 			uploadGame(keeping);
 		}
 		SDL_RenderCopy(app.renderer, app.game, NULL, &to);
-		if (overlay) {
+		if (gameKept && gapsPicture && gapMask && insideMask && gapLayer) {
+			// Each pixel's own gaps: the gap colors times the overlay's alphas, made at the size shown,
+			// added to the picture times the rest.
+			SDL_SetRenderTarget(app.renderer, gapLayer);
+			SDL_RenderCopy(app.renderer, gapsPicture, NULL, NULL);
+			SDL_RenderCopy(app.renderer, gapMask, NULL, NULL);
+			SDL_SetRenderTarget(app.renderer, NULL);
+			SDL_RenderCopy(app.renderer, insideMask, NULL, &to);
+			SDL_RenderCopy(app.renderer, gapLayer, NULL, &to);
+		} else if (overlay) {
 			uint32_t const gap = gameKept ? overlayKeep.gap : lit;
 			SDL_SetTextureColorMod(overlay, gap >> 16 & 0xFF, gap >> 8 & 0xFF, gap & 0xFF);
 			SDL_RenderCopy(app.renderer, overlay, NULL, &to);
@@ -965,9 +1041,10 @@ void recreateRenderer(void) {
 		SDL_DestroyTexture(app.game);
 		app.game = NULL;
 	}
-	if (overlay) {
-		SDL_DestroyTexture(overlay);
-		overlay = NULL;
+	dropOverlay();
+	if (gapsPicture) {
+		SDL_DestroyTexture(gapsPicture);
+		gapsPicture = NULL;
 	}
 	if (shadow) {
 		SDL_DestroyTexture(shadow);

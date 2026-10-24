@@ -35,10 +35,10 @@ int lcdThreads;
 // FSTN, and the Color's and Advance's reflective TFTs; Half halves them. With Interleaved Rows on, the
 // Color's and Advance's also drive alternate rows harder each frame, the other rows the next, the
 // weaker rows moving half as far, so a picture that alternates each frame shows in stripes, as it does
-// on the consoles (as SameBoy's accurate frame blending and BGB's Color interlacing also have it). Each subpixel's level is kept 8-bit,
-// gamma encoded, and its next level read from a table built for the screen and the picture's channel
-// widths, the rows shared out among the CPU's cores. A frame RetroArch runs again, and doesn't show,
-// leaves the screen as it is.
+// on the consoles (as SameBoy's accurate frame blending and BGB's Color interlacing also have it).
+// Each subpixel's level is kept 8-bit, gamma encoded, and its next level read from a table built for
+// the screen and the picture's channel widths, the rows shared out among the CPU's cores. A frame
+// RetroArch runs again, and doesn't show, leaves the screen as it is.
 enum { SCREEN_DMG, SCREEN_POCKET, SCREEN_TFT, SCREEN_KINDS };
 static const float screenTimes[SCREEN_KINDS][2] = { { 50, 110 }, { 25, 50 }, { 15, 30 } };
 
@@ -137,6 +137,47 @@ static inline GridU32 gridScale8888(GridU32 c, GridU32 k) {
 
 static inline uint32_t gridScale8888One(uint32_t c, uint32_t k) {
 	return (c & 0xFF000000) | ((c & 0xFF00FF) * k >> 8 & 0xFF00FF) | ((c & 0xFF00) * k >> 8 & 0xFF00);
+}
+
+// A row of RGB565 pixels blended toward each pixel's own gap color by a of 255.
+static void gridBlendGaps565(const uint16_t* from, const uint16_t* gaps, uint16_t* to, unsigned count, unsigned a) {
+	uint16_t const keep16 = (uint16_t) (255 - a), a16 = (uint16_t) a;
+	unsigned i = 0;
+	for (; i + GRID_LANES16 <= count; i += GRID_LANES16) {
+		GridU16 c, g;
+		memcpy(&c, from + i, sizeof(c));
+		memcpy(&g, gaps + i, sizeof(g));
+		GridU16 r = c >> 11, gr = c >> 5 & 0x3F, b = c & 0x1F, R = g >> 11, G = g >> 5 & 0x3F, B = g & 0x1F;
+		r = GRID_DIV255((GridU16) (r << 3 | r >> 2) * keep16 + (GridU16) (R << 3 | R >> 2) * a16);
+		gr = GRID_DIV255((GridU16) (gr << 2 | gr >> 4) * keep16 + (GridU16) (G << 2 | G >> 4) * a16);
+		b = GRID_DIV255((GridU16) (b << 3 | b >> 2) * keep16 + (GridU16) (B << 3 | B >> 2) * a16);
+		GridU16 const out = (GridU16) ((r >> 3) << 11 | (gr >> 2) << 5 | b >> 3);
+		memcpy(to + i, &out, sizeof(out));
+	}
+	for (; i < count; ++i) {
+		unsigned const c = from[i], g = gaps[i], keep = 255 - a;
+		unsigned const r = GRID_DIV255(((c >> 11) << 3 | c >> 13) * keep + ((g >> 11) << 3 | g >> 13) * a);
+		unsigned const gr = GRID_DIV255(((c >> 5 & 0x3F) << 2 | (c >> 9 & 3)) * keep + ((g >> 5 & 0x3F) << 2 | (g >> 9 & 3)) * a);
+		unsigned const b = GRID_DIV255(((c & 0x1F) << 3 | (c >> 2 & 7)) * keep + ((g & 0x1F) << 3 | (g >> 2 & 7)) * a);
+		to[i] = (uint16_t) ((r >> 3) << 11 | (gr >> 2) << 5 | b >> 3);
+	}
+}
+
+// A row blended toward each pixel's own gap color, in gaps, by a of 255.
+static void gridBlendGaps8888(const uint32_t* from, const uint32_t* gaps, uint32_t* to, unsigned count, unsigned a) {
+	uint32_t const toward = a + (a >> 7), keep = 256 - toward;
+	GridU32 const keeps = (GridU32) { 0 } + keep, towards = (GridU32) { 0 } + toward;
+	unsigned i = 0;
+	for (; i + GRID_LANES32 <= count; i += GRID_LANES32) {
+		GridU32 c, g;
+		memcpy(&c, from + i, sizeof(c));
+		memcpy(&g, gaps + i, sizeof(g));
+		GridU32 const out = gridScale8888(c, keeps) + gridScale8888(g, towards);
+		memcpy(to + i, &out, sizeof(out));
+	}
+	for (; i < count; ++i) {
+		to[i] = gridScale8888One(from[i], keep) + gridScale8888One(gaps[i], toward);
+	}
 }
 
 static void gridBlend8888(const uint32_t* from, uint32_t* to, unsigned count, unsigned a, unsigned gapR, unsigned gapG, unsigned gapB) {
@@ -413,10 +454,13 @@ static void gridLay(int s, enum LibretroLcd lcd) {
 // the gap around it as one color, and the measured screens are those colors, so drawing the gaps over
 // them would count the gaps twice: dark shades would come out far lighter. Instead each pixel's own
 // color is darkened, through a table for each channel, until its square, averaged in linear light, is
-// the color it shows without the grid. The gap is the unlit screen's color, darker only as far as the
-// darkest shade needs; where no gap reaches every shade (Grayscale's white and black), the one whose
-// worst miss is least. The Color's pixels are kept the same way (as BGB's subpixels are), its black
-// gaps left black, so only colors near full brightness, which no pixel can reach, come out darker.
+// the color it shows without the grid (BGB's LCD filters keep it too). The gap is the unlit screen's
+// color, darker only as far as the darkest shade needs; Grayscale's, whose white and black no one gap
+// keeps, light gray. A pixel too dark for the gap has its own gaps darken, as a second table for each
+// channel has them: a driven pixel's field reaches into the gaps beside it. Grayscale's white, too
+// bright for light gray gaps, is the one color whose square comes out darker, a tenth, so the grid
+// still shows on it. The Color's and Advance's black gaps instead lighten beside colors too bright for
+// them.
 static float keepLinear[256];
 
 // A square's average in linear light with level inside drawn and gap in the gaps, blended by each of
@@ -430,11 +474,30 @@ static float keepSquare(const struct LibretroLcdKeep* keep, float total, int ins
 	return sum / total;
 }
 
+// The level, of the inside or of the gap with the other fixed, whose square comes nearest want.
+static int keepNearest(const struct LibretroLcdKeep* keep, float total, float want, int fixed, bool gapVaries) {
+	int lo = 0, hi = 255;
+	while (lo < hi) {
+		int const mid = (lo + hi) / 2;
+		if ((gapVaries ? keepSquare(keep, total, fixed, mid) : keepSquare(keep, total, mid, fixed)) < want) {
+			lo = mid + 1;
+		} else {
+			hi = mid;
+		}
+	}
+	if (lo) {
+		float const below = gapVaries ? keepSquare(keep, total, fixed, lo - 1) : keepSquare(keep, total, lo - 1, fixed);
+		float const at = gapVaries ? keepSquare(keep, total, fixed, lo) : keepSquare(keep, total, lo, fixed);
+		lo -= want - below < at - want;
+	}
+	return lo;
+}
+
 bool libretroLcdKeep(struct LibretroLcdKeep* keep) {
 	uint32_t off;
 	enum LibretroLcd const lcd = libretroLcd(&off);
 	bool const shades = lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET;
-	if (!shades && lcd != LIBRETRO_LCD_COLOR) {
+	if (!shades && lcd != LIBRETRO_LCD_COLOR && lcd != LIBRETRO_LCD_ADVANCE) {
 		return false;
 	}
 	uint32_t colors[5] = { off };
@@ -454,38 +517,37 @@ bool libretroLcdKeep(struct LibretroLcdKeep* keep) {
 	for (int i = 0; i < keep->count; ++i) {
 		total += keep->weights[i];
 	}
+	uint32_t const base = shades && gbShades == 0 ? 0xE0E0E0 : off;
 	uint32_t gap = 0;
 	for (int c = 0; c < 3; ++c) {
-		int const bits = 16 - 8 * c, unlit = (int) (off >> bits & 0xFF);
-		int best = unlit;
-		float bestMiss = INFINITY;
-		for (int g = unlit; shades && g >= 0; --g) {
+		int const bits = 16 - 8 * c;
+		int best = (int) (base >> bits & 0xFF);
+		for (int g = best; shades && g >= 0; --g) {
 			float const low = keepSquare(keep, total, 0, g), high = keepSquare(keep, total, 255, g);
 			float miss = 0;
 			for (int k = 0; k < 5; ++k) {
 				float const want = keepLinear[colors[k] >> bits & 0xFF];
 				miss = fmaxf(miss, fmaxf(low - want, want - high));
 			}
-			if (miss < bestMiss) {
-				bestMiss = miss;
+			if (miss == 0) {
 				best = g;
+				break;
 			}
 		}
 		gap |= (uint32_t) best << bits;
+		float const darkest = keepSquare(keep, total, 0, best), lightest = keepSquare(keep, total, 255, best);
 		for (int v = 0; v < 256; ++v) {
-			int lo = 0, hi = 255;
-			while (lo < hi) {
-				int const mid = (lo + hi) / 2;
-				if (keepSquare(keep, total, mid, best) < keepLinear[v]) {
-					lo = mid + 1;
-				} else {
-					hi = mid;
-				}
+			float const want = keepLinear[v];
+			if (want > lightest) {
+				keep->table[c][v] = 255;
+				keep->gaps[c][v] = (uint8_t) (shades ? best : keepNearest(keep, total, want, 255, true));
+			} else if (want < darkest) {
+				keep->table[c][v] = 0;
+				keep->gaps[c][v] = (uint8_t) keepNearest(keep, total, want, 0, true);
+			} else {
+				keep->table[c][v] = (uint8_t) keepNearest(keep, total, want, best, false);
+				keep->gaps[c][v] = (uint8_t) best;
 			}
-			if (lo && keepLinear[v] - keepSquare(keep, total, lo - 1, best) < keepSquare(keep, total, lo, best) - keepLinear[v]) {
-				--lo;
-			}
-			keep->table[c][v] = (uint8_t) lo;
 		}
 	}
 	keep->gap = gap;
@@ -662,7 +724,7 @@ static void gridShadeRow(uint32_t* row, const uint8_t* keep, unsigned width) {
 
 // One source row's templates: the row blended for each share of gap, darkened by the shadow when
 // there is one, then each row of a square unlike those above it woven from the blends its columns use.
-static void gridMakeTemplates(const uint8_t* row, uint8_t* blends, uint8_t* templates, const uint8_t* keep) {
+static void gridMakeTemplates(const uint8_t* row, const uint8_t* gaps, uint8_t* blends, uint8_t* templates, const uint8_t* keep) {
 	unsigned const width = gridFrame.width, gap = gridFrame.gap;
 	unsigned const gapR = gap >> 16 & 0xFF, gapG = gap >> 8 & 0xFF, gapB = gap & 0xFF;
 	size_t const bytes = gridFrame.bytes, rowBytes = width * bytes, outPitch = rowBytes * gridFrame.s;
@@ -670,6 +732,10 @@ static void gridMakeTemplates(const uint8_t* row, uint8_t* blends, uint8_t* temp
 		void* const blended = blends + k * rowBytes;
 		if (!gridLayout.shares[k]) {
 			memcpy(blended, row, rowBytes);
+		} else if (gaps && bytes == 4) {
+			gridBlendGaps8888((const uint32_t*) row, (const uint32_t*) gaps, blended, width, gridLayout.shares[k]);
+		} else if (gaps) {
+			gridBlendGaps565((const uint16_t*) row, (const uint16_t*) gaps, blended, width, gridLayout.shares[k]);
 		} else if (bytes == 4) {
 			gridBlend8888((const uint32_t*) row, blended, width, gridLayout.shares[k], gapR, gapG, gapB);
 		} else {
@@ -696,6 +762,11 @@ static void gridMakeTemplates(const uint8_t* row, uint8_t* blends, uint8_t* temp
 	}
 }
 
+// 8-bit channels to RGB565, rounded.
+static inline uint16_t gridPack565(unsigned r, unsigned g, unsigned b) {
+	return (uint16_t) ((r * 31 + 127) / 255 << 11 | (g * 63 + 127) / 255 << 5 | (b * 31 + 127) / 255);
+}
+
 // A thread's rows of the larger picture, each from its template.
 static void gridDrawJob(int job) {
 	unsigned from, to;
@@ -705,22 +776,35 @@ static void gridDrawJob(int job) {
 	uint8_t* const blends = gridBlends.data + (size_t) job * GRID_SHARES_MAX * rowBytes;
 	uint8_t* const templates = gridTemplates.data + (size_t) job * 8 * outPitch;
 	uint8_t* const keep = gridFrame.shadow ? gridKeeps.data + (size_t) job * gridFrame.width : NULL;
-	uint8_t* const kept = gridFrame.kept ? gridKeptRows.data + (size_t) job * rowBytes : NULL;
+	uint8_t* const kept = gridFrame.kept ? gridKeptRows.data + (size_t) job * 2 * rowBytes : NULL;
+	uint8_t* const gaps = kept ? kept + rowBytes : NULL;
 	for (unsigned y = from; y < to; ++y) {
 		if (keep) {
 			gridKeepRow(y, keep);
 		}
 		const uint8_t* row = gridFrame.picture + y * gridFrame.pitch;
-		if (kept) {
+		if (kept && gridFrame.bytes == 2) {
+			const uint16_t* const in = (const uint16_t*) row;
+			for (unsigned x = 0; x < gridFrame.width; ++x) {
+				unsigned const c = in[x], r = (c >> 11) << 3 | c >> 13, g = (c >> 5 & 0x3F) << 2 | (c >> 9 & 3), b = (c & 0x1F) << 3 | (c >> 2 & 7);
+				((uint16_t*) kept)[x] = gridPack565(gridKept.table[0][r], gridKept.table[1][g], gridKept.table[2][b]);
+				((uint16_t*) gaps)[x] = gridPack565(gridKept.gaps[0][r], gridKept.gaps[1][g], gridKept.gaps[2][b]);
+			}
+			row = kept;
+		} else if (kept) {
 			for (size_t x = 0; x < rowBytes; x += 4) {
 				kept[x] = gridKept.table[2][row[x]];
 				kept[x + 1] = gridKept.table[1][row[x + 1]];
 				kept[x + 2] = gridKept.table[0][row[x + 2]];
 				kept[x + 3] = row[x + 3];
+				gaps[x] = gridKept.gaps[2][row[x]];
+				gaps[x + 1] = gridKept.gaps[1][row[x + 1]];
+				gaps[x + 2] = gridKept.gaps[0][row[x + 2]];
+				gaps[x + 3] = 0;
 			}
 			row = kept;
 		}
-		gridMakeTemplates(row, blends, templates, keep);
+		gridMakeTemplates(row, gaps, blends, templates, keep);
 		for (int sy = 0; sy < s; ++sy) {
 			memcpy(gridOut.data + (size_t) (y * s + sy) * outPitch, templates + (size_t) gridLayout.firstAlike[sy] * outPitch, outPitch);
 		}
@@ -743,10 +827,9 @@ void sendPicture(const void* picture, unsigned width, unsigned height, size_t pi
 	size_t const outPitch = (size_t) outWidth * bytes;
 	uint32_t gap;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
-	bool const kept = bytes == 4 && lcd != LIBRETRO_LCD_ADVANCE;
 	bool const shadow = gridWay && bytes == 4 && libretroLcdShadow();
 	bool const room = gridReserve(&gridOut, outPitch * outHeight) && gridReserve(&gridBlends, (size_t) GRID_JOBS * GRID_SHARES_MAX * width * bytes) &&
-	                  gridReserve(&gridTemplates, (size_t) GRID_JOBS * 8 * outPitch) && (!kept || gridReserve(&gridKeptRows, (size_t) GRID_JOBS * width * 4)) &&
+	                  gridReserve(&gridTemplates, (size_t) GRID_JOBS * 8 * outPitch) && gridReserve(&gridKeptRows, (size_t) GRID_JOBS * 2 * width * bytes) &&
 	                  (!shadow || (gridReserve(&gridDark, (size_t) (width + 16) * (height + 4)) &&
 	                               gridReserve(&gridKeeps, (size_t) GRID_JOBS * width)));
 	// Without the memory, the last picture stays.
@@ -756,7 +839,7 @@ void sendPicture(const void* picture, unsigned width, unsigned height, size_t pi
 	}
 	gridLay(s, lcd);
 	startJobs();
-	if (kept && (keptScale != s || keptLcd != (int) lcd)) {
+	if (keptScale != s || keptLcd != (int) lcd) {
 		gridKept.count = s * s;
 		for (int i = 0; i < gridKept.count; ++i) {
 			gridKept.shares[i] = gridLayout.shares[gridLayout.shareOf[i / s][i % s]] / 255.0f;
@@ -766,9 +849,7 @@ void sendPicture(const void* picture, unsigned width, unsigned height, size_t pi
 		keptScale = s;
 		keptLcd = (int) lcd;
 	}
-	if (kept) {
-		libretroLcdKeep(&gridKept);
-	}
+	bool const kept = libretroLcdKeep(&gridKept);
 	gridFrame = (struct GridFrame) { .picture = picture, .width = width, .height = height, .pitch = pitch, .bytes = bytes, .s = s,
 		                             .gap = kept ? gridKept.gap : gap, .kept = kept, .shadow = shadow };
 	if (shadow) {
