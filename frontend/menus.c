@@ -827,6 +827,7 @@ static void resetControls(int argument, int delta) {
 		memcpy(kept.pad, settings.pad, sizeof(kept.pad));
 		memcpy(kept.hotkeys, settings.hotkeys, sizeof(kept.hotkeys));
 		memcpy(kept.padHotkeys, settings.padHotkeys, sizeof(kept.padHotkeys));
+		kept.padHotkey = settings.padHotkey;
 		settings = kept;
 		settingsWrite();
 		osd("Controls reset");
@@ -838,12 +839,12 @@ static void resetControls(int argument, int delta) {
 static const int buttonOrder[BUTTONS] = { BUTTON_A, BUTTON_B, 10, 11, 3, 2, 4, 5, 6, 7, 9, 1, 12, 13, 14, 15 };
 
 // Fast-Forward and Rewind work while held.
-static const char* hotkeyHelp(int action) {
+static const char* hotkeyHelp(int action, bool controller) {
 	switch (action) {
 	case ACT_MENU:
 		return "Opens and closes this menu.";
 	case ACT_FAST_FORWARD:
-		return "Runs the game faster while held.";
+		return controller ? "Turns fast-forward on, and off again." : "Runs the game faster while held.";
 	case ACT_REWIND:
 		return "Goes back in time while held.";
 	case ACT_QUIT:
@@ -861,9 +862,13 @@ static void padControlsMenu(void) {
 		helpFor(i == BUTTON_A ? "A also chooses in these menus." : i == BUTTON_B ? "B also goes back in these menus." : NULL);
 	}
 	addHeader("Hotkeys");
+	addChoice("Hotkey", padHotkeyName(), bind, 3000 + ACTIONS);
+	helpFor("Held with each action's button below. Auto is Home, or Select on a controller without Home, as on ROCKNIX.");
 	for (int i = 0; i < ACTIONS; ++i) {
-		addChoice(actionNames[i], padComboName(settings.padHotkeys[i]), bind, 3000 + i);
-		helpFor(hotkeyHelp(i));
+		char value[64];
+		snprintf(value, sizeof(value), "Hotkey + %s", padName(settings.padHotkeys[i]));
+		addChoice(actionNames[i], settings.padHotkeys[i] == PAD_NONE ? "None" : value, bind, 3000 + i);
+		helpFor(hotkeyHelp(i, true));
 	}
 }
 
@@ -876,7 +881,7 @@ static void keyControlsMenu(void) {
 	addHeader("Hotkeys");
 	for (int i = 0; i < ACTIONS; ++i) {
 		addChoice(actionNames[i], scancodeName(settings.hotkeys[i]), bind, 2000 + i);
-		helpFor(hotkeyHelp(i));
+		helpFor(hotkeyHelp(i, false));
 	}
 }
 

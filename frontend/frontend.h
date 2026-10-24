@@ -65,6 +65,8 @@ enum { ACCENTS = 7 };
 // A controller binding: a button, or a trigger past half way.
 enum {
 	PAD_NONE = -1,
+	// The Hotkey on Auto: Home on a controller that has one, otherwise Select.
+	PAD_AUTO = -2,
 	PAD_LEFT_TRIGGER = 100,
 	PAD_RIGHT_TRIGGER = 101,
 };
@@ -92,8 +94,9 @@ struct Settings {
 	SDL_Scancode keys[BUTTONS];
 	int pad[BUTTONS];
 	SDL_Scancode hotkeys[ACTIONS];
-	// A controller's hotkeys: the buttons held together, as padBit()s.
-	uint32_t padHotkeys[ACTIONS];
+	// A controller's hotkeys: the Hotkey held with each action's own button, as on ROCKNIX.
+	int padHotkey;
+	int padHotkeys[ACTIONS];
 	char nickname[32];
 	char host[128];
 	int netPort;
@@ -183,6 +186,8 @@ struct App {
 	bool menuOpen;
 	bool running;
 	bool fastForward;
+	// Fast-forward turned on by the controller's hotkey, until it's pressed again.
+	bool fastForwardOn;
 	bool rewinding;
 	int slot;
 	// What the core may put out now: RETRO_AV_ENABLE_* bits, cleared while a frame is run again.
@@ -223,10 +228,10 @@ uint32_t padBit(int binding);
 // The core's (libretro/saves.c): writes a whole file, the old one kept whole until the new one is,
 // with Safe Saves on; false if it couldn't.
 bool writeWholeFile(const char* path, const void* data, size_t size);
-// Whether a button or trigger pressed on a controller completes a hotkey there; its buttons are then
-// kept from the game until let go.
-bool padHotkeyPressed(SDL_JoystickID which, uint32_t bit, uint32_t combo);
-const char* padComboName(uint32_t combo);
+// Whether a button or trigger pressed on a controller, with its Hotkey held, is action's; both are
+// then kept from the game until let go.
+bool padHotkeyPressed(SDL_JoystickID which, int binding, int action);
+const char* padHotkeyName(void);
 
 // ui.c
 bool uiInit(void);

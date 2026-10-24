@@ -77,10 +77,18 @@ void settingsDefaults(void) {
 	memcpy(settings.keys, keys, sizeof(keys));
 	memcpy(settings.pad, pad, sizeof(pad));
 	memcpy(settings.hotkeys, hotkeys, sizeof(hotkeys));
-	// Home + North for the menu and Home + Start to quit, as on ROCKNIX.
-	memset(settings.padHotkeys, 0, sizeof(settings.padHotkeys));
-	settings.padHotkeys[ACT_MENU] = padBit(SDL_CONTROLLER_BUTTON_GUIDE) | padBit(SDL_CONTROLLER_BUTTON_Y);
-	settings.padHotkeys[ACT_QUIT] = padBit(SDL_CONTROLLER_BUTTON_GUIDE) | padBit(SDL_CONTROLLER_BUTTON_START);
+	// ROCKNIX's hotkeys: with the Hotkey, North for the menu, Start to quit, R and L to save and load a
+	// state, R2 to fast-forward and L2 to rewind.
+	settings.padHotkey = PAD_AUTO;
+	for (int i = 0; i < ACTIONS; ++i) {
+		settings.padHotkeys[i] = PAD_NONE;
+	}
+	settings.padHotkeys[ACT_MENU] = SDL_CONTROLLER_BUTTON_Y;
+	settings.padHotkeys[ACT_QUIT] = SDL_CONTROLLER_BUTTON_START;
+	settings.padHotkeys[ACT_SAVE_STATE] = SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
+	settings.padHotkeys[ACT_LOAD_STATE] = SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
+	settings.padHotkeys[ACT_FAST_FORWARD] = PAD_RIGHT_TRIGGER;
+	settings.padHotkeys[ACT_REWIND] = PAD_LEFT_TRIGGER;
 	const char* home = getenv("HOME");
 	snprintf(settings.directory, sizeof(settings.directory), "%s", home ? home : "/");
 }
@@ -201,8 +209,9 @@ static void takeSetting(const char* key, const char* value) {
 		settings.fastForward = n >= 2 && n <= 12 ? n : 0;
 	} else if (!strcmp(key, "show_messages")) {
 		settings.showMessages = yes;
-	} else if (!strncmp(key, "key_", 4) || !strncmp(key, "pad_", 4) || !strncmp(key, "hotkey_", 7) || !strncmp(key, "padhotkey_", 10) ||
-	           !strncmp(key, "padcombo_", 9)) {
+	} else if (!strcmp(key, "hotkeypad")) {
+		settings.padHotkey = n;
+	} else if (!strncmp(key, "key_", 4) || !strncmp(key, "pad_", 4) || !strncmp(key, "hotkey_", 7) || !strncmp(key, "hotkeypad_", 10)) {
 		int const index = atoi(strrchr(key, '_') + 1);
 		if (!strncmp(key, "key_", 4) && index >= 0 && index < BUTTONS) {
 			settings.keys[index] = (SDL_Scancode) n;
@@ -210,13 +219,8 @@ static void takeSetting(const char* key, const char* value) {
 			settings.pad[index] = n;
 		} else if (!strncmp(key, "hotkey_", 7) && index >= 0 && index < ACTIONS) {
 			settings.hotkeys[index] = (SDL_Scancode) n;
-		} else if (!strncmp(key, "padhotkey_", 10) && index >= 0 && index < ACTIONS) {
-			// Before hotkeys were buttons held together: one button, the menu's on Home alone then.
-			if (index != ACT_MENU || n != SDL_CONTROLLER_BUTTON_GUIDE) {
-				settings.padHotkeys[index] = padBit(n);
-			}
-		} else if (!strncmp(key, "padcombo_", 9) && index >= 0 && index < ACTIONS) {
-			settings.padHotkeys[index] = (uint32_t) strtoul(value, NULL, 10);
+		} else if (!strncmp(key, "hotkeypad_", 10) && index >= 0 && index < ACTIONS) {
+			settings.padHotkeys[index] = n;
 		}
 	}
 }
@@ -258,8 +262,9 @@ void settingsWrite(void) {
 	for (int i = 0; i < BUTTONS; ++i) {
 		fprintf(f, "key_%d = %d\npad_%d = %d\n", i, settings.keys[i], i, settings.pad[i]);
 	}
+	fprintf(f, "hotkeypad = %d\n", settings.padHotkey);
 	for (int i = 0; i < ACTIONS; ++i) {
-		fprintf(f, "hotkey_%d = %d\npadcombo_%d = %u\n", i, settings.hotkeys[i], i, (unsigned) settings.padHotkeys[i]);
+		fprintf(f, "hotkey_%d = %d\nhotkeypad_%d = %d\n", i, settings.hotkeys[i], i, settings.padHotkeys[i]);
 	}
 	fclose(f);
 }
@@ -431,22 +436,9 @@ uint32_t padBit(int binding) {
 	return binding >= 0 && binding < SDL_CONTROLLER_BUTTON_MAX ? 1u << binding : 0;
 }
 
-// A hotkey's buttons, Home, Select and Start first: Home + North.
-const char* padComboName(uint32_t combo) {
-	enum { FIRST = 3 };
-	static const int first[FIRST] = { SDL_CONTROLLER_BUTTON_GUIDE, SDL_CONTROLLER_BUTTON_BACK, SDL_CONTROLLER_BUTTON_START };
-	static char name[160];
-	name[0] = '\0';
-	uint32_t left = combo;
-	for (int k = 0; left && k < FIRST + 32; ++k) {
-		int const b = k < FIRST ? first[k] : k - FIRST;
-		int const binding = b == 30 ? PAD_LEFT_TRIGGER : b == 31 ? PAD_RIGHT_TRIGGER : b;
-		if (left & padBit(binding)) {
-			left &= ~padBit(binding);
-			snprintf(name + strlen(name), sizeof(name) - strlen(name), "%s%s", name[0] ? " + " : "", padName(binding));
-		}
-	}
-	return name[0] ? name : "None";
+// The Hotkey as the menu lists it.
+const char* padHotkeyName(void) {
+	return settings.padHotkey == PAD_AUTO ? "Auto (Home or Select)" : padName(settings.padHotkey);
 }
 
 // Recent games.

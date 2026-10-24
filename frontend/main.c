@@ -467,14 +467,12 @@ static bool padHeld(SDL_GameController* pad, int binding) {
 	return SDL_GameControllerGetButton(pad, (SDL_GameControllerButton) binding);
 }
 
-// Whether a controller holds all of a hotkey's buttons.
-static bool comboHeld(SDL_GameController* pad, uint32_t combo) {
-	for (int b = 0; b < 32; ++b) {
-		if (combo >> b & 1 && !padHeld(pad, b == 30 ? PAD_LEFT_TRIGGER : b == 31 ? PAD_RIGHT_TRIGGER : b)) {
-			return false;
-		}
+// A controller's Hotkey: the one chosen, or on Auto its Home button, or Select without one.
+static int hotkeyOf(SDL_GameController* pad) {
+	if (settings.padHotkey != PAD_AUTO) {
+		return settings.padHotkey;
 	}
-	return combo != 0;
+	return pad && SDL_GameControllerHasButton(pad, SDL_CONTROLLER_BUTTON_GUIDE) ? SDL_CONTROLLER_BUTTON_GUIDE : SDL_CONTROLLER_BUTTON_BACK;
 }
 
 // The controller playing a port, by its joystick's id; -1 for none.
@@ -490,14 +488,16 @@ static int portOf(SDL_JoystickID which) {
 // A hotkey's buttons on each controller, held back from the game after the hotkey until they're let go.
 static uint32_t heldBack[PORTS];
 
-bool padHotkeyPressed(SDL_JoystickID which, uint32_t bit, uint32_t combo) {
+bool padHotkeyPressed(SDL_JoystickID which, int binding, int action) {
 	int const port = portOf(which);
-	if (port < 0 || !(combo & bit) || !comboHeld(app.pads[port], combo)) {
+	if (port < 0 || binding == PAD_NONE || binding != settings.padHotkeys[action]) {
 		return false;
 	}
-	if (combo & (combo - 1)) {
-		heldBack[port] |= combo;
+	int const hotkey = hotkeyOf(app.pads[port]);
+	if (hotkey == binding || !padHeld(app.pads[port], hotkey)) {
+		return false;
 	}
+	heldBack[port] |= padBit(hotkey) | padBit(binding);
 	return true;
 }
 
@@ -636,6 +636,7 @@ void unloadGame(void) {
 	}
 	netStop();
 	recordStop();
+	app.fastForwardOn = false;
 	if (settings.autoState && !cheevosHardcore()) {
 		saveState(-1);
 	}
@@ -1061,11 +1062,17 @@ static void doAction(enum Action action) {
 	}
 }
 
-// A controller button or trigger pressed: the hotkeys it completes, but Fast-Forward and Rewind,
-// which work while held.
-static void padPressed(SDL_JoystickID which, uint32_t bit) {
+// A controller button or trigger pressed: the hotkey it makes with the Hotkey held. Fast-Forward
+// turns on and off, as on ROCKNIX; Rewind works while held.
+static void padPressed(SDL_JoystickID which, int binding) {
 	for (int a = 0; a < ACTIONS; ++a) {
-		if (a != ACT_FAST_FORWARD && a != ACT_REWIND && padHotkeyPressed(which, bit, settings.padHotkeys[a])) {
+		if (a == ACT_REWIND || !padHotkeyPressed(which, binding, a)) {
+			continue;
+		}
+		if (a == ACT_FAST_FORWARD) {
+			app.fastForwardOn = !app.fastForwardOn && app.loaded;
+			osd("Fast-Forward %s", app.fastForwardOn ? "On" : "Off");
+		} else {
 			doAction((enum Action) a);
 		}
 	}
@@ -1102,7 +1109,7 @@ static void handleEvent(const SDL_Event* event) {
 		}
 		break;
 	case SDL_CONTROLLERBUTTONDOWN:
-		padPressed(event->cbutton.which, padBit(event->cbutton.button));
+		padPressed(event->cbutton.which, event->cbutton.button);
 		break;
 	case SDL_CONTROLLERAXISMOTION:
 		if (event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT || event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
@@ -1113,7 +1120,7 @@ static void handleEvent(const SDL_Event* event) {
 			if (port >= 0 && now != down[port][side]) {
 				down[port][side] = now;
 				if (now) {
-					padPressed(event->caxis.which, padBit(side ? PAD_RIGHT_TRIGGER : PAD_LEFT_TRIGGER));
+					padPressed(event->caxis.which, side ? PAD_RIGHT_TRIGGER : PAD_LEFT_TRIGGER);
 				}
 			}
 		}
@@ -1133,8 +1140,14 @@ static bool actionHeld(enum Action action) {
 	}
 	const Uint8* keys = SDL_GetKeyboardState(NULL);
 	bool held = settings.hotkeys[action] && keys[settings.hotkeys[action]];
-	for (int port = 0; port < PORTS; ++port) {
-		held |= comboHeld(app.pads[port], settings.padHotkeys[action]);
+	// A controller's Fast-Forward turns on and off instead.
+	for (int port = 0; port < PORTS && action != ACT_FAST_FORWARD; ++port) {
+		SDL_GameController* const pad = app.pads[port];
+		int const hotkey = hotkeyOf(pad), second = settings.padHotkeys[action];
+		if (second != PAD_NONE && second != hotkey && padHeld(pad, hotkey) && padHeld(pad, second)) {
+			heldBack[port] |= padBit(hotkey) | padBit(second);
+			held = true;
+		}
 	}
 	return held;
 }
@@ -1252,7 +1265,7 @@ int main(int argc, char** argv) {
 		while (SDL_PollEvent(&event)) {
 			handleEvent(&event);
 		}
-		app.fastForward = actionHeld(ACT_FAST_FORWARD) || coreFastForward;
+		app.fastForward = actionHeld(ACT_FAST_FORWARD) || app.fastForwardOn || coreFastForward;
 		app.rewinding = settings.rewind && !cheevosHardcore() && !netRunning() && actionHeld(ACT_REWIND);
 		cheevosIdle();
 		// Paused, in the menus or without a game: only the picture. Netplay runs on behind the menus.
