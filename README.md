@@ -28,7 +28,7 @@ With the consoles of a link on one device, R2 changes how the screens are shown 
 or changes them back as the L2 Button option says; in netplay, L2 changes them back. In netplay each
 device shows the screens its own way, changed by its own player's R2. RetroArch 1.22.2 and older don't
 say which player is on a device, so there the host follows player 1 and other devices player 2,
-unless R2 Follows names the player (Player Numbers shows each player theirs). The tilt stick
+unless Screen Control names the player (Player Numbers shows each player theirs). The tilt stick
 is the left stick by default. The Tilt Sensor option moves it to the right stick or the D-pad; with
 the D-pad, L is the flick.
 
@@ -73,7 +73,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | GameCube Address | Game Boy Advance | Find on the Network, This Device (GameCube) |
 | Link: Screens and Controls | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
 | | L2 Button | Both | Fast-Forward, Previous Screens (Together) |
-| | R2 Follows | Both | Auto, Player 1 to Player 4 (Together) |
+| | Screen Control | Both | Auto, Player 1 to Player 4 (Together) |
 | | Player Numbers | Both | Off, On (default) (Together) |
 | | Switch Controller | Both | L + R + A + B, L3 + R3, Start + L2 + R2, Start + L3, Start + R3, Off; stick clicks it uses only switch |
 | Saves | Back Up Save | Both | Off, then each player |

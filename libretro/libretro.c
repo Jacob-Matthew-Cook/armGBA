@@ -171,7 +171,7 @@ static int screens;
 static int screensOption = -1;
 // The L2 Button option: fast-forward, or the previous screens.
 static bool l2FastForward = true;
-// R2 Follows: in netplay, whose R2 and L2 change this device's screens, -1 for Auto. Player Numbers:
+// Screen Control: in netplay, whose L2 and R2 change this device's screens, -1 for Auto. Player Numbers:
 // each player's number on their screen.
 static int r2Follows = -1;
 static bool playerNumbers;
@@ -1702,9 +1702,9 @@ static int nextScreens(int now, int step) {
 }
 
 // R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. In netplay
-// each device shows the screens its own way, changed by one player's R2 and L2: R2 Follows' player,
-// or with Auto this device's own, which the standalone frontend says, and RetroArch after 1.22.2; with
-// one that doesn't, the host's player 1, or player 2 on a device that joined.
+// each device shows the screens its own way, changed by one player's L2 and R2: Screen Control's
+// player, or with Auto this device's own, which the standalone frontend says, and RetroArch after
+// 1.22.2; with one that doesn't, the host's player 1, or player 2 on a device that joined.
 static void readScreensKeys(void) {
 	static bool held[MAX_PLAYERS][2];
 	if (rerunning()) {
