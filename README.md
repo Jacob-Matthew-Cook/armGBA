@@ -26,8 +26,8 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 
 With the consoles of a link on one device, R2 changes how the screens are shown and L2 fast-forwards,
 or changes them back as the L2 Button option says; in netplay, L2 changes them back. In netplay each
-device shows the screens its own way, changed by its own player's R2 (in RetroArch, which doesn't say
-which player is on a device, the host's and a joined device's player 2's; others use the Screens
+device shows the screens its own way, changed by its own player's R2 (with RetroArch 1.22.2 or older,
+which doesn't say which player is on a device, only the host's and player 2's; others use the Screens
 option), or with Netplay Screens on Host's View, every device shows the host's. The tilt stick
 is the left stick by default. The Tilt Sensor option moves it to the right stick or the D-pad; with
 the D-pad, L is the flick.

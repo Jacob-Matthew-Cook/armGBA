@@ -179,6 +179,14 @@ static int hostScreens;
 static uint8_t hostHeld;
 // This device's player in the standalone frontend's netplay, -1 when not in it.
 static int netplayPlayer = -1;
+
+// RetroArch after 1.22.2 says which netplay client this device is: 0 the host, then the devices that
+// joined, each playing the player of its number.
+#ifndef RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX
+#define RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX (82 | RETRO_ENVIRONMENT_EXPERIMENTAL)
+#endif
+// Its answer, asked once a session: -2 not yet asked, -1 none.
+static int netplayClient = -2;
 static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game: the choices offered, and the game running (empty for player 1's).
@@ -1282,6 +1290,7 @@ void retro_unload_game(void) {
 	sessionTag = 0;
 	hostScreens = SCREENS_SIDE;
 	hostHeld = 0;
+	netplayClient = -2;
 	updateRumble(false);
 	cheatsClear(&cheats, NULL);
 	for (size_t i = 0; i < cheatCodeCount; ++i) {
@@ -1701,8 +1710,9 @@ static int nextScreens(int now, int step) {
 
 // R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. In netplay
 // each device shows the screens its own way and only this device's player changes them: the
-// standalone frontend says which that is, and in RetroArch's netplay, which doesn't, it is the host's
-// player 1 or a joined device's player 2. On Netplay Screens' Host's View, a device shows the host's.
+// standalone frontend says which that is, and RetroArch after 1.22.2 too; with one that doesn't, it is
+// the host's player 1 or a joined device's player 2. On Netplay Screens' Host's View, a device shows
+// the host's.
 static void readScreensKeys(void) {
 	static bool held[MAX_PLAYERS][2];
 	static int announced = -1;
@@ -1720,7 +1730,16 @@ static void readScreensKeys(void) {
 	}
 	// This device's own.
 	bool const netplay = netplaySeen || netplayPlayer >= 0;
-	int const here = netplayPlayer >= 0 ? netplayPlayer : netplayJoined ? 1 : 0;
+	if (netplaySeen && netplayClient == -2) {
+		unsigned client = 0;
+		netplayClient = environment(RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX, &client) && client < MAX_PLAYERS ? (int) client : -1;
+	}
+	int here = netplayJoined ? 1 : 0;
+	if (netplayPlayer >= 0) {
+		here = netplayPlayer;
+	} else if (netplayClient >= 0 && netplayClient < playersHere) {
+		here = netplayClient;
+	}
 	int step = 0;
 	for (int port = 0; port < playersHere; ++port) {
 		if (netplay && port != here) {
