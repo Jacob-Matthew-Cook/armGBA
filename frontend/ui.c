@@ -1440,6 +1440,9 @@ void uiDraw(void) {
 		direction(held.dx, held.dy);
 		held.next = SDL_GetTicks() + (SDL_GetTicks() - held.since > REPEAT_FAST_AFTER_MS ? REPEAT_FAST_MS : REPEAT_MS);
 	}
+#ifdef __ANDROID__
+	folderPickerPoll();
+#endif
 	if (app.menuOpen && depth) {
 		fillRect(0, 0, width, height, app.loaded ? (SDL_Color) { panelFill.r, panelFill.g, panelFill.b, dimAlphas[settings.dim] } : (SDL_Color) { 11, 15, 24, 255 });
 		if (entry.open) {

@@ -91,6 +91,10 @@ extern const char* const dims[3];
 extern char browserPath[PATH_SIZE];
 extern char browserListed[PATH_SIZE];
 void browserMenu(void);
+#ifdef __ANDROID__
+// Takes Android's folder picker's answer once it has one.
+void folderPickerPoll(void);
+#endif
 void browserJump(int delta);
 void browserFind(char c);
 

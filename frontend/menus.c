@@ -22,6 +22,7 @@
 #include "lcd.h"
 
 #ifdef __ANDROID__
+#include <jni.h>
 #include <limits.h>
 #define ANDROID_STORAGE "/storage"
 #endif
@@ -1057,11 +1058,76 @@ static void folderTyped(const char* text) {
 	settingsWrite();
 }
 
-// A choice on a folder's page: 0 Auto, 1 armGBA's, 2 RetroArch's, 3 typed in.
+static void folderPick(int kind, int delta);
+
+#ifdef __ANDROID__
+// Android's folder picker (Armgba.java), for the folder shown; its answer is polled as the menus draw.
+static bool pickerOpen;
+
+static jclass armgbaClass(JNIEnv* env) {
+	jclass const found = (*env)->FindClass(env, "org/armgba/app/Armgba");
+	if (!found && (*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionClear(env);
+	}
+	return found;
+}
+
+static void openPicker(void) {
+	JNIEnv* const env = SDL_AndroidGetJNIEnv();
+	jclass const armgba = env ? armgbaClass(env) : NULL;
+	jmethodID const pick = armgba ? (*env)->GetStaticMethodID(env, armgba, "pickFolder", "()V") : NULL;
+	if (!pick) {
+		folderPick(3, 0);
+		return;
+	}
+	(*env)->CallStaticVoidMethod(env, armgba, pick);
+	(*env)->DeleteLocalRef(env, armgba);
+	pickerOpen = true;
+}
+
+void folderPickerPoll(void) {
+	if (!pickerOpen) {
+		return;
+	}
+	JNIEnv* const env = SDL_AndroidGetJNIEnv();
+	jclass const armgba = env ? armgbaClass(env) : NULL;
+	jmethodID const take = armgba ? (*env)->GetStaticMethodID(env, armgba, "takeFolder", "()Ljava/lang/String;") : NULL;
+	jstring const answer = take ? (jstring) (*env)->CallStaticObjectMethod(env, armgba, take) : NULL;
+	if (armgba) {
+		(*env)->DeleteLocalRef(env, armgba);
+	}
+	if (!answer) {
+		return;
+	}
+	pickerOpen = false;
+	const char* const path = (*env)->GetStringUTFChars(env, answer, NULL);
+	// No picker on this device: the folder's typed in instead.
+	if (!strcmp(path, "?")) {
+		folderPick(3, 0);
+	} else if (path[0] && access(path, R_OK)) {
+		osd("Can't read %s", path);
+	} else if (path[0]) {
+		snprintf(folders[folderShown].setting, PATH_SIZE, "%s", path);
+		chooseFolders();
+		settingsWrite();
+		osd("%s Folder: %s", folders[folderShown].label, folderName(path));
+	}
+	(*env)->ReleaseStringUTFChars(env, answer, path);
+	(*env)->DeleteLocalRef(env, answer);
+}
+#endif
+
+// A choice on a folder's page: 0 Auto, 1 armGBA's, 2 RetroArch's, 3 typed in, 4 from Android's picker.
 static void folderPick(int kind, int delta) {
 	if (delta) {
 		return;
 	}
+#ifdef __ANDROID__
+	if (kind == 4) {
+		openPicker();
+		return;
+	}
+#endif
 	if (kind == 3) {
 		const char* const path = folderPath(folderShown);
 		char folderTitle[64];
@@ -1097,8 +1163,13 @@ static void folderMenu(void) {
 		snprintf(help[2], sizeof(help[2]), "RetroArch's, from its retroarch.cfg: %s", theirs);
 		helpFor(help[2]);
 	}
+#ifdef __ANDROID__
+	addChoice("Choose a Folder...", typed ? folderName(setting) : "", folderPick, 4);
+	snprintf(help[3], sizeof(help[3]), typed ? "In use: %s" : "Any folder, chosen with Android's folder picker.", setting);
+#else
 	addChoice("Type a Folder...", typed ? folderName(setting) : "", folderPick, 3);
 	snprintf(help[3], sizeof(help[3]), typed ? "In use: %s" : "Any folder, typed in.", setting);
+#endif
 	helpFor(help[3]);
 }
 
