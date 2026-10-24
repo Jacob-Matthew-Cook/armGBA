@@ -96,7 +96,7 @@ static struct {
 // The footer's hints. Each has a slot as wide as its controller or keyboard form, so switching
 // between them moves nothing, and a click or a tap on one does what it says as it was last drawn: on
 // Change, Tabs and Letter, the left half goes back and the right half on.
-enum HintAction { HINT_SELECT, HINT_BACK, HINT_CHANGE, HINT_TABS, HINT_LETTER, HINT_TYPE, HINT_DELETE, HINT_CANCEL, HINT_DONE, HINT_PASTE };
+enum HintAction { HINT_SELECT, HINT_BACK, HINT_CHANGE, HINT_LETTER, HINT_TYPE, HINT_DELETE, HINT_CANCEL, HINT_DONE, HINT_PASTE };
 struct Hint {
 	const char* button;
 	bool round;
@@ -710,9 +710,6 @@ static void hintDo(enum HintAction action, int way) {
 		break;
 	case HINT_CHANGE:
 		activate(way);
-		break;
-	case HINT_TABS:
-		moveTab(way);
 		break;
 	case HINT_LETTER:
 		browserJump(way);
@@ -1600,10 +1597,10 @@ static void drawMenu(int width, int height, int u) {
 	if (adjustable) {
 		hints[count++] = (struct Hint) { "\xE2\x80\xB9 \xE2\x80\xBA", false, "\xE2\x86\x90 \xE2\x86\x92", "Change", "Change", HINT_CHANGE, HINT_CHANGE };
 	}
+	// The top menus' tabs are in the header, where they're tapped or clicked; L and R, Q and E move
+	// between them too.
 	if (inBrowser()) {
 		hints[count++] = (struct Hint) { "L R", false, "A-Z", "Letter", "Find", HINT_LETTER, HINT_LETTER };
-	} else if (depth == 1) {
-		hints[count++] = (struct Hint) { "L R", false, "Q E", "Tabs", "Tabs", HINT_TABS, HINT_TABS };
 	}
 	drawHints(x, y, u, hints, count);
 }
