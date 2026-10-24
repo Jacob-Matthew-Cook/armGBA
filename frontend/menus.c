@@ -556,9 +556,12 @@ static void addOptions(const char* category) {
 	for (int i = 0; i < optionCount; ++i) {
 		struct Option* o = &options[i];
 		bool const here = category ? o->category && !strcmp(o->category, category) : !o->category;
-		// The core's LCD grid and pixel shadow show only with LCD Rendering on the CPU.
+		// The core's LCD grid and pixel shadow show only with LCD Rendering on the CPU; the shadow's
+		// distance, on the GPU, with the app's own shadow on.
 		bool const cpuLcd = !strcmp(o->key, "armgba_lcd_grid") || !strcmp(o->key, "armgba_lcd_shadow");
-		if (!here || !o->visible || (cpuLcd && settings.lcdOnGpu)) {
+		bool const distance = !strcmp(o->key, "armgba_lcd_shadow_distance");
+		bool const shown = distance && settings.lcdOnGpu ? settings.gpuGrid && settings.shadow && libretroLcdShadow() : o->visible;
+		if (!here || !shown || (cpuLcd && settings.lcdOnGpu)) {
 			continue;
 		}
 		const char* label = o->value;

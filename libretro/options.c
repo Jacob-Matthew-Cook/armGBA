@@ -295,7 +295,7 @@ bool showOptions(void) {
 		{ "armgba_bios", !gameBoy },
 		{ "armgba_threaded_video", !gameBoy },
 		{ "armgba_lcd_shadow", libretroLcdShadow() && !optionIs("armgba_lcd_grid", "disabled") },
-		{ "armgba_lcd_shadow_distance", libretroLcdShadow() },
+		{ "armgba_lcd_shadow_distance", libretroLcdShadow() && !optionIs("armgba_lcd_grid", "disabled") && !optionIs("armgba_lcd_shadow", "off") },
 		{ "armgba_color_correction", !gameBoy },
 		{ "armgba_solar_sensor", !gameBoy && (!advance || devices & HW_LIGHT_SENSOR) },
 		{ "armgba_gb_tilt", (!gameBoy && !advance) || devices & (HW_TILT | HW_GYRO) || (gameBoy && tiltCartridge) },
