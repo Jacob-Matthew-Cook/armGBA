@@ -911,6 +911,8 @@ static void followTilt(bool on) {
 	if (!accelerometer && !(accelerometer = SDL_SensorOpen(accelerometerIndex))) {
 		return;
 	}
+	// Its events are ignored, which stops SDL updating it, so it's updated here.
+	SDL_SensorUpdate();
 	float a[3];
 	if (SDL_SensorGetData(accelerometer, a, 3) != 0) {
 		return;
