@@ -178,7 +178,7 @@ static int screensOption = -1;
 // The L2 Button option: fast-forward, or the previous screens.
 static bool l2FastForward = true;
 // Screen Switch Controller: in netplay, whose L2 and R2 change this device's screens, -1 for Auto.
-// Player Numbers: each player's number on their screen.
+// Show Player Numbers: each player's number on their screen.
 static int r2Follows = -1;
 static bool playerNumbers;
 // This device's player in the standalone frontend's netplay, -1 when not in it.
@@ -207,8 +207,8 @@ char pairPath[PATH_SIZE];
 char otherPaths[MAX_PLAYERS][PATH_SIZE];
 static int pairCount;
 bool netplaySeen;
-// The Switch Controller buttons move controller 1 to the next console here; controllerFocus is the
-// console it plays, the other controllers moving along with it.
+// The Switch Player Combo buttons move controller 1 to the next console here; controllerFocus is
+// the console it plays, the other controllers moving along with it.
 enum { SWITCH_OFF, SWITCH_L_R_A_B, SWITCH_L3_R3, SWITCH_START_L2_R2, SWITCH_START_L3, SWITCH_START_R3 };
 static int switchController = SWITCH_L_R_A_B;
 static int controllerFocus;
@@ -1397,7 +1397,8 @@ static bool contrastStick(void) {
 	return lcdCastsShadow() && !(tiltCartridge && tiltControl == TILT_RIGHT_STICK);
 }
 
-// Whether clicking the right stick resets the contrast: R3 isn't a Restart Button or Switch Controller's.
+// Whether clicking the right stick resets the contrast: R3 isn't a Restart Button or Switch Player
+// Combo's.
 static bool contrastClick(void) {
 	return restartButtons != RESTART_STICKS && !switchStick(RETRO_DEVICE_ID_JOYPAD_R3);
 }
@@ -1556,12 +1557,12 @@ bool rerunning(void) {
 	return environment(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &enabled) && !(enabled & RETRO_AV_ENABLE_VIDEO);
 }
 
-// Whether Switch Controller works now: on, with the consoles here and not in netplay.
+// Whether Switch Player Combo works now: on, with the consoles here and not in netplay.
 static bool switchOn(void) {
 	return switchController != SWITCH_OFF && togetherRunning() && !netplaySeen && playersHere > 1;
 }
 
-// Whether controller 1 holds the Switch Controller buttons.
+// Whether controller 1 holds the Switch Player Combo buttons.
 static bool switchHeld(int port) {
 	static struct {
 		size_t count;
@@ -1584,7 +1585,7 @@ static bool switchHeld(int port) {
 	return true;
 }
 
-// Whether controller 1's L3 or R3 is one of the Switch Controller buttons now, so it only switches.
+// Whether controller 1's L3 or R3 is one of the Switch Player Combo buttons now, so it only switches.
 static bool switchStick(unsigned button) {
 	return switchOn() && (switchController == SWITCH_L3_R3 ||
 	                      (switchController == SWITCH_START_L3 && button == RETRO_DEVICE_ID_JOYPAD_L3) ||
@@ -1599,13 +1600,14 @@ static int portFor(int i) {
 	return (i - controllerFocus + playersHere) % playersHere;
 }
 
-// Whether controller 1 holds Start with Switch Controller on Start + L2 + R2, so its L2 and R2 only switch.
+// Whether controller 1 holds Start with Switch Player Combo on Start + L2 + R2, so its L2 and R2
+// only switch.
 static bool switchStart(int port) {
 	return switchController == SWITCH_START_L2_R2 && port == 0 && switchOn() &&
 	       inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START);
 }
 
-// The Switch Controller buttons on controller 1 move it to the next console.
+// The Switch Player Combo buttons on controller 1 move it to the next console.
 static void readControllerSwitch(void) {
 	static bool held;
 	if (rerunning()) {
@@ -1800,9 +1802,9 @@ static const uint32_t* advanceFrame(const uint32_t* picture) {
 	return gbAdvanceFrame;
 }
 
-// Player Numbers: a badge at a screen's top left corner, its pitch bytes a row: "P" and the player's
-// number in a 5 by 7 dot font, white on the player's color (blue, red, green, amber), with a darker
-// edge and its corners rounded, faint over the picture.
+// Show Player Numbers: a badge at a screen's top left corner, its pitch bytes a row: "P" and the
+// player's number in a 5 by 7 dot font, white on the player's color (blue, red, green, amber), with a
+// darker edge and its corners rounded, faint over the picture.
 static uint32_t blendDot(uint32_t picture, uint32_t color, int alpha, size_t pixelBytes) {
 	unsigned r, g, b;
 	if (pixelBytes == 4) {
