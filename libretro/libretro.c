@@ -171,12 +171,10 @@ static int screens;
 static int screensOption = -1;
 // The L2 Button option: fast-forward, or the previous screens.
 static bool l2FastForward = true;
-// Netplay Screens: every device showing the host's screens, or each its own. The host's are its
-// player 1's R2 and L2 counted on every device alike, rollback's frames too, so every device's state
-// holds the same: they and whether those buttons were held.
-static bool hostsView;
-static int hostScreens;
-static uint8_t hostHeld;
+// R2 Follows: in netplay, whose R2 and L2 change this device's screens, -1 for Auto. Player Numbers:
+// each player's number on their screen.
+static int r2Follows = -1;
+static bool playerNumbers;
 // This device's player in the standalone frontend's netplay, -1 when not in it.
 static int netplayPlayer = -1;
 
@@ -347,11 +345,6 @@ void retro_get_system_info(struct retro_system_info* info) {
 	info->block_extract = false;
 }
 
-// The screens this device shows: in netplay on Host's View, the host's.
-static int shownScreens(void) {
-	return hostsView && (netplaySeen || netplayPlayer >= 0) ? hostScreens : screens;
-}
-
 // The picture size: 240x160, or 160x144 for a Game Boy game, or the linked consoles' screens. On the Game
 // Boy Advance model, a Game Boy game is 240x160 with the border shown, or 160x144 cropped (240x144
 // when stretched).
@@ -381,7 +374,7 @@ static void geometry(struct retro_game_geometry* geometry) {
 		geometry->base_height = SCREEN_HEIGHT;
 	}
 	if (togetherRunning()) {
-		int const shown = shownScreens();
+		int const shown = screens;
 		bool const grid = playersHere > 2 && shown < SCREENS_ONE;
 		geometry->base_width *= shown == SCREENS_SIDE || grid ? 2 : 1;
 		geometry->base_height *= shown == SCREENS_STACKED || grid ? 2 : 1;
@@ -626,7 +619,9 @@ static void readOptions(void) {
 		{ "off", SWITCH_OFF },
 	};
 	switchController = optionChoice("armgba_switch_controller", switchChoices, COUNT(switchChoices), SWITCH_L_R_A_B);
-	hostsView = optionIs("armgba_netplay_screens", "host");
+	const char* const follows = option("armgba_r2_follows");
+	r2Follows = follows && *follows >= '1' && *follows <= '4' ? *follows - '1' : -1;
+	playerNumbers = optionIs("armgba_player_numbers", "enabled");
 	bool const fastForward = !optionIs("armgba_link_l2", "previous screens");
 	if (fastForward != l2FastForward) {
 		l2FastForward = fastForward;
@@ -1288,8 +1283,6 @@ void retro_unload_game(void) {
 	netplaySeen = false;
 	netplayJoined = false;
 	sessionTag = 0;
-	hostScreens = SCREENS_SIDE;
-	hostHeld = 0;
 	netplayClient = -2;
 	updateRumble(false);
 	cheatsClear(&cheats, NULL);
@@ -1709,33 +1702,23 @@ static int nextScreens(int now, int step) {
 }
 
 // R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. In netplay
-// each device shows the screens its own way and only this device's player changes them: the
-// standalone frontend says which that is, and RetroArch after 1.22.2 too; with one that doesn't, it is
-// the host's player 1 or a joined device's player 2. On Netplay Screens' Host's View, a device shows
-// the host's.
+// each device shows the screens its own way, changed by one player's R2 and L2: R2 Follows' player,
+// or with Auto this device's own, which the standalone frontend says, and RetroArch after 1.22.2; with
+// one that doesn't, the host's player 1, or player 2 on a device that joined.
 static void readScreensKeys(void) {
 	static bool held[MAX_PLAYERS][2];
-	static int announced = -1;
-	int const was = announced < 0 ? shownScreens() : announced;
-	// The host's, from player 1's buttons on every device alike.
-	for (int k = 0; k < 2; ++k) {
-		bool const now = inputState(0, RETRO_DEVICE_JOYPAD, 0, k ? RETRO_DEVICE_ID_JOYPAD_R2 : RETRO_DEVICE_ID_JOYPAD_L2);
-		if (now && !(hostHeld >> k & 1)) {
-			hostScreens = nextScreens(hostScreens, k ? 1 : -1);
-		}
-		hostHeld = (uint8_t) ((hostHeld & ~(1 << k)) | now << k);
-	}
 	if (rerunning()) {
 		return;
 	}
-	// This device's own.
 	bool const netplay = netplaySeen || netplayPlayer >= 0;
 	if (netplaySeen && netplayClient == -2) {
 		unsigned client = 0;
 		netplayClient = environment(RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX, &client) && client < MAX_PLAYERS ? (int) client : -1;
 	}
 	int here = netplayJoined ? 1 : 0;
-	if (netplayPlayer >= 0) {
+	if (r2Follows >= 0) {
+		here = r2Follows;
+	} else if (netplayPlayer >= 0) {
 		here = netplayPlayer;
 	} else if (netplayClient >= 0 && netplayClient < playersHere) {
 		here = netplayClient;
@@ -1753,20 +1736,16 @@ static void readScreensKeys(void) {
 			held[port][k] = now;
 		}
 	}
-	if (step) {
-		screens = nextScreens(screens, step);
-	}
-	int const shown = shownScreens();
-	announced = shown;
-	if (shown == was) {
+	if (!step) {
 		return;
 	}
+	screens = nextScreens(screens, step);
 	announceGeometry();
 	char name[32];
-	if (shown >= SCREENS_ONE) {
-		snprintf(name, sizeof(name), "Player %d Only", shown - SCREENS_ONE + 1);
+	if (screens >= SCREENS_ONE) {
+		snprintf(name, sizeof(name), "Player %d Only", screens - SCREENS_ONE + 1);
 	} else {
-		snprintf(name, sizeof(name), "%s", playersHere > 2 ? "Grid" : shown == SCREENS_SIDE ? "Side by Side" : "Top and Bottom");
+		snprintf(name, sizeof(name), "%s", playersHere > 2 ? "Grid" : screens == SCREENS_SIDE ? "Side by Side" : "Top and Bottom");
 	}
 	notify(name, 120);
 }
@@ -1813,18 +1792,44 @@ static const uint32_t* advanceFrame(const uint32_t* picture) {
 	return gbAdvanceFrame;
 }
 
+// Player Numbers: "P" and the player's number, 3 by 5 dots each drawn 2 by 2, white on black at a
+// screen's top left corner, its pitch bytes a row.
+static void numberScreen(uint8_t* corner, size_t pitch, size_t pixelBytes, int player) {
+	static const uint8_t glyphs[5][5] = {
+		{ 7, 5, 7, 4, 4 }, { 2, 6, 2, 2, 7 }, { 7, 1, 7, 4, 7 }, { 7, 1, 7, 1, 7 }, { 5, 5, 7, 1, 1 },
+	};
+	const uint8_t* const shapes[2] = { glyphs[0], glyphs[player + 1] };
+	for (int y = 0; y < 14; ++y) {
+		for (int x = 0; x < 18; ++x) {
+			int const gx = x - 2, gy = y - 2, glyph = gx / 8, dot = gx % 8 / 2;
+			bool const on = gx >= 0 && gy >= 0 && gy < 10 && glyph < 2 && gx % 8 < 6 && shapes[glyph][gy / 2] >> (2 - dot) & 1;
+			uint8_t* const at = corner + y * pitch + x * pixelBytes;
+			if (pixelBytes == 4) {
+				*(uint32_t*) at = on ? 0xFFFFFF : 0;
+			} else {
+				*(uint16_t*) at = on ? 0xFFFF : 0;
+			}
+		}
+	}
+}
+
 // Puts the consoles' pictures side by side, one above the other, in a grid, or one alone, as chosen,
 // and hands over their sound mixed, or the shown one's.
 static void showConsoles(const void* const pictures[], size_t pixelBytes, int width, int height, void* frame, const int16_t* const samples[],
                          const size_t frames[]) {
-	int const way = shownScreens();
-	if (way >= SCREENS_ONE) {
-		int const shown = way - SCREENS_ONE < playersHere ? way - SCREENS_ONE : 0;
-		showPicture(pictures[shown], width, height, width * pixelBytes);
+	if (screens >= SCREENS_ONE) {
+		int const shown = screens - SCREENS_ONE < playersHere ? screens - SCREENS_ONE : 0;
+		if (playerNumbers) {
+			memcpy(frame, pictures[shown], width * pixelBytes * height);
+			numberScreen(frame, width * pixelBytes, pixelBytes, shown);
+			showPicture(frame, width, height, width * pixelBytes);
+		} else {
+			showPicture(pictures[shown], width, height, width * pixelBytes);
+		}
 		sendSound(samples[shown], frames[shown]);
 		return;
 	}
-	int const columns = playersHere == 2 && way == SCREENS_STACKED ? 1 : 2;
+	int const columns = playersHere == 2 && screens == SCREENS_STACKED ? 1 : 2;
 	int const rows = (playersHere + columns - 1) / columns;
 	size_t const row = width * pixelBytes;
 	uint8_t* const out = frame;
@@ -1833,6 +1838,9 @@ static void showConsoles(const void* const pictures[], size_t pixelBytes, int wi
 		uint8_t* const corner = out + (i / columns) * height * row * columns + (i % columns) * row;
 		for (int y = 0; y < height; ++y) {
 			memcpy(corner + y * row * columns, (const uint8_t*) pictures[i] + y * row, row);
+		}
+		if (playerNumbers) {
+			numberScreen(corner, row * columns, pixelBytes, i);
 		}
 	}
 	showPicture(frame, width * columns, height * rows, row * columns);
@@ -2390,9 +2398,8 @@ static bool loadConsoles(const void* data, size_t size) {
 //   rollback restarts a console on the same frame;
 // - the session's tag, which tells a device in netplay that it joined another's session.
 // A single-console state from before the tag still loads.
-// Together's: the restart buttons' hold, and the host's screens with its R2 and L2 held.
 static size_t extraStateSize(void) {
-	return togetherRunning() ? sizeof(restartHeld) + 1 : 0;
+	return togetherRunning() ? sizeof(restartHeld) : 0;
 }
 
 size_t retro_serialize_size(void) {
@@ -2404,38 +2411,25 @@ bool retro_serialize(void* data, size_t size) {
 	if (size < retro_serialize_size() || !saveConsoles(data, consolesStateSize())) {
 		return false;
 	}
-	uint8_t* at = (uint8_t*) data + consolesStateSize();
-	if (togetherRunning()) {
-		memcpy(at, restartHeld, sizeof(restartHeld));
-		at[sizeof(restartHeld)] = (uint8_t) (hostScreens | hostHeld << 6);
-		at += extraStateSize();
-	}
-	memcpy(at, &sessionTag, sizeof(sessionTag));
+	uint8_t* const at = (uint8_t*) data + consolesStateSize();
+	memcpy(at, restartHeld, extraStateSize());
+	memcpy(at + extraStateSize(), &sessionTag, sizeof(sessionTag));
 	return true;
 }
 
 bool retro_unserialize(const void* data, size_t size) {
 	checkNetplay();
-	// Together's states from before the screens were kept are a byte shorter.
-	bool const full = size >= retro_serialize_size(), older = togetherRunning() && size == retro_serialize_size() - 1;
-	bool const tagged = full || older;
+	bool const tagged = size >= retro_serialize_size();
 	if (!(tagged || (size == consolesStateSize() && !togetherRunning())) || !loadConsoles(data, consolesStateSize())) {
 		return false;
 	}
 	// A loaded state has every console's save as it was; player 1's isn't copied over them after.
 	copySaves = 0;
 	if (tagged) {
-		const uint8_t* at = (const uint8_t*) data + consolesStateSize();
-		if (togetherRunning()) {
-			memcpy(restartHeld, at, sizeof(restartHeld));
-			at += sizeof(restartHeld);
-			int const host = full ? *at & 0x3F : SCREENS_SIDE;
-			hostHeld = full ? *at++ >> 6 : 0;
-			hostScreens = host < SCREENS_ONE ? (host != SCREENS_STACKED || playersHere == 2 ? host : SCREENS_SIDE)
-			                                 : host < SCREENS_ONE + playersHere ? host : SCREENS_SIDE;
-		}
+		const uint8_t* const at = (const uint8_t*) data + consolesStateSize();
+		memcpy(restartHeld, at, extraStateSize());
 		uint32_t tag;
-		memcpy(&tag, at, sizeof(tag));
+		memcpy(&tag, at + extraStateSize(), sizeof(tag));
 		loadedTag(tag);
 	}
 	return true;
