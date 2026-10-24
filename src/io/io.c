@@ -198,7 +198,7 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	case 0x0CC:
 	case 0x0D4:
 	case 0x0D8:
-		ioWrite32(gba, address, (gba->io[(address >> 1) + 1] << 16) | value);
+		ioWrite32(gba, address, ((uint32_t) gba->io[(address >> 1) + 1] << 16) | value);
 		break;
 	case 0x092:
 	case 0x096:
@@ -212,15 +212,15 @@ void ioWrite(struct GBA* gba, uint32_t address, uint16_t value) {
 	case 0x0CE:
 	case 0x0D6:
 	case 0x0DA:
-		ioWrite32(gba, address - 2, gba->io[(address >> 1) - 1] | (value << 16));
+		ioWrite32(gba, address - 2, gba->io[(address >> 1) - 1] | ((uint32_t) value << 16));
 		break;
 	case REG_FIFO_A_LO:
 	case REG_FIFO_B_LO:
-		ioWrite32(gba, address, (gba->io[(address >> 1) + 1] << 16) | value);
+		ioWrite32(gba, address, ((uint32_t) gba->io[(address >> 1) + 1] << 16) | value);
 		return;
 	case REG_FIFO_A_HI:
 	case REG_FIFO_B_HI:
-		ioWrite32(gba, address - 2, gba->io[(address >> 1) - 1] | (value << 16));
+		ioWrite32(gba, address - 2, gba->io[(address >> 1) - 1] | ((uint32_t) value << 16));
 		return;
 
 	// The DMA counts, which are write-only and need nothing done until the control word is written.

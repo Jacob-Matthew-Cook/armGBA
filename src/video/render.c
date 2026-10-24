@@ -1273,7 +1273,7 @@ static int preprocessSprite(struct GBA* gba, const struct RenderSprite* sprite, 
 	int end = renderer->end;
 	// The flags its pixels carry: priority, whether it is a first blend target (a semi-transparent
 	// sprite always is), and whether it is an object window sprite.
-	uint32_t flags = OBJ_C_PRIORITY(c) << OFFSET_PRIORITY;
+	uint32_t flags = (uint32_t) OBJ_C_PRIORITY(c) << OFFSET_PRIORITY;
 	flags |= FLAG_TARGET_1 * ((WIN_BLEND_ENABLE(renderer->currentWindow.packed) && renderer->target1Obj && renderer->blendEffect == BLEND_ALPHA) || OBJ_A_MODE(a) == OBJ_MODE_SEMITRANSPARENT);
 	flags |= FLAG_OBJWIN * (OBJ_A_MODE(a) == OBJ_MODE_OBJWIN);
 	// Inside one of the rectangular windows, which take precedence, the object window doesn't
@@ -1826,7 +1826,7 @@ static void breakWindow(struct Renderer* renderer, const struct RenderWindowN* w
 // Works out the flags a background's pixels carry: its priority and index, whether it is a blend
 // target, and which palette it uses. Done when a register changes instead of for every pixel.
 static void updateFlags(struct Renderer* renderer, struct RenderBackground* background) {
-	uint32_t flags = (background->priority << OFFSET_PRIORITY) | (background->index << OFFSET_INDEX) | FLAG_IS_BACKGROUND;
+	uint32_t flags = ((uint32_t) background->priority << OFFSET_PRIORITY) | (background->index << OFFSET_INDEX) | FLAG_IS_BACKGROUND;
 	if (background->target2) {
 		flags |= FLAG_TARGET_2;
 	}
