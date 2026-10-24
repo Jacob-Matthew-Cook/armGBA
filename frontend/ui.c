@@ -746,7 +746,8 @@ static void hover(SDL_Point p) {
 
 // A click at p: the back button, a hint's action, a tab, a key of the keyboard, or a row (a selected
 // value's arrows change it); the right button goes back.
-static void click(SDL_Point p, Uint8 button) {
+// A finger's tap only selects a row the first time; the second, on the selected row, chooses it.
+static void click(SDL_Point p, Uint8 button, bool tap) {
 	if (button == SDL_BUTTON_LEFT && SDL_PointInRect(&p, &backRect)) {
 		back();
 		return;
@@ -783,7 +784,9 @@ static void click(SDL_Point p, Uint8 button) {
 				bool const already = stack[depth - 1].selected == firstShown + i;
 				stack[depth - 1].selected = firstShown + i;
 				// A selected value's arrows change it backward or forward; elsewhere chooses.
-				if (already && arrowLeft[i] >= 0 && p.x <= arrowLeft[i]) {
+				if (tap && !already) {
+					disarm();
+				} else if (already && arrowLeft[i] >= 0 && p.x <= arrowLeft[i]) {
 					activate(-1);
 				} else if (already && arrowRight[i] >= 0 && p.x >= arrowRight[i]) {
 					activate(1);
@@ -1048,7 +1051,7 @@ bool uiEvent(const SDL_Event* event) {
 			trailCount = 0;
 			trailAdd(event->button.y);
 		} else {
-			click((SDL_Point) { event->button.x, event->button.y }, event->button.button);
+			click((SDL_Point) { event->button.x, event->button.y }, event->button.button, false);
 		}
 		return true;
 	case SDL_MOUSEBUTTONUP:
@@ -1067,7 +1070,7 @@ bool uiEvent(const SDL_Event* event) {
 			}
 			Uint32 const since = trailCount ? now - trail[from].time : 0;
 			if (!drag.moved) {
-				click((SDL_Point) { event->button.x, event->button.y }, SDL_BUTTON_LEFT);
+				click((SDL_Point) { event->button.x, event->button.y }, SDL_BUTTON_LEFT, true);
 			// A swipe across the top menus moves to the next tab or the one before.
 			} else if (drag.across && depth == 1 && !entry.open && abs(dx) > lastRowH * 2) {
 				moveTab(dx < 0 ? 1 : -1);
