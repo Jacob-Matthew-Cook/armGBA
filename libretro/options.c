@@ -163,7 +163,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_gamecube_address", "GameCube Address", NULL,
 	  "Where Dolphin runs, with a controller port set to GBA (TCP): found on this device or the local network, or this device only.",
 	  NULL, "link_connection", { { "auto", "Find on the Network" }, { "127.0.0.1", "This Device" }, { NULL, NULL } }, "auto" },
-	{ "armgba_link_screens", "Screens", NULL,
+	{ "armgba_link_screens", "Screen Layout", NULL,
 	  "How the screens are arranged. R2 changes it while playing.", NULL, "link_screens",
 	  { { "side by side", "Side by Side" }, { "top and bottom", "Top and Bottom" }, { "player 1", "Player 1 Only" }, { "player 2", "Player 2 Only" }, { "player 3", "Player 3 Only" }, { "player 4", "Player 4 Only" }, { NULL, NULL } },
 	  "side by side" },
