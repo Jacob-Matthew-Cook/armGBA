@@ -1319,6 +1319,14 @@ int main(int argc, char** argv) {
 	bool listControllers = false;
 	// Hosting from the command line: 0 off, 1 Together, 2 Separate.
 	int hostMode = 0;
+#ifdef __ANDROID__
+	// On Android, armgba's folder is at the shared storage's top, where a file manager reaches it, and
+	// the game list starts there.
+	const char* const shared = getenv("EXTERNAL_STORAGE") ? getenv("EXTERNAL_STORAGE") : "/storage/emulated/0";
+	setenv("HOME", shared, 1);
+	setenv("XDG_CONFIG_HOME", shared, 1);
+	setenv("XDG_DATA_HOME", shared, 1);
+#endif
 	// The settings, then the arguments over them.
 	settingsDefaults();
 	dataDirectory(configDirectory, "XDG_CONFIG_HOME", ".config", "");

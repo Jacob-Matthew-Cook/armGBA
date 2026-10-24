@@ -6,20 +6,24 @@
 
 // RetroAchievements, through their rcheevos library (libretro/deps/rcheevos). It talks to
 // retroachievements.org with the system's libcurl, loaded when first needed so armgba runs without
-// it, on a thread of its own; the answers are handed to rcheevos on the main thread. Only the login
-// token is kept, never the password.
+// it, or on Android through Android's own HTTPS, on a thread of its own; the answers are handed to
+// rcheevos on the main thread. Only the login token is kept, never the password.
 
 #include "frontend.h"
 
 #include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __ANDROID__
+#include <jni.h>
+#endif
 
 #include "rc_client.h"
 #include "rc_consoles.h"
 #include "rc_hash.h"
 #include "rc_libretro.h"
 
+#ifndef __ANDROID__
 // The few parts of libcurl's interface used here, as its curl.h numbers them.
 enum {
 	CURLOPT_WRITEDATA = 10001,
@@ -47,6 +51,7 @@ static struct {
 	void* (*slistAppend)(void* list, const char* text);
 	void (*slistFree)(void* list);
 } curl;
+#endif
 
 // A request to the server and, once the worker has fetched it, its answer. Jobs wait on one list for
 // the worker and on another for the main thread.
@@ -76,6 +81,8 @@ static struct Job* waiting;
 static struct Job* done;
 
 // HTTP.
+
+#ifndef __ANDROID__
 
 // Loads libcurl, under the names distributions give it, the first time it's needed; false if it isn't
 // installed or lacks a function used here.
@@ -157,6 +164,78 @@ static void fetch(struct Job* job) {
 	}
 	curl.cleanup(handle);
 }
+
+#else
+
+// On Android, the app's Java helper (android/java/org/armgba/app/Http.java) makes the requests. Its
+// class is found on the main thread, as the worker's thread can't find the app's classes by name.
+static jclass http;
+static jmethodID httpFetch;
+
+static bool curlLoad(void) {
+	if (http) {
+		return true;
+	}
+	JNIEnv* const env = SDL_AndroidGetJNIEnv();
+	jclass const found = env ? (*env)->FindClass(env, "org/armgba/app/Http") : NULL;
+	if (!found) {
+		if (env && (*env)->ExceptionCheck(env)) {
+			(*env)->ExceptionClear(env);
+		}
+		return false;
+	}
+	http = (*env)->NewGlobalRef(env, found);
+	(*env)->DeleteLocalRef(env, found);
+	httpFetch = (*env)->GetStaticMethodID(env, http, "fetch", "(Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;[I)[B");
+	return httpFetch != NULL;
+}
+
+// Fetches a job's URL, posting its data if it has any; the status is the HTTP code, or one that has
+// rcheevos try again.
+static void fetch(struct Job* job) {
+	job->status = RC_API_SERVER_RESPONSE_RETRYABLE_CLIENT_ERROR;
+	JNIEnv* const env = SDL_AndroidGetJNIEnv();
+	if (!env) {
+		return;
+	}
+	jstring const url = (*env)->NewStringUTF(env, job->url);
+	jstring const type = (*env)->NewStringUTF(env, job->contentType ? job->contentType : "application/x-www-form-urlencoded");
+	jstring const agent = (*env)->NewStringUTF(env, userAgent);
+	jbyteArray post = NULL;
+	if (job->post) {
+		jsize const length = (jsize) strlen(job->post);
+		post = (*env)->NewByteArray(env, length);
+		(*env)->SetByteArrayRegion(env, post, 0, length, (const jbyte*) job->post);
+	}
+	jintArray const code = (*env)->NewIntArray(env, 1);
+	jbyteArray body = (*env)->CallStaticObjectMethod(env, http, httpFetch, url, post, type, agent, code);
+	if ((*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionClear(env);
+		body = NULL;
+	}
+	if (body) {
+		jsize const length = (*env)->GetArrayLength(env, body);
+		job->body = malloc((size_t) length + 1);
+		if (job->body) {
+			(*env)->GetByteArrayRegion(env, body, 0, length, (jbyte*) job->body);
+			job->body[length] = '\0';
+			job->length = (size_t) length;
+			jint status = 0;
+			(*env)->GetIntArrayRegion(env, code, 0, 1, &status);
+			job->status = status;
+		}
+		(*env)->DeleteLocalRef(env, body);
+	}
+	(*env)->DeleteLocalRef(env, url);
+	(*env)->DeleteLocalRef(env, type);
+	(*env)->DeleteLocalRef(env, agent);
+	(*env)->DeleteLocalRef(env, code);
+	if (post) {
+		(*env)->DeleteLocalRef(env, post);
+	}
+}
+
+#endif
 
 // The worker thread: fetches the waiting jobs in order and hands each on to the main thread.
 static int work(void* unused) {
