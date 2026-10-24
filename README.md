@@ -152,7 +152,9 @@ L2 rewinds, West shows the frame rate. Arrow keys, X = A, Z = B, A = L, S = R, E
 Backspace = Select, C and V turbo B and A; controllers work too, one per player. Tab fast-forwards
 while held, R rewinds, P pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its
 slot, F12 takes a screenshot, F9 starts and stops recording, F11 goes full screen, F3 shows the
-frame rate. The menu changes all of these, and the Hotkey too.
+frame rate. The menu changes all of these, and the Hotkey too. Controls' Button Layout puts A on the
+right face button and B at the bottom (Nintendo, the default) or A at the bottom and B on the right
+(Xbox).
 
 The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyboard; left and right
 too on a row without a value), and it opens again where it was left. General has the recent games,

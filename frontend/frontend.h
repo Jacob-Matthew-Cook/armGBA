@@ -118,6 +118,8 @@ struct Settings {
 	bool showMessages;
 	// On-Screen Controls (Android), shown while no controller is connected.
 	bool touchControls;
+	// Button Layout: false Nintendo's, A the right face button; true Xbox's, A the bottom one.
+	bool xboxLayout;
 	// The menus' look: the accent color, their size as a percentage, and how far the game behind them
 	// is dimmed (0 to 2).
 	int accent;

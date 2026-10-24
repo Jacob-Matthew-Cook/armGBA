@@ -671,6 +671,7 @@ enum {
 	SET_MENU_SIZE,
 	SET_DIM,
 	SET_TOUCH,
+	SET_LAYOUT,
 };
 
 // A setting's row (SET_*): left and right step a value or turn it over, as choosing it does. The
@@ -752,6 +753,9 @@ static void changeSetting(int which, int delta) {
 		settings.fastForward = speeds[wrap(at, d, 6)];
 		break;
 	}
+	case SET_LAYOUT:
+		settings.xboxLayout = !settings.xboxLayout;
+		break;
 	case SET_TOUCH:
 		settings.touchControls = !settings.touchControls;
 		setPadForPort();
@@ -960,6 +964,8 @@ static void controlsMenu(void) {
 	addValue("On-Screen Controls", onOff(settings.touchControls), changeSetting, SET_TOUCH);
 	helpFor("A controller on the screen, played by touch, there while no other controller is connected.");
 #endif
+	addValue("Button Layout", settings.xboxLayout ? "Xbox" : "Nintendo", changeSetting, SET_LAYOUT);
+	helpFor("Nintendo: A is the right face button and B the bottom one, as on a Game Boy. Xbox: A is the bottom one and B the right.");
 	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
 	helpFor("How fast the Fast-Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);

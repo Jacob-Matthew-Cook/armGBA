@@ -478,19 +478,21 @@ static void audioSample(int16_t left, int16_t right) {
 static void inputPoll(void) {
 }
 
-// Android handhelds with a Nintendo layout name their face buttons by label, A on the right, where
-// SDL means places, A at the bottom, so their A and B, and X and Y, are swapped back. Controllers SDL
-// knows (Xbox, PlayStation, Switch and others) give places already, as do the On-Screen Controls.
+// The face buttons by place, as the bindings mean them: with the Nintendo Button Layout, A on the
+// right; with Xbox's, A at the bottom, A and B and X and Y swapped. Android handhelds with a Nintendo
+// layout name their face buttons by label, A on the right, where SDL means places, A at the bottom,
+// so theirs are swapped too; controllers SDL knows (Xbox, PlayStation, Switch and others) give places
+// already. The On-Screen Controls keep their letters.
 static int facePlace(SDL_GameController* pad, int button) {
-#ifdef __ANDROID__
-	if (pad && SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_UNKNOWN && button >= SDL_CONTROLLER_BUTTON_A &&
-	    button <= SDL_CONTROLLER_BUTTON_Y) {
-		return button ^ 1;
+	if (!pad || button < SDL_CONTROLLER_BUTTON_A || button > SDL_CONTROLLER_BUTTON_Y ||
+	    SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_VIRTUAL) {
+		return button;
 	}
-#else
-	(void) pad;
+	bool swap = settings.xboxLayout;
+#ifdef __ANDROID__
+	swap ^= SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_UNKNOWN;
 #endif
-	return button;
+	return swap ? button ^ 1 : button;
 }
 
 // A controller binding's state.
