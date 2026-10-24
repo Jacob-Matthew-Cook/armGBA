@@ -1063,6 +1063,7 @@ static void folderPick(int kind, int delta);
 #ifdef __ANDROID__
 // Android's folder picker (Armgba.java), for the folder shown; its answer is polled as the menus draw.
 static bool pickerOpen;
+static int pickerFolder;
 
 static jclass armgbaClass(JNIEnv* env) {
 	jclass const found = (*env)->FindClass(env, "org/armgba/app/Armgba");
@@ -1083,6 +1084,7 @@ static void openPicker(void) {
 	(*env)->CallStaticVoidMethod(env, armgba, pick);
 	(*env)->DeleteLocalRef(env, armgba);
 	pickerOpen = true;
+	pickerFolder = folderShown;
 }
 
 void folderPickerPoll(void) {
@@ -1102,15 +1104,16 @@ void folderPickerPoll(void) {
 	pickerOpen = false;
 	const char* const path = (*env)->GetStringUTFChars(env, answer, NULL);
 	// No picker on this device: the folder's typed in instead.
+	folderShown = pickerFolder;
 	if (!strcmp(path, "?")) {
 		folderPick(3, 0);
 	} else if (path[0] && access(path, R_OK)) {
 		osd("Can't read %s", path);
 	} else if (path[0]) {
-		snprintf(folders[folderShown].setting, PATH_SIZE, "%s", path);
+		snprintf(folders[pickerFolder].setting, PATH_SIZE, "%s", path);
 		chooseFolders();
 		settingsWrite();
-		osd("%s Folder: %s", folders[folderShown].label, folderName(path));
+		osd("%s Folder: %s", folders[pickerFolder].label, folderName(path));
 	}
 	(*env)->ReleaseStringUTFChars(env, answer, path);
 	(*env)->DeleteLocalRef(env, answer);
