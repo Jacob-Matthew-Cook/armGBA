@@ -642,6 +642,25 @@ static bool inBrowser(void) {
 
 // The controller button bound to the game's button: B's or A's own if it's bound to a trigger or not
 // at all.
+// In the menus on Android, A and B, and X and Y, are the other way round from the game's.
+static int menuFace(int button) {
+#ifdef __ANDROID__
+	switch (button) {
+	case SDL_CONTROLLER_BUTTON_A:
+		return SDL_CONTROLLER_BUTTON_B;
+	case SDL_CONTROLLER_BUTTON_B:
+		return SDL_CONTROLLER_BUTTON_A;
+	case SDL_CONTROLLER_BUTTON_X:
+		return SDL_CONTROLLER_BUTTON_Y;
+	case SDL_CONTROLLER_BUTTON_Y:
+		return SDL_CONTROLLER_BUTTON_X;
+	default:
+		break;
+	}
+#endif
+	return button;
+}
+
 static int menuButton(int button) {
 	int const bound = settings.pad[button];
 	if (bound >= 0 && bound < SDL_CONTROLLER_BUTTON_MAX) {
@@ -886,15 +905,16 @@ bool uiEvent(const SDL_Event* event) {
 			return true;
 		}
 		// The buttons bound to the game's A and B choose and go back, as in RetroArch.
-		if (event->cbutton.button == menuButton(BUTTON_A)) {
+		int const button = menuFace(event->cbutton.button);
+		if (button == menuButton(BUTTON_A)) {
 			confirm();
 			return true;
 		}
-		if (event->cbutton.button == menuButton(BUTTON_B)) {
+		if (button == menuButton(BUTTON_B)) {
 			back();
 			return true;
 		}
-		switch (event->cbutton.button) {
+		switch (button) {
 		// The D-pad repeats while it's held, as the stick does.
 		case SDL_CONTROLLER_BUTTON_DPAD_UP:
 		case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
