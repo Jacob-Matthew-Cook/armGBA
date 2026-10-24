@@ -33,6 +33,9 @@ enum {
 	// Holding a direction on a controller repeats it after this long, then this often.
 	REPEAT_DELAY_MS = 400,
 	REPEAT_MS = 90,
+	// Held this long, it repeats this often.
+	REPEAT_FAST_AFTER_MS = 1200,
+	REPEAT_FAST_MS = 35,
 	CIRCLES = 16,
 	// How long a tab takes to slide in.
 	SLIDE_MS = 180,
@@ -102,11 +105,21 @@ static SDL_Rect hintRects[HINTS_MOST];
 static enum HintAction hintActions[HINTS_MOST];
 static int hintCount;
 
-// A controller's held direction, for repeats.
+// A controller's held direction, for repeats, and since when.
 static struct {
 	int dx, dy;
-	Uint32 next;
+	Uint32 next, since;
 } held;
+
+// A touch on the menus: where it came down, and whether it's dragged the rows.
+static struct {
+	bool down, moved;
+	int y, scroll;
+} drag;
+// The rows' height as last drawn.
+static int lastRowH;
+// The view moved by a drag or the wheel stays where it was put, until the selection moves.
+static bool viewHeld;
 
 
 // A message at the bottom left for a few seconds, the newest lowest, unless Show Messages is off;
@@ -324,6 +337,7 @@ void pushMenu(void (*build)(void), const char* title) {
 		stack[depth].selected = -1;
 		stack[depth].scroll = 0;
 		++depth;
+		viewHeld = false;
 	}
 }
 
@@ -360,6 +374,7 @@ static void moveTab(int way) {
 // Back to the menu before, or out of the menus from the first.
 void popMenu(void) {
 	disarm();
+	viewHeld = false;
 	if (depth > 1) {
 		--depth;
 	} else {
@@ -471,6 +486,7 @@ bool selectable(int i) {
 // The next selectable row the way delta points, wrapping round.
 static void moveSelection(int delta) {
 	disarm();
+	viewHeld = false;
 	struct Menu* m = &stack[depth - 1];
 	int i = m->selected;
 	for (int tries = 0; tries < itemCount; ++tries) {
@@ -640,6 +656,54 @@ static void hintDo(enum HintAction action, int way) {
 	}
 }
 
+// A click at p: a hint's action, a tab, a key of the keyboard, or a row (a selected value's arrows
+// change it); the right button goes back.
+static void click(SDL_Point p, Uint8 button) {
+	for (int i = 0; i < hintCount && button == SDL_BUTTON_LEFT; ++i) {
+		if (SDL_PointInRect(&p, &hintRects[i])) {
+			hintDo(hintActions[i], p.x < hintRects[i].x + hintRects[i].w / 2 ? -1 : 1);
+			return;
+		}
+	}
+	if (button == SDL_BUTTON_RIGHT) {
+		back();
+	// A click on the keyboard types the key.
+	} else if (button == SDL_BUTTON_LEFT && entry.open) {
+		for (int r = 0; r < 5; ++r) {
+			for (int c = 0; c < 12; ++c) {
+				if (SDL_PointInRect(&p, &keyRects[r][c])) {
+					entry.row = r;
+					entry.column = c;
+					entryType();
+					return;
+				}
+			}
+		}
+	} else if (button == SDL_BUTTON_LEFT) {
+		for (int t = 0; t < TABS && depth == 1; ++t) {
+			if (t != tab && SDL_PointInRect(&p, &tabRects[t])) {
+				showTab(t, t > tab ? 1 : -1);
+				return;
+			}
+		}
+		for (int i = 0; i < shownCount; ++i) {
+			if (selectable(firstShown + i) && SDL_PointInRect(&p, &itemRects[i])) {
+				bool const already = stack[depth - 1].selected == firstShown + i;
+				stack[depth - 1].selected = firstShown + i;
+				// A selected value's arrows change it backward or forward; elsewhere chooses.
+				if (already && arrowLeft[i] >= 0 && p.x <= arrowLeft[i]) {
+					activate(-1);
+				} else if (already && arrowRight[i] >= 0 && p.x >= arrowRight[i]) {
+					activate(1);
+				} else {
+					confirm();
+				}
+				break;
+			}
+		}
+	}
+}
+
 // An event while the menus are open or a binding is waited for; returns whether it was used.
 bool uiEvent(const SDL_Event* event) {
 	if (event->type == SDL_CONTROLLERBUTTONDOWN || (event->type == SDL_CONTROLLERAXISMOTION && abs(event->caxis.value) > 20000)) {
@@ -781,18 +845,19 @@ bool uiEvent(const SDL_Event* event) {
 			return true;
 		}
 		switch (event->cbutton.button) {
+		// The D-pad repeats while it's held, as the stick does.
 		case SDL_CONTROLLER_BUTTON_DPAD_UP:
-			direction(0, -1);
-			break;
 		case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-			direction(0, 1);
-			break;
 		case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
-			direction(-1, 0);
+		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: {
+			int const b = event->cbutton.button;
+			held.dx = b == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT ? 1 : 0;
+			held.dy = b == SDL_CONTROLLER_BUTTON_DPAD_UP ? -1 : b == SDL_CONTROLLER_BUTTON_DPAD_DOWN ? 1 : 0;
+			held.since = SDL_GetTicks();
+			held.next = held.since + REPEAT_DELAY_MS;
+			direction(held.dx, held.dy);
 			break;
-		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-			direction(1, 0);
-			break;
+		}
 		// On the keyboard, X deletes and Start is Done.
 		case SDL_CONTROLLER_BUTTON_X:
 			if (entry.open && entry.text[0]) {
@@ -824,6 +889,11 @@ bool uiEvent(const SDL_Event* event) {
 		}
 		return true;
 	}
+	case SDL_CONTROLLERBUTTONUP:
+		if (event->cbutton.button >= SDL_CONTROLLER_BUTTON_DPAD_UP && event->cbutton.button <= SDL_CONTROLLER_BUTTON_DPAD_RIGHT) {
+			held.dx = held.dy = 0;
+		}
+		return true;
 	case SDL_CONTROLLERAXISMOTION:
 		// The left stick moves as the D-pad does; uiDraw repeats it while it's held.
 		if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX || event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
@@ -832,15 +902,26 @@ bool uiEvent(const SDL_Event* event) {
 			int const dy = event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY ? v : held.dy;
 			if ((dx || dy) && (dx != held.dx || dy != held.dy)) {
 				direction(dx, dy);
-				held.next = SDL_GetTicks() + REPEAT_DELAY_MS;
+				held.since = SDL_GetTicks();
+				held.next = held.since + REPEAT_DELAY_MS;
 			}
 			held.dx = dx;
 			held.dy = dy;
 		}
 		return true;
-	// The mouse selects the row it's over.
+	// The mouse selects the row it's over; a touch drags the rows, a row's height at a time, once
+	// it's moved a third of one.
 	case SDL_MOUSEMOTION:
-		if (!entry.open) {
+		if (event->motion.which == SDL_TOUCH_MOUSEID) {
+			int const dy = event->motion.y - drag.y;
+			if (drag.down && !entry.open && lastRowH > 0) {
+				drag.moved |= abs(dy) > lastRowH / 3;
+				if (drag.moved) {
+					stack[depth - 1].scroll = drag.scroll - (dy + (dy < 0 ? -lastRowH / 2 : lastRowH / 2)) / lastRowH;
+					viewHeld = true;
+				}
+			}
+		} else if (!entry.open) {
 			for (int i = 0; i < shownCount; ++i) {
 				SDL_Point const p = { event->motion.x, event->motion.y };
 				if (selectable(firstShown + i) && SDL_PointInRect(&p, &itemRects[i])) {
@@ -849,57 +930,30 @@ bool uiEvent(const SDL_Event* event) {
 			}
 		}
 		return true;
-	case SDL_MOUSEBUTTONDOWN: {
-		SDL_Point const p = { event->button.x, event->button.y };
-		for (int i = 0; i < hintCount && event->button.button == SDL_BUTTON_LEFT; ++i) {
-			if (SDL_PointInRect(&p, &hintRects[i])) {
-				hintDo(hintActions[i], p.x < hintRects[i].x + hintRects[i].w / 2 ? -1 : 1);
-				return true;
-			}
+	// A touch scrolls the rows as it drags, and clicks where it lifts if it didn't.
+	case SDL_MOUSEBUTTONDOWN:
+		if (event->button.which == SDL_TOUCH_MOUSEID && event->button.button == SDL_BUTTON_LEFT) {
+			drag.down = true;
+			drag.moved = false;
+			drag.y = event->button.y;
+			drag.scroll = stack[depth - 1].scroll;
+		} else {
+			click((SDL_Point) { event->button.x, event->button.y }, event->button.button);
 		}
-		if (event->button.button == SDL_BUTTON_RIGHT) {
-			back();
-		// A click on the keyboard types the key.
-		} else if (event->button.button == SDL_BUTTON_LEFT && entry.open) {
-			for (int r = 0; r < 5; ++r) {
-				for (int c = 0; c < 12; ++c) {
-					if (SDL_PointInRect(&p, &keyRects[r][c])) {
-						entry.row = r;
-						entry.column = c;
-						entryType();
-						return true;
-					}
-				}
-			}
-		} else if (event->button.button == SDL_BUTTON_LEFT) {
-			for (int t = 0; t < TABS && depth == 1; ++t) {
-				if (t != tab && SDL_PointInRect(&p, &tabRects[t])) {
-					showTab(t, t > tab ? 1 : -1);
-					return true;
-				}
-			}
-			for (int i = 0; i < shownCount; ++i) {
-				if (selectable(firstShown + i) && SDL_PointInRect(&p, &itemRects[i])) {
-					bool const already = stack[depth - 1].selected == firstShown + i;
-					stack[depth - 1].selected = firstShown + i;
-					// A selected value's arrows change it backward or forward; elsewhere chooses.
-					if (already && arrowLeft[i] >= 0 && p.x <= arrowLeft[i]) {
-						activate(-1);
-					} else if (already && arrowRight[i] >= 0 && p.x >= arrowRight[i]) {
-						activate(1);
-					} else {
-						confirm();
-					}
-					break;
-				}
+		return true;
+	case SDL_MOUSEBUTTONUP:
+		if (event->button.which == SDL_TOUCH_MOUSEID && drag.down) {
+			drag.down = false;
+			if (!drag.moved) {
+				click((SDL_Point) { event->button.x, event->button.y }, SDL_BUTTON_LEFT);
 			}
 		}
 		return true;
-	}
 	// The wheel scrolls three rows at a time.
 	case SDL_MOUSEWHEEL:
 		if (!entry.open) {
 			stack[depth - 1].scroll -= event->wheel.y * 3;
+			viewHeld = true;
 		}
 		return true;
 	default:
@@ -1242,7 +1296,8 @@ static void drawMenu(int width, int height, int u) {
 		drawTabs(panel, u);
 	}
 	// Keep the selection in view; the mouse wheel moves the view too.
-	if (m->selected >= 0 && (m->selected < m->scroll || m->selected >= m->scroll + rows)) {
+	lastRowH = rowH;
+	if (!viewHeld && m->selected >= 0 && (m->selected < m->scroll || m->selected >= m->scroll + rows)) {
 		m->scroll = m->selected < m->scroll ? m->selected : m->selected - rows + 1;
 	}
 	m->scroll = SDL_max(0, SDL_min(m->scroll, itemCount - rows));
@@ -1383,7 +1438,7 @@ void uiDraw(void) {
 	bool const tabbing = held.dx && !held.dy && !entry.open && depth && tabsMove();
 	if ((held.dx || held.dy) && !tabbing && SDL_TICKS_PASSED(SDL_GetTicks(), held.next) && app.menuOpen) {
 		direction(held.dx, held.dy);
-		held.next = SDL_GetTicks() + REPEAT_MS;
+		held.next = SDL_GetTicks() + (SDL_GetTicks() - held.since > REPEAT_FAST_AFTER_MS ? REPEAT_FAST_MS : REPEAT_MS);
 	}
 	if (app.menuOpen && depth) {
 		fillRect(0, 0, width, height, app.loaded ? (SDL_Color) { panelFill.r, panelFill.g, panelFill.b, dimAlphas[settings.dim] } : (SDL_Color) { 11, 15, 24, 255 });
