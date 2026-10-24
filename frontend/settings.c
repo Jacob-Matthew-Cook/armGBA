@@ -23,7 +23,7 @@ bool optionsChanged;
 
 const char* actionNames[ACTIONS] = {
 	"Menu", "Fast-Forward", "Rewind", "Pause", "Save State", "Load State", "Previous Slot", "Next Slot",
-	"Screenshot", "Record", "Full Screen", "Restart", "Quit",
+	"Screenshot", "Record", "Full Screen", "Restart", "Quit", "Show Frame Rate",
 };
 
 const char* buttonNames[BUTTONS] = {
@@ -72,13 +72,13 @@ void settingsDefaults(void) {
 	static const SDL_Scancode hotkeys[ACTIONS] = {
 		SDL_SCANCODE_ESCAPE, SDL_SCANCODE_TAB, SDL_SCANCODE_R, SDL_SCANCODE_P, SDL_SCANCODE_F5, SDL_SCANCODE_F7,
 		SDL_SCANCODE_F6, SDL_SCANCODE_F8, SDL_SCANCODE_F12, SDL_SCANCODE_F9, SDL_SCANCODE_F11, SDL_SCANCODE_F2,
-		SDL_SCANCODE_UNKNOWN,
+		SDL_SCANCODE_UNKNOWN, SDL_SCANCODE_F3,
 	};
 	memcpy(settings.keys, keys, sizeof(keys));
 	memcpy(settings.pad, pad, sizeof(pad));
 	memcpy(settings.hotkeys, hotkeys, sizeof(hotkeys));
 	// ROCKNIX's hotkeys: with the Hotkey, North for the menu, Start to quit, R and L to save and load a
-	// state, R2 to fast-forward and L2 to rewind.
+	// state, R2 to fast-forward, L2 to rewind and West for the frame rate.
 	settings.padHotkey = PAD_AUTO;
 	for (int i = 0; i < ACTIONS; ++i) {
 		settings.padHotkeys[i] = PAD_NONE;
@@ -89,6 +89,7 @@ void settingsDefaults(void) {
 	settings.padHotkeys[ACT_LOAD_STATE] = SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
 	settings.padHotkeys[ACT_FAST_FORWARD] = PAD_RIGHT_TRIGGER;
 	settings.padHotkeys[ACT_REWIND] = PAD_LEFT_TRIGGER;
+	settings.padHotkeys[ACT_FPS] = SDL_CONTROLLER_BUTTON_X;
 	const char* home = getenv("HOME");
 	snprintf(settings.directory, sizeof(settings.directory), "%s", home ? home : "/");
 }

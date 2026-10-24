@@ -848,7 +848,9 @@ static const char* hotkeyHelp(int action, bool controller) {
 	case ACT_REWIND:
 		return "Goes back in time while held.";
 	case ACT_QUIT:
-		return "Quits armGBA, writing the game's save first.";
+		return "Quits armGBA on a second press, writing the game's save first.";
+	case ACT_FPS:
+		return "Shows or hides the frame rate.";
 	default:
 		return NULL;
 	}

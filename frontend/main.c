@@ -1006,6 +1006,24 @@ void runFrames(void) {
 
 // Hotkeys and the menu.
 
+// Whether the action being done came from a controller's hotkey, for what its messages name.
+static bool actionFromPad;
+
+void requestQuit(bool controller) {
+	static Uint32 asked;
+	Uint32 const now = SDL_GetTicks();
+	if (asked && now - asked < 3000) {
+		app.running = false;
+		return;
+	}
+	asked = now;
+	if (controller) {
+		osd("Press Hotkey + %s again to quit", padName(settings.padHotkeys[ACT_QUIT]));
+	} else {
+		osd("Press %s again to quit", scancodeName(settings.hotkeys[ACT_QUIT]));
+	}
+}
+
 // A hotkey pressed. Menu and Full Screen work without a game; Pause and Restart not during netplay.
 static void doAction(enum Action action) {
 	if (action == ACT_MENU) {
@@ -1017,7 +1035,12 @@ static void doAction(enum Action action) {
 		return;
 	}
 	if (action == ACT_QUIT) {
-		app.running = false;
+		requestQuit(actionFromPad);
+		return;
+	}
+	if (action == ACT_FPS) {
+		settings.showFps = !settings.showFps;
+		osd("Show Frame Rate: %s", settings.showFps ? "On" : "Off");
 		return;
 	}
 	if (action == ACT_FULLSCREEN) {
@@ -1073,7 +1096,9 @@ static void padPressed(SDL_JoystickID which, int binding) {
 			app.fastForwardOn = !app.fastForwardOn && app.loaded;
 			osd("Fast-Forward %s", app.fastForwardOn ? "On" : "Off");
 		} else {
+			actionFromPad = true;
 			doAction((enum Action) a);
+			actionFromPad = false;
 		}
 	}
 }
