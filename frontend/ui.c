@@ -114,7 +114,7 @@ static struct {
 // A touch on the menus: where it came down, and whether it's dragged the rows.
 static struct {
 	bool down, moved;
-	int y, scroll;
+	int x, y, scroll;
 } drag;
 // The rows' height as last drawn.
 static int lastRowH;
@@ -656,6 +656,15 @@ static void hintDo(enum HintAction action, int way) {
 	}
 }
 
+// The row under p is selected, as the mouse or a finger moves over it.
+static void hover(SDL_Point p) {
+	for (int i = 0; i < shownCount; ++i) {
+		if (selectable(firstShown + i) && SDL_PointInRect(&p, &itemRects[i])) {
+			stack[depth - 1].selected = firstShown + i;
+		}
+	}
+}
+
 // A click at p: a hint's action, a tab, a key of the keyboard, or a row (a selected value's arrows
 // change it); the right button goes back.
 static void click(SDL_Point p, Uint8 button) {
@@ -909,25 +918,21 @@ bool uiEvent(const SDL_Event* event) {
 			held.dy = dy;
 		}
 		return true;
-	// The mouse selects the row it's over; a touch drags the rows, a row's height at a time, once
-	// it's moved a third of one.
+	// The mouse selects the row it's over; a touch that moves a quarter of a row any way is a drag,
+	// not a tap, and drags the rows a row's height at a time.
 	case SDL_MOUSEMOTION:
 		if (event->motion.which == SDL_TOUCH_MOUSEID) {
-			int const dy = event->motion.y - drag.y;
-			if (drag.down && !entry.open && lastRowH > 0) {
-				drag.moved |= abs(dy) > lastRowH / 3;
-				if (drag.moved) {
-					stack[depth - 1].scroll = drag.scroll - (dy + (dy < 0 ? -lastRowH / 2 : lastRowH / 2)) / lastRowH;
-					viewHeld = true;
-				}
+			int const dx = event->motion.x - drag.x, dy = event->motion.y - drag.y;
+			if (drag.down && lastRowH > 0) {
+				drag.moved |= abs(dx) > lastRowH / 4 || abs(dy) > lastRowH / 4;
 			}
-		} else if (!entry.open) {
-			for (int i = 0; i < shownCount; ++i) {
-				SDL_Point const p = { event->motion.x, event->motion.y };
-				if (selectable(firstShown + i) && SDL_PointInRect(&p, &itemRects[i])) {
-					stack[depth - 1].selected = firstShown + i;
-				}
+			if (drag.down && drag.moved && !entry.open) {
+				stack[depth - 1].scroll = drag.scroll - (dy + (dy < 0 ? -lastRowH / 2 : lastRowH / 2)) / lastRowH;
+				viewHeld = true;
 			}
+		}
+		if (!entry.open && (event->motion.which != SDL_TOUCH_MOUSEID || drag.down)) {
+			hover((SDL_Point) { event->motion.x, event->motion.y });
 		}
 		return true;
 	// A touch scrolls the rows as it drags, and clicks where it lifts if it didn't.
@@ -935,8 +940,12 @@ bool uiEvent(const SDL_Event* event) {
 		if (event->button.which == SDL_TOUCH_MOUSEID && event->button.button == SDL_BUTTON_LEFT) {
 			drag.down = true;
 			drag.moved = false;
+			drag.x = event->button.x;
 			drag.y = event->button.y;
 			drag.scroll = stack[depth - 1].scroll;
+			if (!entry.open) {
+				hover((SDL_Point) { drag.x, drag.y });
+			}
 		} else {
 			click((SDL_Point) { event->button.x, event->button.y }, event->button.button);
 		}
