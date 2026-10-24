@@ -8,15 +8,16 @@
 
 // armGBA's LCD Grid for RetroArch, as the standalone frontend draws it: the gaps between the
 // console screen's pixels, and the shadow the first Game Boy's and the Pocket's pixels cast on the
-// reflector behind them. A gap is centered on the edge between two pixels; an output pixel takes the
-// gap's color by how much of it the gap covers, across (between columns) and down (between rows). The
-// Color's and Advance's gaps are black. The Game Boy screens' colors are each pixel seen with the
-// gaps around it, so Keep the Screen's Brightness sets each pixel, and beside the darkest ones the
-// gaps, until each square averages its color, in linear light (libretro/lcd.c's libretroLcdKeep has
-// the gaps' colors); on the Color and the Advance the gaps lighten beside their brightest colors. The shadow
-// darkens the screen 1.4 dots from each pixel the chosen way, softly, by up to Shadow at a pixel as
-// dark as the screen goes, counting from the unlit screen's color. The presets beside this hold each
-// screen's values, measured from photos of the consoles (see libretro/lcd.h).
+// reflector behind them. A gap is centered on the edge between two pixels; an output pixel takes
+// the gap's color by how much of it the gap covers, across (between columns) and down (between
+// rows). The Color's and Advance's gaps are black. The Game Boy screens' colors are each pixel seen
+// with the gaps around it, so Keep the Screen's Brightness sets each pixel, and beside the darkest
+// ones the gaps, until each square averages its color, in linear light (libretro/lcd.c's
+// libretroLcdKeep has the gaps' colors); on the Color and the Advance the gaps lighten beside their
+// brightest colors. The shadow darkens the screen 1.4 dots from each pixel the chosen way, softly,
+// by Shadow times how far the pixel's luminance in linear light is below the unlit screen's, black
+// all the way; each preset's Shadow makes its darkest shade cast a fifth. The presets beside this
+// hold each screen's values, measured from photos of the consoles (see libretro/lcd.h).
 
 layout(push_constant) uniform Push {
 	vec4 SourceSize;
@@ -100,8 +101,9 @@ vec3 fromLinear(vec3 l) {
 	return mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l));
 }
 
+// Luminance in linear light: the light a pixel keeps from the reflector.
 float level(vec3 c) {
-	return dot(c, vec3(2.0, 5.0, 1.0));
+	return dot(toLinear(c), vec3(0.2126, 0.7152, 0.0722));
 }
 
 void main() {

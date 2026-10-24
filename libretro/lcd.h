@@ -61,10 +61,24 @@ static const struct LibretroLcdLook libretroLcdLooks[] = {
 // The first Game Boy's and the Pocket's pixels' shadow on the reflector behind them: a pixel as dark
 // as the screen goes darkens it by a fifth (51 of 255), 1.4 dots away the way chosen (1 dot each way
 // on a diagonal), from a Reddit photo of a first Game Boy's screen and Brick Boy's model of it (a
-// shadow 1.35 dots away). Darkness counts from a sixteenth below the unlit screen's level, so the
-// lightest shade, about a twentieth darker than the unlit screen, casts none. The ways, up and on
+// shadow 1.35 dots away), so that is the screen's darkest shade's at the middle of its contrast wheel.
+// A pixel's darkness is how far its luminance in linear light, the light it keeps from the reflector,
+// is below a sixteenth under the unlit screen's: the first Game Boy's lightest shade, as bright as the
+// unlit screen, casts none, and darker shades, as the wheel turns up, cast more. The ways, up and on
 // clockwise.
 enum { LIBRETRO_LCD_SHADOW = 51 };
+
+// Each channel's share of an XRGB8888 color's luminance, in linear light, white 65535.
+extern uint16_t libretroLcdLuminance[3][256];
+
+static inline int libretroLcdLuminanceOf(uint32_t c) {
+	return libretroLcdLuminance[0][c >> 16 & 0xFF] + libretroLcdLuminance[1][c >> 8 & 0xFF] + libretroLcdLuminance[2][c & 0xFF];
+}
+
+// Where the shadow of a screen unlit as unlit starts, in luminance, and its scale: a pixel of
+// luminance y below start is (start - y) * scale >> 16 dark, LIBRETRO_LCD_SHADOW at the darkest shade.
+// Fills libretroLcdLuminance.
+void libretroLcdShadowFrom(uint32_t unlit, uint32_t darkest, int* start, int* scale);
 
 // Whether the screen's pixels cast that shadow: the first Game Boy's and the Pocket's, lit from the
 // front, but not the Light's, lit from behind.

@@ -757,6 +757,10 @@ uint32_t libretroGbShade(int shade) {
 	return (uint32_t) shown[shade];
 }
 
+uint32_t libretroGbDarkestColor(void) {
+	return screens[screen].shades[3];
+}
+
 uint32_t libretroGbOffColor(void) {
 	return screens[screen].off;
 }

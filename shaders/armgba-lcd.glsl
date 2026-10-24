@@ -136,8 +136,9 @@ vec3 fromLinear(vec3 l) {
 	return mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l));
 }
 
+// Luminance in linear light: the light a pixel keeps from the reflector.
 float level(vec3 c) {
-	return dot(c, vec3(2.0, 5.0, 1.0));
+	return dot(toLinear(c), vec3(0.2126, 0.7152, 0.0722));
 }
 
 void main() {

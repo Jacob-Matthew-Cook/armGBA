@@ -9,6 +9,7 @@
 // from the menu.
 
 #include "frontend.h"
+#include "gb.h"
 #include "lcd.h"
 #include "games.h"
 #include "patch.h"
@@ -886,18 +887,18 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 		if (SDL_LockTexture(shadow, NULL, &pixels, &pitch) != 0) {
 			return;
 		}
-		// A pixel's darkness, from a sixteenth below the unlit screen, as an alpha: a fifth (51) at black.
-		// Game Boy pictures, the only ones with a shadow, are XRGB8888.
-		int const litLevel = 2 * (lit >> 16 & 0xFF) + 5 * (lit >> 8 & 0xFF) + (lit & 0xFF), start = litLevel - litLevel / 16;
-		int const scale = start ? (LIBRETRO_LCD_SHADOW << 16) / start : 0;
+		// A pixel's darkness as an alpha (lcd.h). Game Boy pictures, the only ones with a shadow, are
+		// XRGB8888.
+		int start, scale;
+		libretroLcdShadowFrom(lit, libretroGbDarkestColor(), &start, &scale);
 		for (int y = 0; y < app.gameHeight; ++y) {
 			const uint32_t* const row = (const uint32_t*) (app.picture + y * app.picturePitch);
 			uint32_t* const out = (uint32_t*) ((uint8_t*) pixels + y * pitch);
 			for (int x = 0; x < app.gameWidth; ++x) {
 				uint32_t const c = row[x];
-				int const level = 2 * (int) (c >> 16 & 0xFF) + 5 * (int) (c >> 8 & 0xFF) + (int) (c & 0xFF);
-				int const dark = level < start ? (start - level) * scale >> 16 : 0;
-				out[x] = (uint32_t) dark << 24;
+				int const level = libretroLcdLuminanceOf(c);
+				int const dark = level < start ? (int) ((int64_t) (start - level) * scale >> 16) : 0;
+				out[x] = (uint32_t) (dark < 255 ? dark : 255) << 24;
 			}
 		}
 		SDL_UnlockTexture(shadow);

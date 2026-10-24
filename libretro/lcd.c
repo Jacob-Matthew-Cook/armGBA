@@ -59,6 +59,23 @@ bool lcdCastsShadow(void) {
 	return screenKind() != SCREEN_TFT;
 }
 
+uint16_t libretroLcdLuminance[3][256];
+
+void libretroLcdShadowFrom(uint32_t unlit, uint32_t darkest, int* start, int* scale) {
+	if (!libretroLcdLuminance[1][255]) {
+		static const float weights[3] = { 0.2126f, 0.7152f, 0.0722f };
+		for (int v = 0; v < 256; ++v) {
+			float const c = v / 255.0f, l = c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+			for (int k = 0; k < 3; ++k) {
+				libretroLcdLuminance[k][v] = (uint16_t) floorf(l * weights[k] * 65535);
+			}
+		}
+	}
+	int const lit = libretroLcdLuminanceOf(unlit), range = lit - lit / 16 - libretroLcdLuminanceOf(darkest);
+	*start = lit - lit / 16;
+	*scale = range > 0 ? (LIBRETRO_LCD_SHADOW << 16) / range : 0;
+}
+
 bool libretroLcdShadow(void) {
 	return screenKind() != SCREEN_TFT && gbShades != 3;
 }
@@ -610,29 +627,14 @@ static void runJobs(void (*job)(int index)) {
 	}
 }
 
-// Each pixel's darkness, in a row of count XRGB8888 pixels: 0 down to start, then rising by scale
-// / 65536 a level; returns whether any is dark.
+// Each pixel's darkness, in a row of count XRGB8888 pixels: 0 down to start, in luminance, then rising
+// by scale / 65536 a level; returns whether any is dark.
 static bool gridDarkRow(const uint32_t* row, uint8_t* to, unsigned count, int start, int scale) {
-	GridU32 const starts = (GridU32) { 0 } + (uint32_t) start, scales = (GridU32) { 0 } + (uint32_t) scale;
-	GridU32 seen = { 0 };
-	unsigned x = 0;
-	for (; x + GRID_LANES32 <= count; x += GRID_LANES32) {
-		GridU32 c;
-		memcpy(&c, row + x, sizeof(c));
-		GridU32 const level = (c >> 16 & 0xFF) * 2 + (c >> 8 & 0xFF) * 5 + (c & 0xFF);
-		GridU32 const dark = (GridU32) (level < starts) & ((starts - level) * scales >> 16);
-		GridBytes32 const bytes = __builtin_convertvector(dark, GridBytes32);
-		memcpy(to + x, &bytes, sizeof(bytes));
-		seen |= dark;
-	}
 	bool any = false;
-	for (int i = 0; i < GRID_LANES32; ++i) {
-		any |= seen[i] != 0;
-	}
-	for (; x < count; ++x) {
-		uint32_t const c = row[x];
-		int const level = 2 * (int) (c >> 16 & 0xFF) + 5 * (int) (c >> 8 & 0xFF) + (int) (c & 0xFF);
-		to[x] = (uint8_t) (level < start ? (start - level) * scale >> 16 : 0);
+	for (unsigned x = 0; x < count; ++x) {
+		int const level = libretroLcdLuminanceOf(row[x]);
+		int const dark = level < start ? (int) ((int64_t) (start - level) * scale >> 16) : 0;
+		to[x] = (uint8_t) (dark < 255 ? dark : 255);
 		any |= to[x] != 0;
 	}
 	return any;
@@ -853,10 +855,7 @@ void sendPicture(const void* picture, unsigned width, unsigned height, size_t pi
 	gridFrame = (struct GridFrame) { .picture = picture, .width = width, .height = height, .pitch = pitch, .bytes = bytes, .s = s,
 		                             .gap = kept ? gridKept.gap : gap, .kept = kept, .shadow = shadow };
 	if (shadow) {
-		// Darkness counts from a sixteenth below the unlit screen; it is a fifth (51 of 255) at black.
-		int const lit = 2 * (int) (gap >> 16 & 0xFF) + 5 * (int) (gap >> 8 & 0xFF) + (int) (gap & 0xFF);
-		gridFrame.start = lit - lit / 16;
-		gridFrame.scale = gridFrame.start ? (LIBRETRO_LCD_SHADOW << 16) / gridFrame.start : 0;
+		libretroLcdShadowFrom(gap, libretroGbDarkestColor(), &gridFrame.start, &gridFrame.scale);
 		int const way = gridWay - 1;
 		float const reach = libretroLcdReach(way);
 		float const x = -libretroLcdWays[way][0] * reach, y = -libretroLcdWays[way][1] * reach;

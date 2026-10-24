@@ -59,6 +59,8 @@ void libretroGbSetContrast(int);
 uint32_t libretroGbShade(int shade);
 // That screen's color while the game has it off, as XRGB8888.
 uint32_t libretroGbOffColor(void);
+// That screen's darkest shade at the middle of its contrast wheel, as XRGB8888.
+uint32_t libretroGbDarkestColor(void);
 // Whether the game runs as on a Game Boy Advance, which shows it on its own larger screen.
 bool libretroGbOnAdvance(void);
 // Runs a frame with the pressed buttons as KEYINPUT bits. Returns the picture in XRGB8888 and the
