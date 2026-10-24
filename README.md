@@ -227,7 +227,7 @@ mGBA's SDL frontend scales a stick.
 **Game Boy and Game Boy Color.** Gambatte-Speedrun's core (`gambatte/`), plus mappers for unlicensed
 cartridges: Sachen, TAMA5, MBC6, MBC7, Vast Fame, and the BBD, Hitek, Sintax, Li Cheng, NT and Makon
 families. The Game Boy and Game Boy Pocket screens are BGB's measurements of real ones
-(bgb.bircd.org/reality); the Light's is the Pocket's lit by a teal backlight, its color from photos
+(bgb.bircd.org/reality); the Light's is the Pocket's lit by a cyan backlight, its color and contrast from photos
 of real ones; Grayscale is gambatte-libretro's. The Game Boy Color and Game Boy Advance color
 correction is SameBoy's. The boot ROMs built in are armGBA's own.
 

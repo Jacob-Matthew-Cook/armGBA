@@ -940,7 +940,7 @@ static void present(void) {
 		to.y = (height - to.h) / 2;
 		makeOverlay(to);
 		uint32_t lit = 0;
-		enum LibretroLcd const lcd = libretroLcd(&lit);
+		libretroLcd(&lit);
 		bool const keeping = overlay && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 && libretroLcdKeep(&overlayKeep);
 		if (keeping ? !gameKept || gameKeptStale || gameKeptSolved != overlayKeep.solved : gameKept) {
 			uploadGame(keeping);
@@ -951,8 +951,7 @@ static void present(void) {
 			SDL_SetTextureColorMod(overlay, gap >> 16 & 0xFF, gap >> 8 & 0xFF, gap & 0xFF);
 			SDL_RenderCopy(app.renderer, overlay, NULL, &to);
 		}
-		if (overlay && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 &&
-		    (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
+		if (overlay && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 && libretroLcdShadow()) {
 			drawShadow(to, lit);
 		}
 	}

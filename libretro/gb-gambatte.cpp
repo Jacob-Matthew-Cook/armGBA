@@ -443,9 +443,12 @@ void correctedColors(bool advance) {
 // model's and the Pocket's are BGB's (bgb.bircd.org/reality): real ones photographed under
 // color-accurate light and corrected with a ColorChecker. A first Game Boy's pixels go toward dark
 // blue at the most contrast, as in BGB's contrast wheel; the Pocket's only darker. The Light is the
-// Pocket's screen lit from behind: light crosses it once rather than twice, so each shade passes the
-// square root of the Pocket's share of the screen switched off, in the backlight's teal (hue 170, the
-// middle of photographed Lights, which run from about 157 to 180).
+// Pocket's screen lit from behind, in the backlight's cyan (hue 180; photographed Lights run from
+// about 157 to 191). A Light photographed with its light off and on, the contrast wheel unchanged,
+// shows each shade's share of the lightest when lit as about the unlit share to the power 0.85, so
+// each color here is the Pocket's share of its lightest shade to that power. The lightest shade
+// passes the square root of the Pocket's share of the screen switched off: light crosses the screen
+// once rather than twice.
 struct Screen {
 	unsigned long off;
 	unsigned long shades[4];
@@ -455,7 +458,7 @@ const Screen screens[4] = {
 	{ 0xFFFFFF, { 0xFFFFFF, 0xA5A5A5, 0x525252, 0x000000 }, 0x000000 },
 	{ 0x948A04, { 0x759833, 0x588F51, 0x3B7560, 0x2E615A }, 0x00005E },
 	{ 0xC2CFA8, { 0xADBF92, 0x96A67C, 0x727E64, 0x5A635C }, 0x2C322E },
-	{ 0x5EEBD3, { 0x5AE1CA, 0x53D2BC, 0x48B8A5, 0x3FA493 }, 0x2C786B },
+	{ 0x60F1F1, { 0x59DFDF, 0x4EC6C6, 0x3C9E9E, 0x308383 }, 0x194B4B },
 };
 
 void setColors() {

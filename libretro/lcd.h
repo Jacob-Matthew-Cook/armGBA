@@ -64,6 +64,10 @@ static const struct LibretroLcdLook libretroLcdLooks[] = {
 // lightest shade, about a twentieth darker than the unlit screen, casts none. The ways, up and on
 // clockwise.
 enum { LIBRETRO_LCD_SHADOW = 51 };
+
+// Whether the screen's pixels cast that shadow: the first Game Boy's and the Pocket's, lit from the
+// front, but not the Light's, lit from behind.
+bool libretroLcdShadow(void);
 static const int8_t libretroLcdWays[8][2] = { { 0, -1 }, { 1, -1 }, { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 } };
 
 static inline float libretroLcdReach(int way) {

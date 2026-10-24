@@ -10,6 +10,7 @@
 
 #include "core.h"
 #include "gba.h"
+#include "lcd.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,7 +78,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  "Colors as the Game Boy Color's screen showed them. Not used for games running on an original Game Boy.", NULL, "video",
 	  { { "disabled", "Off" }, { "enabled", "On" }, { NULL, NULL } }, "disabled" },
 	{ "armgba_gb_screen", "Game Boy Screen", NULL,
-	  "The colors original Game Boy games are shown in: plain grays, the first model's and the Pocket's, measured from real ones, or the Light's lit by its teal backlight.", NULL, "video",
+	  "The colors original Game Boy games are shown in: plain grays, the first model's and the Pocket's, measured from real ones, or the Light's lit by its cyan backlight.", NULL, "video",
 	  { { "grayscale", "Grayscale" }, { "measured", "Game Boy" }, { "pocket measured", "Game Boy Pocket" }, { "light", "Game Boy Light (Backlit)" }, { NULL, NULL } },
 	  "grayscale" },
 	{ "armgba_gb_contrast", "Game Boy Contrast", NULL,
@@ -281,7 +282,7 @@ bool showOptions(void) {
 		{ "armgba_skip_bios", !gameBoy },
 		{ "armgba_bios", !gameBoy },
 		{ "armgba_threaded_video", !gameBoy },
-		{ "armgba_lcd_shadow", lcdCastsShadow() && !optionIs("armgba_lcd_grid", "disabled") },
+		{ "armgba_lcd_shadow", libretroLcdShadow() && !optionIs("armgba_lcd_grid", "disabled") },
 		{ "armgba_color_correction", !gameBoy },
 		{ "armgba_solar_sensor", !gameBoy && (!advance || devices & HW_LIGHT_SENSOR) },
 		{ "armgba_gb_tilt", (!gameBoy && !advance) || devices & (HW_TILT | HW_GYRO) || (gameBoy && tiltCartridge) },

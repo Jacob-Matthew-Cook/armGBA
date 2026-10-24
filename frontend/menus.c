@@ -777,9 +777,7 @@ static void shadersMenu(void) {
 	addValue("LCD Grid", onOff(settings.gpuGrid), changeSetting, SET_GPU_GRID);
 	helpFor("Draws the gaps between the console screen's pixels at any size, fainter the smaller it is. On a small screen, "
 	        "the CPU's at 2x with Integer Scaling looks cleanest.");
-	uint32_t gap;
-	enum LibretroLcd const lcd = libretroLcd(&gap);
-	if (settings.gpuGrid && (!app.loaded || lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
+	if (settings.gpuGrid && (!app.loaded || libretroLcdShadow())) {
 		static const char* const shadows[9] = { "Off", "Up", "Up Right", "Right", "Down Right", "Down", "Down Left", "Left", "Up Left" };
 		addValue("Game Boy Pixel Shadow", shadows[settings.shadow], changeSetting, SET_SHADOW);
 		helpFor("On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls.");

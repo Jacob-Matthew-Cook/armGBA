@@ -59,6 +59,10 @@ bool lcdCastsShadow(void) {
 	return screenKind() != SCREEN_TFT;
 }
 
+bool libretroLcdShadow(void) {
+	return screenKind() != SCREEN_TFT && gbShades != 3;
+}
+
 enum LibretroLcd libretroLcd(uint32_t* gap) {
 	int const kind = screenKind();
 	*gap = kind == SCREEN_TFT ? 0 : libretroGbOffColor();
@@ -740,7 +744,7 @@ void sendPicture(const void* picture, unsigned width, unsigned height, size_t pi
 	uint32_t gap;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
 	bool const kept = bytes == 4 && lcd != LIBRETRO_LCD_ADVANCE;
-	bool const shadow = gridWay && bytes == 4 && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET);
+	bool const shadow = gridWay && bytes == 4 && libretroLcdShadow();
 	bool const room = gridReserve(&gridOut, outPitch * outHeight) && gridReserve(&gridBlends, (size_t) GRID_JOBS * GRID_SHARES_MAX * width * bytes) &&
 	                  gridReserve(&gridTemplates, (size_t) GRID_JOBS * 8 * outPitch) && (!kept || gridReserve(&gridKeptRows, (size_t) GRID_JOBS * width * 4)) &&
 	                  (!shadow || (gridReserve(&gridDark, (size_t) (width + 16) * (height + 4)) &&
