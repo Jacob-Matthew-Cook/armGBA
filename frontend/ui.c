@@ -85,6 +85,23 @@ static struct {
 	bool hotkey;
 } capture;
 
+// The footer's hints. Each has a slot as wide as its controller or keyboard form, so switching
+// between them moves nothing, and a click or a tap on one does what it says as it was last drawn: on
+// Change, Tabs and Letter, the left half goes back and the right half on.
+enum HintAction { HINT_SELECT, HINT_BACK, HINT_CHANGE, HINT_TABS, HINT_LETTER, HINT_TYPE, HINT_DELETE, HINT_CANCEL, HINT_DONE, HINT_PASTE };
+struct Hint {
+	const char* button;
+	bool round;
+	const char* key;
+	const char* buttonLabel;
+	const char* keyLabel;
+	enum HintAction action, keyAction;
+};
+enum { HINTS_MOST = 5 };
+static SDL_Rect hintRects[HINTS_MOST];
+static enum HintAction hintActions[HINTS_MOST];
+static int hintCount;
+
 // A controller's held direction, for repeats.
 static struct {
 	int dx, dy;
@@ -538,6 +555,53 @@ static int menuButton(int button) {
 	return button == BUTTON_A ? SDL_CONTROLLER_BUTTON_B : SDL_CONTROLLER_BUTTON_A;
 }
 
+// The clipboard's text added to what's typed, if it fits.
+static void entryPaste(void) {
+	char* clip = SDL_GetClipboardText();
+	if (clip && strlen(entry.text) + strlen(clip) < sizeof(entry.text)) {
+		strcat(entry.text, clip);
+	}
+	SDL_free(clip);
+}
+
+// What a footer hint does when it's clicked or tapped; way is which half, -1 or 1.
+static void hintDo(enum HintAction action, int way) {
+	switch (action) {
+	case HINT_SELECT:
+		confirm();
+		break;
+	case HINT_BACK:
+		back();
+		break;
+	case HINT_CHANGE:
+		activate(way);
+		break;
+	case HINT_TABS:
+		moveTab(way);
+		break;
+	case HINT_LETTER:
+		browserJump(way);
+		break;
+	case HINT_TYPE:
+		entryType();
+		break;
+	case HINT_DELETE:
+		if (entry.text[0]) {
+			entry.text[strlen(entry.text) - 1] = '\0';
+		}
+		break;
+	case HINT_CANCEL:
+		closeEntry(false);
+		break;
+	case HINT_DONE:
+		closeEntry(true);
+		break;
+	case HINT_PASTE:
+		entryPaste();
+		break;
+	}
+}
+
 // An event while the menus are open or a binding is waited for; returns whether it was used.
 bool uiEvent(const SDL_Event* event) {
 	if (event->type == SDL_CONTROLLERBUTTONDOWN || (event->type == SDL_CONTROLLERAXISMOTION && abs(event->caxis.value) > 20000)) {
@@ -599,11 +663,7 @@ bool uiEvent(const SDL_Event* event) {
 				entryMove(code == SDL_SCANCODE_RIGHT ? 1 : code == SDL_SCANCODE_LEFT ? -1 : 0,
 				          code == SDL_SCANCODE_DOWN ? 1 : code == SDL_SCANCODE_UP ? -1 : 0);
 			} else if (code == SDL_SCANCODE_V && (event->key.keysym.mod & KMOD_CTRL)) {
-				char* clip = SDL_GetClipboardText();
-				if (clip && strlen(entry.text) + strlen(clip) < sizeof(entry.text)) {
-					strcat(entry.text, clip);
-				}
-				SDL_free(clip);
+				entryPaste();
 			}
 			return true;
 		}
@@ -752,6 +812,12 @@ bool uiEvent(const SDL_Event* event) {
 		return true;
 	case SDL_MOUSEBUTTONDOWN: {
 		SDL_Point const p = { event->button.x, event->button.y };
+		for (int i = 0; i < hintCount && event->button.button == SDL_BUTTON_LEFT; ++i) {
+			if (SDL_PointInRect(&p, &hintRects[i])) {
+				hintDo(hintActions[i], p.x < hintRects[i].x + hintRects[i].w / 2 ? -1 : 1);
+				return true;
+			}
+		}
 		if (event->button.button == SDL_BUTTON_RIGHT) {
 			back();
 		// A click on the keyboard types the key.
@@ -829,10 +895,15 @@ static int hintHeight(int u) {
 	return u * 5 / 4;
 }
 
+static int badgeWidth(int u, const char* label, bool round) {
+	int const h = hintHeight(u);
+	return round ? h : SDL_max(h, textWidth(FACE_STRONG, u * 7 / 10, label) + u * 2 / 3);
+}
+
 static int drawBadge(int x, int y, int u, const char* label, bool round) {
 	int const size = u * 7 / 10, h = hintHeight(u);
 	int const tw = textWidth(FACE_STRONG, size, label);
-	int const w = round ? h : SDL_max(h, tw + u * 2 / 3);
+	int const w = badgeWidth(u, label, round);
 	fillRounded((SDL_Rect) { x, y, w, h }, round ? h / 2 : u / 4, keyFill);
 	textDraw(FACE_STRONG, size, x + (w - tw) / 2, y + (h - size) / 2, white, label);
 	return w;
@@ -844,6 +915,23 @@ static int drawHint(int x, int y, int u, const char* badge, bool round, const ch
 	x += drawBadge(x, y, u, badge, round) + u / 3;
 	x += textDraw(FACE_BODY, size, x, y + (h - size) / 2, helpText, label);
 	return x + u;
+}
+
+
+static int hintWidth(int u, const char* badge, bool round, const char* label) {
+	return badgeWidth(u, badge, round) + u / 3 + textWidth(FACE_BODY, u * 17 / 20, label);
+}
+
+static void drawHints(int x, int y, int u, const struct Hint* hints, int count) {
+	hintCount = 0;
+	for (int i = 0; i < count && i < HINTS_MOST; ++i) {
+		const struct Hint* const h = &hints[i];
+		int const slot = SDL_max(hintWidth(u, h->button, h->round, h->buttonLabel), hintWidth(u, h->key, false, h->keyLabel));
+		drawHint(x, y, u, lastInputPad ? h->button : h->key, lastInputPad && h->round, lastInputPad ? h->buttonLabel : h->keyLabel);
+		hintRects[hintCount] = (SDL_Rect) { x, y, slot, hintHeight(u) };
+		hintActions[hintCount++] = lastInputPad ? h->action : h->keyAction;
+		x += slot + u;
+	}
 }
 
 // The header's height: room for ARMGBA, the tabs and where you are.
@@ -1023,16 +1111,13 @@ static void drawEntry(int width, int height, int u) {
 	}
 	int x = panel.x + u + u / 2;
 	y = drawFooter(panel, u);
-	if (lastInputPad) {
-		x = drawHint(x, y, u, "A", true, "Type");
-		x = drawHint(x, y, u, "X", true, "Delete");
-		x = drawHint(x, y, u, "B", true, "Cancel");
-		drawHint(x, y, u, "Start", false, "Done");
-	} else {
-		x = drawHint(x, y, u, "Enter", false, "Done");
-		x = drawHint(x, y, u, "Esc", false, "Cancel");
-		drawHint(x, y, u, "Ctrl+V", false, "Paste");
-	}
+	static const struct Hint keyboardHints[] = {
+		{ "A", true, "Enter", "Type", "Done", HINT_TYPE, HINT_DONE },
+		{ "X", true, "Bksp", "Delete", "Delete", HINT_DELETE, HINT_DELETE },
+		{ "B", true, "Esc", "Cancel", "Cancel", HINT_CANCEL, HINT_CANCEL },
+		{ "Start", false, "Ctrl+V", "Done", "Paste", HINT_DONE, HINT_PASTE },
+	};
+	drawHints(x, y, u, keyboardHints, 4);
 }
 
 // Asks for the key or button to bind, over the menu.
@@ -1229,33 +1314,21 @@ static void drawMenu(int width, int height, int u) {
 	// The footer's hints, for a controller or the keyboard, whichever was used last.
 	bool const adjustable = selectable(m->selected) && items[m->selected].adjustable;
 	const char* backLabel = depth > 1 ? "Back" : app.loaded ? "Close" : NULL;
-	if (lastInputPad) {
-		x = drawHint(x, y, u, "A", true, "Select");
-		if (backLabel) {
-			x = drawHint(x, y, u, "B", true, backLabel);
-		}
-		if (adjustable) {
-			x = drawHint(x, y, u, "\xE2\x80\xB9 \xE2\x80\xBA", false, "Change");
-		}
-		if (inBrowser()) {
-			drawHint(x, y, u, "L R", false, "Letter");
-		} else if (depth == 1) {
-			drawHint(x, y, u, "L R", false, "Tabs");
-		}
-	} else {
-		x = drawHint(x, y, u, "Enter", false, "Select");
-		if (backLabel) {
-			x = drawHint(x, y, u, "Esc", false, backLabel);
-		}
-		if (adjustable) {
-			x = drawHint(x, y, u, "\xE2\x86\x90 \xE2\x86\x92", false, "Change");
-		}
-		if (inBrowser()) {
-			drawHint(x, y, u, "A-Z", false, "Find");
-		} else if (depth == 1) {
-			drawHint(x, y, u, "Q E", false, "Tabs");
-		}
+	struct Hint hints[HINTS_MOST];
+	int count = 0;
+	hints[count++] = (struct Hint) { "A", true, "Enter", "Select", "Select", HINT_SELECT, HINT_SELECT };
+	if (backLabel) {
+		hints[count++] = (struct Hint) { "B", true, "Esc", backLabel, backLabel, HINT_BACK, HINT_BACK };
 	}
+	if (adjustable) {
+		hints[count++] = (struct Hint) { "\xE2\x80\xB9 \xE2\x80\xBA", false, "\xE2\x86\x90 \xE2\x86\x92", "Change", "Change", HINT_CHANGE, HINT_CHANGE };
+	}
+	if (inBrowser()) {
+		hints[count++] = (struct Hint) { "L R", false, "A-Z", "Letter", "Find", HINT_LETTER, HINT_LETTER };
+	} else if (depth == 1) {
+		hints[count++] = (struct Hint) { "L R", false, "Q E", "Tabs", "Tabs", HINT_TABS, HINT_TABS };
+	}
+	drawHints(x, y, u, hints, count);
 }
 
 // The menus, or the keyboard, over the dimmed game; then the frame rate and messages over everything.
