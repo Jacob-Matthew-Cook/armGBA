@@ -462,9 +462,10 @@ void setColors() {
 	s->gb->setDmgPaletteColor(0, 4, now.off);
 	// The wheel sets the drive voltages of the whole STN screen together (DMG-LCD-06: its 30k pot sets
 	// the IR3E02's bias levels), from about -11 V to -14 V end to end, so 12% either side of the
-	// middle, each step a tenth of the turn. An STN pixel's darkness is an S-curve of its voltage, 10%
-	// to 90% dark over about 12% of it, so the wheel sweeps nearly the whole curve: down, the screen
-	// fades to blank; up, it goes past the darkest shade. A shade's darkness places it on its
+	// middle, each step a tenth of the turn. An STN pixel's darkness is an S-curve of its voltage, as
+	// steep as BGB's contrast wheel shows: all the way down the screen is blank, and all the way up
+	// even the lightest shade is nearly as dark as it goes, 10% to 90% dark over about 7% of the
+	// voltage. A shade's darkness places it on its
 	// screen's own path, from the screen switched off through the four shades to its darkest, so
 	// its color changes along the way as a real screen's does: the lightest a little past the screen
 	// switched off, the others by their brightness, the darkest nine tenths of the way.
@@ -476,7 +477,7 @@ void setColors() {
 		auto const luminance = [&](unsigned long color) {
 			return 0.2126 * linear(color, 16) + 0.7152 * linear(color, 8) + 0.0722 * linear(color, 0);
 		};
-		double const width = 0.12 / (2 * std::log(9.0)), lightest = 0.03, darkest = 0.95;
+		double const lightest = 0.03, darkest = 0.95, width = 0.12 / (std::log((1 - lightest) / lightest) * 2.12);
 		unsigned long const path[6] = { now.off, now.shades[0], now.shades[1], now.shades[2], now.shades[3], now.full };
 		double places[6] = { 0, lightest, 0, 0, darkest, 1 };
 		double const top = luminance(now.shades[0]), bottom = luminance(now.shades[3]);
