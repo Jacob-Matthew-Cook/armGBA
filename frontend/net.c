@@ -17,6 +17,7 @@
 // a check of the state every few seconds; a player whose state differs is sent the host's again.
 
 #include "frontend.h"
+#include "link.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -764,6 +765,7 @@ bool netHost(bool together) {
 	netTogether = together;
 	netMode = NET_HOSTING;
 	self = 0;
+	libretroSetNetplayPlayer(self);
 	resetSync();
 	if (linkMode(together ? "together" : "separate")) {
 		osd(together ? "Restarted with every player's console" : "Restarted for the link cable");
@@ -875,6 +877,7 @@ void netStop(void) {
 	restoreOptions();
 	netMode = NET_OFF;
 	netTogether = false;
+	libretroSetNetplayPlayer(-1);
 	setStatus();
 }
 
@@ -1041,6 +1044,7 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 	}
 	netTogether = p[0];
 	self = p[1];
+	libretroSetNetplayPlayer(self);
 	if (netTogether && gameCrc() != get32(p + 4) && !loadHostGame(game, get32(p + 4))) {
 		osd("Netplay: you need %s to join", game);
 		netStop();

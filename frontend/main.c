@@ -423,10 +423,17 @@ static void makeGameTexture(unsigned width, unsigned height) {
 	app.gameHeight = height;
 }
 
+// Frames the core has drawn, for the frame rate shown.
+static unsigned framesDrawn;
+
 // The core's picture: to the game's texture, and kept for screenshots and the pixel shadow.
 static void videoRefresh(const void* data, unsigned width, unsigned height, size_t pitch) {
 	// No picture: the last one stays. While a frame is run again, nothing is shown.
-	if (!data || !(app.avEnable & RETRO_AV_ENABLE_VIDEO)) {
+	if (!(app.avEnable & RETRO_AV_ENABLE_VIDEO)) {
+		return;
+	}
+	++framesDrawn;
+	if (!data) {
 		return;
 	}
 	if (!app.game || (int) width != app.gameWidth || (int) height != app.gameHeight || pitch != app.picturePitch) {
@@ -1411,7 +1418,7 @@ int main(int argc, char** argv) {
 	double const frameTicks = frequency / FRAME_RATE;
 	Uint64 last = SDL_GetPerformanceCounter(), fpsSince = last;
 	double owed = 0;
-	unsigned frame = 0, fpsFrames = 0;
+	unsigned frame = 0, fpsFrames = framesDrawn;
 	app.running = true;
 	while (app.running) {
 		SDL_Event event;
@@ -1456,10 +1463,10 @@ int main(int argc, char** argv) {
 				runFrames();
 			}
 		}
-		fpsFrames += due;
+		// The frames drawn, not the passes here: netplay's waits and rollbacks draw none.
 		if (now - fpsSince > frequency) {
-			app.fps = fpsFrames * (double) frequency / (now - fpsSince);
-			fpsFrames = 0;
+			app.fps = (framesDrawn - fpsFrames) * (double) frequency / (now - fpsSince);
+			fpsFrames = framesDrawn;
 			fpsSince = now;
 		}
 		present();

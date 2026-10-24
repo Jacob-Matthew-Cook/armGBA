@@ -1659,9 +1659,16 @@ static void readRestarts(const uint16_t keys[]) {
 	}
 }
 
+static int netplayPlayer = -1;
+
+void libretroSetNetplayPlayer(int player) {
+	netplayPlayer = player;
+}
+
 // R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. Each device
-// shows the screens its own way: in netplay only this device's player changes them, the host's
-// player 1 or a joined device's player 2, as RetroArch doesn't say which player is here.
+// shows the screens its own way: in netplay only this device's player changes them. The standalone
+// frontend says which that is; in RetroArch's netplay it is the host's player 1 or a joined device's
+// player 2, as RetroArch doesn't say.
 static void readScreensKeys(void) {
 	static bool held[MAX_PLAYERS][2];
 	if (rerunning()) {
@@ -1680,7 +1687,7 @@ static void readScreensKeys(void) {
 	for (int i = 0; i < count; ++i) {
 		at = ways[i] == screens ? i : at;
 	}
-	int const here = netplayJoined ? 1 : 0;
+	int const here = netplayPlayer >= 0 ? netplayPlayer : netplayJoined ? 1 : 0;
 	int step = 0;
 	for (int port = 0; port < playersHere; ++port) {
 		if (netplaySeen && port != here) {

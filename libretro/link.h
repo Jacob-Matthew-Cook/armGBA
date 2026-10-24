@@ -24,6 +24,9 @@ struct RfuAir;
 
 // Offers the frontend the netpacket interface.
 void linkSetEnvironment(retro_environment_t);
+// This device's player in the standalone frontend's netplay, which RetroArch's doesn't say; -1 when
+// not in it.
+void libretroSetNetplayPlayer(int player);
 // The loaded console: a Game Boy Advance, a Game Boy (gba NULL), or none.
 void linkSetGba(struct GBA*);
 void linkSetGameBoy(bool loaded);
