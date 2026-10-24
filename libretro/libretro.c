@@ -171,6 +171,8 @@ static int screens;
 static int screensOption = -1;
 // The L2 Button option: fast-forward, or the previous screens.
 static bool l2FastForward = true;
+// Netplay Screens: every device showing the host's screens, or each its own.
+static bool hostsView;
 static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game: the choices offered, and the game running (empty for player 1's).
@@ -604,6 +606,7 @@ static void readOptions(void) {
 		{ "off", SWITCH_OFF },
 	};
 	switchController = optionChoice("armgba_switch_controller", switchChoices, COUNT(switchChoices), SWITCH_L_R_A_B);
+	hostsView = optionIs("armgba_netplay_screens", "host");
 	bool const fastForward = !optionIs("armgba_link_l2", "previous screens");
 	if (fastForward != l2FastForward) {
 		l2FastForward = fastForward;
@@ -1665,10 +1668,11 @@ void libretroSetNetplayPlayer(int player) {
 	netplayPlayer = player;
 }
 
-// R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. Each device
-// shows the screens its own way: in netplay only this device's player changes them. The standalone
-// frontend says which that is; in RetroArch's netplay it is the host's player 1 or a joined device's
-// player 2, as RetroArch doesn't say.
+// R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. In netplay,
+// with Netplay Screens on Own View, each device shows the screens its own way and only this device's
+// player changes them: the standalone frontend says which that is, and in RetroArch's netplay, which
+// doesn't, it is the host's player 1 or a joined device's player 2. On Host's View the host's player
+// 1 changes them on every device; a joining device takes the host's with its state.
 static void readScreensKeys(void) {
 	static bool held[MAX_PLAYERS][2];
 	if (rerunning()) {
@@ -1687,13 +1691,14 @@ static void readScreensKeys(void) {
 	for (int i = 0; i < count; ++i) {
 		at = ways[i] == screens ? i : at;
 	}
-	int const here = netplayPlayer >= 0 ? netplayPlayer : netplayJoined ? 1 : 0;
+	bool const netplay = netplaySeen || netplayPlayer >= 0;
+	int const here = hostsView ? 0 : netplayPlayer >= 0 ? netplayPlayer : netplayJoined ? 1 : 0;
 	int step = 0;
 	for (int port = 0; port < playersHere; ++port) {
-		if (netplaySeen && port != here) {
+		if (netplay && port != here) {
 			continue;
 		}
-		for (int k = netplaySeen || !l2FastForward ? 0 : 1; k < 2; ++k) {
+		for (int k = netplay || !l2FastForward ? 0 : 1; k < 2; ++k) {
 			bool const now = !switchStart(port) && inputState(port, RETRO_DEVICE_JOYPAD, 0, k ? RETRO_DEVICE_ID_JOYPAD_R2 : RETRO_DEVICE_ID_JOYPAD_L2);
 			if (now && !held[port][k]) {
 				step += k ? 1 : -1;
@@ -2333,8 +2338,9 @@ static bool loadConsoles(const void* data, size_t size) {
 //   rollback restarts a console on the same frame;
 // - the session's tag, which tells a device in netplay that it joined another's session.
 // A single-console state from before the tag still loads.
+// Together's: the restart buttons' hold, and the screens shown, for a device joining on Host's View.
 static size_t extraStateSize(void) {
-	return togetherRunning() ? sizeof(restartHeld) : 0;
+	return togetherRunning() ? sizeof(restartHeld) + 1 : 0;
 }
 
 size_t retro_serialize_size(void) {
@@ -2346,25 +2352,43 @@ bool retro_serialize(void* data, size_t size) {
 	if (size < retro_serialize_size() || !saveConsoles(data, consolesStateSize())) {
 		return false;
 	}
-	uint8_t* const at = (uint8_t*) data + consolesStateSize();
-	memcpy(at, restartHeld, extraStateSize());
-	memcpy(at + extraStateSize(), &sessionTag, sizeof(sessionTag));
+	uint8_t* at = (uint8_t*) data + consolesStateSize();
+	if (togetherRunning()) {
+		memcpy(at, restartHeld, sizeof(restartHeld));
+		at[sizeof(restartHeld)] = (uint8_t) screens;
+		at += extraStateSize();
+	}
+	memcpy(at, &sessionTag, sizeof(sessionTag));
 	return true;
 }
 
 bool retro_unserialize(const void* data, size_t size) {
 	checkNetplay();
-	bool const tagged = size >= retro_serialize_size();
+	// Together's states from before the screens were kept are a byte shorter.
+	bool const full = size >= retro_serialize_size(), older = togetherRunning() && size == retro_serialize_size() - 1;
+	bool const tagged = full || older;
 	if (!(tagged || (size == consolesStateSize() && !togetherRunning())) || !loadConsoles(data, consolesStateSize())) {
 		return false;
 	}
 	// A loaded state has every console's save as it was; player 1's isn't copied over them after.
 	copySaves = 0;
 	if (tagged) {
-		const uint8_t* const at = (const uint8_t*) data + consolesStateSize();
-		memcpy(restartHeld, at, extraStateSize());
+		const uint8_t* at = (const uint8_t*) data + consolesStateSize();
+		int shown = -1;
+		if (togetherRunning()) {
+			memcpy(restartHeld, at, sizeof(restartHeld));
+			at += sizeof(restartHeld);
+			shown = full ? *at++ : -1;
+		}
 		uint32_t tag;
-		memcpy(&tag, at + extraStateSize(), sizeof(tag));
+		memcpy(&tag, at, sizeof(tag));
+		// Joining on Host's View: the host's screens. A state of this device's own, as rollback
+		// loads, leaves them as they are.
+		if (hostsView && tag != sessionTag && (netplaySeen || netplayPlayer >= 0) && shown >= 0 &&
+		    (shown < SCREENS_ONE ? shown != SCREENS_STACKED || playersHere == 2 : shown < SCREENS_ONE + playersHere) && shown != screens) {
+			screens = shown;
+			announceGeometry();
+		}
 		loadedTag(tag);
 	}
 	return true;
