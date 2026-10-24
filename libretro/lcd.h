@@ -87,8 +87,12 @@ void libretroLcdShadowFrom(uint32_t unlit, uint32_t darkest, int* start, int* sc
 bool libretroLcdShadow(void);
 static const int8_t libretroLcdWays[8][2] = { { 0, -1 }, { 1, -1 }, { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 } };
 
+// How far the shadow falls, in the screen's dots (Game Boy Pixel Shadow Distance), and so how far
+// each way reaches across and down: a diagonal's as far in all.
+extern float libretroLcdShadowDistance;
+
 static inline float libretroLcdReach(int way) {
-	return libretroLcdWays[way][0] && libretroLcdWays[way][1] ? 1.0f : 1.4f;
+	return libretroLcdWays[way][0] && libretroLcdWays[way][1] ? libretroLcdShadowDistance * 0.70710678f : libretroLcdShadowDistance;
 }
 
 // How strongly a grid drawn at any size shows when a source pixel is pitch output pixels wide: a

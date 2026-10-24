@@ -587,6 +587,11 @@ static void readOptions(void) {
 		{ "up", 1 }, { "up right", 2 }, { "right", 3 }, { "down right", 4 }, { "down", 5 }, { "down left", 6 }, { "left", 7 }, { "up left", 8 },
 	};
 	gridWay = optionChoice("armgba_lcd_shadow", wayChoices, COUNT(wayChoices), 0);
+	// "0.5" to "3.0", read in halves so the locale's decimal point doesn't matter.
+	const char* const distance = option("armgba_lcd_shadow_distance");
+	const char* const point = distance ? strchr(distance, '.') : NULL;
+	int const halves = distance ? atoi(distance) * 2 + (point && point[1] == '5') : 3;
+	libretroLcdShadowDistance = (halves >= 1 && halves <= 6 ? halves : 3) / 2.0f;
 	static const struct Choice threadChoices[] = { { "1", 1 }, { "2", 2 }, { "3", 3 }, { "4", 4 } };
 	lcdThreads = optionChoice("armgba_lcd_threads", threadChoices, COUNT(threadChoices), 0);
 	const char* const filter = option("armgba_low_pass_filter");

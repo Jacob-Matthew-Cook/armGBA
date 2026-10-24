@@ -26,6 +26,7 @@ int ghosting;
 bool interleaved;
 int gridScale = 1;
 int gridWay;
+float libretroLcdShadowDistance = 1.5f;
 int lcdThreads;
 
 // LCD Ghosting: the screens' liquid crystal takes time to change, darkening, as it is driven,
@@ -406,6 +407,9 @@ static int postJobs = 1;
 // The larger picture; for each thread, the source row blended for each share of gap and each row of a
 // square unlike those above it; the shadow's darkness at the source's size, with 8 more on each side
 // and 2 more rows above and below; for each thread, a row of each square's share kept from the shadow.
+// Rows of no darkness above and below the shadow's picture of darkness, as far as the farthest shadow
+// reads past it; 8 columns each side.
+enum { DARK_EDGE = 4 };
 static struct GridBuffer gridOut, gridBlends, gridTemplates, gridDark, gridKeeps, gridKeptRows;
 
 // Whether b holds wanted bytes, growing it if it didn't.
@@ -653,7 +657,7 @@ static void gridDarkJob(int job) {
 	unsigned from, to;
 	rowsOf(job, gridFrame.height, &from, &to);
 	for (unsigned y = from; y < to; ++y) {
-		uint8_t* const d = gridDark.data + (size_t) (y + 2) * (gridFrame.width + 16) + 8;
+		uint8_t* const d = gridDark.data + (size_t) (y + DARK_EDGE) * (gridFrame.width + 16) + 8;
 		gridDarkRow((const uint32_t*) (gridFrame.picture + y * gridFrame.pitch), d, gridFrame.width, gridFrame.start, gridFrame.scale);
 	}
 }
@@ -663,7 +667,7 @@ static void gridDarkJob(int job) {
 static void gridKeepRow(unsigned y, uint8_t* keep) {
 	unsigned const width = gridFrame.width;
 	size_t const stride = width + 16;
-	const uint8_t* const top = gridDark.data + (size_t) (y + 2 + gridFrame.fromY) * stride + 8 + gridFrame.fromX;
+	const uint8_t* const top = gridDark.data + (size_t) (y + DARK_EDGE + gridFrame.fromY) * stride + 8 + gridFrame.fromX;
 	const uint8_t* const bottom = top + stride;
 	uint16_t const right = (uint16_t) gridFrame.weightX, left = (uint16_t) (256 - right);
 	uint16_t const below = (uint16_t) gridFrame.weightY, above = (uint16_t) (256 - below);
@@ -837,7 +841,7 @@ void sendPicture(const void* picture, unsigned width, unsigned height, size_t pi
 	bool const shadow = gridWay && bytes == 4 && libretroLcdShadow();
 	bool const room = gridReserve(&gridOut, outPitch * outHeight) && gridReserve(&gridBlends, (size_t) GRID_JOBS * GRID_SHARES_MAX * width * bytes) &&
 	                  gridReserve(&gridTemplates, (size_t) GRID_JOBS * 8 * outPitch) && gridReserve(&gridKeptRows, (size_t) GRID_JOBS * 2 * width * bytes) &&
-	                  (!shadow || (gridReserve(&gridDark, (size_t) (width + 16) * (height + 4)) &&
+	                  (!shadow || (gridReserve(&gridDark, (size_t) (width + 16) * (height + 2 * DARK_EDGE)) &&
 	                               gridReserve(&gridKeeps, (size_t) GRID_JOBS * width)));
 	// Without the memory, the last picture stays.
 	if (!room) {
@@ -870,11 +874,11 @@ void sendPicture(const void* picture, unsigned width, unsigned height, size_t pi
 		gridFrame.weightY = (int) lroundf((y - gridFrame.fromY) * 256);
 		// Beside and above and below the picture, no darkness.
 		size_t const stride = width + 16;
-		memset(gridDark.data, 0, 2 * stride);
-		memset(gridDark.data + (height + 2) * stride, 0, 2 * stride);
+		memset(gridDark.data, 0, DARK_EDGE * stride);
+		memset(gridDark.data + (height + DARK_EDGE) * stride, 0, DARK_EDGE * stride);
 		for (unsigned row = 0; row < height; ++row) {
-			memset(gridDark.data + (row + 2) * stride, 0, 8);
-			memset(gridDark.data + (row + 2) * stride + 8 + width, 0, 8);
+			memset(gridDark.data + (row + DARK_EDGE) * stride, 0, 8);
+			memset(gridDark.data + (row + DARK_EDGE) * stride + 8 + width, 0, 8);
 		}
 		runJobs(gridDarkJob);
 	}

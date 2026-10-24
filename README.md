@@ -56,6 +56,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Interleaved Rows | Both | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left, Tilt (Android: follows the device's tilt) |
+| | Game Boy Pixel Shadow Distance | Game Boy | 0.5 to 3 dots in halves, 1.5 by default; how far Tilt reaches in the app |
 | | CPU Effect Threads | Both | Auto, 1, 2, 3, 4 |
 | Audio | Low-Pass Filter | Both | Off, 20%, 40%, 60%, 80% |
 | Input | Left Stick as D-Pad | Both | Off, On |
