@@ -59,6 +59,8 @@ static int firstShown, shownCount;
 static int arrowLeft[ROWS_MAX], arrowRight[ROWS_MAX];
 // The footer shows a controller's buttons once one is used, and keys once the keyboard or mouse is.
 static bool lastInputPad;
+// Whether a finger was last, which the footer's buttons show as plain buttons.
+static bool lastInputTouch;
 
 static struct {
 	char text[160];
@@ -803,8 +805,10 @@ static void click(SDL_Point p, Uint8 button, bool tap) {
 bool uiEvent(const SDL_Event* event) {
 	if (event->type == SDL_CONTROLLERBUTTONDOWN || (event->type == SDL_CONTROLLERAXISMOTION && abs(event->caxis.value) > 20000)) {
 		lastInputPad = true;
+		lastInputTouch = false;
 	} else if (event->type == SDL_KEYDOWN || event->type == SDL_MOUSEBUTTONDOWN || event->type == SDL_MOUSEWHEEL) {
 		lastInputPad = false;
+		lastInputTouch = event->type == SDL_MOUSEBUTTONDOWN && event->button.which == SDL_TOUCH_MOUSEID;
 	}
 	if (capture.open) {
 		// Waiting for a binding: Esc cancels, Delete clears it, and a key or button (a trigger too) binds.
@@ -1161,15 +1165,27 @@ static int hintWidth(int u, const char* badge, bool round, const char* label) {
 	return badgeWidth(u, badge, round) + u / 3 + textWidth(FACE_BODY, u * 17 / 20, label);
 }
 
+// The footer's hints as solid buttons, each as wide as its widest way of being shown, so none moves
+// when the controller, the keyboard or a finger takes over: the button or key and what it does, or
+// for a finger, what it does alone, to tap.
 static void drawHints(int x, int y, int u, const struct Hint* hints, int count) {
 	hintCount = 0;
+	int const h = hintHeight(u), pad = u / 3, size = u * 17 / 20;
 	for (int i = 0; i < count && i < HINTS_MOST; ++i) {
-		const struct Hint* const h = &hints[i];
-		int const slot = SDL_max(hintWidth(u, h->button, h->round, h->buttonLabel), hintWidth(u, h->key, false, h->keyLabel));
-		drawHint(x, y, u, lastInputPad ? h->button : h->key, lastInputPad && h->round, lastInputPad ? h->buttonLabel : h->keyLabel);
-		hintRects[hintCount] = (SDL_Rect) { x, y, slot, hintHeight(u) };
-		hintActions[hintCount++] = lastInputPad ? h->action : h->keyAction;
-		x += slot + u;
+		const struct Hint* const hint = &hints[i];
+		int const slot = SDL_max(hintWidth(u, hint->button, hint->round, hint->buttonLabel), hintWidth(u, hint->key, false, hint->keyLabel));
+		SDL_Rect const button = { x - pad, y - pad / 2, slot + 2 * pad, h + pad };
+		fillBordered(button, button.h / 2, (SDL_Color) { 20, 26, 38, 255 }, edge, 1);
+		const char* const label = lastInputPad ? hint->buttonLabel : hint->keyLabel;
+		if (lastInputTouch) {
+			int const lw = textWidth(FACE_STRONG, size, label);
+			textDraw(FACE_STRONG, size, button.x + (button.w - lw) / 2, y + (h - size) / 2, white, label);
+		} else {
+			drawHint(x, y, u, lastInputPad ? hint->button : hint->key, lastInputPad && hint->round, label);
+		}
+		hintRects[hintCount] = button;
+		hintActions[hintCount++] = lastInputPad ? hint->action : hint->keyAction;
+		x += slot + 2 * pad + u / 2;
 	}
 }
 
