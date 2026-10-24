@@ -1555,11 +1555,14 @@ static void drawMenu(int width, int height, int u) {
 		int const y = top + shownCount * rowH;
 		itemRects[shownCount] = (SDL_Rect) { pillL, y, pillR - pillL, rowH };
 		arrowLeft[shownCount] = arrowRight[shownCount] = -1;
-		// A header: bold, a little larger than the rows under it, toward the foot of its row.
+		// A header: bold, a little larger than the rows under it, toward the foot of its row, over a
+		// faint line across the rows it heads.
 		if (item->header) {
 			char header[NAME_SIZE + 64];
 			textFit(FACE_STRONG, headerSize, item->label, textR - textL, false, header, sizeof(header));
 			textDraw(FACE_STRONG, headerSize, textL, y + rowH - headerSize - u / 4, accent, header);
+			int const line = SDL_max(1, u / 16);
+			fillRect(textL, y + rowH - line, textR - textL, line, faded(accent, 90));
 			continue;
 		}
 		bool const on = i == m->selected;
