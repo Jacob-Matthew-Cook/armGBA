@@ -122,11 +122,24 @@ static struct {
 
 // A touch on the menus: where it came down, and whether it's dragged the rows.
 static struct {
-	bool down, moved;
+	bool down, moved, across;
 	int x, y, scroll;
 } drag;
-// The rows' height as last drawn.
-static int lastRowH;
+// The rows' height as last drawn, and how far the rows scroll.
+static int lastRowH, lastMaxScroll;
+// The header's back button, where drawn.
+static SDL_Rect backRect;
+// A flick's run on after the finger lifts: where the rows are, and how fast they go, in rows a
+// millisecond, slowing.
+static struct {
+	float at, speed;
+	Uint32 last;
+} fling;
+// A touch's last two places and times, for the flick's speed.
+static struct TrailPoint {
+	int y;
+	Uint32 time;
+} trail[2];
 // The view moved by a drag or the wheel stays where it was put, until the selection moves.
 static bool viewHeld;
 
@@ -706,9 +719,13 @@ static void hover(SDL_Point p) {
 	}
 }
 
-// A click at p: a hint's action, a tab, a key of the keyboard, or a row (a selected value's arrows
-// change it); the right button goes back.
+// A click at p: the back button, a hint's action, a tab, a key of the keyboard, or a row (a selected
+// value's arrows change it); the right button goes back.
 static void click(SDL_Point p, Uint8 button) {
+	if (button == SDL_BUTTON_LEFT && SDL_PointInRect(&p, &backRect)) {
+		back();
+		return;
+	}
 	for (int i = 0; i < hintCount && button == SDL_BUTTON_LEFT; ++i) {
 		if (SDL_PointInRect(&p, &hintRects[i])) {
 			hintDo(hintActions[i], p.x < hintRects[i].x + hintRects[i].w / 2 ? -1 : 1);
@@ -969,12 +986,15 @@ bool uiEvent(const SDL_Event* event) {
 	case SDL_MOUSEMOTION:
 		if (event->motion.which == SDL_TOUCH_MOUSEID) {
 			int const dx = event->motion.x - drag.x, dy = event->motion.y - drag.y;
-			if (drag.down && lastRowH > 0) {
-				drag.moved |= abs(dx) > lastRowH / 4 || abs(dy) > lastRowH / 4;
+			if (drag.down && lastRowH > 0 && !drag.moved && (abs(dx) > lastRowH / 4 || abs(dy) > lastRowH / 4)) {
+				drag.moved = true;
+				drag.across = abs(dx) > abs(dy);
 			}
-			if (drag.down && drag.moved && !entry.open) {
+			if (drag.down && drag.moved && !drag.across && !entry.open) {
 				stack[depth - 1].scroll = drag.scroll - (dy + (dy < 0 ? -lastRowH / 2 : lastRowH / 2)) / lastRowH;
 				viewHeld = true;
+				trail[0] = trail[1];
+				trail[1] = (struct TrailPoint) { event->motion.y, SDL_GetTicks() };
 			}
 		}
 		if (!entry.open && (event->motion.which != SDL_TOUCH_MOUSEID || drag.down)) {
@@ -989,6 +1009,9 @@ bool uiEvent(const SDL_Event* event) {
 			drag.x = event->button.x;
 			drag.y = event->button.y;
 			drag.scroll = stack[depth - 1].scroll;
+			drag.across = false;
+			fling.speed = 0;
+			trail[0] = trail[1] = (struct TrailPoint) { event->button.y, SDL_GetTicks() };
 			if (!entry.open) {
 				hover((SDL_Point) { drag.x, drag.y });
 			}
@@ -999,8 +1022,18 @@ bool uiEvent(const SDL_Event* event) {
 	case SDL_MOUSEBUTTONUP:
 		if (event->button.which == SDL_TOUCH_MOUSEID && drag.down) {
 			drag.down = false;
+			int const dx = event->button.x - drag.x;
+			Uint32 const since = SDL_GetTicks() - trail[0].time;
 			if (!drag.moved) {
 				click((SDL_Point) { event->button.x, event->button.y }, SDL_BUTTON_LEFT);
+			// A swipe across the top menus moves to the next tab or the one before.
+			} else if (drag.across && depth == 1 && !entry.open && abs(dx) > lastRowH * 2) {
+				moveTab(dx < 0 ? 1 : -1);
+			// A flick runs on: as fast as the finger went over its last moments.
+			} else if (!drag.across && lastRowH > 0 && since > 0 && since < 150) {
+				fling.speed = -(float) (event->button.y - trail[0].y) / since / lastRowH;
+				fling.at = (float) stack[depth - 1].scroll;
+				fling.last = SDL_GetTicks();
 			}
 		}
 		return true;
@@ -1033,8 +1066,21 @@ static SDL_Color faded(SDL_Color c, int alpha) {
 }
 
 // A 24th of the height or a 40th of the width, whichever is less, times the menu size.
+// On a phone played by touch, a quarter larger, for fingers.
+static bool phoneScreen(void) {
+	static int phone = -1;
+	if (phone < 0) {
+		float dpi = 0;
+		SDL_DisplayMode mode;
+		phone = !SDL_GetDisplayDPI(0, &dpi, NULL, NULL) && dpi > 0 && !SDL_GetDesktopDisplayMode(0, &mode) &&
+		        sqrtf((float) (mode.w * mode.w + mode.h * mode.h)) / dpi < 7.5f;
+	}
+	return phone;
+}
+
 static int unitFor(int width, int height) {
-	return SDL_max(10, SDL_min(height / 24, width / 40) * settings.menuSize / 100);
+	int const u = SDL_max(10, SDL_min(height / 24, width / 40) * settings.menuSize / 100);
+	return touchOnly() && phoneScreen() ? u * 5 / 4 : u;
 }
 
 // A button or key in the footer's hints: a circle for a controller's buttons, a key cap otherwise.
@@ -1091,7 +1137,18 @@ static int headerHeight(int u) {
 static int drawPanel(SDL_Rect panel, int u, const char* where) {
 	int const headerH = headerHeight(u), inset = u + u / 2;
 	int const titleSize = u * 9 / 5, whereSize = u * 9 / 10;
-	int const brand = textDraw(FACE_TITLE, titleSize, panel.x + inset, panel.y + (headerH - titleSize) / 2, accent, "ARMGBA");
+	// On Android, a back button before the title, for touch, where Back is a gesture.
+	int left = panel.x + inset;
+	backRect = (SDL_Rect) { 0, 0, 0, 0 };
+#ifdef __ANDROID__
+	int const size = u * 2;
+	backRect = (SDL_Rect) { left - u / 2, panel.y + (headerH - size) / 2, size, size };
+	fillRounded(backRect, size / 2, keyFill);
+	int const arrow = u * 3 / 2, aw = textWidth(FACE_STRONG, arrow, "\xE2\x80\xB9");
+	textDraw(FACE_STRONG, arrow, backRect.x + (size - aw) / 2, backRect.y + (size - arrow) / 2 - arrow / 10, white, "\xE2\x80\xB9");
+	left = backRect.x + size + u / 2;
+#endif
+	int const brand = left - panel.x - inset + textDraw(FACE_TITLE, titleSize, left, panel.y + (headerH - titleSize) / 2, accent, "ARMGBA");
 	char fitted[512];
 	textFit(FACE_BODY, whereSize, where, panel.w - 2 * inset - brand - u, true, fitted, sizeof(fitted));
 	int const ww = textWidth(FACE_BODY, whereSize, fitted);
@@ -1210,7 +1267,10 @@ static void drawEntry(int width, int height, int u) {
 	int const hintH = hintLines ? hintLines * hintLine + u * 2 / 5 : 0;
 	// Keys 1.75 units high, or less to fit between the field and the footer.
 	int const keyH = SDL_max(keySize + u / 4, SDL_min(u * 7 / 4, (footerTop(panel, u) - top - u / 2 - fieldH - hintH - u / 2) / 5));
-	int y = top + SDL_max(u / 4, (footerTop(panel, u) - top - (fieldH + hintH + u / 2 + 5 * keyH)) / 2);
+	// Played by touch, the phone's own keyboard comes up instead of these keys, so the field sits at
+	// the top, above it.
+	bool const keys = !touchOnly();
+	int y = keys ? top + SDL_max(u / 4, (footerTop(panel, u) - top - (fieldH + hintH + u / 2 + 5 * keyH)) / 2) : top + u;
 	fillBordered((SDL_Rect) { left, y, inner, fieldH }, u / 2, (SDL_Color) { 13, 18, 28, 255 }, accent, 2);
 	// The text, as stars when hidden, its start cut off if it's too long.
 	char shown[300];
@@ -1235,7 +1295,8 @@ static void drawEntry(int width, int height, int u) {
 	}
 	// Each key's rectangle is kept for the mouse, the last row's for each of the columns it spans.
 	int const keyW = inner / 12, gap = SDL_max(2, u / 8);
-	for (int r = 0; r < 5; ++r) {
+	memset(keyRects, 0, sizeof(keyRects));
+	for (int r = 0; r < 5 && keys; ++r) {
 		for (int c = 0; c < 12; ++c) {
 			SDL_Rect* rect = &keyRects[r][c];
 			int const span = r < 4 ? 1 : 3, at = r < 4 ? c : c / 3 * 3;
@@ -1355,6 +1416,7 @@ static void drawMenu(int width, int height, int u) {
 	if (!viewHeld && m->selected >= 0 && (m->selected < m->scroll || m->selected >= m->scroll + rows)) {
 		m->scroll = m->selected < m->scroll ? m->selected : m->selected - rows + 1;
 	}
+	lastMaxScroll = SDL_max(0, itemCount - rows);
 	m->scroll = SDL_max(0, SDL_min(m->scroll, itemCount - rows));
 	// A scroll bar takes room on the right when the rows don't all fit.
 	bool const scrolls = itemCount > rows;
@@ -1500,6 +1562,19 @@ void uiDraw(void) {
 			direction(held.dx, held.dy);
 		}
 		held.next = now + (Uint32) interval;
+	}
+	// A flick's run, slowing by a third every tenth of a second, stopping at either end.
+	if (fling.speed != 0 && app.menuOpen && depth) {
+		Uint32 const now = SDL_GetTicks(), dt = now - fling.last;
+		fling.last = now;
+		fling.at += fling.speed * (float) dt;
+		fling.speed *= expf(-(float) dt / 250.0f);
+		if (fling.at <= 0 || fling.at >= (float) lastMaxScroll || fabsf(fling.speed) < 0.002f) {
+			fling.at = SDL_max(0.0f, SDL_min(fling.at, (float) lastMaxScroll));
+			fling.speed = 0;
+		}
+		stack[depth - 1].scroll = (int) lroundf(fling.at);
+		viewHeld = true;
 	}
 	if (shoulder.way && app.menuOpen && SDL_TICKS_PASSED(SDL_GetTicks(), shoulder.next)) {
 		shoulder.way = shoulderStep(shoulder.way) ? shoulder.way : 0;

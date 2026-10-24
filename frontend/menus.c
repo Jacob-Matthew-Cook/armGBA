@@ -538,8 +538,40 @@ static void openCheats(int argument, int delta) {
 static int categoryShown;
 
 // A core option's row: left and right step through its values; choosing it steps forward.
+// A core option's values as a list to pick from, the one in use marked, as a tap or A opens it for an
+// option of more than two values.
+static int pickerOption;
+
+static void pickValue(int value, int delta) {
+	if (delta) {
+		return;
+	}
+	struct Option* o = &options[pickerOption];
+	optionSet(o, o->values[value]);
+	optionsWrite();
+	refreshShownOptions();
+	popMenu();
+}
+
+static void pickerMenu(void) {
+	struct Option* o = &options[pickerOption];
+	for (int v = 0; v < o->valueCount; ++v) {
+		bool const now = !strcmp(o->values[v], o->value);
+		addChoice(o->labels[v] ? o->labels[v] : o->values[v], now ? "In Use" : "", pickValue, v);
+		helpFor(o->info);
+		if (now && stack[depth - 1].selected < 0) {
+			stack[depth - 1].selected = itemCount - 1;
+		}
+	}
+}
+
 static void optionChange(int index, int delta) {
 	struct Option* o = &options[index];
+	if (!delta && o->valueCount > 2) {
+		pickerOption = index;
+		pushMenu(pickerMenu, o->description ? o->description : o->key);
+		return;
+	}
 	int at = 0;
 	for (int v = 0; v < o->valueCount; ++v) {
 		if (!strcmp(o->values[v], o->value)) {

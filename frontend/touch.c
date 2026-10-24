@@ -144,13 +144,24 @@ static void release(void) {
 
 // Attached while wanted and no other controller is connected; detached, the controllers' ports are
 // filled again from the first.
+static bool padsConnected;
+
+bool touchOnly(void) {
+#ifdef __ANDROID__
+	return !padsConnected;
+#else
+	return false;
+#endif
+}
+
 void touchUpdate(void) {
+	padsConnected = false;
+	for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+		padsConnected |= SDL_IsGameController(i) && !SDL_JoystickIsVirtual(i);
+	}
 	bool wanted = false;
 #ifdef __ANDROID__
-	wanted = settings.touchControls;
-	for (int i = 0; i < SDL_NumJoysticks() && wanted; ++i) {
-		wanted = !SDL_IsGameController(i) || SDL_JoystickIsVirtual(i);
-	}
+	wanted = settings.touchControls && !padsConnected;
 #endif
 	if (wanted && !joystick) {
 		SDL_VirtualJoystickDesc desc;

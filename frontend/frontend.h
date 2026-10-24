@@ -247,6 +247,8 @@ bool tiltAvailable(void);
 // The On-Screen Controls (touch.c): attached or detached as wanted when the controllers change, a
 // touch, and drawn over the game.
 void touchUpdate(void);
+// Whether the device is played by touch alone: Android with no controller connected.
+bool touchOnly(void);
 bool touchEvent(const SDL_Event* event);
 void touchDraw(void);
 // Quits on the Quit hotkey's second press within three seconds; the first says so.
