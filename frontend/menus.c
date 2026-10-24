@@ -654,7 +654,7 @@ static void changeSetting(int which, int delta) {
 		break;
 	// Off, then the eight directions.
 	case SET_SHADOW:
-		settings.shadow = wrap(settings.shadow, d, 9);
+		settings.shadow = wrap(settings.shadow, d, tiltAvailable() ? SHADOW_TILT + 1 : SHADOW_TILT);
 		break;
 	case SET_VSYNC:
 		settings.vsync = !settings.vsync;
@@ -778,9 +778,11 @@ static void shadersMenu(void) {
 	helpFor("Draws the gaps between the console screen's pixels at any size, fainter the smaller it is. On a small screen, "
 	        "the CPU's at 2x with Integer Scaling looks cleanest.");
 	if (settings.gpuGrid && (!app.loaded || libretroLcdShadow())) {
-		static const char* const shadows[9] = { "Off", "Up", "Up Right", "Right", "Down Right", "Down", "Down Left", "Left", "Up Left" };
+		static const char* const shadows[SHADOW_TILT + 1] = { "Off", "Up", "Up Right", "Right", "Down Right", "Down", "Down Left", "Left", "Up Left", "Tilt" };
 		addValue("Game Boy Pixel Shadow", shadows[settings.shadow], changeSetting, SET_SHADOW);
-		helpFor("On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls.");
+		helpFor(tiltAvailable() ? "On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls. "
+		                          "Tilt moves it as the device tilts, as light from above would."
+		                        : "On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls.");
 	}
 }
 

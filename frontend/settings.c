@@ -158,7 +158,7 @@ static void takeSetting(const char* key, const char* value) {
 	} else if (!strcmp(key, "gpu_lcd_grid")) {
 		settings.gpuGrid = yes;
 	} else if (!strcmp(key, "lcd_shadow")) {
-		settings.shadow = n >= 0 && n <= 8 ? n : 4;
+		settings.shadow = n >= 0 && n <= SHADOW_TILT ? n : 4;
 	} else if (!strcmp(key, "show_fps")) {
 		settings.showFps = yes;
 	} else if (!strcmp(key, "volume")) {
@@ -439,7 +439,11 @@ uint32_t padBit(int binding) {
 
 // The Hotkey as the menu lists it.
 const char* padHotkeyName(void) {
+#ifdef __ANDROID__
+	return settings.padHotkey == PAD_AUTO ? "Auto (Select)" : padName(settings.padHotkey);
+#else
 	return settings.padHotkey == PAD_AUTO ? "Auto (Home or Select)" : padName(settings.padHotkey);
+#endif
 }
 
 // Recent games.

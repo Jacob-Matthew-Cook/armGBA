@@ -55,7 +55,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | Video: LCD Effects | LCD Ghosting | Both | Off, Half, Full |
 | | Interleaved Rows | Both | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
-| | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left |
+| | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left, Tilt (Android: follows the device's tilt) |
 | | CPU Effect Threads | Both | Auto, 1, 2, 3, 4 |
 | Audio | Low-Pass Filter | Both | Off, 20%, 40%, 60%, 80% |
 | Input | Left Stick as D-Pad | Both | Off, On |

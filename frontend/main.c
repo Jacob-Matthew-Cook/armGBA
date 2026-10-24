@@ -490,11 +490,16 @@ static bool padHeld(SDL_GameController* pad, int binding) {
 	return SDL_GameControllerGetButton(pad, (SDL_GameControllerButton) binding);
 }
 
-// A controller's Hotkey: the one chosen, or on Auto its Home button, or Select without one.
+// A controller's Hotkey: the one chosen, or on Auto its Home button, or Select without one. Android
+// keeps Home for itself, so there Auto is Select.
 static int hotkeyOf(SDL_GameController* pad) {
 	if (settings.padHotkey != PAD_AUTO) {
 		return settings.padHotkey;
 	}
+#ifdef __ANDROID__
+	(void) pad;
+	return SDL_CONTROLLER_BUTTON_BACK;
+#endif
 	return pad && SDL_GameControllerHasButton(pad, SDL_CONTROLLER_BUTTON_GUIDE) ? SDL_CONTROLLER_BUTTON_GUIDE : SDL_CONTROLLER_BUTTON_BACK;
 }
 
@@ -869,6 +874,75 @@ static void makeOverlay(SDL_Rect to) {
 	free(across);
 }
 
+// Tilt: the shadow falls the way gravity pulls across the screen, 1.4 dots with the screen upright and
+// none with it lying flat, from the accelerometer (open only while it's used), smoothed.
+static int accelerometerIndex = -1;
+static SDL_Sensor* accelerometer;
+static float tiltX, tiltY;
+
+bool tiltAvailable(void) {
+	return accelerometerIndex >= 0;
+}
+
+static void findAccelerometer(void) {
+#ifdef __ANDROID__
+	if (SDL_InitSubSystem(SDL_INIT_SENSOR) != 0) {
+		return;
+	}
+	SDL_EventState(SDL_SENSORUPDATE, SDL_IGNORE);
+	for (int i = 0; i < SDL_NumSensors(); ++i) {
+		if (SDL_SensorGetDeviceType(i) == SDL_SENSOR_ACCEL) {
+			accelerometerIndex = i;
+			return;
+		}
+	}
+#endif
+}
+
+static void followTilt(bool on) {
+	if (!on || accelerometerIndex < 0) {
+		if (accelerometer) {
+			SDL_SensorClose(accelerometer);
+			accelerometer = NULL;
+		}
+		return;
+	}
+	if (!accelerometer && !(accelerometer = SDL_SensorOpen(accelerometerIndex))) {
+		return;
+	}
+	float a[3];
+	if (SDL_SensorGetData(accelerometer, a, 3) != 0) {
+		return;
+	}
+	// The accelerometer's axes are the device's own, x right and y up as it's naturally held, and it
+	// reads the push against gravity; down across the screen as the display's turned (SDL names
+	// Android's rotations 0, 90, 180 and 270 portrait, landscape, portrait flipped, landscape flipped).
+	float x, y;
+	switch (SDL_GetDisplayOrientation(0)) {
+	case SDL_ORIENTATION_LANDSCAPE:
+		x = a[1], y = a[0];
+		break;
+	case SDL_ORIENTATION_PORTRAIT_FLIPPED:
+		x = a[0], y = -a[1];
+		break;
+	case SDL_ORIENTATION_LANDSCAPE_FLIPPED:
+		x = -a[1], y = -a[0];
+		break;
+	default:
+		x = -a[0], y = a[1];
+		break;
+	}
+	x *= 1.4f / SDL_STANDARD_GRAVITY;
+	y *= 1.4f / SDL_STANDARD_GRAVITY;
+	float const length = sqrtf(x * x + y * y);
+	if (length > 1.4f) {
+		x *= 1.4f / length;
+		y *= 1.4f / length;
+	}
+	tiltX += (x - tiltX) * 0.1f;
+	tiltY += (y - tiltY) * 0.1f;
+}
+
 // The shadow the first Game Boy's and the Pocket's pixels cast on the reflector behind them, the way
 // the setting points (lcd.h has how far and how dark): a texture a dot to each of the picture's
 // pixels, remade when the picture changes, drawn scaled smoothly over the picture.
@@ -911,11 +985,14 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 		SDL_UnlockTexture(shadow);
 		shadowStale = false;
 	}
-	// Up, then on clockwise.
-	int const dx = libretroLcdWays[settings.shadow - 1][0], dy = libretroLcdWays[settings.shadow - 1][1];
-	float const reach = libretroLcdReach(settings.shadow - 1);
-	SDL_Rect const cast = { to.x + (int) lroundf(dx * reach * to.w / app.gameWidth), to.y + (int) lroundf(dy * reach * to.h / app.gameHeight),
-		                    to.w, to.h };
+	// Up, then on clockwise, or the tilt's way.
+	float dx = tiltX, dy = tiltY;
+	if (settings.shadow != SHADOW_TILT) {
+		float const reach = libretroLcdReach(settings.shadow - 1);
+		dx = libretroLcdWays[settings.shadow - 1][0] * reach;
+		dy = libretroLcdWays[settings.shadow - 1][1] * reach;
+	}
+	SDL_Rect const cast = { to.x + (int) lroundf(dx * to.w / app.gameWidth), to.y + (int) lroundf(dy * to.h / app.gameHeight), to.w, to.h };
 	SDL_RenderSetClipRect(app.renderer, &to);
 	SDL_RenderCopy(app.renderer, shadow, NULL, &cast);
 	SDL_RenderSetClipRect(app.renderer, NULL);
@@ -1031,7 +1108,9 @@ static void present(void) {
 			SDL_SetTextureColorMod(overlay, gap >> 16 & 0xFF, gap >> 8 & 0xFF, gap & 0xFF);
 			SDL_RenderCopy(app.renderer, overlay, NULL, &to);
 		}
-		if (overlay && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 && libretroLcdShadow()) {
+		bool const shadowed = overlay && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 && libretroLcdShadow();
+		followTilt(shadowed && settings.shadow == SHADOW_TILT);
+		if (shadowed) {
 			drawShadow(to, lit);
 		}
 	}
@@ -1265,6 +1344,9 @@ static void handleEvent(const SDL_Event* event) {
 			if (event->key.keysym.sym == SDLK_RETURN && (event->key.keysym.mod & KMOD_ALT)) {
 				doAction(ACT_FULLSCREEN);
 			}
+			if (event->key.keysym.scancode == SDL_SCANCODE_AC_BACK) {
+				uiOpenMenu();
+			}
 		}
 		break;
 	case SDL_CONTROLLERBUTTONDOWN:
@@ -1365,10 +1447,14 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	// Android's Back opens the menu instead of leaving, and the phone's tilt isn't a controller.
+	SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
 		fprintf(stderr, "armgba: %s\n", SDL_GetError());
 		return 1;
 	}
+	findAccelerometer();
 	if (listControllers) {
 		// Each joystick SDL sees: its GUID, whether a mapping makes it a controller, its name.
 		for (int i = 0; i < SDL_NumJoysticks(); ++i) {

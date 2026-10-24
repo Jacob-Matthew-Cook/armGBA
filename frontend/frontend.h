@@ -83,7 +83,8 @@ struct Settings {
 	// CPU; never both.
 	bool lcdOnGpu;
 	bool gpuGrid;
-	// Where the GPU grid's Game Boy pixels cast their shadow: 0 nowhere, then up and on clockwise.
+	// Where the GPU grid's Game Boy pixels cast their shadow: 0 nowhere, then up and on clockwise, then
+	// SHADOW_TILT, the way the device tilts.
 	int shadow;
 	bool showFps;
 	int volume;
@@ -236,6 +237,9 @@ bool writeWholeFile(const char* path, const void* data, size_t size);
 // then kept from the game until let go.
 bool padHotkeyPressed(SDL_JoystickID which, int binding, int action);
 const char* padHotkeyName(void);
+// Whether there's an accelerometer for the Game Boy Pixel Shadow's Tilt (Android's only).
+bool tiltAvailable(void);
+#define SHADOW_TILT 9
 // Quits on the Quit hotkey's second press within three seconds; the first says so.
 void requestQuit(bool controller);
 

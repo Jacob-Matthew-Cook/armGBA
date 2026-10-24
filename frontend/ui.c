@@ -651,14 +651,14 @@ bool uiEvent(const SDL_Event* event) {
 		// Waiting for a binding: Esc cancels, Delete clears it, and a key or button (a trigger too) binds.
 		if (event->type == SDL_KEYDOWN && !capture.controller) {
 			SDL_Scancode const code = event->key.keysym.scancode;
-			if (code == SDL_SCANCODE_ESCAPE) {
+			if (code == SDL_SCANCODE_ESCAPE || code == SDL_SCANCODE_AC_BACK) {
 				capture.open = false;
 			} else {
 				captured(code == SDL_SCANCODE_DELETE ? SDL_SCANCODE_UNKNOWN : code);
 			}
 			return true;
 		}
-		if (event->type == SDL_KEYDOWN && event->key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+		if (event->type == SDL_KEYDOWN && (event->key.keysym.scancode == SDL_SCANCODE_ESCAPE || event->key.keysym.scancode == SDL_SCANCODE_AC_BACK)) {
 			capture.open = false;
 			return true;
 		}
@@ -695,7 +695,7 @@ bool uiEvent(const SDL_Event* event) {
 				entry.text[strlen(entry.text) - 1] = '\0';
 			} else if (code == SDL_SCANCODE_RETURN || code == SDL_SCANCODE_KP_ENTER) {
 				closeEntry(true);
-			} else if (code == SDL_SCANCODE_ESCAPE) {
+			} else if (code == SDL_SCANCODE_ESCAPE || code == SDL_SCANCODE_AC_BACK) {
 				closeEntry(false);
 			} else if (code >= SDL_SCANCODE_RIGHT && code <= SDL_SCANCODE_UP) {
 				entryMove(code == SDL_SCANCODE_RIGHT ? 1 : code == SDL_SCANCODE_LEFT ? -1 : 0,
@@ -742,6 +742,7 @@ bool uiEvent(const SDL_Event* event) {
 			break;
 		case SDL_SCANCODE_ESCAPE:
 		case SDL_SCANCODE_BACKSPACE:
+		case SDL_SCANCODE_AC_BACK:
 			back();
 			break;
 		// The Full Screen hotkey works in the menus too; in the game list, letters find a name.
