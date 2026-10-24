@@ -33,9 +33,10 @@ enum {
 	// Holding a direction on a controller repeats it after this long, then this often.
 	REPEAT_DELAY_MS = 400,
 	REPEAT_MS = 90,
-	// Held this long, it repeats this often.
-	REPEAT_FAST_AFTER_MS = 1200,
-	REPEAT_FAST_MS = 35,
+	// Held on, it repeats faster until this long, then once a frame, and then two and four rows at a
+	// time.
+	REPEAT_FULL_MS = 2000,
+	REPEAT_MIN_MS = 16,
 	CIRCLES = 16,
 	// How long a tab takes to slide in.
 	SLIDE_MS = 180,
@@ -498,6 +499,19 @@ static void moveSelection(int delta) {
 	}
 }
 
+// The first row that can be chosen, or the last.
+static void moveToEnd(int way) {
+	disarm();
+	viewHeld = false;
+	for (int k = 0; k < itemCount; ++k) {
+		int const i = way < 0 ? k : itemCount - 1 - k;
+		if (selectable(i)) {
+			stack[depth - 1].selected = i;
+			return;
+		}
+	}
+}
+
 // The selected row's function, chosen (delta 0) or changed by delta. A row that asks twice is armed
 // the first time it's chosen.
 static void activate(int delta) {
@@ -904,6 +918,17 @@ bool uiEvent(const SDL_Event* event) {
 		}
 		return true;
 	case SDL_CONTROLLERAXISMOTION:
+		// L2 and R2 go to the first and last row, as in ROCKNIX.
+		if (event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT || event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
+			static bool pulled[2];
+			int const side = event->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
+			bool const now = event->caxis.value > 16384;
+			if (now && !pulled[side] && !entry.open) {
+				moveToEnd(side ? 1 : -1);
+			}
+			pulled[side] = now;
+			return true;
+		}
 		// The left stick moves as the D-pad does; uiDraw repeats it while it's held.
 		if (event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX || event->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
 			int const v = event->caxis.value > 20000 ? 1 : event->caxis.value < -20000 ? -1 : 0;
@@ -1446,8 +1471,14 @@ void uiDraw(void) {
 	// A held direction repeats, but doesn't run on through the tabs.
 	bool const tabbing = held.dx && !held.dy && !entry.open && depth && tabsMove();
 	if ((held.dx || held.dy) && !tabbing && SDL_TICKS_PASSED(SDL_GetTicks(), held.next) && app.menuOpen) {
-		direction(held.dx, held.dy);
-		held.next = SDL_GetTicks() + (SDL_GetTicks() - held.since > REPEAT_FAST_AFTER_MS ? REPEAT_FAST_MS : REPEAT_MS);
+		Uint32 const now = SDL_GetTicks(), heldFor = now - held.since;
+		int const interval = heldFor >= REPEAT_FULL_MS ? REPEAT_MIN_MS
+		                                               : REPEAT_MS - (REPEAT_MS - REPEAT_MIN_MS) * (int) (heldFor - REPEAT_DELAY_MS) / (REPEAT_FULL_MS - REPEAT_DELAY_MS);
+		int const rows = !held.dy || heldFor < REPEAT_FULL_MS + 1000 ? 1 : heldFor < REPEAT_FULL_MS + 2500 ? 2 : 4;
+		for (int i = 0; i < rows; ++i) {
+			direction(held.dx, held.dy);
+		}
+		held.next = now + (Uint32) interval;
 	}
 #ifdef __ANDROID__
 	folderPickerPoll();
