@@ -1006,8 +1006,8 @@ bool uiEvent(const SDL_Event* event) {
 			held.dy = dy;
 		}
 		return true;
-	// The mouse selects the row it's over; a touch that moves a quarter of a row any way is a drag,
-	// not a tap, and drags the rows a row's height at a time.
+	// The mouse selects the row it's over; a finger selects only by tapping. A touch that moves a
+	// quarter of a row any way is a drag, not a tap, and drags the rows a row's height at a time.
 	case SDL_MOUSEMOTION:
 		if (bar.dragging) {
 			scrollToBar(event->motion.y);
@@ -1025,7 +1025,7 @@ bool uiEvent(const SDL_Event* event) {
 				trailAdd(event->motion.y);
 			}
 		}
-		if (!entry.open && (event->motion.which != SDL_TOUCH_MOUSEID || drag.down)) {
+		if (!entry.open && event->motion.which != SDL_TOUCH_MOUSEID) {
 			hover((SDL_Point) { event->motion.x, event->motion.y });
 		}
 		return true;
@@ -1047,9 +1047,6 @@ bool uiEvent(const SDL_Event* event) {
 			fling.speed = 0;
 			trailCount = 0;
 			trailAdd(event->button.y);
-			if (!entry.open) {
-				hover((SDL_Point) { drag.x, drag.y });
-			}
 		} else {
 			click((SDL_Point) { event->button.x, event->button.y }, event->button.button);
 		}
