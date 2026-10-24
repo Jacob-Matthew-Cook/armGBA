@@ -48,8 +48,8 @@ struct Control {
 };
 
 enum { MENU = -1, CONTROLS = 16 };
-// The menu button shows for a while after a tap near it, then fades.
-enum { MENU_SHOWN_MS = 3000, MENU_FADE_MS = 300 };
+// The menu button slides down from the top after a tap near it, and back up a while later.
+enum { MENU_SHOWN_MS = 3000, MENU_SLIDE_MS = 220 };
 static Uint32 menuShownUntil;
 
 static int layout(struct Control out[CONTROLS], int width, int height) {
@@ -374,17 +374,18 @@ void touchDraw(void) {
 			float const knob = c->w * 0.46f, reach = c->w * 0.4f - knob / 2 + c->w * 0.1f;
 			drawShape(c->x + sticks[c->button][0] * reach, c->y + sticks[c->button][1] * reach, knob, knob, moved ? down : faint, faintEdge, e);
 		} else if (c->button == MENU) {
-			// Three lines, while shown.
+			// Three lines, while shown: sliding in from above the screen, easing as it arrives, and out
+			// again the same way.
 			Uint32 const now = SDL_GetTicks();
 			if (SDL_TICKS_PASSED(now, menuShownUntil)) {
 				continue;
 			}
-			float const fade = SDL_min(1.0f, (float) (menuShownUntil - now) / MENU_FADE_MS);
-			SDL_Color const fill = { up.r, up.g, up.b, (Uint8) (up.a * fade) }, line = { edge.r, edge.g, edge.b, (Uint8) (edge.a * fade) },
-			                bar = { text.r, text.g, text.b, (Uint8) (text.a * fade) };
-			drawShape(c->x, c->y, c->w * 1.4f, c->h * 1.4f, fill, line, e);
+			float const in = (float) (now - (menuShownUntil - MENU_SHOWN_MS)) / MENU_SLIDE_MS, out = (float) (menuShownUntil - now) / MENU_SLIDE_MS;
+			float const t = 1 - SDL_min(1.0f, SDL_min(in, out)), eased = t * t * t;
+			float const size = c->w * 1.4f, y = c->y - eased * (c->y + size);
+			drawShape(c->x, y, size, size, up, edge, e);
 			for (int k = -1; k <= 1; ++k) {
-				fillRectF(c->x - c->w * 0.34f, c->y + k * c->h * 0.25f - c->h * 0.055f, c->w * 0.68f, c->h * 0.11f, bar);
+				fillRectF(c->x - c->w * 0.34f, y + k * c->h * 0.25f - c->h * 0.055f, c->w * 0.68f, c->h * 0.11f, text);
 			}
 		} else {
 			drawShape(c->x, c->y, c->w, c->h, held[c->button] ? down : up, edge, e);
