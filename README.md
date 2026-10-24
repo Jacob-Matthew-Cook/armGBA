@@ -84,9 +84,9 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy on Advance
 Border set to Shown, the black around it shows too, as on that console's screen. Game Boy on Advance
 Screen shows it on the Advance's panel or the Color's: their colors with Color Correction on, their
-LCD Grid and their ghosting. Interleaved Rows, on the Advance's panel with LCD Ghosting on, drives
-alternate rows harder each frame, so pictures that alternate each frame show in stripes, as on the
-console.
+LCD Grid and their ghosting. Interleaved Rows, on the Color's and Advance's panels with LCD Ghosting
+on, drives alternate rows harder each frame, so pictures that alternate each frame show in stripes,
+as on the consoles.
 
 LCD Grid draws the gaps between the console screen's pixels into a picture as many times larger,
 with the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen,

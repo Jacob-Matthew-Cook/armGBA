@@ -95,7 +95,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  "The console's slow screen, which some games flicker sprites on to make them see-through: each change fades in over a few frames. Half fades twice as fast.",
 	  NULL, "video_lcd", { { "disabled", "Off" }, { "half", "Half" }, { "enabled", "Full" }, { NULL, NULL } }, "disabled" },
 	{ "armgba_lcd_interleave", "Interleaved Rows", NULL,
-	  "The Game Boy Advance's screen drives alternate rows each frame, so a picture that alternates frames shows in stripes, as on the console. Needs LCD Ghosting.",
+	  "The Game Boy Color's and Advance's screens drive alternate rows each frame, so a picture that alternates frames shows in stripes, as on the consoles. Needs LCD Ghosting.",
 	  NULL, "video_lcd", { { "disabled", "Off" }, { "enabled", "On" }, { NULL, NULL } }, "disabled" },
 	{ "armgba_lcd_grid", "LCD Grid", NULL,
 	  "Draws the gaps between the screen's pixels into a picture this many times larger. Pick the largest that fits, with integer scaling on. The armgba shaders do it on the GPU.",

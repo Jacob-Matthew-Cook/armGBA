@@ -33,9 +33,9 @@ int lcdThreads;
 // towards the new frame by a share each frame. The time constants, in milliseconds to darken and to
 // lighten, are estimates for each kind of panel: the first Game Boy's STN, the Pocket's and Light's
 // FSTN, and the Color's and Advance's reflective TFTs; Half halves them. With Interleaved Rows on, the
-// Advance's also drives alternate rows harder each frame, the other rows the next, the weaker rows
-// moving half as far, so a picture that alternates each frame shows in stripes, as it does on the
-// console (as SameBoy's accurate frame blending also has it). Each subpixel's level is kept 8-bit,
+// Color's and Advance's also drive alternate rows harder each frame, the other rows the next, the
+// weaker rows moving half as far, so a picture that alternates each frame shows in stripes, as it does
+// on the consoles (as SameBoy's accurate frame blending and BGB's Color interlacing also have it). Each subpixel's level is kept 8-bit,
 // gamma encoded, and its next level read from a table built for the screen and the picture's channel
 // widths, the rows shared out among the CPU's cores. A frame RetroArch runs again, and doesn't show,
 // leaves the screen as it is.
@@ -977,7 +977,7 @@ void showPicture(const void* picture, unsigned width, unsigned height, size_t pi
 	}
 	ghost.picture = picture;
 	ghost.bytes = bytes;
-	ghost.alternate = kind == SCREEN_TFT && interleaved && advancePanel();
+	ghost.alternate = kind == SCREEN_TFT && interleaved;
 	startJobs();
 	runJobs(ghostJob);
 	sendPicture(ghost.shown, width, height, pitch);
