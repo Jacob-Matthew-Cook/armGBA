@@ -1204,9 +1204,11 @@ bool loadOne(const void* data, size_t size) {
 	}
 	std::memcpy(&length, data, sizeof(length));
 	const char* const state = static_cast<const char*>(data) + sizeof(length);
+	// An exact state is read straight into the machine, its pointers as offsets, so one of another
+	// size, from another build, is refused before any of it is.
 	if (length & EXACT) {
 		length &= ~EXACT;
-		if (length > size - sizeof(length) || !s->gb->loadExactState(state, length)) {
+		if (length > size - sizeof(length) || length != s->gb->exactStateSize() || !s->gb->loadExactState(state, length)) {
 			return false;
 		}
 		setColors();
