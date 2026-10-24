@@ -57,6 +57,21 @@ bool canUndoLoad(void) {
 	return undoData != NULL;
 }
 
+// A state that stays in this session: the core may save it exactly, as it needn't load anywhere else.
+static bool keepState(void* data, size_t size) {
+	app.stateContext = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
+	bool const saved = retro_serialize(data, size);
+	app.stateContext = RETRO_SAVESTATE_CONTEXT_NORMAL;
+	return saved;
+}
+
+static bool restoreState(const void* data, size_t size) {
+	app.stateContext = RETRO_SAVESTATE_CONTEXT_RUNAHEAD_SAME_INSTANCE;
+	bool const loaded = retro_unserialize(data, size);
+	app.stateContext = RETRO_SAVESTATE_CONTEXT_NORMAL;
+	return loaded;
+}
+
 void undoForget(void) {
 	free(undoData);
 	undoData = NULL;
@@ -65,7 +80,7 @@ void undoForget(void) {
 
 // Back to the game as it was before the last state loaded; that can be undone only once.
 bool undoLoadState(void) {
-	if (!undoData || !retro_unserialize(undoData, undoSize)) {
+	if (!undoData || !restoreState(undoData, undoSize)) {
 		return false;
 	}
 	undoForget();
@@ -107,7 +122,7 @@ bool loadState(int slot) {
 	void* data = gameRead(path, &size);
 	size_t const keptSize = data ? retro_serialize_size() : 0;
 	void* kept = keptSize ? malloc(keptSize) : NULL;
-	if (kept && !retro_serialize(kept, keptSize)) {
+	if (kept && !keepState(kept, keptSize)) {
 		free(kept);
 		kept = NULL;
 	}
@@ -168,7 +183,7 @@ void rewindReset(void) {
 	stateNew = calloc(stateWords, 4);
 	// At worst, every word differs: a count pair for each and the words.
 	packed = malloc(stateWords * 12 + 16);
-	if (!ring || !entries || !stateNow || !stateNew || !packed || !retro_serialize(stateNow, size)) {
+	if (!ring || !entries || !stateNow || !stateNew || !packed || !keepState(stateNow, size)) {
 		settings.rewind = false;
 		rewindReset();
 		osd("Not enough memory to rewind");
@@ -217,7 +232,7 @@ void rewindPush(void) {
 		return;
 	}
 	size_t const size = retro_serialize_size();
-	if ((size + 3) / 4 != stateWords || !retro_serialize(stateNew, size)) {
+	if ((size + 3) / 4 != stateWords || !keepState(stateNew, size)) {
 		rewindReset();
 		return;
 	}
@@ -259,13 +274,13 @@ bool rewindStep(void) {
 	unpack((const uint32_t*) (ring + e.at), e.size, stateNow, stateWords);
 	ringAt = e.at;
 	size_t const size = retro_serialize_size();
-	retro_unserialize(stateNow, size);
+	restoreState(stateNow, size);
 	// The frame shows, without its sound, and the game goes back to its start.
 	int const av = app.avEnable;
 	app.avEnable = RETRO_AV_ENABLE_VIDEO;
 	retro_run();
 	app.avEnable = av;
-	retro_unserialize(stateNow, size);
+	restoreState(stateNow, size);
 	return true;
 }
 
@@ -284,7 +299,7 @@ void runAheadFrame(void) {
 	int const av = app.avEnable;
 	app.avEnable = RETRO_AV_ENABLE_AUDIO;
 	retro_run();
-	if (!kept || !retro_serialize(kept, size)) {
+	if (!kept || !keepState(kept, size)) {
 		app.avEnable = av;
 		return;
 	}
@@ -294,7 +309,7 @@ void runAheadFrame(void) {
 	}
 	app.avEnable = RETRO_AV_ENABLE_VIDEO;
 	retro_run();
-	retro_unserialize(kept, size);
+	restoreState(kept, size);
 	app.avEnable = av;
 }
 

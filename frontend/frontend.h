@@ -193,6 +193,9 @@ struct App {
 	int slot;
 	// What the core may put out now: RETRO_AV_ENABLE_* bits, cleared while a frame is run again.
 	int avEnable;
+	// What the states saved now are for, as the core is told: kept in a file, or only for this session
+	// (rewind, run-ahead and Undo Load State), which the core may save exactly.
+	int stateContext;
 	double fps;
 	SDL_GameController* pads[PORTS];
 };

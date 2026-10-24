@@ -394,10 +394,10 @@ static bool environment(unsigned command, void* data) {
 	case RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE:
 		((struct retro_rumble_interface*) data)->set_rumble_state = setRumble;
 		return true;
-	// Netplay's states need only load back into this same core.
+	// Netplay's, rewind's and run-ahead's states need only load back into this same core.
 	case RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT:
 		if (data) {
-			*(int*) data = netRollingBack() ? RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY : RETRO_SAVESTATE_CONTEXT_NORMAL;
+			*(int*) data = netRollingBack() ? RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY : app.stateContext;
 		}
 		return true;
 	default:
