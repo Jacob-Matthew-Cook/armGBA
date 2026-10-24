@@ -51,7 +51,7 @@ enum { MENU = -1, CONTROLS = 16 };
 static int layout(struct Control out[CONTROLS], int width, int height) {
 	float const s = (float) SDL_min(width, height);
 	float const pad = 0.20f * s, low = height - 0.45f * s, face = 0.105f * s, round = 0.12f * s;
-	float const pillW = 0.26f * s, pillH = 0.08f * s, smallW = 0.15f * s, smallH = 0.06f * s, stickX = 0.40f * s, stickY = height - 0.17f * s, stick = 0.24f * s;
+	float const pillW = 0.26f * s, pillH = 0.08f * s, smallW = 0.15f * s, smallH = 0.06f * s, stickX = 0.34f * s, stickY = height - 0.17f * s, stick = 0.24f * s;
 	float const top = 0.03f * s + pillH / 2, under = top + 0.10f * s, click = 0.085f * s;
 	struct Control const c[CONTROLS] = {
 		{ CROSS, SDL_CONTROLLER_BUTTON_DPAD_UP, NULL, pad, low, 0.30f * s, 0.30f * s },
@@ -352,7 +352,7 @@ void touchDraw(void) {
 			}
 		} else if (c->shape == STICK) {
 			// The base, and the knob where it's pushed; fainter than the buttons, as they cover the game.
-			SDL_Color const faint = { up.r, up.g, up.b, 36 }, faintEdge = { edge.r, edge.g, edge.b, 60 };
+			SDL_Color const faint = { up.r, up.g, up.b, 60 }, faintEdge = { edge.r, edge.g, edge.b, 85 };
 			bool const moved = sticks[c->button][0] || sticks[c->button][1];
 			drawShape(c->x, c->y, c->w, c->h, faint, faintEdge, e);
 			float const knob = c->w * 0.46f, reach = c->w * 0.4f - knob / 2 + c->w * 0.1f;
