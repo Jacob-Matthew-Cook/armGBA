@@ -44,8 +44,15 @@ static unsigned bytesPerFrame;
 static int16_t frameSound[2 * 4096];
 static size_t frameSoundCount;
 static SDL_Texture* overlay;
-static int overlayWidth, overlayHeight, overlayShownWidth, overlayShownHeight;
-static uint32_t overlayGap = 1;
+static int overlayWidth, overlayHeight, overlayShownWidth, overlayShownHeight, overlayLcd = -1;
+// The overlay's shares of gap, for keeping a Game Boy screen's brightness under it; whether the game's
+// texture holds the picture darkened through its tables, from which solve, and whether a newer
+// picture waits.
+static struct LibretroLcdKeep overlayKeep;
+static bool gameKept, gameKeptStale;
+static unsigned gameKeptSolved;
+static uint8_t* keptPicture;
+static size_t keptSize;
 static SDL_Texture* shadow;
 static bool shadowStale;
 static uint16_t rumbleStrength[PORTS][2];
@@ -426,7 +433,11 @@ static void videoRefresh(const void* data, unsigned width, unsigned height, size
 			return;
 		}
 	}
-	SDL_UpdateTexture(app.game, NULL, data, (int) pitch);
+	if (gameKept) {
+		gameKeptStale = true;
+	} else {
+		SDL_UpdateTexture(app.game, NULL, data, (int) pitch);
+	}
 	memcpy(app.picture, data, pitch * height);
 	app.picturePitch = pitch;
 	shadowStale = true;
@@ -756,13 +767,14 @@ static int coreGridScale(void) {
 // while off there, the Color's and Advance's a black matrix; lcd.h has each screen's values. It's
 // blended as in linear light: over black, color c becomes c * (1 - a)^(1 / 2.2), which an ordinary
 // blend gives with alpha 1 - (1 - a)^(1 / 2.2); the Game Boy's gaps, near its pixels' colors, take
-// the same.
+// the same. It is white, tinted the gap's color as it's drawn, and how many of its pixels take each
+// alpha goes to overlayKeep.
 static void makeOverlay(SDL_Rect to) {
 	uint32_t gap = 0;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
 	bool const grid = settings.lcdOnGpu && settings.gpuGrid;
 	if (overlay && grid && overlayWidth == app.gameWidth && overlayHeight == app.gameHeight && overlayShownWidth == to.w &&
-	    overlayShownHeight == to.h && overlayGap == gap) {
+	    overlayShownHeight == to.h && overlayLcd == (int) lcd) {
 		return;
 	}
 	if (overlay) {
@@ -773,7 +785,7 @@ static void makeOverlay(SDL_Rect to) {
 	overlayHeight = app.gameHeight;
 	overlayShownWidth = to.w;
 	overlayShownHeight = to.h;
-	overlayGap = gap;
+	overlayLcd = (int) lcd;
 	if (!grid || !app.gameWidth || to.w <= 0 || to.h <= 0) {
 		return;
 	}
@@ -796,13 +808,21 @@ static void makeOverlay(SDL_Rect to) {
 	for (int x = 0; x < w; ++x) {
 		across[x] = (int) lroundf(libretroLcdGapSpread(x, pitchX, look->share * pitchX) * look->across * fade * 255);
 	}
+	memset(overlayKeep.weights, 0, sizeof(overlayKeep.weights));
 	for (int y = 0; y < h; ++y) {
 		int const down = (int) lroundf(libretroLcdGapSpread(y, pitchY, look->share * pitchY) * look->down * fade * 255);
 		uint32_t* const row = pixels + (size_t) y * w;
 		for (int x = 0; x < w; ++x) {
-			row[x] = (uint32_t) linear[across[x] + down - (across[x] * down + 127) / 255] << 24 | (gap & 0xFFFFFF);
+			uint8_t const alpha = linear[across[x] + down - (across[x] * down + 127) / 255];
+			row[x] = (uint32_t) alpha << 24 | 0xFFFFFF;
+			++overlayKeep.weights[alpha];
 		}
 	}
+	for (int a = 0; a < 256; ++a) {
+		overlayKeep.shares[a] = a / 255.0f;
+	}
+	overlayKeep.count = 256;
+	overlayKeep.stale = true;
 	overlay = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
 	SDL_UpdateTexture(overlay, NULL, pixels, w * 4);
 	SDL_SetTextureBlendMode(overlay, SDL_BLENDMODE_BLEND);
@@ -863,12 +883,40 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 	SDL_RenderSetClipRect(app.renderer, NULL);
 }
 
+// The game's texture from the picture, darkened through overlayKeep's tables when keeping.
+static void uploadGame(bool keeping) {
+	const uint8_t* data = app.picture;
+	size_t const size = app.picturePitch * (size_t) app.gameHeight;
+	if (keeping && size > keptSize) {
+		uint8_t* const more = realloc(keptPicture, size);
+		keeping = more != NULL;
+		if (more) {
+			keptPicture = more;
+			keptSize = size;
+		}
+	}
+	if (keeping) {
+		// ARGB8888, blue first in memory.
+		for (size_t i = 0; i < size; i += 4) {
+			keptPicture[i] = overlayKeep.table[2][data[i]];
+			keptPicture[i + 1] = overlayKeep.table[1][data[i + 1]];
+			keptPicture[i + 2] = overlayKeep.table[0][data[i + 2]];
+			keptPicture[i + 3] = data[i + 3];
+		}
+		data = keptPicture;
+	}
+	SDL_UpdateTexture(app.game, NULL, data, (int) app.picturePitch);
+	gameKept = keeping;
+	gameKeptStale = false;
+	gameKeptSolved = overlayKeep.solved;
+}
+
 static void present(void) {
 	SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 255);
 	SDL_RenderClear(app.renderer);
 	if (app.game && app.loaded && gameSmooth != (settings.filter == FILTER_SMOOTH)) {
 		makeGameTexture(app.gameWidth, app.gameHeight);
-		SDL_UpdateTexture(app.game, NULL, app.picture, (int) app.picturePitch);
+		uploadGame(false);
 	}
 	if (app.game && app.loaded) {
 		int width, height;
@@ -890,13 +938,19 @@ static void present(void) {
 		}
 		to.x = (width - to.w) / 2;
 		to.y = (height - to.h) / 2;
-		SDL_RenderCopy(app.renderer, app.game, NULL, &to);
 		makeOverlay(to);
-		if (overlay) {
-			SDL_RenderCopy(app.renderer, overlay, NULL, &to);
-		}
 		uint32_t lit = 0;
 		enum LibretroLcd const lcd = libretroLcd(&lit);
+		bool const keeping = overlay && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 && libretroLcdKeep(&overlayKeep);
+		if (keeping ? !gameKept || gameKeptStale || gameKeptSolved != overlayKeep.solved : gameKept) {
+			uploadGame(keeping);
+		}
+		SDL_RenderCopy(app.renderer, app.game, NULL, &to);
+		if (overlay) {
+			uint32_t const gap = gameKept ? overlayKeep.gap : lit;
+			SDL_SetTextureColorMod(overlay, gap >> 16 & 0xFF, gap >> 8 & 0xFF, gap & 0xFF);
+			SDL_RenderCopy(app.renderer, overlay, NULL, &to);
+		}
 		if (overlay && settings.shadow && app.picture && app.format == RETRO_PIXEL_FORMAT_XRGB8888 &&
 		    (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET)) {
 			drawShadow(to, lit);

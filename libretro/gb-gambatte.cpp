@@ -407,6 +407,8 @@ bool correction;
 bool colorPanel;
 // The contrast wheel of the first Game Boy, the Pocket and the Light, -5 to 5.
 int contrast;
+// The four shades shown now, the contrast wheel's included.
+unsigned long shown[4];
 // What the color table was last built for: 0 uncorrected, 1 a Game Boy Color's screen, 2 a Game Boy
 // Advance's.
 int built = -1;
@@ -502,8 +504,11 @@ void setColors() {
 	// A Game Boy game started through a Game Boy Color's boot ROM keeps the colors the boot ROM
 	// gave it (a state stores them too), so they aren't replaced here.
 	if (!s->gb->isCgb() || (s->loadFlags & gambatte::GB::NO_BIOS)) {
+		for (int i = 0; i < 4; ++i) {
+			shown[i] = contrast ? contrasted(i) : now.shades[i];
+		}
 		for (int i = 0; i < 12; ++i) {
-			s->gb->setDmgPaletteColor(i / 4, i % 4, contrast ? contrasted(i % 4) : now.shades[i % 4]);
+			s->gb->setDmgPaletteColor(i / 4, i % 4, shown[i % 4]);
 		}
 	}
 	// Game Boy screen shades are shown as they are; color correction is only for a Game Boy Color's
@@ -743,6 +748,10 @@ void libretroGbSetContrast(int steps) {
 	if (s->gb) {
 		setColors();
 	}
+}
+
+uint32_t libretroGbShade(int shade) {
+	return (uint32_t) shown[shade];
 }
 
 uint32_t libretroGbOffColor(void) {

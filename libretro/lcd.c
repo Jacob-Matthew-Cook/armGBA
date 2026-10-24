@@ -344,7 +344,7 @@ static int postJobs = 1;
 // The larger picture; for each thread, the source row blended for each share of gap and each row of a
 // square unlike those above it; the shadow's darkness at the source's size, with 8 more on each side
 // and 2 more rows above and below; for each thread, a row of each square's share kept from the shadow.
-static struct GridBuffer gridOut, gridBlends, gridTemplates, gridDark, gridKeeps;
+static struct GridBuffer gridOut, gridBlends, gridTemplates, gridDark, gridKeeps, gridKeptRows;
 
 // Whether b holds wanted bytes, growing it if it didn't.
 static bool gridReserve(struct GridBuffer* b, size_t wanted) {
@@ -405,6 +405,97 @@ static void gridLay(int s, enum LibretroLcd lcd) {
 	gridLayout.lcd = lcd;
 }
 
+// Keeping a Game Boy screen's brightness under the grid. A camera out of focus sees each pixel with
+// the gap around it as one color, and the measured screens are those colors, so drawing the gaps over
+// them would count the gaps twice: dark shades would come out far lighter. Instead each pixel's own
+// color is darkened, through a table for each channel, until its square, averaged in linear light, is
+// the color it shows without the grid. The gap is the unlit screen's color, darker only as far as the
+// darkest shade needs; where no gap reaches every shade (Grayscale's white and black), the one whose
+// worst miss is least. The Color's pixels are kept the same way (as BGB's subpixels are), its black
+// gaps left black, so only colors near full brightness, which no pixel can reach, come out darker.
+static float keepLinear[256];
+
+// A square's average in linear light with level inside drawn and gap in the gaps, blended by each of
+// keep's shares.
+static float keepSquare(const struct LibretroLcdKeep* keep, float total, int inside, int gap) {
+	float sum = 0;
+	for (int i = 0; i < keep->count; ++i) {
+		float const share = keep->shares[i];
+		sum += keep->weights[i] * keepLinear[(int) lroundf(inside * (1 - share) + gap * share)];
+	}
+	return sum / total;
+}
+
+bool libretroLcdKeep(struct LibretroLcdKeep* keep) {
+	uint32_t off;
+	enum LibretroLcd const lcd = libretroLcd(&off);
+	bool const shades = lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET;
+	if (!shades && lcd != LIBRETRO_LCD_COLOR) {
+		return false;
+	}
+	uint32_t colors[5] = { off };
+	for (int k = 0; shades && k < 4; ++k) {
+		colors[k + 1] = libretroGbShade(k);
+	}
+	if (!keep->stale && keep->lcd == (int) lcd && !memcmp(keep->colors, colors, sizeof(colors))) {
+		return true;
+	}
+	if (!keepLinear[255]) {
+		for (int v = 0; v < 256; ++v) {
+			float const c = v / 255.0f;
+			keepLinear[v] = c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+		}
+	}
+	float total = 0;
+	for (int i = 0; i < keep->count; ++i) {
+		total += keep->weights[i];
+	}
+	uint32_t gap = 0;
+	for (int c = 0; c < 3; ++c) {
+		int const bits = 16 - 8 * c, unlit = (int) (off >> bits & 0xFF);
+		int best = unlit;
+		float bestMiss = INFINITY;
+		for (int g = unlit; shades && g >= 0; --g) {
+			float const low = keepSquare(keep, total, 0, g), high = keepSquare(keep, total, 255, g);
+			float miss = 0;
+			for (int k = 0; k < 5; ++k) {
+				float const want = keepLinear[colors[k] >> bits & 0xFF];
+				miss = fmaxf(miss, fmaxf(low - want, want - high));
+			}
+			if (miss < bestMiss) {
+				bestMiss = miss;
+				best = g;
+			}
+		}
+		gap |= (uint32_t) best << bits;
+		for (int v = 0; v < 256; ++v) {
+			int lo = 0, hi = 255;
+			while (lo < hi) {
+				int const mid = (lo + hi) / 2;
+				if (keepSquare(keep, total, mid, best) < keepLinear[v]) {
+					lo = mid + 1;
+				} else {
+					hi = mid;
+				}
+			}
+			if (lo && keepLinear[v] - keepSquare(keep, total, lo - 1, best) < keepSquare(keep, total, lo, best) - keepLinear[v]) {
+				--lo;
+			}
+			keep->table[c][v] = (uint8_t) lo;
+		}
+	}
+	keep->gap = gap;
+	keep->lcd = (int) lcd;
+	memcpy(keep->colors, colors, sizeof(colors));
+	keep->stale = false;
+	++keep->solved;
+	return true;
+}
+
+// The CPU grid's, for the scale and screen its shares are from.
+static struct LibretroLcdKeep gridKept;
+static int keptScale, keptLcd = -1;
+
 // The frame the threads draw.
 static struct GridFrame {
 	const uint8_t* picture;
@@ -412,6 +503,8 @@ static struct GridFrame {
 	size_t pitch, bytes;
 	int s;
 	uint32_t gap;
+	// Whether each row goes through gridKept's tables first.
+	bool kept;
 	bool shadow;
 	// Where the shadow on a square comes from: the source pixel above and left of that point, as
 	// offsets, and the weights of the ones after; the darkness from start down, by scale / 65536.
@@ -608,11 +701,22 @@ static void gridDrawJob(int job) {
 	uint8_t* const blends = gridBlends.data + (size_t) job * GRID_SHARES_MAX * rowBytes;
 	uint8_t* const templates = gridTemplates.data + (size_t) job * 8 * outPitch;
 	uint8_t* const keep = gridFrame.shadow ? gridKeeps.data + (size_t) job * gridFrame.width : NULL;
+	uint8_t* const kept = gridFrame.kept ? gridKeptRows.data + (size_t) job * rowBytes : NULL;
 	for (unsigned y = from; y < to; ++y) {
 		if (keep) {
 			gridKeepRow(y, keep);
 		}
-		gridMakeTemplates(gridFrame.picture + y * gridFrame.pitch, blends, templates, keep);
+		const uint8_t* row = gridFrame.picture + y * gridFrame.pitch;
+		if (kept) {
+			for (size_t x = 0; x < rowBytes; x += 4) {
+				kept[x] = gridKept.table[2][row[x]];
+				kept[x + 1] = gridKept.table[1][row[x + 1]];
+				kept[x + 2] = gridKept.table[0][row[x + 2]];
+				kept[x + 3] = row[x + 3];
+			}
+			row = kept;
+		}
+		gridMakeTemplates(row, blends, templates, keep);
 		for (int sy = 0; sy < s; ++sy) {
 			memcpy(gridOut.data + (size_t) (y * s + sy) * outPitch, templates + (size_t) gridLayout.firstAlike[sy] * outPitch, outPitch);
 		}
@@ -635,9 +739,10 @@ void sendPicture(const void* picture, unsigned width, unsigned height, size_t pi
 	size_t const outPitch = (size_t) outWidth * bytes;
 	uint32_t gap;
 	enum LibretroLcd const lcd = libretroLcd(&gap);
+	bool const kept = bytes == 4 && lcd != LIBRETRO_LCD_ADVANCE;
 	bool const shadow = gridWay && bytes == 4 && (lcd == LIBRETRO_LCD_DMG || lcd == LIBRETRO_LCD_POCKET);
 	bool const room = gridReserve(&gridOut, outPitch * outHeight) && gridReserve(&gridBlends, (size_t) GRID_JOBS * GRID_SHARES_MAX * width * bytes) &&
-	                  gridReserve(&gridTemplates, (size_t) GRID_JOBS * 8 * outPitch) &&
+	                  gridReserve(&gridTemplates, (size_t) GRID_JOBS * 8 * outPitch) && (!kept || gridReserve(&gridKeptRows, (size_t) GRID_JOBS * width * 4)) &&
 	                  (!shadow || (gridReserve(&gridDark, (size_t) (width + 16) * (height + 4)) &&
 	                               gridReserve(&gridKeeps, (size_t) GRID_JOBS * width)));
 	// Without the memory, the last picture stays.
@@ -647,7 +752,21 @@ void sendPicture(const void* picture, unsigned width, unsigned height, size_t pi
 	}
 	gridLay(s, lcd);
 	startJobs();
-	gridFrame = (struct GridFrame) { .picture = picture, .width = width, .height = height, .pitch = pitch, .bytes = bytes, .s = s, .gap = gap, .shadow = shadow };
+	if (kept && (keptScale != s || keptLcd != (int) lcd)) {
+		gridKept.count = s * s;
+		for (int i = 0; i < gridKept.count; ++i) {
+			gridKept.shares[i] = gridLayout.shares[gridLayout.shareOf[i / s][i % s]] / 255.0f;
+			gridKept.weights[i] = 1;
+		}
+		gridKept.stale = true;
+		keptScale = s;
+		keptLcd = (int) lcd;
+	}
+	if (kept) {
+		libretroLcdKeep(&gridKept);
+	}
+	gridFrame = (struct GridFrame) { .picture = picture, .width = width, .height = height, .pitch = pitch, .bytes = bytes, .s = s,
+		                             .gap = kept ? gridKept.gap : gap, .kept = kept, .shadow = shadow };
 	if (shadow) {
 		// Darkness counts from a sixteenth below the unlit screen; it is a fifth (51 of 255) at black.
 		int const lit = 2 * (int) (gap >> 16 & 0xFF) + 5 * (int) (gap >> 8 & 0xFF) + (int) (gap & 0xFF);

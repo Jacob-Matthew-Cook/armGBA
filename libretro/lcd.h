@@ -10,6 +10,7 @@
 // cast, which the standalone frontend draws on the GPU and the core can draw into a larger picture.
 
 #include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 enum LibretroLcd {
@@ -24,6 +25,22 @@ enum LibretroLcd {
 
 // The screen, and the color between its pixels as XRGB8888.
 enum LibretroLcd libretroLcd(uint32_t* gap);
+
+// Keeping the Game Boy screens' and the Color's brightness under the grid (lcd.c has why). The caller
+// gives the shares of gap, 0 to 1, a square's pixels are blended with, and how many pixels take each,
+// and sets stale when they change. The gap to draw instead and a table for each channel (red, green,
+// blue) that darkens the picture are solved again when stale or the screen or its colors change,
+// counted in solved. Returns whether the screen's brightness is kept.
+struct LibretroLcdKeep {
+	float shares[256], weights[256];
+	int count;
+	bool stale;
+	int lcd;
+	uint32_t colors[5], gap;
+	uint8_t table[3][256];
+	unsigned solved;
+};
+bool libretroLcdKeep(struct LibretroLcdKeep* keep);
 
 // Each screen's gaps: their width as a share of the pixel pitch, and how much of the gap color shows
 // across (between columns) and down (between rows). From photos of the consoles: the first Game Boy's
