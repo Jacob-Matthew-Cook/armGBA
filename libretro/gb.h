@@ -51,7 +51,7 @@ void libretroGbSetColorCorrection(bool);
 // On the Game Boy Advance model, shows the Color's panel, its colors, instead of the Advance's.
 void libretroGbSetColorPanel(bool color);
 // Sets the original Game Boy's screen: 0 plain grays, 1 the Pocket's, 2 the first model's green, 3
-// the Light's backlight.
+// the Light's backlight, 4 the first model measured, 5 the Pocket measured.
 void libretroGbSetScreen(int);
 // Sets that screen's contrast wheel, -5 to 5.
 void libretroGbSetContrast(int);

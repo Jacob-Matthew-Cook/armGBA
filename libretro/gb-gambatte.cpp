@@ -400,7 +400,7 @@ size_t stall() {
 }
 
 // The original Game Boy screen chosen: 0 plain grays, 1 the Pocket's, 2 the first model's green, 3
-// the Light's with its backlight on.
+// the Light's with its backlight on, 4 the first model measured, 5 the Pocket measured.
 int screen;
 bool correction;
 // On the Game Boy Advance model, the Color's panel shown instead of the Advance's.
@@ -436,29 +436,39 @@ void correctedColors(bool advance) {
 
 // Installs the colors: the chosen screen's four shades for original Game Boy games, and the table
 // that turns Game Boy Color 15-bit colors into the frontend's, corrected or not.
-// Each screen's color while the game has it off: slightly lighter than its lightest shade, not
-// white.
-const unsigned long offColors[4] = { 0xFFFFFF, 0xCFDAAC, 0xD2E6A6, 0x91EAD0 };
+// Each screen: its color while the game has it off, its four shades, and the color its pixels go
+// toward driven harder than the darkest shade. The plain grays are gambatte-libretro's; the Pocket's,
+// the first model's and the Light's are SameBoy's, past the darkest shade only darker. The measured
+// ones are BGB's (bgb.bircd.org/reality): a first Game Boy and a Pocket photographed under
+// color-accurate light and corrected with a ColorChecker, the lightest shade about as bright as the
+// screen switched off. A first Game Boy's pixels go toward dark blue at the most contrast, as in
+// BGB's contrast wheel; the measured Pocket's only darker.
+struct Screen {
+	unsigned long off;
+	unsigned long shades[4];
+	unsigned long full;
+};
+const Screen screens[6] = {
+	{ 0xFFFFFF, { 0xFFFFFF, 0xA5A5A5, 0x525252, 0x000000 }, 0x000000 },
+	{ 0xCFDAAC, { 0xC2CE93, 0x818D66, 0x3A4C3A, 0x07100E }, 0x000000 },
+	{ 0xD2E6A6, { 0xC6DE8C, 0x84A563, 0x396139, 0x081810 }, 0x000000 },
+	{ 0x91EAD0, { 0x7FE2C3, 0x56B495, 0x357862, 0x0A1C15 }, 0x000000 },
+	{ 0x948A04, { 0x759833, 0x588F51, 0x3B7560, 0x2E615A }, 0x00005E },
+	{ 0xC2CFA8, { 0xADBF92, 0x96A67C, 0x727E64, 0x5A635C }, 0x2C322E },
+};
 
 void setColors() {
-	// The plain grays are those gambatte-libretro shows Game Boy games in; the Pocket's, the first
-	// model's and the Light's are SameBoy's.
-	static const unsigned long shades[4][4] = {
-		{ 0xFFFFFF, 0xA5A5A5, 0x525252, 0x000000 },
-		{ 0xC2CE93, 0x818D66, 0x3A4C3A, 0x07100E },
-		{ 0xC6DE8C, 0x84A563, 0x396139, 0x081810 },
-		{ 0x7FE2C3, 0x56B495, 0x357862, 0x0A1C15 },
-	};
-	s->gb->setDmgPaletteColor(0, 4, offColors[screen]);
+	Screen const& now = screens[screen];
+	s->gb->setDmgPaletteColor(0, 4, now.off);
 	// The wheel sets the drive voltages of the whole STN screen together (DMG-LCD-06: its 30k pot sets
 	// the IR3E02's bias levels), from about -11 V to -14 V end to end, so 12% either side of the
 	// middle, each step a tenth of the turn. An STN pixel's darkness is an S-curve of its voltage, 10%
 	// to 90% dark over about 12% of it, so the wheel sweeps nearly the whole curve: down, the screen
-	// fades to blank; up, it goes to black, past the darkest shade. Each shade's place on the curve
-	// comes from its darkness in linear light: the lightest a little past the unlit screen, the
-	// darkest nine tenths of the way to black. Darker, a shade keeps its hue, as a pixel blocking
-	// more light would; lighter, it moves toward the unlit screen.
-	auto const contrasted = [](int shade) {
+	// fades to blank; up, it goes past the darkest shade. A shade's darkness places it on its
+	// screen's own path, from the screen switched off through the four shades to its darkest, so
+	// its color changes along the way as a real screen's does: the lightest a little past the screen
+	// switched off, the others by their brightness, the darkest nine tenths of the way.
+	auto const contrasted = [&now](int shade) {
 		auto const linear = [](unsigned long color, int bits) {
 			double const c = (color >> bits & 0xFF) / 255.0;
 			return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
@@ -467,17 +477,23 @@ void setColors() {
 			return 0.2126 * linear(color, 16) + 0.7152 * linear(color, 8) + 0.0722 * linear(color, 0);
 		};
 		double const width = 0.12 / (2 * std::log(9.0)), lightest = 0.03, darkest = 0.95;
-		unsigned long const off = offColors[screen], dark = shades[screen][3], color = shades[screen][shade];
-		double const share = (luminance(off) - luminance(color)) / (luminance(off) - luminance(dark));
-		double const before = lightest + (darkest - lightest) * share;
+		unsigned long const path[6] = { now.off, now.shades[0], now.shades[1], now.shades[2], now.shades[3], now.full };
+		double places[6] = { 0, lightest, 0, 0, darkest, 1 };
+		double const top = luminance(now.shades[0]), bottom = luminance(now.shades[3]);
+		for (int k = 2; k <= 3; ++k) {
+			places[k] = lightest + (darkest - lightest) * (top - luminance(now.shades[k - 1])) / (top - bottom);
+		}
+		double const before = places[shade + 1];
 		double const voltage = (1 + width * std::log(before / (1 - before))) * (1 + 0.12 * contrast / 5);
 		double const after = 1 / (1 + std::exp(-(voltage - 1) / width));
-		double const now = luminance(color), unlit = luminance(off);
-		double const wanted = std::min(std::max(unlit - (unlit - luminance(dark)) * (after - lightest) / (darkest - lightest), 0.0), unlit);
+		int k = 0;
+		while (k < 4 && after > places[k + 1]) {
+			++k;
+		}
+		double const t = std::min(std::max((after - places[k]) / (places[k + 1] - places[k]), 0.0), 1.0);
 		unsigned long result = 0;
 		for (int bits = 0; bits < 24; bits += 8) {
-			double const o = linear(off, bits), v = linear(color, bits);
-			double const l = wanted <= now ? (now > 0 ? v * wanted / now : 0) : o + (v - o) * (unlit - wanted) / (unlit - now);
+			double const l = linear(path[k], bits) + (linear(path[k + 1], bits) - linear(path[k], bits)) * t;
 			double const c = l <= 0.0031308 ? l * 12.92 : 1.055 * std::pow(l, 1 / 2.4) - 0.055;
 			result |= (unsigned long) std::lround(c * 255) << bits;
 		}
@@ -487,7 +503,7 @@ void setColors() {
 	// gave it (a state stores them too), so they aren't replaced here.
 	if (!s->gb->isCgb() || (s->loadFlags & gambatte::GB::NO_BIOS)) {
 		for (int i = 0; i < 12; ++i) {
-			s->gb->setDmgPaletteColor(i / 4, i % 4, contrast ? contrasted(i % 4) : shades[screen][i % 4]);
+			s->gb->setDmgPaletteColor(i / 4, i % 4, contrast ? contrasted(i % 4) : now.shades[i % 4]);
 		}
 	}
 	// Game Boy screen shades are shown as they are; color correction is only for a Game Boy Color's
@@ -730,7 +746,7 @@ void libretroGbSetContrast(int steps) {
 }
 
 uint32_t libretroGbOffColor(void) {
-	return offColors[screen];
+	return screens[screen].off;
 }
 
 bool libretroGbOnAdvance(void) {

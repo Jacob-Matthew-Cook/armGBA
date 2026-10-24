@@ -46,7 +46,7 @@ static int screenKind(void) {
 	if (!gameBoy || libretroGbOnAdvance() || libretroGbIsColor()) {
 		return SCREEN_TFT;
 	}
-	return gbModel == LIBRETRO_GB_MGB || gbShades == 1 || gbShades == 3 ? SCREEN_POCKET : SCREEN_DMG;
+	return gbModel == LIBRETRO_GB_MGB || gbShades == 1 || gbShades == 3 || gbShades == 5 ? SCREEN_POCKET : SCREEN_DMG;
 }
 
 // Whether the picture is on the Game Boy Advance's panel: a Game Boy Advance game's, or a Game Boy

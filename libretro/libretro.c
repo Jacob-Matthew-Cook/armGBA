@@ -522,7 +522,7 @@ static void readOptions(void) {
 		{ "Game Boy Advance", LIBRETRO_GB_AGB },
 	};
 	static const struct Choice bootChoices[] = { { "disabled", LIBRETRO_GB_BOOT_OFF }, { "open-source", LIBRETRO_GB_BOOT_ARMGBA } };
-	static const struct Choice shadeChoices[] = { { "pocket", 1 }, { "original", 2 }, { "light", 3 } };
+	static const struct Choice shadeChoices[] = { { "grayscale", 0 }, { "pocket", 1 }, { "original", 2 }, { "light", 3 }, { "measured", 4 }, { "pocket measured", 5 } };
 	static const struct Choice screensChoices[] = {
 		{ "top and bottom", SCREENS_STACKED },
 		{ "player 1", SCREENS_ONE },
@@ -569,7 +569,7 @@ static void readOptions(void) {
 	lowPass = filter ? atoi(filter) * 0x10000 / 100 : 0;
 	gbModel = optionChoice("armgba_gb_model", modelChoices, COUNT(modelChoices), LIBRETRO_GB_AUTO);
 	libretroGbSetBootRom(optionChoice("armgba_gb_boot_rom", bootChoices, COUNT(bootChoices), LIBRETRO_GB_BOOT_NINTENDO));
-	int const shades = optionChoice("armgba_gb_screen", shadeChoices, COUNT(shadeChoices), 0);
+	int const shades = optionChoice("armgba_gb_screen", shadeChoices, COUNT(shadeChoices), 4);
 	gbShades = shades;
 	const char* const contrast = option("armgba_gb_contrast");
 	gbContrast = contrast ? atoi(contrast) : 0;
