@@ -103,8 +103,8 @@ a close likeness of the smooth one the shaders and the standalone frontend draw,
 the cost. At 6x, a Game Boy game's grid adds about 1.5 ms a frame on an RG353M and its shadow 0.1 ms
 more; on a Core i7-9700F, 0.07 ms and 0.02 ms. On a small screen, such as a 640x480 handheld's, 2x
 with integer scaling looks cleanest. `shaders/` holds RetroArch shader presets, `.slangp` and
-`.glslp`, that draw the same on the GPU at any size instead, one for each screen: `gb-measured`,
-`gb-pocket-measured`, `gb-light` and `gb-gray` (with the shadow), `gbc` and `gba`. The standalone frontend
+`.glslp`, that draw the same on the GPU at any size instead, one for each screen: `gb`,
+`gb-pocket`, `gb-light` and `gb-gray` (with the shadow), `gbc` and `gba`. The standalone frontend
 draws its own on the GPU or the core's, never both: its LCD Rendering setting picks one. Drawn at
 any size, the grid shows a tenth of the photos' darkness for each time larger the picture is, all of
 it from 10x: small, its gaps would land unevenly and read too heavy.
