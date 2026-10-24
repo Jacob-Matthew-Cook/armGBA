@@ -56,6 +56,12 @@ static unsigned turboPeriod = TURBO_FEWEST;
 static unsigned turboPulse = 2;
 // Boktai's sunlight, 0 to 10.
 static int solarLevel = 5;
+// What the buttons have done that a state holds, so a rollback replays them alike: each turbo
+// button's place in its period, and whether the Solar Sensor's stick and the tilt flick were held.
+static struct {
+	uint8_t turboA[MAX_PLAYERS], turboB[MAX_PLAYERS], turboL, turboR;
+	uint8_t solarHeld, flickHeld;
+} pressed;
 static retro_set_rumble_state_t setRumble;
 static bool rumbling;
 int threadedVideo;
@@ -1369,15 +1375,14 @@ static void readMotion(uint16_t keys, int* x, int* y, bool* click) {
 // Feeds the tilt sensor of a Game Boy cartridge that has one (Kirby Tilt 'n' Tumble). Clicking the
 // stick flicks the console upwards, which is how Kirby jumps.
 static void readTilt(uint16_t keys) {
-	static bool held;
 	int x;
 	int y;
 	bool click;
 	readMotion(keys, &x, &y, &click);
-	if (click && !held) {
+	if (click && !pressed.flickHeld) {
 		libretroGbFlick();
 	}
-	held = click;
+	pressed.flickHeld = click;
 	libretroGbSetTilt(x, y);
 }
 
@@ -1441,38 +1446,36 @@ static void readSensors(uint16_t keys) {
 	}
 	if (devices & HW_LIGHT_SENSOR) {
 		static const int levels[10] = { 5, 11, 18, 27, 42, 62, 84, 109, 139, 183 };
-		static bool held;
 		int const push = inputState(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
 		bool brighter = push < -0x4000;
 		bool darker = push > 0x4000;
-		if ((brighter || darker) && !held) {
+		if ((brighter || darker) && !pressed.solarHeld) {
 			solarLevel += brighter ? (solarLevel < 10) : -(solarLevel > 0);
 			char message[32];
 			snprintf(message, sizeof(message), "Sunlight %d of 10", solarLevel);
 			notify(message, 120);
 		}
-		held = brighter || darker;
+		pressed.solarHeld = brighter || darker;
 		gba->gpio.luminance = 0xFF - (0x16 + (solarLevel ? levels[solarLevel - 1] : 0));
 	}
 }
 
 // Returns whether a held turbo button presses its button this frame: pressed for the first frames
 // of every turbo period, as in gambatte's core.
-static bool turbo(unsigned port, unsigned button, unsigned* counter) {
+static bool turbo(unsigned port, unsigned button, uint8_t* counter) {
 	if (!inputState(port, RETRO_DEVICE_JOYPAD, 0, button)) {
 		*counter = 0;
 		return false;
 	}
 	bool const down = *counter < turboPulse;
-	*counter = *counter + 1 >= turboPeriod ? 0 : *counter + 1;
+	*counter = (uint8_t) (*counter + 1u >= turboPeriod ? 0 : *counter + 1u);
 	return down;
 }
 
 // Turbo L and R: L3 and R3 held press a Game Boy Advance game's L and R.
 static uint16_t readTurboShoulders(void) {
-	static unsigned turboL, turboR;
-	bool const l = !switchStick(RETRO_DEVICE_ID_JOYPAD_L3) && turbo(0, RETRO_DEVICE_ID_JOYPAD_L3, &turboL);
-	bool const r = !switchStick(RETRO_DEVICE_ID_JOYPAD_R3) && turbo(0, RETRO_DEVICE_ID_JOYPAD_R3, &turboR);
+	bool const l = !switchStick(RETRO_DEVICE_ID_JOYPAD_L3) && turbo(0, RETRO_DEVICE_ID_JOYPAD_L3, &pressed.turboL);
+	bool const r = !switchStick(RETRO_DEVICE_ID_JOYPAD_R3) && turbo(0, RETRO_DEVICE_ID_JOYPAD_R3, &pressed.turboR);
 	return (l ? KEY_L : 0) | (r ? KEY_R : 0);
 }
 
@@ -1501,9 +1504,8 @@ static uint16_t readKeys(unsigned port) {
 		}
 	}
 	// Turbo A and B: X and Y held press A and B.
-	static unsigned turboA[MAX_PLAYERS], turboB[MAX_PLAYERS];
-	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_X, &turboA[port]) ? KEY_A : 0;
-	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_Y, &turboB[port]) ? KEY_B : 0;
+	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_X, &pressed.turboA[port]) ? KEY_A : 0;
+	keys |= turbo(port, RETRO_DEVICE_ID_JOYPAD_Y, &pressed.turboB[port]) ? KEY_B : 0;
 	// The left stick as the D-pad, unless it tilts controller 1's motion sensor cartridge.
 	bool const tilting = port == 0 && tiltControl == TILT_LEFT_STICK &&
 	                     (gameBoy ? tiltCartridge : gba && gba->gpio.devices & (HW_TILT | HW_GYRO));
@@ -2422,14 +2424,15 @@ static bool loadConsoles(const void* data, size_t size) {
 // - the consoles' states;
 // - with the consoles of a link here, how long each player has held the restart buttons, so a
 //   rollback restarts a console on the same frame;
+// - what the buttons have done (pressed) and the sunlight level;
 // - the session's tag, which tells a device in netplay that it joined another's session.
-// A single-console state from before the tag still loads.
+// A state from before the buttons were kept still loads, and a single-console one from before the tag.
 static size_t extraStateSize(void) {
 	return togetherRunning() ? sizeof(restartHeld) : 0;
 }
 
 size_t retro_serialize_size(void) {
-	return consolesStateSize() + extraStateSize() + sizeof(sessionTag);
+	return consolesStateSize() + extraStateSize() + sizeof(pressed) + 1 + sizeof(sessionTag);
 }
 
 bool retro_serialize(void* data, size_t size) {
@@ -2437,25 +2440,39 @@ bool retro_serialize(void* data, size_t size) {
 	if (size < retro_serialize_size() || !saveConsoles(data, consolesStateSize())) {
 		return false;
 	}
-	uint8_t* const at = (uint8_t*) data + consolesStateSize();
+	uint8_t* at = (uint8_t*) data + consolesStateSize();
 	memcpy(at, restartHeld, extraStateSize());
-	memcpy(at + extraStateSize(), &sessionTag, sizeof(sessionTag));
+	at += extraStateSize();
+	memcpy(at, &pressed, sizeof(pressed));
+	at += sizeof(pressed);
+	*at++ = (uint8_t) solarLevel;
+	memcpy(at, &sessionTag, sizeof(sessionTag));
 	return true;
 }
 
 bool retro_unserialize(const void* data, size_t size) {
 	checkNetplay();
-	bool const tagged = size >= retro_serialize_size();
+	size_t const buttons = sizeof(pressed) + 1;
+	bool const full = size >= retro_serialize_size(), older = size == retro_serialize_size() - buttons;
+	bool const tagged = full || older;
 	if (!(tagged || (size == consolesStateSize() && !togetherRunning())) || !loadConsoles(data, consolesStateSize())) {
 		return false;
 	}
 	// A loaded state has every console's save as it was; player 1's isn't copied over them after.
 	copySaves = 0;
 	if (tagged) {
-		const uint8_t* const at = (const uint8_t*) data + consolesStateSize();
+		const uint8_t* at = (const uint8_t*) data + consolesStateSize();
 		memcpy(restartHeld, at, extraStateSize());
+		at += extraStateSize();
+		if (full) {
+			memcpy(&pressed, at, sizeof(pressed));
+			solarLevel = at[sizeof(pressed)] <= 10 ? at[sizeof(pressed)] : solarLevel;
+			at += buttons;
+		} else {
+			memset(&pressed, 0, sizeof(pressed));
+		}
 		uint32_t tag;
-		memcpy(&tag, at + extraStateSize(), sizeof(tag));
+		memcpy(&tag, at, sizeof(tag));
 		loadedTag(tag);
 	}
 	return true;
