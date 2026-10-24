@@ -1414,7 +1414,7 @@ int main(int argc, char** argv) {
 #ifdef __ANDROID__
 	// On Android, armgba's folder is at the shared storage's top, where a file manager reaches it, and
 	// the game list starts there.
-	const char* const shared = getenv("EXTERNAL_STORAGE") ? getenv("EXTERNAL_STORAGE") : "/storage/emulated/0";
+	const char* const shared = !access("/storage/emulated/0", R_OK) || !getenv("EXTERNAL_STORAGE") ? "/storage/emulated/0" : getenv("EXTERNAL_STORAGE");
 	setenv("HOME", shared, 1);
 	setenv("XDG_CONFIG_HOME", shared, 1);
 	setenv("XDG_DATA_HOME", shared, 1);

@@ -21,6 +21,11 @@
 
 #include "lcd.h"
 
+#ifdef __ANDROID__
+#include <limits.h>
+#define ANDROID_STORAGE "/storage"
+#endif
+
 char browserPath[PATH_SIZE];
 // Recent games, read as the menu opens.
 static char recentGames[RECENT_MAX][PATH_SIZE];
@@ -106,6 +111,21 @@ static int compareEntries(const void* a, const void* b) {
 	return strcasecmp(x->name, y->name);
 }
 
+// Room for count entries.
+static bool ensureEntries(int count) {
+	if (count <= browserCapacity) {
+		return true;
+	}
+	int const capacity = browserCapacity ? browserCapacity * 2 : 256;
+	struct BrowserEntry* const grown = realloc(browserEntries, (size_t) capacity * sizeof(*grown));
+	if (!grown) {
+		return false;
+	}
+	browserEntries = grown;
+	browserCapacity = capacity;
+	return true;
+}
+
 // Reads browserPath's folders and games (or cheat files), sorted, unless it's the folder read last.
 // File systems that don't say what an entry is, and symbolic links, are asked with stat.
 static void readBrowser(void) {
@@ -115,6 +135,14 @@ static void readBrowser(void) {
 	snprintf(browserListed, sizeof(browserListed), "%s", browserPath);
 	browserCount = 0;
 	DIR* dir = opendir(browserPath);
+#ifdef __ANDROID__
+	// Android's top is its storage: the shared storage, emulated/0, and each card's partition.
+	if (!strcmp(browserPath, ANDROID_STORAGE)) {
+		ensureEntries(1);
+		snprintf(browserEntries[browserCount].name, NAME_SIZE, "emulated/0");
+		browserEntries[browserCount++].directory = true;
+	}
+#endif
 	if (!dir) {
 		return;
 	}
@@ -123,6 +151,11 @@ static void readBrowser(void) {
 		if (e->d_name[0] == '.') {
 			continue;
 		}
+#ifdef __ANDROID__
+		if (!strcmp(browserPath, ANDROID_STORAGE) && (!strcmp(e->d_name, "emulated") || !strcmp(e->d_name, "self"))) {
+			continue;
+		}
+#endif
 		bool directory = e->d_type == DT_DIR;
 		if (e->d_type == DT_UNKNOWN || e->d_type == DT_LNK) {
 			char path[FILE_SIZE];
@@ -137,14 +170,8 @@ static void readBrowser(void) {
 		if (!directory && !(browserCheats ? cheatFile(e->d_name) : gameFile(e->d_name))) {
 			continue;
 		}
-		if (browserCount == browserCapacity) {
-			int const capacity = browserCapacity ? browserCapacity * 2 : 256;
-			struct BrowserEntry* const grown = realloc(browserEntries, (size_t) capacity * sizeof(*grown));
-			if (!grown) {
-				break;
-			}
-			browserEntries = grown;
-			browserCapacity = capacity;
+		if (!ensureEntries(browserCount + 1)) {
+			break;
 		}
 		snprintf(browserEntries[browserCount].name, NAME_SIZE, "%s", e->d_name);
 		browserEntries[browserCount++].directory = directory;
@@ -286,6 +313,26 @@ static void browse(int index, int delta) {
 		return;
 	}
 	if (index < 0) {
+#ifdef __ANDROID__
+		// Above the shared storage or a card is the list of them; Android lets apps read nothing higher.
+		// /sdcard's paths are named by where they lead.
+		char real[PATH_MAX];
+		if (strncmp(browserPath, ANDROID_STORAGE, strlen(ANDROID_STORAGE)) && realpath(browserPath, real) && strlen(real) < sizeof(browserPath)) {
+			snprintf(browserPath, sizeof(browserPath), "%s", real);
+		}
+		if (!strcmp(browserPath, ANDROID_STORAGE)) {
+			return;
+		}
+		size_t const top = strlen(ANDROID_STORAGE "/");
+		char* const after = strncmp(browserPath, ANDROID_STORAGE "/", top) ? NULL : browserPath + top;
+		char* const inside = after ? strchr(!strncmp(after, "emulated/", 9) ? after + 9 : after, '/') : NULL;
+		if (!inside) {
+			snprintf(browserReselect, sizeof(browserReselect), "%s", after ? after : "emulated/0");
+			snprintf(browserPath, sizeof(browserPath), "%s", ANDROID_STORAGE);
+			stack[depth - 1].selected = -1;
+			return;
+		}
+#endif
 		char* slash = strrchr(browserPath, '/');
 		snprintf(browserReselect, sizeof(browserReselect), "%s", slash ? slash + 1 : "");
 		if (slash && slash != browserPath) {
