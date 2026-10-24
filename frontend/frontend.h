@@ -244,6 +244,8 @@ void uiCloseMenu(void);
 bool uiEvent(const SDL_Event* event);
 void uiDraw(void);
 void osd(const char* format, ...);
+// A small sync arrow at the top left for a moment: netplay took the host's state.
+void osdResync(void);
 void uiCaptureBinding(int which, bool controller, bool hotkey);
 
 // play.c

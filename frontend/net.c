@@ -588,7 +588,7 @@ static void checkAgainst(int frame) {
 	struct Check const* own = &roll.ownChecks[frame / CHECK_FRAMES % CHECKS];
 	if (host->frame == frame && own->frame == frame && host->crc != own->crc) {
 		roll.hostChecks[frame / CHECK_FRAMES % CHECKS].frame = -1;
-		osd("Netplay: out of step, taking the host's state");
+		osdResync();
 		sendTo(&connections[0], MSG_RESYNC, NULL, 0);
 	}
 }

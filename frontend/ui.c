@@ -123,6 +123,44 @@ void osd(const char* format, ...) {
 	fprintf(stderr, "armgba: %s\n", messages[0].text);
 }
 
+static Uint32 resyncUntil;
+
+// A circular arrow centered at x, y, radius r: an arc most of the way round, clockwise, and its head.
+static void drawSyncArrow(int x, int y, float r, SDL_Color color) {
+	enum { STEPS = 24 };
+	SDL_Vertex v[2 * (STEPS + 1) + 3];
+	int index[6 * STEPS + 3];
+	float const thick = r * 0.28f, from = -1.0f, to = 3.9f;
+	for (int i = 0; i <= STEPS; ++i) {
+		float const a = from + (to - from) * i / STEPS;
+		for (int k = 0; k < 2; ++k) {
+			float const radius = r + (k ? thick : -thick) / 2;
+			v[2 * i + k] = (SDL_Vertex) { { x + radius * cosf(a), y + radius * sinf(a) }, color, { 0, 0 } };
+		}
+	}
+	int n = 0;
+	for (int i = 0; i < STEPS; ++i) {
+		int const q[6] = { 2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 1, 2 * i + 3, 2 * i + 2 };
+		for (int k = 0; k < 6; ++k) {
+			index[n++] = q[k];
+		}
+	}
+	// The head: across the arc's end, pointing on round.
+	int const head = 2 * (STEPS + 1);
+	v[head] = (SDL_Vertex) { { x + (r + thick * 1.6f) * cosf(to), y + (r + thick * 1.6f) * sinf(to) }, color, { 0, 0 } };
+	v[head + 1] = (SDL_Vertex) { { x + (r - thick * 1.6f) * cosf(to), y + (r - thick * 1.6f) * sinf(to) }, color, { 0, 0 } };
+	v[head + 2] = (SDL_Vertex) { { x + r * cosf(to + 0.75f), y + r * sinf(to + 0.75f) }, color, { 0, 0 } };
+	for (int k = 0; k < 3; ++k) {
+		index[n++] = head + k;
+	}
+	SDL_RenderGeometry(app.renderer, NULL, v, head + 3, index, n);
+}
+
+void osdResync(void) {
+	resyncUntil = settings.showMessages ? SDL_GetTicks() + 1500 : 0;
+	fprintf(stderr, "armgba: Netplay: out of step, taking the host's state\n");
+}
+
 // Shapes: rounded rectangles are a circle's quarters at the corners and plain rectangles between.
 
 static struct {
@@ -1368,6 +1406,13 @@ void uiDraw(void) {
 		int const w = textWidth(FACE_STRONG, size, fps) + u;
 		fillRounded((SDL_Rect) { width - w - u / 2, u / 2, w, h }, h / 2, (SDL_Color) { 0, 0, 0, 150 });
 		textDraw(FACE_STRONG, size, width - w - u / 2 + u / 2, u / 2 + (h - size) / 2, white, fps);
+	}
+	// Netplay taking the host's state: a sync arrow at the top left, fading out over its last half second.
+	Uint32 const now = SDL_GetTicks();
+	if (now < resyncUntil) {
+		int const alpha = resyncUntil - now < 500 ? (int) ((resyncUntil - now) * 255 / 500) : 255;
+		fillRounded((SDL_Rect) { u / 2, u / 2, u, u }, u / 2, (SDL_Color) { 0, 0, 0, (Uint8) (150 * alpha / 255) });
+		drawSyncArrow(u, u, u * 0.3f, faded(white, alpha));
 	}
 	drawMessages(width, height, u);
 }
