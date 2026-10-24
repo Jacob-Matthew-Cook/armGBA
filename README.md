@@ -24,18 +24,18 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | Right stick up, down | Sunlight up, down (solar sensor games) | Contrast up, down (original Game Boy screens) |
 | L, R, Start (held 1 s) | Restart that player's console (the Restart Combo option) | Same |
 
-With the consoles of a link on one device, R2 changes how the screens are shown and L2 fast-forwards,
-or changes them back as the L2 Button option says; in netplay, L2 changes them back. In netplay each
-device shows the screens its own way, changed by its own player's R2. RetroArch 1.22.2 and older don't
-say which player is on a device, so there the host follows player 1 and other devices player 2,
-unless Screen Switch Controller names the player (Show Player Numbers marks each player's screen).
-The tilt stick is the left stick by default. The Tilt Control option moves it to the right stick or
-the D-pad; with the D-pad, L is the flick.
+With the consoles of a link on one device, R2 changes how the screens are shown and L2
+fast-forwards, or changes them back as the L2 Outside Netplay option says; in netplay, L2 changes
+them back. In netplay each device shows the screens its own way, changed by its own player's R2.
+RetroArch 1.22.2 and older don't say which player is on a device, so there the host follows player 1
+and other devices player 2, unless Screen Layout Control names the player (Show Player Numbers marks
+each player's screen). The tilt stick is the left stick by default. The Tilt Control option moves it
+to the right stick or the D-pad; with the D-pad, L is the flick.
 
 ## Options
 
 The options are in six categories, Link's in four parts: Link (Link Mode), Link: Players, Link:
-Connection, and Link: Screens and Controls; the standalone frontend shows Link's as one page with
+Connection, and Link: Screens and Controllers; the standalone frontend shows Link's as one page with
 headers. The menu shows only those that do something for the game loaded and the Link Mode chosen:
 the Tilt and Solar Sensors only for cartridges with one, the link options only with Link Mode on.
 
@@ -67,15 +67,15 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | Link | Link Mode (applies on restart) | Both | Off, Together, Separate, GameCube (Game Boy Advance) |
 | Link: Players | Number of Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
-| Link: Connection | This Console's Cartridge (applies on restart) | Game Boy Advance | Inserted, Removed (Separate, GameCube) |
-| | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
+| Link: Connection | Cartridge (applies on restart) | Game Boy Advance | Inserted, Removed (Separate, GameCube) |
+| | GBA Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
 | | Game Boy Link Port (applies on restart) | Game Boy | Link Cable, Four Player Adapter (Together) |
 | | Game Boy Link Timing | Game Boy | Standard, Exact (Separate) |
-| | GameCube Address | Game Boy Advance | Find on the Network, This Device (GameCube) |
-| Link: Screens and Controls | Screen Layout | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
-| | L2 Button | Both | Fast-Forward, Previous Screens (Together) |
-| | Screen Switch Controller | Both | Auto, Player 1 to Player 4 (Together) |
-| | Switch Player Combo | Both | L + R + A + B, L3 + R3, Start + L2 + R2, Start + L3, Start + R3, Off; stick clicks it uses only switch |
+| | Dolphin Address | Game Boy Advance | Find on the Network, This Device (GameCube) |
+| Link: Screens and Controllers | Screen Layout | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
+| | L2 Outside Netplay | Both | Fast-Forward, Previous Screens (Together) |
+| | Screen Layout Control | Both | Auto, Player 1 to Player 4 (Together) |
+| | Switch Controller Combo | Both | L + R + A + B, L3 + R3, Start + L2 + R2, Start + L3, Start + R3, Off; stick clicks it uses only switch |
 | | Show Player Numbers | Both | Off, On (default) (Together) |
 | Saves | Back Up Save | Both | Off, then each player |
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
@@ -293,15 +293,15 @@ The two ways to link:
 - Player 1's Save Folder can keep player 1's save in armGBA/Player 1 too, beside the other players'.
   When it changes, the newer save is used.
 
-The Game Boy Advance Wireless Adapter (Link Port) works with either: the Union Room and trades of
-Pokemon FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The Game
-Boy Four Player Adapter works with Together, and three or four Game Boys always use it: Wario Blast,
-F-1 Race, Yoshi's Cookie and other four-player games.
+The Game Boy Advance Wireless Adapter (GBA Link Port) works with either: the Union Room and trades
+of Pokemon FireRed, LeafGreen and Emerald, and other games using Nintendo's wireless library. The
+Game Boy Four Player Adapter works with Together, and three or four Game Boys always use it: Wario
+Blast, F-1 Race, Yoshi's Cookie and other four-player games.
 
 **GameCube.** With Link Mode on GameCube, this Game Boy Advance is plugged into a controller port of
 Dolphin set to GBA (TCP), on the same device or another on the local network, and plays its part in
 the GameCube game, as Four Swords Adventures' players do. For a program the GameCube sends, set
-This Console's Cartridge to Removed; either BIOS takes it. GameCube Address finds Dolphin by itself;
+Cartridge to Removed; either BIOS takes it. Dolphin Address finds Dolphin by itself;
 This Device looks only here. The console keeps to Dolphin's time while the game talks to it, so the
 two run in step.
 

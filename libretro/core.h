@@ -126,10 +126,10 @@ void sendSaveOnPairing(void);
 void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);
 
 // options.c: the options given to the frontend (NULL to an older frontend, which has plain
-// variables), and their values. optionChoice gives the number of the option's value among
-// choices, or fallback if it isn't one. The Wanted functions read Link Mode, Players and Link Port.
-// showOptions shows the options that do something for the game and Link Mode, and returns whether
-// that changed; setOptions gives the options again after a list of choices changed.
+// variables), and their values. optionChoice gives the number of the option's value among choices,
+// or fallback if it isn't one. The Wanted functions read Link Mode, Number of Players and GBA Link
+// Port. showOptions shows the options that do something for the game and Link Mode, and returns
+// whether that changed; setOptions gives the options again after a list of choices changed.
 extern struct retro_core_options_v2* coreOptions;
 struct Choice {
 	const char* value;

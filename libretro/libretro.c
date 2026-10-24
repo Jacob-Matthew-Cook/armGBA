@@ -175,9 +175,9 @@ static uint16_t gbaCorrected[MAX_PLAYERS][SCREEN_WIDTH * SCREEN_HEIGHT];
 enum { SCREENS_SIDE, SCREENS_STACKED, SCREENS_ONE, SCREENS_COUNT = SCREENS_ONE + MAX_PLAYERS };
 static int screens;
 static int screensOption = -1;
-// The L2 Button option: fast-forward, or the previous screens.
+// The L2 Outside Netplay option: fast-forward, or the previous screens.
 static bool l2FastForward = true;
-// Screen Switch Controller: in netplay, whose L2 and R2 change this device's screens, -1 for Auto.
+// Screen Layout Control: in netplay, whose L2 and R2 change this device's screens, -1 for Auto.
 // Show Player Numbers: each player's number on their screen.
 static int r2Follows = -1;
 static bool playerNumbers;
@@ -207,8 +207,8 @@ char pairPath[PATH_SIZE];
 char otherPaths[MAX_PLAYERS][PATH_SIZE];
 static int pairCount;
 bool netplaySeen;
-// The Switch Player Combo buttons move controller 1 to the next console here; controllerFocus is
-// the console it plays, the other controllers moving along with it.
+// The Switch Controller Combo buttons move controller 1 to the next console here; controllerFocus
+// is the console it plays, the other controllers moving along with it.
 enum { SWITCH_OFF, SWITCH_L_R_A_B, SWITCH_L3_R3, SWITCH_START_L2_R2, SWITCH_START_L3, SWITCH_START_R3 };
 static int switchController = SWITCH_L_R_A_B;
 static int controllerFocus;
@@ -837,8 +837,8 @@ static void stopOtherGameBoys(void) {
 	linkSetGameBoy(true);
 }
 
-// Plugs the Link Port option's choice into each console: the Wireless Adapter, or the cable between
-// the consoles here.
+// Plugs the GBA Link Port option's choice into each console: the Wireless Adapter, or the cable
+// between the consoles here.
 static void attachPorts(void) {
 	const char* value = option("armgba_link_port");
 	bool wireless = value && !strcmp(value, "wireless") && (togetherWanted() || separateWanted());
@@ -1025,7 +1025,7 @@ static bool runningAsWanted(void) {
 	return same;
 }
 
-// Restart takes in a change of Link Mode, Players, a Link Port or Player 2's Game.
+// Restart takes in a change of Link Mode, Number of Players, a Link Port or Player 2's Game.
 static void applyLinkOptions(void) {
 	if (secondFromFrontend || pairFile) {
 		return;
@@ -1138,7 +1138,7 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 	return true;
 }
 
-// This Console's Cartridge: with Separate, player 1's console may start with its cartridge out,
+// Cartridge: with Separate, player 1's console may start with its cartridge out,
 // waiting for a game sent over the cable. The game comes back from its file when put back in, its
 // save memory as it was; if it was out from the start, RetroArch read no save into it, so the save
 // comes from RetroArch's save file once the console has been reset. Returns whether it went back in.
@@ -1557,12 +1557,12 @@ bool rerunning(void) {
 	return environment(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &enabled) && !(enabled & RETRO_AV_ENABLE_VIDEO);
 }
 
-// Whether Switch Player Combo works now: on, with the consoles here and not in netplay.
+// Whether Switch Controller Combo works now: on, with the consoles here and not in netplay.
 static bool switchOn(void) {
 	return switchController != SWITCH_OFF && togetherRunning() && !netplaySeen && playersHere > 1;
 }
 
-// Whether controller 1 holds the Switch Player Combo buttons.
+// Whether controller 1 holds the Switch Controller Combo buttons.
 static bool switchHeld(int port) {
 	static struct {
 		size_t count;
@@ -1585,7 +1585,8 @@ static bool switchHeld(int port) {
 	return true;
 }
 
-// Whether controller 1's L3 or R3 is one of the Switch Player Combo buttons now, so it only switches.
+// Whether controller 1's L3 or R3 is one of the Switch Controller Combo buttons now, so it only
+// switches.
 static bool switchStick(unsigned button) {
 	return switchOn() && (switchController == SWITCH_L3_R3 ||
 	                      (switchController == SWITCH_START_L3 && button == RETRO_DEVICE_ID_JOYPAD_L3) ||
@@ -1600,14 +1601,14 @@ static int portFor(int i) {
 	return (i - controllerFocus + playersHere) % playersHere;
 }
 
-// Whether controller 1 holds Start with Switch Player Combo on Start + L2 + R2, so its L2 and R2
-// only switch.
+// Whether controller 1 holds Start with Switch Controller Combo on Start + L2 + R2, so its L2 and
+// R2 only switch.
 static bool switchStart(int port) {
 	return switchController == SWITCH_START_L2_R2 && port == 0 && switchOn() &&
 	       inputState(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START);
 }
 
-// The Switch Player Combo buttons on controller 1 move it to the next console.
+// The Switch Controller Combo buttons on controller 1 move it to the next console.
 static void readControllerSwitch(void) {
 	static bool held;
 	if (rerunning()) {
@@ -1626,7 +1627,7 @@ static void readControllerSwitch(void) {
 }
 
 // L2 or R2 held fast-forwards at RetroArch's maximum run speed; with the consoles here only L2, as
-// the L2 Button option says. Not in netplay, where the other consoles would wait.
+// the L2 Outside Netplay option says. Not in netplay, where the other consoles would wait.
 static void readFastForward(void) {
 	static bool held;
 	bool now = false;
