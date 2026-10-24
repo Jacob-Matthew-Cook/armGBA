@@ -1328,6 +1328,14 @@ static void handleEvent(const SDL_Event* event) {
 	case SDL_QUIT:
 		app.running = false;
 		break;
+	// Android may end an app it has sent to the background without a word, so its save, and the state
+	// when Save and Load State on Exit and Start is on, are written as on quitting.
+	case SDL_APP_WILLENTERBACKGROUND:
+		if (app.loaded && settings.autoState && !cheevosHardcore()) {
+			saveState(-1);
+		}
+		writeSaves();
+		break;
 	case SDL_DROPFILE:
 		loadGame(event->drop.file);
 		SDL_free(event->drop.file);
