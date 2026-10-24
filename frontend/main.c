@@ -1483,7 +1483,9 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// Android's Back opens the menu instead of leaving, and the phone's tilt isn't a controller.
+	// Android's Back opens the menu instead of leaving, the phone's tilt isn't a controller, and the
+	// screen stays landscape, either way up, as the manifest asks, which SDL would otherwise undo.
+	SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 	SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
 	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
