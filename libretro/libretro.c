@@ -2340,9 +2340,12 @@ static size_t consolesStateSize(void) {
 	return gbaStateSize();
 }
 
+// Also tells the Game Boy core whether this state is for rollback or run-ahead, which want it exact.
 static void checkNetplay(void) {
 	int context = RETRO_SAVESTATE_CONTEXT_NORMAL;
-	netplaySeen |= environment(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &context) && context == RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+	bool const told = environment(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &context);
+	netplaySeen |= told && context == RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+	libretroGbExactStates(told && context != RETRO_SAVESTATE_CONTEXT_NORMAL);
 	// A tag of this device's own: the time, the processor time used and where this core sits in
 	// memory, which differ from one device to the next.
 	while (netplaySeen && !sessionTag) {

@@ -344,6 +344,15 @@ public:
 	bool loadState(char const *stateBuf, std::size_t size);
 
 	/**
+	  * armGBA: the whole machine exactly, as BizHawk keeps it (SyncState), for a frontend's
+	  * rollback and run-ahead, which a state from saveState can come back from slightly
+	  * differently: its size, saving it into a buffer that size, and loading it.
+	  */
+	std::size_t exactStateSize();
+	void saveExactState(char *stateBuf);
+	bool loadExactState(char const *stateBuf, std::size_t size);
+
+	/**
 	  * Selects which state slot to save state to or load state from.
 	  * There are 10 such slots, numbered from 0 to 9 (periodically extended for all n).
 	  */

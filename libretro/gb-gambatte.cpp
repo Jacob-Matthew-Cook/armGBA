@@ -614,7 +614,7 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 	s->summed = 0;
 	s->pressed = 0;
 	std::memset(s->pixels, 0, sizeof(s->pixels));
-	size_t const needed = s->gb->saveState(0, 0, static_cast<char*>(0)) + sizeof(gambatte::uint_least32_t);
+	size_t const needed = std::max(s->gb->saveState(0, 0, static_cast<char*>(0)), s->gb->exactStateSize()) + sizeof(gambatte::uint_least32_t);
 	if (!s->stateSize) {
 		s->stateSize = needed + STATE_SLACK;
 	} else if (needed > s->stateSize) {
@@ -1155,10 +1155,36 @@ size_t stateSizeOne() {
 	return s->gb ? s->stateSize : 0;
 }
 
+// Rollback and run-ahead take states of the whole machine exactly (exactStates), which mark their
+// length's top bit; a state to keep is gambatte's own, which a Game Boy of another model can load.
+// An exact state is saved with the shades blank, as each device shows the screen its own way.
+bool exactStates;
+gambatte::uint_least32_t const EXACT = 0x80000000u;
+
+bool saveExact(void* data) {
+	bool const shades = !s->gb->isCgb() || (s->loadFlags & gambatte::GB::NO_BIOS);
+	for (int i = 0; shades && i < 12; ++i) {
+		s->gb->setDmgPaletteColor(i / 4, i % 4, 0);
+	}
+	gambatte::uint_least32_t const length = static_cast<gambatte::uint_least32_t>(s->gb->exactStateSize());
+	bool const fits = length + sizeof(length) <= s->stateSize;
+	if (fits) {
+		gambatte::uint_least32_t const marked = length | EXACT;
+		std::memcpy(data, &marked, sizeof(marked));
+		s->gb->saveExactState(static_cast<char*>(data) + sizeof(length));
+		std::memset(static_cast<char*>(data) + sizeof(length) + length, 0, s->stateSize - sizeof(length) - length);
+	}
+	setColors();
+	return fits;
+}
+
 // Saves the state's length, then the state.
 bool saveOne(void* data, size_t size) {
 	if (!s->gb || size < s->stateSize) {
 		return false;
+	}
+	if (exactStates) {
+		return saveExact(data);
 	}
 	gambatte::uint_least32_t const length = s->gb->saveState(0, 0, static_cast<char*>(0));
 	if (length + sizeof(length) > size) {
@@ -1178,6 +1204,14 @@ bool loadOne(const void* data, size_t size) {
 	}
 	std::memcpy(&length, data, sizeof(length));
 	const char* const state = static_cast<const char*>(data) + sizeof(length);
+	if (length & EXACT) {
+		length &= ~EXACT;
+		if (length > size - sizeof(length) || !s->gb->loadExactState(state, length)) {
+			return false;
+		}
+		setColors();
+		return true;
+	}
 	if (length > size - sizeof(length)) {
 		return false;
 	}
@@ -1214,6 +1248,10 @@ bool loadOne(const void* data, size_t size) {
 }
 
 extern "C" {
+
+void libretroGbExactStates(bool exact) {
+	exactStates = exact;
+}
 
 // Link cable: the byte this Game Boy shifts out, and one shifted in from the other's transfer.
 int libretroGbLinkOut(void) {

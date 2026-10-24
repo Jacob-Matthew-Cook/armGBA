@@ -22,6 +22,7 @@
 #include "savestate.h"
 #include "state_osd_elements.h"
 #include "statesaver.h"
+#include "newstate.h"
 #include "file/file.h"
 #include "file/crc32.h"
 
@@ -393,6 +394,23 @@ bool GB::loadState(std::string const &filepath) {
 	}
 
 	return false;
+}
+
+std::size_t GB::exactStateSize() {
+	NewStateDummy counter;
+	SyncState<false>(&counter);
+	return counter.GetLength();
+}
+
+void GB::saveExactState(char *stateBuf) {
+	NewStateExternalBuffer saver(stateBuf, exactStateSize());
+	SyncState<false>(&saver);
+}
+
+bool GB::loadExactState(char const *stateBuf, std::size_t size) {
+	NewStateExternalBuffer loader(const_cast<char *>(stateBuf), size);
+	SyncState<true>(&loader);
+	return !loader.Overflow() && loader.GetLength() == static_cast<long>(size);
 }
 
 bool GB::saveState(gambatte::uint_least32_t const *videoBuf, std::ptrdiff_t pitch) {

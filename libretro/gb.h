@@ -86,6 +86,8 @@ bool libretroGbIsColor(void);
 // '+' or spaces. They stay in force, including after a restart. Returns false if a code is neither.
 bool libretroGbSetCheats(const char* const* codes, size_t count);
 size_t libretroGbStateSize(void);
+// States for rollback and run-ahead save the whole machine exactly; others, in gambatte's format.
+void libretroGbExactStates(bool exact);
 bool libretroGbSaveState(void* data, size_t size);
 bool libretroGbLoadState(const void* data, size_t size);
 // The link cable: the byte this Game Boy shifts out, and a byte shifted in when the other Game Boy
