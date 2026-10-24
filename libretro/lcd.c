@@ -567,6 +567,14 @@ bool libretroLcdKeep(struct LibretroLcdKeep* keep) {
 			}
 		}
 	}
+	for (int c = 0; c < 3; ++c) {
+		int const bits = c == 1 ? 6 : 5, shift = c == 0 ? 11 : c == 1 ? 5 : 0, top = (1 << bits) - 1;
+		for (int v = 0; v <= top; ++v) {
+			int const wide = bits == 5 ? v << 3 | v >> 2 : v << 2 | v >> 4;
+			keep->table565[0][c][v] = (uint16_t) ((keep->table[c][wide] * top + 127) / 255 << shift);
+			keep->table565[1][c][v] = (uint16_t) ((keep->gaps[c][wide] * top + 127) / 255 << shift);
+		}
+	}
 	keep->gap = gap;
 	keep->lcd = (int) lcd;
 	memcpy(keep->colors, colors, sizeof(colors));
@@ -764,11 +772,6 @@ static void gridMakeTemplates(const uint8_t* row, const uint8_t* gaps, uint8_t* 
 	}
 }
 
-// 8-bit channels to RGB565, rounded.
-static inline uint16_t gridPack565(unsigned r, unsigned g, unsigned b) {
-	return (uint16_t) ((r * 31 + 127) / 255 << 11 | (g * 63 + 127) / 255 << 5 | (b * 31 + 127) / 255);
-}
-
 // A thread's rows of the larger picture, each from its template.
 static void gridDrawJob(int job) {
 	unsigned from, to;
@@ -787,10 +790,12 @@ static void gridDrawJob(int job) {
 		const uint8_t* row = gridFrame.picture + y * gridFrame.pitch;
 		if (kept && gridFrame.bytes == 2) {
 			const uint16_t* const in = (const uint16_t*) row;
+			const uint16_t(*const inside)[64] = gridKept.table565[0];
+			const uint16_t(*const around)[64] = gridKept.table565[1];
 			for (unsigned x = 0; x < gridFrame.width; ++x) {
-				unsigned const c = in[x], r = (c >> 11) << 3 | c >> 13, g = (c >> 5 & 0x3F) << 2 | (c >> 9 & 3), b = (c & 0x1F) << 3 | (c >> 2 & 7);
-				((uint16_t*) kept)[x] = gridPack565(gridKept.table[0][r], gridKept.table[1][g], gridKept.table[2][b]);
-				((uint16_t*) gaps)[x] = gridPack565(gridKept.gaps[0][r], gridKept.gaps[1][g], gridKept.gaps[2][b]);
+				unsigned const c = in[x], r = c >> 11, g = c >> 5 & 0x3F, b = c & 0x1F;
+				((uint16_t*) kept)[x] = (uint16_t) (inside[0][r] | inside[1][g] | inside[2][b]);
+				((uint16_t*) gaps)[x] = (uint16_t) (around[0][r] | around[1][g] | around[2][b]);
 			}
 			row = kept;
 		} else if (kept) {

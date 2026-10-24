@@ -914,11 +914,6 @@ static void drawShadow(SDL_Rect to, uint32_t lit) {
 	SDL_RenderSetClipRect(app.renderer, NULL);
 }
 
-// 8-bit channels to RGB565, rounded.
-static uint16_t pack565(unsigned r, unsigned g, unsigned b) {
-	return (uint16_t) ((r * 31 + 127) / 255 << 11 | (g * 63 + 127) / 255 << 5 | (b * 31 + 127) / 255);
-}
-
 // The game's texture from the picture, darkened through overlayKeep's tables when keeping.
 static void uploadGame(bool keeping) {
 	const uint8_t* data = app.picture;
@@ -933,12 +928,13 @@ static void uploadGame(bool keeping) {
 	}
 	bool const wide = app.format == RETRO_PIXEL_FORMAT_XRGB8888;
 	if (keeping && !wide) {
-		// RGB565: each channel widened to 8 bits for the tables, then narrowed again.
+		// RGB565, through the tables for it.
+		const uint16_t(*const inside)[64] = overlayKeep.table565[0];
+		const uint16_t(*const around)[64] = overlayKeep.table565[1];
 		for (size_t i = 0; i < size; i += 2) {
-			unsigned const c = *(const uint16_t*) (data + i);
-			unsigned const r = (c >> 11) << 3 | c >> 13, g = (c >> 5 & 0x3F) << 2 | (c >> 9 & 3), b = (c & 0x1F) << 3 | (c >> 2 & 7);
-			*(uint16_t*) (keptPicture + i) = pack565(overlayKeep.table[0][r], overlayKeep.table[1][g], overlayKeep.table[2][b]);
-			*(uint16_t*) (keptGaps + i) = pack565(overlayKeep.gaps[0][r], overlayKeep.gaps[1][g], overlayKeep.gaps[2][b]);
+			unsigned const c = *(const uint16_t*) (data + i), r = c >> 11, g = c >> 5 & 0x3F, b = c & 0x1F;
+			*(uint16_t*) (keptPicture + i) = (uint16_t) (inside[0][r] | inside[1][g] | inside[2][b]);
+			*(uint16_t*) (keptGaps + i) = (uint16_t) (around[0][r] | around[1][g] | around[2][b]);
 		}
 	} else if (keeping) {
 		// ARGB8888, blue first in memory.

@@ -39,6 +39,8 @@ struct LibretroLcdKeep {
 	int lcd;
 	uint32_t colors[5], gap;
 	uint8_t table[3][256], gaps[3][256];
+	// The same for RGB565 pictures, each channel's value to its bits in place: the tables, then the gaps.
+	uint16_t table565[2][3][64];
 	unsigned solved;
 };
 bool libretroLcdKeep(struct LibretroLcdKeep* keep);
