@@ -351,11 +351,12 @@ void touchDraw(void) {
 				}
 			}
 		} else if (c->shape == STICK) {
-			// The base, and the knob where it's pushed.
+			// The base, and the knob where it's pushed; fainter than the buttons, as they cover the game.
+			SDL_Color const faint = { up.r, up.g, up.b, 36 }, faintEdge = { edge.r, edge.g, edge.b, 60 };
 			bool const moved = sticks[c->button][0] || sticks[c->button][1];
-			drawShape(c->x, c->y, c->w, c->h, up, edge, e);
+			drawShape(c->x, c->y, c->w, c->h, faint, faintEdge, e);
 			float const knob = c->w * 0.46f, reach = c->w * 0.4f - knob / 2 + c->w * 0.1f;
-			drawShape(c->x + sticks[c->button][0] * reach, c->y + sticks[c->button][1] * reach, knob, knob, moved ? down : up, edge, e);
+			drawShape(c->x + sticks[c->button][0] * reach, c->y + sticks[c->button][1] * reach, knob, knob, moved ? down : faint, faintEdge, e);
 		} else if (c->button == MENU) {
 			// Three lines.
 			drawShape(c->x, c->y, c->w, c->h, up, edge, e);
