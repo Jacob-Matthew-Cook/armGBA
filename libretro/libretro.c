@@ -171,8 +171,14 @@ static int screens;
 static int screensOption = -1;
 // The L2 Button option: fast-forward, or the previous screens.
 static bool l2FastForward = true;
-// Netplay Screens: every device showing the host's screens, or each its own.
+// Netplay Screens: every device showing the host's screens, or each its own. The host's are its
+// player 1's R2 and L2 counted on every device alike, rollback's frames too, so every device's state
+// holds the same: they and whether those buttons were held.
 static bool hostsView;
+static int hostScreens;
+static uint8_t hostHeld;
+// This device's player in the standalone frontend's netplay, -1 when not in it.
+static int netplayPlayer = -1;
 static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game: the choices offered, and the game running (empty for player 1's).
@@ -333,6 +339,11 @@ void retro_get_system_info(struct retro_system_info* info) {
 	info->block_extract = false;
 }
 
+// The screens this device shows: in netplay on Host's View, the host's.
+static int shownScreens(void) {
+	return hostsView && (netplaySeen || netplayPlayer >= 0) ? hostScreens : screens;
+}
+
 // The picture size: 240x160, or 160x144 for a Game Boy game, or the linked consoles' screens. On the Game
 // Boy Advance model, a Game Boy game is 240x160 with the border shown, or 160x144 cropped (240x144
 // when stretched).
@@ -362,9 +373,10 @@ static void geometry(struct retro_game_geometry* geometry) {
 		geometry->base_height = SCREEN_HEIGHT;
 	}
 	if (togetherRunning()) {
-		bool const grid = playersHere > 2 && screens < SCREENS_ONE;
-		geometry->base_width *= screens == SCREENS_SIDE || grid ? 2 : 1;
-		geometry->base_height *= screens == SCREENS_STACKED || grid ? 2 : 1;
+		int const shown = shownScreens();
+		bool const grid = playersHere > 2 && shown < SCREENS_ONE;
+		geometry->base_width *= shown == SCREENS_SIDE || grid ? 2 : 1;
+		geometry->base_height *= shown == SCREENS_STACKED || grid ? 2 : 1;
 		geometry->aspect_ratio = (float) geometry->base_width / geometry->base_height;
 	}
 	// The LCD Grid's larger picture.
@@ -1268,6 +1280,8 @@ void retro_unload_game(void) {
 	netplaySeen = false;
 	netplayJoined = false;
 	sessionTag = 0;
+	hostScreens = SCREENS_SIDE;
+	hostHeld = 0;
 	updateRumble(false);
 	cheatsClear(&cheats, NULL);
 	for (size_t i = 0; i < cheatCodeCount; ++i) {
@@ -1662,37 +1676,51 @@ static void readRestarts(const uint16_t keys[]) {
 	}
 }
 
-static int netplayPlayer = -1;
 
 void libretroSetNetplayPlayer(int player) {
 	netplayPlayer = player;
 }
 
-// R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. In netplay,
-// with Netplay Screens on Own View, each device shows the screens its own way and only this device's
-// player changes them: the standalone frontend says which that is, and in RetroArch's netplay, which
-// doesn't, it is the host's player 1 or a joined device's player 2. On Host's View the host's player
-// 1 changes them on every device; a joining device takes the host's with its state.
-static void readScreensKeys(void) {
-	static bool held[MAX_PLAYERS][2];
-	if (rerunning()) {
-		return;
-	}
+// The way of showing the screens step ways on from now, wrapping round.
+static int nextScreens(int now, int step) {
 	int ways[SCREENS_COUNT];
 	int count = 0;
 	ways[count++] = SCREENS_SIDE;
 	if (playersHere == 2) {
 		ways[count++] = SCREENS_STACKED;
 	}
-	int at = 0;
 	for (int i = 0; i < playersHere; ++i) {
 		ways[count++] = SCREENS_ONE + i;
 	}
+	int at = 0;
 	for (int i = 0; i < count; ++i) {
-		at = ways[i] == screens ? i : at;
+		at = ways[i] == now ? i : at;
 	}
+	return ways[((at + step) % count + count) % count];
+}
+
+// R2 moves to the next way of showing the screens, and L2 back unless it fast-forwards. In netplay
+// each device shows the screens its own way and only this device's player changes them: the
+// standalone frontend says which that is, and in RetroArch's netplay, which doesn't, it is the host's
+// player 1 or a joined device's player 2. On Netplay Screens' Host's View, a device shows the host's.
+static void readScreensKeys(void) {
+	static bool held[MAX_PLAYERS][2];
+	static int announced = -1;
+	int const was = announced < 0 ? shownScreens() : announced;
+	// The host's, from player 1's buttons on every device alike.
+	for (int k = 0; k < 2; ++k) {
+		bool const now = inputState(0, RETRO_DEVICE_JOYPAD, 0, k ? RETRO_DEVICE_ID_JOYPAD_R2 : RETRO_DEVICE_ID_JOYPAD_L2);
+		if (now && !(hostHeld >> k & 1)) {
+			hostScreens = nextScreens(hostScreens, k ? 1 : -1);
+		}
+		hostHeld = (uint8_t) ((hostHeld & ~(1 << k)) | now << k);
+	}
+	if (rerunning()) {
+		return;
+	}
+	// This device's own.
 	bool const netplay = netplaySeen || netplayPlayer >= 0;
-	int const here = hostsView ? 0 : netplayPlayer >= 0 ? netplayPlayer : netplayJoined ? 1 : 0;
+	int const here = netplayPlayer >= 0 ? netplayPlayer : netplayJoined ? 1 : 0;
 	int step = 0;
 	for (int port = 0; port < playersHere; ++port) {
 		if (netplay && port != here) {
@@ -1706,16 +1734,20 @@ static void readScreensKeys(void) {
 			held[port][k] = now;
 		}
 	}
-	if (!step) {
+	if (step) {
+		screens = nextScreens(screens, step);
+	}
+	int const shown = shownScreens();
+	announced = shown;
+	if (shown == was) {
 		return;
 	}
-	screens = ways[((at + step) % count + count) % count];
 	announceGeometry();
 	char name[32];
-	if (screens >= SCREENS_ONE) {
-		snprintf(name, sizeof(name), "Player %d Only", screens - SCREENS_ONE + 1);
+	if (shown >= SCREENS_ONE) {
+		snprintf(name, sizeof(name), "Player %d Only", shown - SCREENS_ONE + 1);
 	} else {
-		snprintf(name, sizeof(name), "%s", playersHere > 2 ? "Grid" : screens == SCREENS_SIDE ? "Side by Side" : "Top and Bottom");
+		snprintf(name, sizeof(name), "%s", playersHere > 2 ? "Grid" : shown == SCREENS_SIDE ? "Side by Side" : "Top and Bottom");
 	}
 	notify(name, 120);
 }
@@ -1766,13 +1798,14 @@ static const uint32_t* advanceFrame(const uint32_t* picture) {
 // and hands over their sound mixed, or the shown one's.
 static void showConsoles(const void* const pictures[], size_t pixelBytes, int width, int height, void* frame, const int16_t* const samples[],
                          const size_t frames[]) {
-	if (screens >= SCREENS_ONE) {
-		int const shown = screens - SCREENS_ONE < playersHere ? screens - SCREENS_ONE : 0;
+	int const way = shownScreens();
+	if (way >= SCREENS_ONE) {
+		int const shown = way - SCREENS_ONE < playersHere ? way - SCREENS_ONE : 0;
 		showPicture(pictures[shown], width, height, width * pixelBytes);
 		sendSound(samples[shown], frames[shown]);
 		return;
 	}
-	int const columns = playersHere == 2 && screens == SCREENS_STACKED ? 1 : 2;
+	int const columns = playersHere == 2 && way == SCREENS_STACKED ? 1 : 2;
 	int const rows = (playersHere + columns - 1) / columns;
 	size_t const row = width * pixelBytes;
 	uint8_t* const out = frame;
@@ -2338,7 +2371,7 @@ static bool loadConsoles(const void* data, size_t size) {
 //   rollback restarts a console on the same frame;
 // - the session's tag, which tells a device in netplay that it joined another's session.
 // A single-console state from before the tag still loads.
-// Together's: the restart buttons' hold, and the screens shown, for a device joining on Host's View.
+// Together's: the restart buttons' hold, and the host's screens with its R2 and L2 held.
 static size_t extraStateSize(void) {
 	return togetherRunning() ? sizeof(restartHeld) + 1 : 0;
 }
@@ -2355,7 +2388,7 @@ bool retro_serialize(void* data, size_t size) {
 	uint8_t* at = (uint8_t*) data + consolesStateSize();
 	if (togetherRunning()) {
 		memcpy(at, restartHeld, sizeof(restartHeld));
-		at[sizeof(restartHeld)] = (uint8_t) screens;
+		at[sizeof(restartHeld)] = (uint8_t) (hostScreens | hostHeld << 6);
 		at += extraStateSize();
 	}
 	memcpy(at, &sessionTag, sizeof(sessionTag));
@@ -2374,21 +2407,16 @@ bool retro_unserialize(const void* data, size_t size) {
 	copySaves = 0;
 	if (tagged) {
 		const uint8_t* at = (const uint8_t*) data + consolesStateSize();
-		int shown = -1;
 		if (togetherRunning()) {
 			memcpy(restartHeld, at, sizeof(restartHeld));
 			at += sizeof(restartHeld);
-			shown = full ? *at++ : -1;
+			int const host = full ? *at & 0x3F : SCREENS_SIDE;
+			hostHeld = full ? *at++ >> 6 : 0;
+			hostScreens = host < SCREENS_ONE ? (host != SCREENS_STACKED || playersHere == 2 ? host : SCREENS_SIDE)
+			                                 : host < SCREENS_ONE + playersHere ? host : SCREENS_SIDE;
 		}
 		uint32_t tag;
 		memcpy(&tag, at, sizeof(tag));
-		// Joining on Host's View: the host's screens. A state of this device's own, as rollback
-		// loads, leaves them as they are.
-		if (hostsView && tag != sessionTag && (netplaySeen || netplayPlayer >= 0) && shown >= 0 &&
-		    (shown < SCREENS_ONE ? shown != SCREENS_STACKED || playersHere == 2 : shown < SCREENS_ONE + playersHere) && shown != screens) {
-			screens = shown;
-			announceGeometry();
-		}
 		loadedTag(tag);
 	}
 	return true;
