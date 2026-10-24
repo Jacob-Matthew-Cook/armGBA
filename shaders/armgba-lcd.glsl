@@ -18,6 +18,7 @@
 #pragma parameter UNLIT_BLUE "Unlit Screen Blue" 0.0 0.0 255.0 1.0
 #pragma parameter SHADOW "Pixel Shadow" 0.0 0.0 0.5 0.01
 #pragma parameter SHADOW_WAY "Pixel Shadow Way (Up, then Clockwise)" 4.0 1.0 8.0 1.0
+#pragma parameter SHADOW_DISTANCE "Pixel Shadow Distance (Dots)" 1.5 0.5 2.5 0.5
 
 #if defined(VERTEX)
 
@@ -88,6 +89,7 @@ uniform COMPAT_PRECISION float UNLIT_GREEN;
 uniform COMPAT_PRECISION float UNLIT_BLUE;
 uniform COMPAT_PRECISION float SHADOW;
 uniform COMPAT_PRECISION float SHADOW_WAY;
+uniform COMPAT_PRECISION float SHADOW_DISTANCE;
 #else
 #define GAP_SHARE 0.15
 #define GAP_ACROSS 0.75
@@ -101,6 +103,7 @@ uniform COMPAT_PRECISION float SHADOW_WAY;
 #define UNLIT_BLUE 0.0
 #define SHADOW 0.0
 #define SHADOW_WAY 4.0
+#define SHADOW_DISTANCE 1.5
 #endif
 
 // The share of a tent two output pixels wide, centered on 0, that lies below u output pixels.
@@ -170,9 +173,7 @@ void main() {
 	}
 	if (SHADOW > 0.0) {
 		float way = (SHADOW_WAY - 1.0) * 0.785398;
-		vec2 toward = vec2(sin(way), -cos(way));
-		toward /= max(abs(toward.x), abs(toward.y));
-		toward *= abs(toward.x) > 0.5 && abs(toward.y) > 0.5 ? 1.0 : 1.4;
+		vec2 toward = vec2(sin(way), -cos(way)) * SHADOW_DISTANCE;
 		vec3 caster = COMPAT_TEXTURE(Texture, (at - toward) / TextureSize).rgb;
 		float start = level(unlit) * 0.9375;
 		float dark = clamp((start - level(caster)) / max(start, 0.001), 0.0, 1.0);

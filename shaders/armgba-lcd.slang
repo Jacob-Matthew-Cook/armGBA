@@ -34,6 +34,7 @@ layout(push_constant) uniform Push {
 	float UNLIT_BLUE;
 	float SHADOW;
 	float SHADOW_WAY;
+	float SHADOW_DISTANCE;
 } params;
 
 #pragma parameter GAP_SHARE "Gap Width (Share of a Pixel)" 0.15 0.0 0.5 0.01
@@ -48,6 +49,7 @@ layout(push_constant) uniform Push {
 #pragma parameter UNLIT_BLUE "Unlit Screen Blue" 0.0 0.0 255.0 1.0
 #pragma parameter SHADOW "Pixel Shadow" 0.0 0.0 0.5 0.01
 #pragma parameter SHADOW_WAY "Pixel Shadow Way (Up, then Clockwise)" 4.0 1.0 8.0 1.0
+#pragma parameter SHADOW_DISTANCE "Pixel Shadow Distance (Dots)" 1.5 0.5 2.5 0.5
 
 layout(std140, set = 0, binding = 0) uniform UBO {
 	mat4 MVP;
@@ -135,9 +137,7 @@ void main() {
 	}
 	if (params.SHADOW > 0.0) {
 		float way = (params.SHADOW_WAY - 1.0) * 0.785398;
-		vec2 toward = vec2(sin(way), -cos(way));
-		toward /= max(abs(toward.x), abs(toward.y));
-		toward *= abs(toward.x) > 0.5 && abs(toward.y) > 0.5 ? 1.0 : 1.4;
+		vec2 toward = vec2(sin(way), -cos(way)) * params.SHADOW_DISTANCE;
 		vec3 caster = texture(Source, (at - toward) * params.SourceSize.zw).rgb;
 		float start = level(unlit) * 0.9375;
 		float dark = clamp((start - level(caster)) / max(start, 0.001), 0.0, 1.0);
