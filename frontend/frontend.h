@@ -50,6 +50,7 @@ enum Action {
 	ACT_FULLSCREEN,
 	ACT_RESET,
 	ACT_QUIT,
+	ACT_FPS,
 	ACTIONS,
 };
 
@@ -232,6 +233,8 @@ bool writeWholeFile(const char* path, const void* data, size_t size);
 // then kept from the game until let go.
 bool padHotkeyPressed(SDL_JoystickID which, int binding, int action);
 const char* padHotkeyName(void);
+// Quits on the Quit hotkey's second press within three seconds; the first says so.
+void requestQuit(bool controller);
 
 // ui.c
 bool uiInit(void);

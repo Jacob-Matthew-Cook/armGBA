@@ -725,7 +725,7 @@ bool uiEvent(const SDL_Event* event) {
 	case SDL_CONTROLLERBUTTONDOWN: {
 		// The Quit hotkey quits, and the Menu hotkey closes the menus.
 		if (padHotkeyPressed(event->cbutton.which, event->cbutton.button, ACT_QUIT)) {
-			app.running = false;
+			requestQuit(true);
 			return true;
 		}
 		if (padHotkeyPressed(event->cbutton.which, event->cbutton.button, ACT_MENU)) {
