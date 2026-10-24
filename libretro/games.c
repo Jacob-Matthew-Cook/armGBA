@@ -208,7 +208,9 @@ size_t gamesList(const char* loadedPath, bool gameBoy, struct ListedGame* out, s
 			addFolder(other, loadedFile, extensions, loaded, loadedCount, &list, &count, &room);
 		}
 	}
-	qsort(list, count, sizeof(*list), byLikeness);
+	if (count) {
+		qsort(list, count, sizeof(*list), byLikeness);
+	}
 	size_t kept = count < max ? count : max;
 	for (size_t i = 0; i < count; ++i) {
 		if (i < kept) {

@@ -282,6 +282,21 @@ static const char* baseName(const char* path) {
 	return slash ? slash + 1 : path;
 }
 
+// This device's own save settings and save actions, which a host doesn't choose: they don't change
+// how the game runs, only this device's save files.
+static bool ownOption(const char* key) {
+	static const char* const own[] = {
+		"armgba_back_up_save", "armgba_load_save", "armgba_load_into", "armgba_send_save", "armgba_player1_saves",
+		"armgba_keep_saves", "armgba_list_saves", "armgba_safe_saves",
+	};
+	for (size_t i = 0; i < sizeof(own) / sizeof(*own); ++i) {
+		if (!strcmp(key, own[i])) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // Player 2's game is a path on the host; here it is the game of the same name beside this device's.
 static bool localSecondGame(const char* hostValue, const char** value) {
 	struct Option* o = optionFind("armgba_player2_game");
@@ -1037,6 +1052,9 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 		if (!value) {
 			break;
 		}
+		if (ownOption(key)) {
+			continue;
+		}
 		if (!strcmp(key, "armgba_player2_game") && !localSecondGame(value, &value)) {
 			osd("Netplay: you need %s beside your game", baseName(value));
 			netStop();
@@ -1112,7 +1130,7 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 		}
 		break;
 	case MSG_INPUT: {
-		if (size < 10) {
+		if (size < 10 || !isFrame(p + 1) || get32(p + 1) > INT_MAX - 255u) {
 			break;
 		}
 		int const player = p[0], first = (int) get32(p + 1), count = SDL_min(p[5], (int) (size - 10) / 2);
