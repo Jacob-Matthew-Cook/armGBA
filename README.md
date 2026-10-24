@@ -75,8 +75,8 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | Link: Screens and Controls | Screens | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
 | | L2 Button | Both | Fast-Forward, Previous Screens (Together) |
 | | Screen Switch Controller | Both | Auto, Player 1 to Player 4 (Together) |
-| | Player Numbers | Both | Off, On (default) (Together) |
 | | Switch Controller | Both | L + R + A + B, L3 + R3, Start + L2 + R2, Start + L3, Start + R3, Off; stick clicks it uses only switch |
+| | Player Numbers | Both | Off, On (default) (Together) |
 | Saves | Back Up Save | Both | Off, then each player |
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
 | | Load Into | Both | Same Player, then each player (Together) |
