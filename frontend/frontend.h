@@ -116,6 +116,8 @@ struct Settings {
 	// Fast-Forward Speed: times as fast, 0 for as fast as it goes (up to 12).
 	int fastForward;
 	bool showMessages;
+	// On-Screen Controls (Android), shown while no controller is connected.
+	bool touchControls;
 	// The menus' look: the accent color, their size as a percentage, and how far the game behind them
 	// is dimmed (0 to 2).
 	int accent;
@@ -240,6 +242,11 @@ const char* padHotkeyName(void);
 // Whether there's an accelerometer for the Game Boy Pixel Shadow's Tilt (Android's only).
 bool tiltAvailable(void);
 #define SHADOW_TILT 9
+// The On-Screen Controls (touch.c): attached or detached as wanted when the controllers change, a
+// touch, and drawn over the game.
+void touchUpdate(void);
+bool touchEvent(const SDL_Event* event);
+void touchDraw(void);
 // Quits on the Quit hotkey's second press within three seconds; the first says so.
 void requestQuit(bool controller);
 

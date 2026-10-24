@@ -572,6 +572,7 @@ static int16_t inputState(unsigned port, unsigned device, unsigned index, unsign
 
 // Controllers take the players in the order they're plugged in.
 void setPadForPort(void) {
+	touchUpdate();
 	for (int port = 0; port < PORTS; ++port) {
 		if (app.pads[port] && !SDL_GameControllerGetAttached(app.pads[port])) {
 			SDL_GameControllerClose(app.pads[port]);
@@ -1114,6 +1115,7 @@ static void present(void) {
 			drawShadow(to, lit);
 		}
 	}
+	touchDraw();
 	uiDraw();
 	SDL_RenderPresent(app.renderer);
 }
@@ -1319,7 +1321,7 @@ static void padPressed(SDL_JoystickID which, int binding) {
 // An event the menus didn't take: quitting, a file dropped on the window to load, controllers
 // plugged in or out, hotkeys, and a right-click for the menu.
 static void handleEvent(const SDL_Event* event) {
-	if (uiEvent(event)) {
+	if (uiEvent(event) || touchEvent(event)) {
 		return;
 	}
 	switch (event->type) {

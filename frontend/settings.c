@@ -45,6 +45,7 @@ void settingsDefaults(void) {
 	settings.filter = FILTER_SHARP;
 	settings.lcdOnGpu = true;
 	settings.showMessages = true;
+	settings.touchControls = true;
 	settings.shadow = 4;
 	settings.volume = 100;
 	settings.latency = 3;
@@ -210,6 +211,8 @@ static void takeSetting(const char* key, const char* value) {
 		settings.fastForward = n >= 2 && n <= 12 ? n : 0;
 	} else if (!strcmp(key, "show_messages")) {
 		settings.showMessages = yes;
+	} else if (!strcmp(key, "touch_controls")) {
+		settings.touchControls = yes;
 	} else if (!strcmp(key, "hotkeypad")) {
 		settings.padHotkey = n;
 	} else if (!strncmp(key, "key_", 4) || !strncmp(key, "pad_", 4) || !strncmp(key, "hotkey_", 7) || !strncmp(key, "hotkeypad_", 10)) {
@@ -259,7 +262,8 @@ void settingsWrite(void) {
 	fprintf(f, "directory = \"%s\"\nbios_folder = \"%s\"\nsave_folder = \"%s\"\nstate_folder = \"%s\"\nscreenshot_folder = \"%s\"\n",
 	        settings.directory, settings.biosFolder[0] ? settings.biosFolder : "auto", settings.saveFolder[0] ? settings.saveFolder : "auto",
 	        settings.stateFolder[0] ? settings.stateFolder : "armgba", settings.shotFolder[0] ? settings.shotFolder : "armgba");
-	fprintf(f, "fast_forward = %d\nshow_messages = %s\n", settings.fastForward, no[settings.showMessages]);
+	fprintf(f, "fast_forward = %d\nshow_messages = %s\ntouch_controls = %s\n", settings.fastForward, no[settings.showMessages],
+	        no[settings.touchControls]);
 	for (int i = 0; i < BUTTONS; ++i) {
 		fprintf(f, "key_%d = %d\npad_%d = %d\n", i, settings.keys[i], i, settings.pad[i]);
 	}
