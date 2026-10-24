@@ -37,6 +37,8 @@ enum {
 	// time.
 	REPEAT_FULL_MS = 2000,
 	REPEAT_MIN_MS = 16,
+	// A held L or R steps this often.
+	SHOULDER_REPEAT_MS = 200,
 	CIRCLES = 16,
 	// How long a tab takes to slide in.
 	SLIDE_MS = 180,
@@ -111,6 +113,12 @@ static struct {
 	int dx, dy;
 	Uint32 next, since;
 } held;
+
+// A held L or R, for its repeats.
+static struct {
+	int way;
+	Uint32 next;
+} shoulder;
 
 // A touch on the menus: where it came down, and whether it's dragged the rows.
 static struct {
@@ -497,6 +505,25 @@ static void moveSelection(int delta) {
 			return;
 		}
 	}
+}
+
+static bool inBrowser(void);
+
+// L and R move between the tabs, jump a letter in the game list, or ten rows elsewhere; held, they
+// go on at an even pace, but not through the tabs.
+static bool shoulderStep(int way) {
+	if (depth == 1 && !entry.open) {
+		moveTab(way);
+		return false;
+	}
+	if (inBrowser()) {
+		browserJump(way);
+	} else if (!entry.open) {
+		for (int i = 0; i < 10; ++i) {
+			moveSelection(way);
+		}
+	}
+	return !entry.open;
 }
 
 // The first row that can be chosen, or the last.
@@ -892,21 +919,12 @@ bool uiEvent(const SDL_Event* event) {
 				closeEntry(true);
 			}
 			break;
-		// L and R move between the tabs, jump a letter in the game list, or ten rows elsewhere.
 		case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
-		case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: {
-			int const way = event->cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER ? -1 : 1;
-			if (depth == 1 && !entry.open) {
-				moveTab(way);
-			} else if (inBrowser()) {
-				browserJump(way);
-			} else {
-				for (int i = 0; i < 10; ++i) {
-					moveSelection(way);
-				}
-			}
+		case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+			shoulder.way = event->cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER ? -1 : 1;
+			shoulder.next = SDL_GetTicks() + REPEAT_DELAY_MS;
+			shoulderStep(shoulder.way);
 			break;
-		}
 		default:
 			break;
 		}
@@ -915,6 +933,9 @@ bool uiEvent(const SDL_Event* event) {
 	case SDL_CONTROLLERBUTTONUP:
 		if (event->cbutton.button >= SDL_CONTROLLER_BUTTON_DPAD_UP && event->cbutton.button <= SDL_CONTROLLER_BUTTON_DPAD_RIGHT) {
 			held.dx = held.dy = 0;
+		}
+		if (event->cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER || event->cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) {
+			shoulder.way = 0;
 		}
 		return true;
 	case SDL_CONTROLLERAXISMOTION:
@@ -1479,6 +1500,10 @@ void uiDraw(void) {
 			direction(held.dx, held.dy);
 		}
 		held.next = now + (Uint32) interval;
+	}
+	if (shoulder.way && app.menuOpen && SDL_TICKS_PASSED(SDL_GetTicks(), shoulder.next)) {
+		shoulder.way = shoulderStep(shoulder.way) ? shoulder.way : 0;
+		shoulder.next = SDL_GetTicks() + SHOULDER_REPEAT_MS;
 	}
 #ifdef __ANDROID__
 	folderPickerPoll();
