@@ -93,7 +93,6 @@ static inline void store8(uint32_t* p, v8 a) {
 	}
 OP8(and8, vandq_u32)
 OP8(or8, vorrq_u32)
-OP8(xor8, veorq_u32)
 OP8(add8, vaddq_u32)
 OP8(mul8, vmulq_u32)
 OP8(eq8, vceqq_u32)
@@ -101,11 +100,6 @@ OP8(eq8, vceqq_u32)
 // ~a & b
 static inline v8 andnot8(v8 a, v8 b) {
 	return (v8) { { vbicq_u32(b.v[0], a.v[0]), vbicq_u32(b.v[1], a.v[1]) } };
-}
-
-// mask ? b : a
-static inline v8 blend8(v8 a, v8 b, v8 mask) {
-	return (v8) { { vbslq_u32(mask.v[0], b.v[0], a.v[0]), vbslq_u32(mask.v[1], b.v[1], a.v[1]) } };
 }
 
 // a > b, signed
