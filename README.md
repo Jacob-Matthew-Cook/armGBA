@@ -22,7 +22,7 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | Tilt stick | Tilt and turn (motion sensor games) | Tilt (motion sensor games) |
 | Left stick, with Left Stick as D-Pad | D-pad, except while it tilts | Same |
 | Right stick up, down | Sunlight up, down (solar sensor games) | Contrast up, down (original Game Boy screens) |
-| L, R, Start (held 1 s) | Restart that player's console (the Restart Buttons option) | Same |
+| L, R, Start (held 1 s) | Restart that player's console (the Restart Combo option) | Same |
 
 With the consoles of a link on one device, R2 changes how the screens are shown and L2 fast-forwards,
 or changes them back as the L2 Button option says; in netplay, L2 changes them back. In netplay each
@@ -46,26 +46,26 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Game Boy Model (applies on restart) | Game Boy | Auto, Game Boy, Game Boy Pocket / Light, Game Boy Color, Game Boy Advance |
 | | Game Boy Boot ROM (applies on restart) | Game Boy | Nintendo's (System Folder), armGBA's (Built In), Off |
 | Video | Threaded Video | Game Boy Advance | Off, On, One Frame Late |
-| | Color Correction | Game Boy Advance | Off, On |
+| | GBA Color Correction | Game Boy Advance | Off, On |
 | | Game Boy Color Correction | Game Boy | Off, On |
 | | Game Boy Screen | Game Boy | Grayscale, Game Boy, Game Boy Pocket (both measured from real ones), Game Boy Light (Backlit) |
 | | Game Boy Contrast | Game Boy | 0% to 100% of the wheel in tenths, 50% by default (original Game Boy screens) |
-| | Game Boy on Advance Border | Game Boy | Cropped, Shown (Game Boy Advance model) |
-| | Game Boy on Advance Screen | Game Boy | Game Boy Advance, Game Boy Color (Game Boy Advance model) |
+| | Game Boy on GBA: Border | Game Boy | Cropped, Shown (Game Boy Advance model) |
+| | Game Boy on GBA: Screen | Game Boy | Game Boy Advance, Game Boy Color (Game Boy Advance model) |
 | Video: LCD Effects | LCD Ghosting | Both | Off, Half, Full |
 | | Interleaved Rows | Both | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left, Tilt (Android: follows the device's tilt) |
 | | Game Boy Pixel Shadow Distance | Game Boy | 0.5 to 2.5 dots in halves, 1.5 by default; how far Tilt reaches in the app |
-| | CPU Effect Threads | Both | Auto, 1, 2, 3, 4 |
+| | LCD Effect Threads | Both | Auto, 1, 2, 3, 4 |
 | Audio | Low-Pass Filter | Both | Off, 20%, 40%, 60%, 80% |
 | Input | Left Stick as D-Pad | Both | Off, On |
 | | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
 | | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
-| | Restart Buttons | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
+| | Restart Combo | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
 | Link | Link Mode (applies on restart) | Both | Off, Together, Separate, GameCube (Game Boy Advance) |
-| Link: Players | Players (applies on restart) | Both | 2, 3, 4 (Together) |
+| Link: Players | Number of Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | Link: Connection | This Console's Cartridge (applies on restart) | Game Boy Advance | Inserted, Removed (Separate, GameCube) |
 | | Link Port (applies on restart) | Game Boy Advance | Link Cable, Wireless Adapter |
@@ -79,7 +79,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Show Player Numbers | Both | Off, On (default) (Together) |
 | Saves | Back Up Save | Both | Off, then each player |
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
-| | Load Into | Both | Same Player, then each player (Together) |
+| | Load Save Into | Both | Same Player, then each player (Together) |
 | | Send Save | Both | Off, then player 1's current save, backups, remote and received saves (Separate) |
 | Saves: Settings | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
 | | Player 1's Save Folder (applies when a game starts) | Both | Save Folder, armGBA/Player 1 Folder |
@@ -87,9 +87,9 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Backups Listed | Both | 10, 20, 40, 80, 126 |
 | | Safe Saves | Both | Off, On; On by default |
 
-On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy on Advance
-Border set to Shown, the black around it shows too, as on that console's screen. Game Boy on Advance
-Screen shows it on the Advance's panel or the Color's: their colors with Color Correction on, their
+On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy on GBA:
+Border set to Shown, the black around it shows too, as on that console's screen. Game Boy on GBA:
+Screen shows it on the Advance's panel or the Color's: their colors with color correction on, their
 LCD Grid and their ghosting. Interleaved Rows, on the Color's and Advance's panels with LCD Ghosting
 on, drives alternate rows harder each frame, so pictures that alternate each frame show in stripes,
 as on the consoles.
@@ -97,7 +97,7 @@ as on the consoles.
 LCD Grid draws the gaps between the console screen's pixels into a picture as many times larger,
 with the shadow a first Game Boy's or a Pocket's pixels cast: pick the largest that fits the screen,
 with RetroArch's integer scaling on. It works on the CPU, in vectors (NEON, SSE or AVX), its rows
-shared out among the cores, as LCD Ghosting's are: CPU Effect Threads says how many, Auto leaving
+shared out among the cores, as LCD Ghosting's are: LCD Effect Threads says how many, Auto leaving
 one core for the rest, or two with Threaded Video. Its shadow is one shade for each pixel's square,
 a close likeness of the smooth one the shaders and the standalone frontend draw, at a fraction of
 the cost. At 6x, a Game Boy game's grid adds about 1.5 ms a frame on an RG353M and its shadow 0.1 ms
@@ -277,13 +277,13 @@ The two ways to link:
   `Game.20261018-153012.srm`, beside their save; player 1's goes in the save folder's
   armGBA/Player 1 folder. The game carries on.
 - Load Save makes a backup a player's save again. With two players or more it can also give one
-  player another's current save or backup, as Load Into says. It backs up the save it replaces
+  player another's current save or backup, as Load Save Into says. It backs up the save it replaces
   first and restarts that player's console. Not during netplay.
 - A device that joined another's netplay session keeps that session's saves in armGBA/Remote/Player
   1 to Player 4, by the session's players, and Load Save lists them as Remote Player 1 to 4. Each
-  goes to the other person unless Load Into names a player: Remote Player 1 (the host) to player 2
-  here when there is one, Remote Player 2 to player 1. Hosting and joining in turn passes both
-  players' saves each way.
+  goes to the other person unless Load Save Into names a player: Remote Player 1 (the host) to
+  player 2 here when there is one, Remote Player 2 to player 1. Hosting and joining in turn passes
+  both players' saves each way.
 - In Separate, linked devices swap their current saves as they connect, and Send Save sends the
   current save, a backup, or a remote or received save, when chosen. The other device keeps it in
   armGBA/Received, and Load Save lists it as Received, going to player 2 when there is one, or

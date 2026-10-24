@@ -82,7 +82,7 @@ static int gbContrast;
 // On the Game Boy Advance model, a Game Boy game is shown as that console shows it: centered on its
 // screen, or stretched across it. When cropped, the black border is left out.
 bool gbOnAdvance;
-// Game Boy on Advance Screen: a Game Boy game on the Advance model shows the Color's panel.
+// Game Boy on GBA: Screen: a Game Boy game on the Advance model shows the Color's panel.
 bool gbColorPanel;
 static bool gbStretched;
 static bool gbCropped;
@@ -1643,7 +1643,7 @@ static void readFastForward(void) {
 	environment(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &override);
 }
 
-// Holding the Restart Buttons for a second restarts that player's console, as its power switch
+// Holding the Restart Combo for a second restarts that player's console, as its power switch
 // would. Games that reset on A, B, Select and Start do so at once by themselves.
 enum { RESTART_FRAMES = 60 };
 static uint8_t restartHeld[MAX_PLAYERS];
@@ -1661,7 +1661,7 @@ void restartConsole(int player) {
 	notify(message, 120);
 }
 
-// Whether a player holds the Restart Buttons.
+// Whether a player holds the Restart Combo.
 static bool restartHeldDown(int port, uint16_t keys) {
 	switch (restartButtons) {
 	case RESTART_L_R_START:

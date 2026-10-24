@@ -5,7 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // Each player's save: its memory, its files, the saves the core keeps itself, and their backups
-// with the Back Up Save, Load Save, Load Into and Send Save options.
+// with the Back Up Save, Load Save, Load Save Into and Send Save options.
 
 #include "core.h"
 #include "gb.h"
@@ -47,7 +47,7 @@ static struct retro_core_option_v2_definition* loadIntoOption;
 static char playerValues[MAX_PLAYERS][2];
 static char playerLabels[MAX_PLAYERS][12];
 static int backupsListed;
-// The player Load Into named when the remote saves' labels were made.
+// The player Load Save Into named when the remote saves' labels were made.
 static int listedInto = -1;
 
 // Save files: each player's save memory and where its file is.
@@ -558,7 +558,7 @@ void keepSession(void) {
 	}
 }
 
-// The player Load Into names, when they are playing here, or -1.
+// The player Load Save Into names, when they are playing here, or -1.
 static int loadIntoPlayer(void) {
 	const char* into = option("armgba_load_into");
 	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE];
@@ -566,8 +566,8 @@ static int loadIntoPlayer(void) {
 	return player >= 0 && saveFiles(player, file, rtcFile) ? player : -1;
 }
 
-// Where a remote save goes. Load Into picks the player when it is set; otherwise the save goes to
-// the other person:
+// Where a remote save goes. Load Save Into picks the player when it is set; otherwise the save goes
+// to the other person:
 // - the session's player 1 (the host) to player 2 here, if there is one, or else player 1;
 // - its player 2 to player 1 here;
 // - players 3 and 4 to the same players here, or else player 1.
@@ -583,8 +583,8 @@ static int remoteTarget(int from) {
 	return from > 1 && saveFiles(from, file, rtcFile) ? from : 0;
 }
 
-// Where a received save goes: where Load Into says, or else to player 2, the other person's place,
-// when there is one, or player 1.
+// Where a received save goes: where Load Save Into says, or else to player 2, the other person's
+// place, when there is one, or player 1.
 static int receivedTarget(void) {
 	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE];
 	int const named = loadIntoPlayer();
@@ -621,8 +621,8 @@ static void addBackupChoices(struct SaveChoices* list, const char* file, int mos
 	}
 }
 
-// Fills Back Up Save's and Load Into's choices with the players playing, and Load Save's and Send
-// Save's with their saves.
+// Fills Back Up Save's and Load Save Into's choices with the players playing, and Load Save's and
+// Send Save's with their saves.
 void fillSaveChoices(void) {
 	if (!loadChoices.option || !sendChoices.option || !backUpOption || !loadIntoOption) {
 		return;
@@ -995,7 +995,7 @@ void forgetOtherSaves(void) {
 }
 
 // After an option changed: the Saves actions chosen, and the lists made again if Backups Listed or
-// Load Into changed.
+// Load Save Into changed.
 void saveOptionsChanged(void) {
 	readSaveActions(true);
 	const char* listed = option("armgba_list_saves");
