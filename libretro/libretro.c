@@ -1792,22 +1792,48 @@ static const uint32_t* advanceFrame(const uint32_t* picture) {
 	return gbAdvanceFrame;
 }
 
-// Player Numbers: "P" and the player's number, 3 by 5 dots each drawn 2 by 2, white on black at a
-// screen's top left corner, its pitch bytes a row.
+// Player Numbers: a badge at a screen's top left corner, its pitch bytes a row: "P" and the player's
+// number in a 5 by 7 dot font, white on the player's color (blue, red, green, amber), with a darker
+// edge and its corners rounded, faint over the picture.
+static uint32_t blendDot(uint32_t picture, uint32_t color, int alpha, size_t pixelBytes) {
+	unsigned r, g, b;
+	if (pixelBytes == 4) {
+		r = picture >> 16 & 0xFF, g = picture >> 8 & 0xFF, b = picture & 0xFF;
+	} else {
+		r = (picture >> 11) << 3, g = (picture >> 5 & 0x3F) << 2, b = (picture & 0x1F) << 3;
+	}
+	r += ((color >> 16 & 0xFF) - (int) r) * alpha / 256;
+	g += ((color >> 8 & 0xFF) - (int) g) * alpha / 256;
+	b += ((color & 0xFF) - (int) b) * alpha / 256;
+	return pixelBytes == 4 ? r << 16 | g << 8 | b : (r >> 3) << 11 | (g >> 2) << 5 | b >> 3;
+}
+
 static void numberScreen(uint8_t* corner, size_t pitch, size_t pixelBytes, int player) {
-	static const uint8_t glyphs[5][5] = {
-		{ 7, 5, 7, 4, 4 }, { 2, 6, 2, 2, 7 }, { 7, 1, 7, 4, 7 }, { 7, 1, 7, 1, 7 }, { 5, 5, 7, 1, 1 },
+	static const uint8_t glyphs[5][7] = {
+		{ 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10 }, { 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E },
+		{ 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F }, { 0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E },
+		{ 0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02 },
 	};
-	const uint8_t* const shapes[2] = { glyphs[0], glyphs[player + 1] };
-	for (int y = 0; y < 14; ++y) {
-		for (int x = 0; x < 18; ++x) {
-			int const gx = x - 2, gy = y - 2, glyph = gx / 8, dot = gx % 8 / 2;
-			bool const on = gx >= 0 && gy >= 0 && gy < 10 && glyph < 2 && gx % 8 < 6 && shapes[glyph][gy / 2] >> (2 - dot) & 1;
-			uint8_t* const at = corner + y * pitch + x * pixelBytes;
+	static const uint32_t colors[MAX_PLAYERS] = { 0x2F6FE0, 0xD83C3C, 0x2E9E4A, 0xD99A12 };
+	uint32_t const fill = colors[player], edge = (fill >> 1) & 0x7F7F7F;
+	int const width = 15, height = 11;
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			bool const cornerDot = (x == 0 || x == width - 1) && (y == 0 || y == height - 1);
+			if (cornerDot) {
+				continue;
+			}
+			bool const border = x == 0 || y == 0 || x == width - 1 || y == height - 1;
+			int const gx = x - 2, gy = y - 2, glyph = gx < 5 ? 0 : 1, column = glyph ? gx - 6 : gx;
+			bool const dot = !border && gy >= 0 && gy < 7 && column >= 0 && column < 5 && (gx < 5 || gx > 5) &&
+			                 glyphs[glyph ? player + 1 : 0][gy] >> (4 - column) & 1;
+			uint8_t* const at = corner + (y + 2) * pitch + (x + 2) * pixelBytes;
+			uint32_t const was = pixelBytes == 4 ? *(uint32_t*) at : *(uint16_t*) at;
+			uint32_t const now = dot ? blendDot(was, 0xFFFFFF, 170, pixelBytes) : blendDot(was, border ? edge : fill, border ? 110 : 90, pixelBytes);
 			if (pixelBytes == 4) {
-				*(uint32_t*) at = on ? 0xFFFFFF : 0;
+				*(uint32_t*) at = now;
 			} else {
-				*(uint16_t*) at = on ? 0xFFFF : 0;
+				*(uint16_t*) at = (uint16_t) now;
 			}
 		}
 	}
