@@ -29,7 +29,7 @@ or changes them back as the L2 Button option says; in netplay, L2 changes them b
 device shows the screens its own way, changed by its own player's R2. RetroArch 1.22.2 and older don't
 say which player is on a device, so there the host follows player 1 and other devices player 2,
 unless Screen Switch Controller names the player (Show Player Numbers marks each player's screen).
-The tilt stick is the left stick by default. The Tilt Sensor option moves it to the right stick or
+The tilt stick is the left stick by default. The Tilt Control option moves it to the right stick or
 the D-pad; with the D-pad, L is the flick.
 
 ## Options
@@ -53,7 +53,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Game Boy on GBA: Border | Game Boy | Cropped, Shown (Game Boy Advance model) |
 | | Game Boy on GBA: Screen | Game Boy | Game Boy Advance, Game Boy Color (Game Boy Advance model) |
 | Video: LCD Effects | LCD Ghosting | Both | Off, Half, Full |
-| | Interleaved Rows | Both | Off, On |
+| | Interlaced Rows | Both | Off, On |
 | | LCD Grid | Both | Off, 2x to 8x |
 | | Game Boy Pixel Shadow | Game Boy | Off, Up, Up Right, Right, Down Right (default), Down, Down Left, Left, Up Left, Tilt (Android: follows the device's tilt) |
 | | Game Boy Pixel Shadow Distance | Game Boy | 0.5 to 2.5 dots in halves, 1.5 by default; how far Tilt reaches in the app |
@@ -61,7 +61,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | Audio | Low-Pass Filter | Both | Off, 20%, 40%, 60%, 80% |
 | Input | Left Stick as D-Pad | Both | Off, On |
 | | Turbo Button Period | Both | 4 to 120 frames, 4 by default |
-| | Tilt Sensor | Both | Left Stick, Right Stick, D-Pad |
+| | Tilt Control | Both | Left Stick, Right Stick, D-Pad |
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
 | | Restart Combo | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
 | Link | Link Mode (applies on restart) | Both | Off, Together, Separate, GameCube (Game Boy Advance) |
@@ -90,7 +90,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 On the Game Boy Advance model, a Game Boy game is shown at its own size. With Game Boy on GBA:
 Border set to Shown, the black around it shows too, as on that console's screen. Game Boy on GBA:
 Screen shows it on the Advance's panel or the Color's: their colors with color correction on, their
-LCD Grid and their ghosting. Interleaved Rows, on the Color's and Advance's panels with LCD Ghosting
+LCD Grid and their ghosting. Interlaced Rows, on the Color's and Advance's panels with LCD Ghosting
 on, drives alternate rows harder each frame, so pictures that alternate each frame show in stripes,
 as on the consoles.
 

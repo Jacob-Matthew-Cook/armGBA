@@ -150,7 +150,7 @@ bool adapterWanted(int count);
 bool showOptions(void);
 void setOptions(void);
 
-// lcd.c: LCD Ghosting (0 off, 1 half, 2 full) and Interleaved Rows; LCD Grid's scale (1 when off)
+// lcd.c: LCD Ghosting (0 off, 1 half, 2 full) and Interlaced Rows; LCD Grid's scale (1 when off)
 // and its shadow's way (0 none, then up and on clockwise); the threads they share rows among (0
 // chooses). showPicture sends the picture on through them both, sendPicture through LCD Grid alone.
 extern int ghosting;

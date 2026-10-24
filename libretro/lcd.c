@@ -33,7 +33,7 @@ int lcdThreads;
 // faster than it lightens, as it relaxes. Each subpixel moves in linear light from where it was
 // towards the new frame by a share each frame. The time constants, in milliseconds to darken and to
 // lighten, are estimates for each kind of panel: the first Game Boy's STN, the Pocket's and Light's
-// FSTN, and the Color's and Advance's reflective TFTs; Half halves them. With Interleaved Rows on, the
+// FSTN, and the Color's and Advance's reflective TFTs; Half halves them. With Interlaced Rows on, the
 // Color's and Advance's also drive alternate rows harder each frame, the other rows the next, the
 // weaker rows moving half as far, so a picture that alternates each frame shows in stripes, as it does
 // on the consoles (as SameBoy's accurate frame blending and BGB's Color interlacing also have it).
