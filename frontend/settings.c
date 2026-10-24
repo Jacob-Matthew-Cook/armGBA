@@ -229,11 +229,24 @@ static void takeSetting(const char* key, const char* value) {
 	}
 }
 
+#ifdef __ANDROID__
+// Android's shared storage, where frontend.cfg is, is open to other apps, so the RetroAchievements
+// login is kept in the app's own storage instead.
+static void cheevosPath(char path[FILE_SIZE]) {
+	const char* const own = SDL_AndroidGetInternalStoragePath();
+	snprintf(path, FILE_SIZE, "%s/cheevos.cfg", own ? own : ".");
+}
+#endif
+
 // frontend.cfg, over the defaults.
 void settingsRead(void) {
 	char path[FILE_SIZE];
 	snprintf(path, sizeof(path), "%s/frontend.cfg", configDirectory);
 	readLines(path, takeSetting);
+#ifdef __ANDROID__
+	cheevosPath(path);
+	readLines(path, takeSetting);
+#endif
 }
 
 // Every setting to frontend.cfg, as the menu changes one.
@@ -256,8 +269,20 @@ void settingsWrite(void) {
 	        settings.latency, settings.runahead, no[settings.rewind], settings.rewindMegabytes, no[settings.autoState]);
 	fprintf(f, "nickname = \"%s\"\nnetplay_host = \"%s\"\nnetplay_port = %d\ninput_delay = %d\n", settings.nickname, settings.host,
 	        settings.netPort, settings.inputDelay);
+#ifdef __ANDROID__
+	fprintf(f, "hardcore = %s\n", no[settings.hardcore]);
+	char own[FILE_SIZE];
+	cheevosPath(own);
+	FILE* const login = fopen(own, "w");
+	if (login) {
+		fchmod(fileno(login), 0600);
+		fprintf(login, "cheevos_user = \"%s\"\ncheevos_token = \"%s\"\n", settings.cheevosUser, settings.cheevosToken);
+		fclose(login);
+	}
+#else
 	fprintf(f, "cheevos_user = \"%s\"\ncheevos_token = \"%s\"\nhardcore = %s\n", settings.cheevosUser, settings.cheevosToken,
 	        no[settings.hardcore]);
+#endif
 	fprintf(f, "ui_accent = %d\nui_menu_size = %d\nui_dim = %d\n", settings.accent, settings.menuSize, settings.dim);
 	fprintf(f, "directory = \"%s\"\nbios_folder = \"%s\"\nsave_folder = \"%s\"\nstate_folder = \"%s\"\nscreenshot_folder = \"%s\"\n",
 	        settings.directory, settings.biosFolder[0] ? settings.biosFolder : "auto", settings.saveFolder[0] ? settings.saveFolder : "auto",
