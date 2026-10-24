@@ -249,8 +249,8 @@ void audioSample(struct GBA* gba, int32_t timestamp) {
 		}
 		int16_t sampleLeft = psg->cachedLeft >> psgShift;
 		int16_t sampleRight = psg->cachedRight >> psgShift;
-		int a = (samplesA[sample] << 2) >> shiftA;
-		int b = (samplesB[sample] << 2) >> shiftB;
+		int a = samplesA[sample] * 4 >> shiftA;
+		int b = samplesB[sample] * 4 >> shiftB;
 		if (leftA) {
 			sampleLeft += a;
 		}

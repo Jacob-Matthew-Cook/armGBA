@@ -453,7 +453,7 @@ void decodeThumb(struct Inst* in, uint32_t address, uint16_t opcode) {
 		}
 		in->kind = I_B;
 		in->cond = cond;
-		in->target = address + 4 + ((int32_t) (int8_t) opcode << 1);
+		in->target = address + 4 + (int32_t) (int8_t) opcode * 2;
 		return;
 	}
 	// The unconditional branch.

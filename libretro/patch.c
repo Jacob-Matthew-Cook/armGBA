@@ -64,14 +64,16 @@ static bool applyIps(struct Patch* p) {
 	p->at += 5;
 	size_t size = p->sourceSize;
 	// The size the records make, first, so the game is copied once.
-	for (const uint8_t* r = p->at; r + 3 <= p->end && memcmp(r, "EOF", 3);) {
-		if (p->end - r < 5) {
+	size_t const left = (size_t) (p->end - p->at);
+	for (size_t i = 0; i + 3 <= left && memcmp(p->at + i, "EOF", 3);) {
+		const uint8_t* const r = p->at + i;
+		if (left - i < 5) {
 			return false;
 		}
 		size_t const offset = (size_t) r[0] << 16 | r[1] << 8 | r[2], length = r[3] << 8 | r[4];
-		size_t const span = length ? length : (p->end - r >= 7 ? (size_t) (r[5] << 8 | r[6]) : 0);
+		size_t const span = length ? length : (left - i >= 7 ? (size_t) (r[5] << 8 | r[6]) : 0);
 		size = offset + span > size ? offset + span : size;
-		r += length ? 5 + length : 8;
+		i += length ? 5 + length : 8;
 	}
 	if (size > PATCHED_MOST || !(p->out = calloc(size ? size : 1, 1))) {
 		return false;
@@ -198,7 +200,7 @@ static bool applyBps(struct Patch* p) {
 			break;
 		default: {
 			uint64_t offset;
-			if (!number(p, &offset)) {
+			if (!number(p, &offset) || offset >> 1 > PATCHED_MOST) {
 				return false;
 			}
 			int64_t const move = (offset & 1 ? -1 : 1) * (int64_t) (offset >> 1);

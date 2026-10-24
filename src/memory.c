@@ -453,7 +453,7 @@ static uint32_t load32Raw(struct GBA* gba, uint32_t address, int* wait, const ui
 	case REGION_IWRAM:
 		return le32(&gba->iwram[address & (SIZE_IWRAM - 4)]);
 	case REGION_IO:
-		return ioRead(gba, address & 0xFFFFFC) | (ioRead(gba, (address & 0xFFFFFE) | 2) << 16);
+		return ioRead(gba, address & 0xFFFFFC) | (uint32_t) ioRead(gba, (address & 0xFFFFFE) | 2) << 16;
 	case REGION_PALETTE:
 		*wait += waits[REGION_PALETTE];
 		return le32(&gba->palette[address & (SIZE_PALETTE - 4)]);

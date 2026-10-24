@@ -78,6 +78,11 @@ static int quietOverflows(struct GBA* gba, int id) {
 		return 0;
 	}
 	int limit = QUIET_MAX;
+	// The overflows after them are scheduled in one 32-bit span: at the slowest prescaler, fewer fit.
+	int const fit = (int) ((INT32_MAX - 0x10000) / period(&gba->timers[id])) - 1;
+	if (fit < limit) {
+		limit = fit;
+	}
 	if (cascades(gba, id)) {
 		// Ticking the timer after it is quiet too, up to the tick that overflows it.
 		int ticks = 0xFFFF - (int) gba->timers[id + 1].counter;
