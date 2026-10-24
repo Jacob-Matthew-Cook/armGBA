@@ -1142,8 +1142,8 @@ static void portDone(const char* text) {
 	settingsWrite();
 }
 
-// Netplay's rows: Your Name (0), hosting Separate (1) or Together (2), Join (3), Disconnect (4) and
-// Port (5).
+// Netplay's rows: Your Name (0), hosting Together (1), the default, or Separate (2), Join (3),
+// Disconnect (4) and Port (5).
 static void netAction(int which, int delta) {
 	if (delta) {
 		return;
@@ -1156,7 +1156,7 @@ static void netAction(int which, int delta) {
 	case 2:
 		if (!app.loaded) {
 			osd("Netplay: load your game first");
-		} else if (netHost(which == 2)) {
+		} else if (netHost(which == 1)) {
 			uiCloseMenu();
 		}
 		break;
@@ -1188,11 +1188,11 @@ static void netplayMenu(void) {
 	helpFor("How long each player's buttons wait in Together, so fewer corrections show. More suits a slow network.");
 	if (netMode == NET_OFF) {
 		addHeader("Host");
-		addItem("Separate", netAction, 1);
+		addItem("Together", netAction, 1);
+		helpFor("Hosts the loaded game: every device runs every player's console, with rollback, so the link never waits on the network.");
+		addItem("Separate", netAction, 2);
 		helpFor("Hosts the loaded game: each device runs its own console and game, joined by the link cable over the network. Two "
 		        "players.");
-		addItem("Together", netAction, 2);
-		helpFor("Hosts the loaded game: every device runs every player's console, with rollback, so the link never waits on the network.");
 		addHeader("Join");
 		addItem("Join a Host...", netAction, 3);
 		helpFor("Type the host's name or address.");

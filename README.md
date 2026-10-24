@@ -162,9 +162,10 @@ netplay and RetroAchievements. Rows ending in "..." open a page; rows with a val
 The line under the menu says what the selected item does. With a controller, the buttons bound to A
 and B choose and go back, and in the game list L and R jump by letter; on the keyboard, typing a
 name's start finds it. Restart, Close Game, Quit, Reset Config and Reset Controls and Hotkeys ask
-for a second press. Netplay is armgba to armgba: Separate carries the link cable between two devices
-each running its own game; Together runs every player's console on every device, kept in step with
-rollback. `--host`, `--host-together` and `--connect ADDRESS` start it from the command line.
+for a second press. Netplay is armgba to armgba: Together, the default, runs every player's console on
+every device, kept in step with rollback; Separate carries the link cable between two devices each
+running its own game. `--host` (Together), `--host-separate` and `--connect ADDRESS` start it from
+the command line.
 Achievements need the system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
@@ -246,14 +247,6 @@ usual netplay.
 
 The two ways to link:
 
-- Separate: each device runs its own player's console, with their own game and save, and the cable
-  crosses RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and
-  Crystal. It links two players; three or four play Together. Each transfer waits for the other
-  end, so a slow network stalls the cable. Game Boy Advances keep to the same cycles, as on a real
-  cable, which games that link every frame, such as Kirby & The Amazing Mirror, need; it wants a
-  short ping. Game Boys run at their own pace, the one waiting sending its next byte ahead, which
-  suits Wi-Fi and games that link in turns; Game Boy Link Timing set to Exact times them as Game
-  Boy Advances are. The Wireless Adapter needs neither: each device runs freely.
 - Together: every device runs every player's console, two to four with the Players option, for
   multiplayer on one device (a controller each) or with RetroArch's rollback netplay, where the
   link never waits on the network. Every device needs every game. Three or four are shown in a
@@ -263,6 +256,14 @@ The two ways to link:
   Saves says. In netplay the session runs the host's games and saves, and the host writes the
   players' saves as the game closes. A device that joined keeps its own saves as they were, and
   the session's in the save folder's armGBA/Remote folders (see Backups).
+- Separate: each device runs its own player's console, with their own game and save, and the cable
+  crosses RetroArch's netplay. Players can run different games, such as Red and Blue, or Yellow and
+  Crystal. It links two players; three or four play Together. Each transfer waits for the other
+  end, so a slow network stalls the cable. Game Boy Advances keep to the same cycles, as on a real
+  cable, which games that link every frame, such as Kirby & The Amazing Mirror, need; it wants a
+  short ping. Game Boys run at their own pace, the one waiting sending its next byte ahead, which
+  suits Wi-Fi and games that link in turns; Game Boy Link Timing set to Exact times them as Game
+  Boy Advances are. The Wireless Adapter needs neither: each device runs freely.
 
 **Backups.**
 
