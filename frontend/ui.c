@@ -129,19 +129,44 @@ static struct {
 static int lastRowH, lastMaxScroll;
 // The header's back button, where drawn.
 static SDL_Rect backRect;
+// The scroll bar: where it's grabbed, its thumb's height, and whether it's being dragged.
+static struct {
+	SDL_Rect grab;
+	int height;
+	bool dragging;
+} bar;
+
 // A flick's run on after the finger lifts: where the rows are, and how fast they go, in rows a
 // millisecond, slowing.
 static struct {
 	float at, speed;
 	Uint32 last;
 } fling;
-// A touch's last two places and times, for the flick's speed.
+// A touch's recent places and times, for the flick's speed over its last tenth of a second.
+enum { TRAIL = 16 };
 static struct TrailPoint {
 	int y;
 	Uint32 time;
-} trail[2];
+} trail[TRAIL];
+static int trailCount;
+
+static void trailAdd(int y) {
+	if (trailCount == TRAIL) {
+		memmove(trail, trail + 1, (TRAIL - 1) * sizeof(*trail));
+		--trailCount;
+	}
+	trail[trailCount++] = (struct TrailPoint) { y, SDL_GetTicks() };
+}
 // The view moved by a drag or the wheel stays where it was put, until the selection moves.
 static bool viewHeld;
+
+// The rows scrolled to where y puts the scroll bar's thumb.
+static void scrollToBar(int y) {
+	int const room = bar.grab.h - bar.height;
+	float const at = room > 0 ? (float) (y - bar.grab.y - bar.height / 2) / room : 0;
+	stack[depth - 1].scroll = (int) lroundf(SDL_max(0.0f, SDL_min(at, 1.0f)) * lastMaxScroll);
+	viewHeld = true;
+}
 
 
 // A message at the bottom left for a few seconds, the newest lowest, unless Show Messages is off;
@@ -984,6 +1009,10 @@ bool uiEvent(const SDL_Event* event) {
 	// The mouse selects the row it's over; a touch that moves a quarter of a row any way is a drag,
 	// not a tap, and drags the rows a row's height at a time.
 	case SDL_MOUSEMOTION:
+		if (bar.dragging) {
+			scrollToBar(event->motion.y);
+			return true;
+		}
 		if (event->motion.which == SDL_TOUCH_MOUSEID) {
 			int const dx = event->motion.x - drag.x, dy = event->motion.y - drag.y;
 			if (drag.down && lastRowH > 0 && !drag.moved && (abs(dx) > lastRowH / 4 || abs(dy) > lastRowH / 4)) {
@@ -993,8 +1022,7 @@ bool uiEvent(const SDL_Event* event) {
 			if (drag.down && drag.moved && !drag.across && !entry.open) {
 				stack[depth - 1].scroll = drag.scroll - (dy + (dy < 0 ? -lastRowH / 2 : lastRowH / 2)) / lastRowH;
 				viewHeld = true;
-				trail[0] = trail[1];
-				trail[1] = (struct TrailPoint) { event->motion.y, SDL_GetTicks() };
+				trailAdd(event->motion.y);
 			}
 		}
 		if (!entry.open && (event->motion.which != SDL_TOUCH_MOUSEID || drag.down)) {
@@ -1003,6 +1031,12 @@ bool uiEvent(const SDL_Event* event) {
 		return true;
 	// A touch scrolls the rows as it drags, and clicks where it lifts if it didn't.
 	case SDL_MOUSEBUTTONDOWN:
+		if (event->button.button == SDL_BUTTON_LEFT && !entry.open && SDL_PointInRect(&(SDL_Point) { event->button.x, event->button.y }, &bar.grab)) {
+			bar.dragging = true;
+			fling.speed = 0;
+			scrollToBar(event->button.y);
+			return true;
+		}
 		if (event->button.which == SDL_TOUCH_MOUSEID && event->button.button == SDL_BUTTON_LEFT) {
 			drag.down = true;
 			drag.moved = false;
@@ -1011,7 +1045,8 @@ bool uiEvent(const SDL_Event* event) {
 			drag.scroll = stack[depth - 1].scroll;
 			drag.across = false;
 			fling.speed = 0;
-			trail[0] = trail[1] = (struct TrailPoint) { event->button.y, SDL_GetTicks() };
+			trailCount = 0;
+			trailAdd(event->button.y);
 			if (!entry.open) {
 				hover((SDL_Point) { drag.x, drag.y });
 			}
@@ -1020,18 +1055,28 @@ bool uiEvent(const SDL_Event* event) {
 		}
 		return true;
 	case SDL_MOUSEBUTTONUP:
+		if (bar.dragging) {
+			bar.dragging = false;
+			return true;
+		}
 		if (event->button.which == SDL_TOUCH_MOUSEID && drag.down) {
 			drag.down = false;
 			int const dx = event->button.x - drag.x;
-			Uint32 const since = SDL_GetTicks() - trail[0].time;
+			// The flick's speed: from the oldest place in the last tenth of a second to where it lifted.
+			Uint32 const now = SDL_GetTicks();
+			int from = trailCount - 1;
+			while (from > 0 && now - trail[from - 1].time <= 100) {
+				--from;
+			}
+			Uint32 const since = trailCount ? now - trail[from].time : 0;
 			if (!drag.moved) {
 				click((SDL_Point) { event->button.x, event->button.y }, SDL_BUTTON_LEFT);
 			// A swipe across the top menus moves to the next tab or the one before.
 			} else if (drag.across && depth == 1 && !entry.open && abs(dx) > lastRowH * 2) {
 				moveTab(dx < 0 ? 1 : -1);
 			// A flick runs on: as fast as the finger went over its last moments.
-			} else if (!drag.across && lastRowH > 0 && since > 0 && since < 150) {
-				fling.speed = -(float) (event->button.y - trail[0].y) / since / lastRowH;
+			} else if (!drag.across && lastRowH > 0 && since > 0 && since <= 100) {
+				fling.speed = -(float) (event->button.y - trail[from].y) / since / lastRowH;
 				fling.at = (float) stack[depth - 1].scroll;
 				fling.last = SDL_GetTicks();
 			}
@@ -1508,11 +1553,16 @@ static void drawMenu(int width, int height, int u) {
 		textFit(face, size, item->label, valueL - textL - u, item->label[0] == '/', label, sizeof(label));
 		textDraw(face, size, textL, ty, on ? white : item->function ? text : muted, label);
 	}
-	// The scroll bar.
+	// The scroll bar, which a finger or the mouse drags: wider while dragged, and grabbed anywhere
+	// two units in from the edge.
+	bar.grab = (SDL_Rect) { 0, 0, 0, 0 };
 	if (scrolls) {
 		int const trackH = rows * rowH, barH = SDL_max(u, trackH * rows / itemCount);
 		int const barY = top + (trackH - barH) * m->scroll / SDL_max(1, itemCount - rows);
-		fillRounded((SDL_Rect) { panel.x + panel.w - u, barY, SDL_max(3, u / 6), barH }, u, faded(accent, 110));
+		int const barW = bar.dragging ? SDL_max(6, u / 2) : SDL_max(3, u / 6);
+		fillRounded((SDL_Rect) { panel.x + panel.w - u - barW / 2, barY, barW, barH }, u, faded(accent, bar.dragging ? 200 : 110));
+		bar.grab = (SDL_Rect) { panel.x + panel.w - 2 * u, top, 2 * u, trackH };
+		bar.height = barH;
 	}
 	// The selected row's help, above the footer.
 	// The help shares the footer's darker band.
@@ -1563,12 +1613,12 @@ void uiDraw(void) {
 		}
 		held.next = now + (Uint32) interval;
 	}
-	// A flick's run, slowing by a third every tenth of a second, stopping at either end.
+	// A flick's run, slowing smoothly over about a third of a second, stopping at either end.
 	if (fling.speed != 0 && app.menuOpen && depth) {
 		Uint32 const now = SDL_GetTicks(), dt = now - fling.last;
 		fling.last = now;
 		fling.at += fling.speed * (float) dt;
-		fling.speed *= expf(-(float) dt / 250.0f);
+		fling.speed *= expf(-(float) dt / 325.0f);
 		if (fling.at <= 0 || fling.at >= (float) lastMaxScroll || fabsf(fling.speed) < 0.002f) {
 			fling.at = SDL_max(0.0f, SDL_min(fling.at, (float) lastMaxScroll));
 			fling.speed = 0;
