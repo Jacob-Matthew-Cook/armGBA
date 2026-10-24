@@ -1127,8 +1127,10 @@ static bool phoneScreen(void) {
 	return phone;
 }
 
+// From the window's short and long sides, so turning a phone to portrait keeps the text one size.
 static int unitFor(int width, int height) {
-	int const u = SDL_max(10, SDL_min(height / 24, width / 40) * settings.menuSize / 100);
+	int const shortSide = SDL_min(width, height), longSide = SDL_max(width, height);
+	int const u = SDL_max(10, SDL_min(shortSide / 24, longSide / 40) * settings.menuSize / 100);
 	return touchOnly() && phoneScreen() ? u * 5 / 4 : u;
 }
 
@@ -1190,30 +1192,34 @@ static void drawHints(int x, int y, int u, const struct Hint* hints, int count) 
 }
 
 // The header's height: room for ARMGBA, the tabs and where you are.
+// Whether the top menus' tabs take a row of their own under ARMGBA, as on a phone in portrait where
+// they don't fit beside it.
+static bool tabsOwnRow;
+
 static int headerHeight(int u) {
-	return u * 7 / 2;
+	return u * 7 / 2 + (tabsOwnRow ? u * 5 / 2 : 0);
 }
 
 // The header (ARMGBA and where you are) across the window, panel; returns where the content starts.
 static int drawPanel(SDL_Rect panel, int u, const char* where) {
-	int const headerH = headerHeight(u), inset = u + u / 2;
+	int const headerH = headerHeight(u), titleRow = u * 7 / 2, inset = u + u / 2;
 	int const titleSize = u * 9 / 5, whereSize = u * 9 / 10;
 	// On Android, a back button before the title, for touch, where Back is a gesture.
 	int left = panel.x + inset;
 	backRect = (SDL_Rect) { 0, 0, 0, 0 };
 #ifdef __ANDROID__
 	int const size = u * 2;
-	backRect = (SDL_Rect) { left - u / 2, panel.y + (headerH - size) / 2, size, size };
+	backRect = (SDL_Rect) { left - u / 2, panel.y + (titleRow - size) / 2, size, size };
 	fillRounded(backRect, size / 2, keyFill);
 	int const arrow = u * 3 / 2, aw = textWidth(FACE_STRONG, arrow, "\xE2\x80\xB9");
 	textDraw(FACE_STRONG, arrow, backRect.x + (size - aw) / 2, backRect.y + (size - arrow) / 2 - arrow / 10, white, "\xE2\x80\xB9");
 	left = backRect.x + size + u / 2;
 #endif
-	int const brand = left - panel.x - inset + textDraw(FACE_TITLE, titleSize, left, panel.y + (headerH - titleSize) / 2, accent, "ARMGBA");
+	int const brand = left - panel.x - inset + textDraw(FACE_TITLE, titleSize, left, panel.y + (titleRow - titleSize) / 2, accent, "ARMGBA");
 	char fitted[512];
 	textFit(FACE_BODY, whereSize, where, panel.w - 2 * inset - brand - u, true, fitted, sizeof(fitted));
 	int const ww = textWidth(FACE_BODY, whereSize, fitted);
-	textDraw(FACE_BODY, whereSize, panel.x + panel.w - inset - ww, panel.y + (headerH - whereSize) / 2, muted, fitted);
+	textDraw(FACE_BODY, whereSize, panel.x + panel.w - inset - ww, panel.y + (titleRow - whereSize) / 2, muted, fitted);
 	fillRect(panel.x + u, panel.y + headerH, panel.w - 2 * u, 1, edge);
 	return panel.y + headerH + u / 4;
 }
@@ -1269,6 +1275,20 @@ static void drawHelp(const char* help, int x, int y, int width, int size, int li
 // The tabs, right of ARMGBA in the header: the one shown in the accent color and underlined.
 static void drawTabs(SDL_Rect panel, int u) {
 	int const size = u, gap = u * 3 / 2, headerH = headerHeight(u), inset = u + u / 2;
+	// On a row of their own, each in an equal share of the width.
+	if (tabsOwnRow) {
+		int const rowY = panel.y + u * 7 / 2, rowH = u * 5 / 2, share = (panel.w - 2 * inset) / TABS;
+		int const ty = rowY + (rowH - size) / 2 - u / 4;
+		for (int i = 0; i < TABS; ++i) {
+			int const w = textWidth(FACE_STRONG, size, tabNames[i]), x = panel.x + inset + share * i + (share - w) / 2;
+			textDraw(FACE_STRONG, size, x, ty, i == tab ? accent : muted, tabNames[i]);
+			if (i == tab) {
+				fillRect(x, ty + size + u / 4, w, SDL_max(2, u / 8), accent);
+			}
+			tabRects[i] = (SDL_Rect) { panel.x + inset + share * i, rowY, share, rowH };
+		}
+		return;
+	}
 	int const y = panel.y + (headerH - size) / 2;
 	int x = panel.x + panel.w - inset;
 	for (int i = TABS - 1; i >= 0; --i) {
@@ -1454,6 +1474,16 @@ static void drawMenu(int width, int height, int u) {
 		}
 	}
 	int const helpH = helpLines ? helpLine * helpLines + u / 2 : 0;
+	// The tabs go under ARMGBA when they don't fit beside it.
+	int tabsW = 0;
+	for (int i = 0; i < TABS; ++i) {
+		tabsW += textWidth(FACE_STRONG, u, tabNames[i]) + (i ? u * 3 / 2 : 0);
+	}
+	int brandW = textWidth(FACE_TITLE, u * 9 / 5, "ARMGBA") + u * 2;
+#ifdef __ANDROID__
+	brandW += u * 2 + u / 2;
+#endif
+	tabsOwnRow = depth == 1 && 2 * (u + u / 2) + brandW + tabsW > width;
 	int const chrome = headerHeight(u) + u / 4 + u / 4 + u * 9 / 4 + helpH;
 	// A list longer than the room takes the nearest whole number of rows, a little shorter or taller
 	// to fill it to the help text.
@@ -1651,6 +1681,7 @@ void uiDraw(void) {
 #ifdef __ANDROID__
 	folderPickerPoll();
 #endif
+	tabsOwnRow = false;
 	if (app.menuOpen && depth) {
 		fillRect(0, 0, width, height, app.loaded ? (SDL_Color) { panelFill.r, panelFill.g, panelFill.b, dimAlphas[settings.dim] } : (SDL_Color) { 11, 15, 24, 255 });
 		if (entry.open) {
