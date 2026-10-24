@@ -170,7 +170,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_link_l2", "L2 Button", NULL,
 	  "What L2 does outside netplay: fast-forward while held, or go back to the previous screens. In netplay it always goes back.",
 	  NULL, "link_screens", { { "fast forward", "Fast-Forward" }, { "previous screens", "Previous Screens" }, { NULL, NULL } }, "fast forward" },
-	{ "armgba_r2_follows", "Screen Control", NULL,
+	{ "armgba_r2_follows", "Screen Switch Controller", NULL,
 	  "In netplay, whose L2 and R2 change this device's screens. Auto: this device's player when the frontend says which; otherwise player 1 on the host, player 2 elsewhere.",
 	  NULL, "link_screens",
 	  { { "auto", "Auto" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "auto" },
