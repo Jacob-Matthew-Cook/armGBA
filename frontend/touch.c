@@ -11,7 +11,8 @@
 // buttons, hotkeys and menus work with it as with any. Placed and named as on a Nintendo controller:
 // A on the right, B below, X above, Y on the left, L2 above L and R2 above R, the D-pad and the
 // buttons a little below half-way, where thumbs rest, the sticks below them and further in, and L3
-// and R3 in the lower corners.
+// and R3 in the lower corners. A tap at the top middle shows the menu button on any touch screen,
+// with the controls or without them.
 
 #include "frontend.h"
 
@@ -185,8 +186,9 @@ void touchUpdate(void) {
 	}
 }
 
-static bool shown(void) {
-	return joystick && app.loaded && !app.menuOpen;
+// Over a game, outside the menus; the menu button is there with or without the rest.
+static bool overGame(void) {
+	return app.loaded && !app.menuOpen;
 }
 
 // A touch: the buttons held are remade from every finger down; the menu button opens the menu.
@@ -194,7 +196,7 @@ bool touchEvent(const SDL_Event* event) {
 	if (event->type != SDL_FINGERDOWN && event->type != SDL_FINGERMOTION && event->type != SDL_FINGERUP) {
 		return false;
 	}
-	if (!shown()) {
+	if (!overGame()) {
 		release();
 		return false;
 	}
@@ -215,6 +217,9 @@ bool touchEvent(const SDL_Event* event) {
 			uiOpenMenu();
 		}
 		return true;
+	}
+	if (!joystick) {
+		return false;
 	}
 	int slot = -1;
 	for (int i = 0; i < FINGERS; ++i) {
@@ -320,7 +325,7 @@ static void label(const char* text, float x, float y, int size, SDL_Color color)
 
 // Dark and see-through with a light edge, to show on light and dark games alike; light when pressed.
 void touchDraw(void) {
-	if (!shown()) {
+	if (!overGame()) {
 		return;
 	}
 	int width, height;
@@ -332,6 +337,9 @@ void touchDraw(void) {
 	SDL_SetRenderDrawBlendMode(app.renderer, SDL_BLENDMODE_BLEND);
 	for (int i = 0; i < CONTROLS; ++i) {
 		struct Control const* c = &controls[i];
+		if (!joystick && c->button != MENU) {
+			continue;
+		}
 		if (c->shape == CROSS) {
 			// The middle square and an arm each way with an arrow on it, then the edge round it all.
 			float const arm = c->w / 3, half = arm / 2;
