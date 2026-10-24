@@ -409,7 +409,7 @@ static int postJobs = 1;
 // and 2 more rows above and below; for each thread, a row of each square's share kept from the shadow.
 // Rows of no darkness above and below the shadow's picture of darkness, as far as the farthest shadow
 // reads past it; 8 columns each side.
-enum { DARK_EDGE = 4 };
+enum { DARK_EDGE = 3 };
 static struct GridBuffer gridOut, gridBlends, gridTemplates, gridDark, gridKeeps, gridKeptRows;
 
 // Whether b holds wanted bytes, growing it if it didn't.

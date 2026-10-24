@@ -111,7 +111,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_lcd_shadow_distance", "Game Boy Pixel Shadow Distance", NULL,
 	  "How far the pixels' shadow falls, in the screen's dots. In the armGBA app it's how far Tilt reaches with the screen upright too.",
 	  NULL, "video_lcd",
-	  { { "0.5", "0.5" }, { "1.0", "1" }, { "1.5", "1.5" }, { "2.0", "2" }, { "2.5", "2.5" }, { "3.0", "3" }, { NULL, NULL } },
+	  { { "0.5", "0.5" }, { "1.0", "1" }, { "1.5", "1.5" }, { "2.0", "2" }, { "2.5", "2.5" }, { NULL, NULL } },
 	  "1.5" },
 	{ "armgba_lcd_threads", "CPU Effect Threads", NULL,
 	  "How many CPU cores share LCD Ghosting's and LCD Grid's work each frame. Auto leaves one core for the rest, two with Threaded Video; 1 keeps it on the emulator's own.",
