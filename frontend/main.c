@@ -478,20 +478,92 @@ static void audioSample(int16_t left, int16_t right) {
 static void inputPoll(void) {
 }
 
+#ifdef __ANDROID__
+// Android controllers that send their face buttons by label, A on the right, from RetroArch's Android
+// profiles: by vendor and product, else by name.
+static const struct {
+	uint16_t vendor, product;
+	const char* name;
+} labelPads[] = {
+	{0x0583, 0x2060, NULL}, // iBuffalo SNES
+	{0x1949, 0x0402, NULL}, // Sminiker
+	{0x2020, 0x0111, NULL}, // Odin Controller
+	{0x2022, 0x0111, NULL}, // Retroid Pocket 2 Plus
+	{0x2022, 0x0112, NULL}, // Retro Station
+	{0x2022, 0x3001, NULL}, // Retroid Pocket
+	{0x2dc8, 0x2810, NULL}, // 8BitDo FC30
+	{0x2dc8, 0x2820, NULL}, // 8BitDo NES30
+	{0x2dc8, 0x2830, NULL}, // 8BitDo SFC30
+	{0x2dc8, 0x2840, NULL}, // 8BitDo SNES30
+	{0x2dc8, 0x2862, NULL}, // 8BitDo SN30
+	{0x2dc8, 0x2865, NULL}, // 8BitDo N30 Pro 2
+	{0x2dc8, 0x3000, NULL}, // 8BitDo SN30
+	{0x2dc8, 0x3001, NULL}, // 8BitDo SF30
+	{0x2dc8, 0x3230, NULL}, // 8BitDo Zero 2
+	{0x2dc8, 0x3810, NULL}, // 8BitDo FC30 Pro
+	{0x2dc8, 0x3820, NULL}, // 8BitDo NES30 Pro
+	{0x2dc8, 0x3830, NULL}, // 8BitDo N64
+	{0x2dc8, 0x5103, NULL}, // 8BitDo SN30 Modkit
+	{0x2dc8, 0x5104, NULL}, // 8BitDo N30 Modkit
+	{0x2dc8, 0x5111, NULL}, // 8BitDo Lite 2
+	{0x2dc8, 0x5112, NULL}, // 8BitDo Lite 2
+	{0x2dc8, 0x6000, NULL}, // 8BitDo SF30 Pro
+	{0x2dc8, 0x6001, NULL}, // 8BitDo SN30 Pro
+	{0x2dc8, 0x6002, NULL}, // 8BitDo SN30 Pro+
+	{0x2dc8, 0x6006, NULL}, // 8BitDo Pro 2
+	{0x2dc8, 0x6100, NULL}, // 8BitDo SF30 Pro
+	{0x2dc8, 0x6101, NULL}, // 8BitDo SN30 Pro
+	{0x2dc8, 0x6102, NULL}, // 8BitDo SN30 Pro+
+	{0x2dc8, 0x9000, NULL}, // 8BitDo FC30 Pro
+	{0x2dc8, 0x9001, NULL}, // 8BitDo NES30 Pro
+	{0x2dc8, 0x9002, NULL}, // 8BitDo N64
+	{0x2dc8, 0x9012, NULL}, // 8BitDo SN30
+	{0x2dc8, 0x9015, NULL}, // 8BitDo N30 Pro 2
+	{0, 0, "2Axes 11Keys Game  Pad"},
+	{0, 0, "G58-joy"},
+	{0, 0, "Odin Handheld"},
+	{0, 0, "Universal Human Interface Device"},
+	{0, 0, "Wikipad"},
+	{0, 0, "adc joystick"},
+	{0, 0, "jxdkey_driver"},
+	{0, 0, "matrix_keyboard"},
+	{0, 0, "tincore_adc_joystick"},
+};
+
+// Only for a mapping SDL guessed: those from its list of controllers give places already.
+static bool byLabel(SDL_GameController* pad) {
+	char* mapping = SDL_GameControllerMapping(pad);
+	bool const guessed = mapping && strstr(mapping, ",*,");
+	SDL_free(mapping);
+	if (!guessed) {
+		return false;
+	}
+	uint16_t const vendor = SDL_GameControllerGetVendor(pad), product = SDL_GameControllerGetProduct(pad);
+	const char* name = SDL_JoystickName(SDL_GameControllerGetJoystick(pad));
+	for (size_t i = 0; i < sizeof(labelPads) / sizeof(labelPads[0]); ++i) {
+		if (labelPads[i].name ? name && !strcmp(name, labelPads[i].name)
+		                      : vendor == labelPads[i].vendor && product == labelPads[i].product) {
+			return true;
+		}
+	}
+	return false;
+}
+#endif
+
+static bool padByLabel[PORTS];
+
 // The face buttons by place, as the bindings mean them: A on the right, as RetroArch's RetroPad has
-// it; with Swap A/B and X/Y on, A at the bottom, A and B and X and Y swapped. Android handhelds
-// with a Nintendo layout name their face buttons by label, A on the right, where SDL means places,
-// A at the bottom, so theirs are swapped too; controllers SDL knows (Xbox, PlayStation, Switch and
-// others) give places already. The On-Screen Controls keep their letters.
+// it; with Swap A/B and X/Y on, A at the bottom. SDL gives places, apart from Android controllers
+// that send labels, which are swapped back. The On-Screen Controls keep their letters.
 static int facePlace(SDL_GameController* pad, int button) {
 	if (!pad || button < SDL_CONTROLLER_BUTTON_A || button > SDL_CONTROLLER_BUTTON_Y ||
 	    SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_VIRTUAL) {
 		return button;
 	}
 	bool swap = settings.xboxLayout;
-#ifdef __ANDROID__
-	swap ^= SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_UNKNOWN;
-#endif
+	for (int port = 0; port < PORTS; ++port) {
+		swap ^= app.pads[port] == pad && padByLabel[port];
+	}
 	return swap ? button ^ 1 : button;
 }
 
@@ -610,6 +682,9 @@ void setPadForPort(void) {
 			if (!app.pads[port]) {
 				app.pads[port] = SDL_GameControllerOpen(i);
 				open = true;
+#ifdef __ANDROID__
+				padByLabel[port] = app.pads[port] && byLabel(app.pads[port]);
+#endif
 				if (app.pads[port]) {
 					osd("Controller %d: %s", port + 1, SDL_GameControllerName(app.pads[port]));
 				}
@@ -1486,6 +1561,8 @@ int main(int argc, char** argv) {
 	// Android's Back opens the menu instead of leaving, and the phone's tilt isn't a controller.
 	SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
 	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+	// Nintendo controllers by place too, as RetroArch has them.
+	SDL_SetHint(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, "0");
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
 		fprintf(stderr, "armgba: %s\n", SDL_GetError());
 		return 1;
