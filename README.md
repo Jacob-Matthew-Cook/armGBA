@@ -152,9 +152,10 @@ L2 rewinds, Y shows the frame rate. Arrow keys, X = A, Z = B, A = L, S = R, Ente
 = Select, C and V turbo B and A; controllers work too, one per player. Tab fast-forwards while held,
 R rewinds, P pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its slot, F12
 takes a screenshot, F9 starts and stops recording, F11 goes full screen, F3 shows the frame rate.
-The menu changes all of these, and the Hotkey too. A controller's face buttons go by RetroArch's
-RetroPad letters, as on a Game Boy: A on the right, B at the bottom, X at the top, Y on the left.
-Controls' Swap A/B and X/Y puts A at the bottom and B on the right, as an Xbox controller's letters.
+The menu changes all of these, and the Hotkey too. Controls' Face Buttons is By Letter, the game's A
+the controller's A (Cross on PlayStation), or By Position, as RetroArch's RetroPad and a Game Boy have
+them: A on the right, B at the bottom, X at the top, Y on the left. By Letter is the default;
+controllers with unknown letters go by position.
 
 The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyboard; left and right
 too on a row without a value), and it opens again where it was left. General has the recent games,

@@ -118,9 +118,9 @@ struct Settings {
 	bool showMessages;
 	// On-Screen Controls (Android), shown while no controller is connected.
 	bool touchControls;
-	// Swap A/B and X/Y: off, A the right face button, as on a Game Boy and in RetroArch; on, A the
-	// bottom one, as an Xbox controller's letters.
-	bool xboxLayout;
+	// Face Buttons: by letter, the game's A is the controller's A; by position, A is the right face
+	// button, as on a Game Boy and in RetroArch.
+	bool faceLetters;
 	// The menus' look: the accent color, their size as a percentage, and how far the game behind them
 	// is dimmed (0 to 2).
 	int accent;
@@ -234,6 +234,7 @@ struct Option* optionFind(const char* key);
 void optionSet(struct Option* option, const char* value);
 const char* scancodeName(SDL_Scancode code);
 const char* padName(int binding);
+const char* faceName(int binding);
 uint32_t padBit(int binding);
 // The core's (libretro/saves.c): writes a whole file, the old one kept whole until the new one is,
 // with Safe Saves on; false if it couldn't.

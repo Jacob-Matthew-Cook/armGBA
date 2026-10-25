@@ -478,13 +478,16 @@ static void audioSample(int16_t left, int16_t right) {
 static void inputPoll(void) {
 }
 
-#ifdef __ANDROID__
-// Android controllers that send their face buttons by label, A on the right, from RetroArch's Android
-// profiles: by vendor and product, else by name.
+// What a controller's face buttons say: Xbox letters, A at the bottom; Nintendo's, A on the right;
+// PlayStation's symbols; or nothing known, places only.
+enum Face { FACE_PLACES, FACE_XBOX, FACE_NINTENDO, FACE_PLAYSTATION };
+
+// Controllers with Nintendo's letters, from RetroArch's Android profiles: by vendor and product, else
+// by name.
 static const struct {
 	uint16_t vendor, product;
 	const char* name;
-} labelPads[] = {
+} nintendoPads[] = {
 	{0x0583, 0x2060, NULL}, // iBuffalo SNES
 	{0x1949, 0x0402, NULL}, // Sminiker
 	{0x2020, 0x0111, NULL}, // Odin Controller
@@ -530,41 +533,96 @@ static const struct {
 	{0, 0, "tincore_adc_joystick"},
 };
 
-// Only for a mapping SDL guessed: those from its list of controllers give places already.
-static bool byLabel(SDL_GameController* pad) {
-	char* mapping = SDL_GameControllerMapping(pad);
-	bool const guessed = mapping && strstr(mapping, ",*,");
-	SDL_free(mapping);
-	if (!guessed) {
-		return false;
-	}
+static bool nintendoListed(SDL_GameController* pad) {
 	uint16_t const vendor = SDL_GameControllerGetVendor(pad), product = SDL_GameControllerGetProduct(pad);
 	const char* name = SDL_JoystickName(SDL_GameControllerGetJoystick(pad));
-	for (size_t i = 0; i < sizeof(labelPads) / sizeof(labelPads[0]); ++i) {
-		if (labelPads[i].name ? name && !strcmp(name, labelPads[i].name)
-		                      : vendor == labelPads[i].vendor && product == labelPads[i].product) {
+	for (size_t i = 0; i < sizeof(nintendoPads) / sizeof(nintendoPads[0]); ++i) {
+		if (nintendoPads[i].name ? name && !strcmp(name, nintendoPads[i].name)
+		                         : vendor == nintendoPads[i].vendor && product == nintendoPads[i].product) {
 			return true;
 		}
 	}
 	return false;
 }
+
+static enum Face faceOf(SDL_GameController* pad) {
+	switch (SDL_GameControllerGetType(pad)) {
+	case SDL_CONTROLLER_TYPE_XBOX360:
+	case SDL_CONTROLLER_TYPE_XBOXONE:
+	case SDL_CONTROLLER_TYPE_AMAZON_LUNA:
+	case SDL_CONTROLLER_TYPE_GOOGLE_STADIA:
+	case SDL_CONTROLLER_TYPE_NVIDIA_SHIELD:
+		return FACE_XBOX;
+	case SDL_CONTROLLER_TYPE_PS3:
+	case SDL_CONTROLLER_TYPE_PS4:
+	case SDL_CONTROLLER_TYPE_PS5:
+		return FACE_PLAYSTATION;
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+	case SDL_CONTROLLER_TYPE_VIRTUAL:
+		return FACE_NINTENDO;
+	default:
+		break;
+	}
+	const char* name = SDL_GameControllerName(pad);
+	if (nintendoListed(pad) || (name && (strstr(name, "Nintendo") || strstr(name, "GameCube")))) {
+		return FACE_NINTENDO;
+	}
+	return name && (strstr(name, "Xbox") || strstr(name, "Steam")) ? FACE_XBOX : FACE_PLACES;
+}
+
+#ifdef __ANDROID__
+// SDL's own guess at an Android controller's mapping goes by Android's button names, which those with
+// Nintendo's letters give by letter, A on the right; SDL's list of controllers gives places.
+static bool sentByLetter(SDL_GameController* pad) {
+	char* mapping = SDL_GameControllerMapping(pad);
+	bool const guessed = mapping && strstr(mapping, ",*,");
+	SDL_free(mapping);
+	return guessed && nintendoListed(pad);
+}
 #endif
 
-static bool padByLabel[PORTS];
+static enum Face padFaces[PORTS];
+static bool padByLetter[PORTS];
+static SDL_JoystickID lastPressed = -1;
 
-// The face buttons by place, as the bindings mean them: A on the right, as RetroArch's RetroPad has
-// it; with Swap A/B and X/Y on, A at the bottom. SDL gives places, apart from Android controllers
-// that send labels, which are swapped back. The On-Screen Controls keep their letters.
+// Whether a controller's A and B, X and Y swap to the places the bindings mean: A on the right, as
+// RetroArch's RetroPad has it. By Letter, the game's A is the controller's A or Cross, at the bottom.
+static bool faceSwap(int port) {
+	bool const bottomA = padFaces[port] == FACE_XBOX || padFaces[port] == FACE_PLAYSTATION;
+	return padByLetter[port] ^ (settings.faceLetters && bottomA);
+}
+
 static int facePlace(SDL_GameController* pad, int button) {
-	if (!pad || button < SDL_CONTROLLER_BUTTON_A || button > SDL_CONTROLLER_BUTTON_Y ||
-	    SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_VIRTUAL) {
+	if (!pad || button < SDL_CONTROLLER_BUTTON_A || button > SDL_CONTROLLER_BUTTON_Y) {
 		return button;
 	}
-	bool swap = settings.xboxLayout;
 	for (int port = 0; port < PORTS; ++port) {
-		swap ^= app.pads[port] == pad && padByLabel[port];
+		if (app.pads[port] == pad && faceSwap(port)) {
+			return button ^ 1;
+		}
 	}
-	return swap ? button ^ 1 : button;
+	return button;
+}
+
+// A face button binding's name on the controller last pressed: what the button says and where it is.
+const char* faceName(int binding) {
+	static const char* const names[4][4] = {
+		[FACE_PLACES] = { "B (Bottom)", "A (Right)", "Y (Left)", "X (Top)" },
+		[FACE_XBOX] = { "A (Bottom)", "B (Right)", "X (Left)", "Y (Top)" },
+		[FACE_NINTENDO] = { "B (Bottom)", "A (Right)", "Y (Left)", "X (Top)" },
+		[FACE_PLAYSTATION] = { "Cross (Bottom)", "Circle (Right)", "Square (Left)", "Triangle (Top)" },
+	};
+	int port = 0;
+	for (int p = 0; p < PORTS; ++p) {
+		port = app.pads[p] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(app.pads[p])) == lastPressed ? p : port;
+	}
+	if (!app.pads[port]) {
+		return names[FACE_PLACES][binding];
+	}
+	return names[padFaces[port]][faceSwap(port) ? binding ^ 1 : binding];
 }
 
 // A controller binding's state.
@@ -682,8 +740,9 @@ void setPadForPort(void) {
 			if (!app.pads[port]) {
 				app.pads[port] = SDL_GameControllerOpen(i);
 				open = true;
+				padFaces[port] = app.pads[port] ? faceOf(app.pads[port]) : FACE_PLACES;
 #ifdef __ANDROID__
-				padByLabel[port] = app.pads[port] && byLabel(app.pads[port]);
+				padByLetter[port] = app.pads[port] && sentByLetter(app.pads[port]);
 #endif
 				if (app.pads[port]) {
 					osd("Controller %d: %s", port + 1, SDL_GameControllerName(app.pads[port]));
@@ -1418,6 +1477,9 @@ static void padPressed(SDL_JoystickID which, int binding) {
 // plugged in or out, hotkeys, and a right-click for the menu.
 static void handleEvent(const SDL_Event* given) {
 	SDL_Event placed = *given;
+	if (given->type == SDL_CONTROLLERBUTTONDOWN) {
+		lastPressed = given->cbutton.which;
+	}
 	if (given->type == SDL_CONTROLLERBUTTONDOWN || given->type == SDL_CONTROLLERBUTTONUP) {
 		placed.cbutton.button = (Uint8) facePlace(SDL_GameControllerFromInstanceID(given->cbutton.which), given->cbutton.button);
 	}
