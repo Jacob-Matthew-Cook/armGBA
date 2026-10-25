@@ -1650,6 +1650,10 @@ static void handleEvent(const SDL_Event* given) {
 		}
 		writeSaves();
 		break;
+	// Android's clock stops while the app is away, so what was shown before it went is put away.
+	case SDL_APP_DIDENTERFOREGROUND:
+		osdClear();
+		break;
 	case SDL_DROPFILE:
 		loadGame(event->drop.file);
 		SDL_free(event->drop.file);

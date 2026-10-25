@@ -187,6 +187,16 @@ void osd(const char* format, ...) {
 
 static Uint32 resyncUntil;
 
+static void disarm(void);
+
+void osdClear(void) {
+	for (int i = 0; i < MESSAGES; ++i) {
+		messages[i].until = 0;
+	}
+	resyncUntil = 0;
+	disarm();
+}
+
 // A circular arrow centered at x, y, radius r: an arc most of the way round, clockwise, and its head.
 static void drawSyncArrow(int x, int y, float r, SDL_Color color) {
 	enum { STEPS = 24 };

@@ -276,6 +276,8 @@ void uiCloseMenu(void);
 bool uiEvent(const SDL_Event* event);
 void uiDraw(void);
 void osd(const char* format, ...);
+// The messages and the presses a row asked for forgotten, as the app comes back.
+void osdClear(void);
 // A small sync arrow at the top left for a moment: netplay took the host's state.
 void osdResync(void);
 void uiCaptureBinding(int which, bool controller, bool hotkey);
