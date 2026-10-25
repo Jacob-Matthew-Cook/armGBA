@@ -31,6 +31,8 @@ struct Item {
 	const char* help;
 	// A game, indented from the menu's own rows.
 	bool game;
+	// A path, cut from its start when it doesn't fit.
+	bool path;
 };
 
 struct Menu {

@@ -200,12 +200,28 @@ static void grouped(char* out, size_t size, int n) {
 	}
 }
 
-// The game list: the folder's name and counts, "..", then each folder and game.
+// A folder's path as shown: on Android, the shared storage as Internal and a card as Card.
+static void shownPath(char* out, size_t size, const char* path) {
+#ifdef __ANDROID__
+	static const char shared[] = "/storage/emulated/0";
+	size_t const sharedLength = sizeof(shared) - 1;
+	if (!strncmp(path, shared, sharedLength) && (!path[sharedLength] || path[sharedLength] == '/')) {
+		snprintf(out, size, "Internal%s", path + sharedLength);
+		return;
+	}
+	if (!strncmp(path, "/storage/", 9) && path[9] && strncmp(path + 9, "emulated", 8) && strncmp(path + 9, "self", 4)) {
+		const char* const rest = strchr(path + 9, '/');
+		snprintf(out, size, "Card%s", rest ? rest : "");
+		return;
+	}
+#endif
+	snprintf(out, size, "%s", path);
+}
+
+// The game list: the folder's path and counts, "..", then each folder and game.
 void browserMenu(void) {
 	readBrowser();
 	// The folder's name, and how many games and folders it holds.
-	const char* slash = strrchr(browserPath, '/');
-	const char* name = slash && slash[1] ? slash + 1 : browserPath;
 	int folders = 0;
 	for (int i = 0; i < browserCount; ++i) {
 		folders += browserEntries[i].directory;
@@ -216,7 +232,12 @@ void browserMenu(void) {
 		snprintf(folderCount, sizeof(folderCount), ", %d %s", folders, folders == 1 ? "folder" : "folders");
 	}
 	snprintf(counts, sizeof(counts), "%s %s%s", games, browserCheats ? "cheat files" : browserCount - folders == 1 ? "game" : "games", folderCount);
-	addInfo(name, counts);
+	char where[PATH_SIZE];
+	shownPath(where, sizeof(where), browserPath);
+	// Only the end of a path too long for the row.
+	size_t const length = strlen(where);
+	addInfo(length > NAME_SIZE ? where + length - NAME_SIZE : where, counts);
+	items[itemCount - 1].path = true;
 	// Shortcuts, under their own header: in the Games folder, its consoles' folders and the last
 	// game's; elsewhere, the way back to it. Then this folder's own.
 	bool const home = !strcmp(browserPath, gamesDirectory);

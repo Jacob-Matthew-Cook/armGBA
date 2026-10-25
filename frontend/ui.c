@@ -1651,7 +1651,7 @@ static void drawMenu(int width, int height, int u) {
 		char label[NAME_SIZE + 64];
 		// The label, cut to fit before the value.
 		int const labelL = textL + (item->game ? u : 0);
-		textFit(face, size, item->label, valueL - labelL - u, item->label[0] == '/', label, sizeof(label));
+		textFit(face, size, item->label, valueL - labelL - u, item->path || item->label[0] == '/', label, sizeof(label));
 		textDraw(face, size, labelL, ty, on ? white : item->function ? text : muted, label);
 	}
 	// The scroll bar, which a finger or the mouse drags: wider while dragged, and grabbed anywhere
