@@ -39,13 +39,14 @@ static void resume(int argument, int delta) {
 	}
 }
 
-// Save State and Load State: left and right change the slot.
+// State Slot: left and right, or choosing it, change the slot Save State and Load State use.
+static void stateSlot(int argument, int delta) {
+	(void) argument;
+	app.slot = wrap(app.slot, delta ? delta : 1, SLOTS);
+}
+
 static void stateItem(int load, int delta) {
-	if (delta) {
-		app.slot = wrap(app.slot, delta, SLOTS);
-		return;
-	}
-	if (stateCommand(load)) {
+	if (!delta && stateCommand(load)) {
 		uiCloseMenu();
 	}
 }
@@ -1625,13 +1626,16 @@ static void gameTab(void) {
 	asGame();
 	addItem("Resume", resume, 0);
 	helpFor("Back to the game.");
-	snprintf(text, sizeof(text), stateExists(app.slot) ? "Slot %d" : "Slot %d \xC2\xB7 Empty", app.slot);
-	addValue("Save State", text, stateItem, 0);
+	snprintf(text, sizeof(text), stateExists(app.slot) ? "%d" : "%d \xC2\xB7 Empty", app.slot);
+	addValue("State Slot", text, stateSlot, 0);
 	asState();
-	helpFor("Saves the game as it is now in the slot shown; left and right change the slot.");
-	addValue("Load State", text, stateItem, 1);
+	helpFor("The slot Save State and Load State use, one of ten; left and right change it.");
+	addItem("Save State", stateItem, 0);
 	asState();
-	helpFor("Goes back to the state in the slot shown. Undo Load State brings back what you had.");
+	helpFor("Saves the game as it is now in the slot.");
+	addItem("Load State", stateItem, 1);
+	asState();
+	helpFor("Goes back to the state in the slot. Undo Load State brings back what you had.");
 	if (canUndoLoad()) {
 		addItem("Undo Load State", undoLoad, 0);
 		helpFor("Goes back to the game as it was before the last state loaded.");
