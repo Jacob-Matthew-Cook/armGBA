@@ -232,8 +232,22 @@ static struct {
 static int nextCircle;
 
 // After the renderer is made again: the textures went with the old one.
+// The picture of the state slot shown, kept until the slot, the game or the state changes.
+static SDL_Texture* thumbnail;
+static char thumbnailPath[FILE_SIZE + 8];
+static int thumbnailSaves = -1, thumbnailWidth, thumbnailHeight;
+
+static void dropThumbnail(void) {
+	if (thumbnail) {
+		SDL_DestroyTexture(thumbnail);
+	}
+	thumbnail = NULL;
+	thumbnailPath[0] = '\0';
+}
+
 void uiRecreateTextures(void) {
 	textReset();
+	dropThumbnail();
 	for (int i = 0; i < CIRCLES; ++i) {
 		if (circles[i].texture) {
 			SDL_DestroyTexture(circles[i].texture);
@@ -365,6 +379,13 @@ void helpFor(const char* help) {
 void asGame(void) {
 	if (itemCount) {
 		items[itemCount - 1].game = true;
+	}
+}
+
+// The item just added is Save State or Load State.
+void asState(void) {
+	if (itemCount) {
+		items[itemCount - 1].state = true;
 	}
 }
 
@@ -1468,6 +1489,47 @@ static void drawCapture(int width, int height, int u) {
 }
 
 // The menu on top: its rows, the help for the selected one and the footer's hints.
+// The slot's picture in the room between left and right, top and bottom: at the right, as large as
+// fits in half the width; a box saying Empty, or No Picture for a state saved without one.
+static void drawThumbnail(int left, int right, int top, int bottom, int u) {
+	char path[FILE_SIZE + 8];
+	stateThumbnailPath(path, app.slot);
+	if (strcmp(path, thumbnailPath) || thumbnailSaves != statesSaved) {
+		dropThumbnail();
+		snprintf(thumbnailPath, sizeof(thumbnailPath), "%s", path);
+		thumbnailSaves = statesSaved;
+		int w, h;
+		uint8_t* const rgb = stateExists(app.slot) ? readPng(path, &w, &h) : NULL;
+		thumbnail = rgb ? SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STATIC, w, h) : NULL;
+		if (thumbnail) {
+			SDL_UpdateTexture(thumbnail, NULL, rgb, w * 3);
+			SDL_SetTextureScaleMode(thumbnail, SDL_ScaleModeLinear);
+			thumbnailWidth = w;
+			thumbnailHeight = h;
+		}
+		free(rgb);
+	}
+	int const aw = thumbnail ? thumbnailWidth : app.gameWidth ? app.gameWidth : 240;
+	int const ah = thumbnail ? thumbnailHeight : app.gameHeight ? app.gameHeight : 160;
+	int h = bottom - top, w = h * aw / ah;
+	if (w > (right - left) / 2) {
+		w = (right - left) / 2;
+		h = w * ah / aw;
+	}
+	if (h < u * 3) {
+		return;
+	}
+	SDL_Rect const box = { right - w, top, w, h };
+	if (thumbnail) {
+		SDL_RenderCopy(app.renderer, thumbnail, NULL, &box);
+		return;
+	}
+	fillBordered(box, u / 4, panelFill, edge, 1);
+	const char* const label = stateExists(app.slot) ? "No Picture" : "Empty";
+	int const size = u * 9 / 10, lw = textWidth(FACE_BODY, size, label);
+	textDraw(FACE_BODY, size, box.x + (box.w - lw) / 2, box.y + (box.h - size) / 2, muted, label);
+}
+
 // Text too long for its room pans across it, a unit a second, waiting at each end, then starts
 // again; since is when it was first shown. Returns whether it had to.
 static bool drawPanning(enum FaceId face, int size, int x, int y, int room, SDL_Color color, const char* text, Uint32 since, int u) {
@@ -1621,9 +1683,11 @@ static void drawMenu(int width, int height, int u) {
 	}
 	firstShown = m->scroll;
 	shownCount = 0;
+	int stateBottom = -1;
 	for (int i = m->scroll; i < itemCount && shownCount < rows; ++i, ++shownCount) {
 		struct Item* item = &items[i];
 		int const y = top + shownCount * rowH;
+		stateBottom = item->state ? y + rowH : stateBottom;
 		itemRects[shownCount] = (SDL_Rect) { pillL, y, pillR - pillL, rowH };
 		arrowLeft[shownCount] = arrowRight[shownCount] = -1;
 		// A header: bold, a little larger than the rows under it, toward the foot of its row, over a
@@ -1680,6 +1744,10 @@ static void drawMenu(int width, int height, int u) {
 			textFit(face, size, item->label, valueL - labelL - u, item->path || item->label[0] == '/', label, sizeof(label));
 			textDraw(face, size, labelL, ty, on ? white : item->function ? text : muted, label);
 		}
+	}
+	// With Save State or Load State selected, the slot's picture under them, down to the help.
+	if (stateBottom >= 0 && selectable(m->selected) && items[m->selected].state) {
+		drawThumbnail(textL, textR, stateBottom + u / 2, footerTop(panel, u) - helpH - u / 2, u);
 	}
 	// The scroll bar, which a finger or the mouse drags: wider while dragged, and grabbed anywhere
 	// two units in from the edge.

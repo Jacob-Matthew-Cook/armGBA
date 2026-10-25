@@ -37,7 +37,19 @@ bool stateExists(int slot) {
 	return app.loaded && !stat(path, &st);
 }
 
-// The game's state now, to slot's file.
+static bool writePng(const char* path);
+
+// The picture saved with slot's state, game.state.png and so on, as RetroArch names it.
+void stateThumbnailPath(char out[FILE_SIZE + 8], int slot) {
+	char path[FILE_SIZE];
+	statePath(path, slot);
+	snprintf(out, FILE_SIZE + 8, "%s.png", path);
+}
+
+// How many states have been saved, so a thumbnail shown is read again after one is.
+int statesSaved;
+
+// The game's state now, to slot's file, with the picture beside it.
 bool saveState(int slot) {
 	size_t const size = retro_serialize_size();
 	void* data = size ? malloc(size) : NULL;
@@ -45,6 +57,14 @@ bool saveState(int slot) {
 	statePath(path, slot);
 	bool const saved = data && retro_serialize(data, size) && writeWholeFile(path, data, size);
 	free(data);
+	if (saved) {
+		char thumbnail[FILE_SIZE + 8];
+		stateThumbnailPath(thumbnail, slot);
+		if (!writePng(thumbnail)) {
+			remove(thumbnail);
+		}
+		++statesSaved;
+	}
 	return saved;
 }
 
@@ -362,10 +382,10 @@ static void timestamp(char* out, size_t size) {
 	strftime(out, size, "%Y%m%d-%H%M%S", &t);
 }
 
-// The picture as the core made it, unscaled, to a PNG in the screenshots folder.
-void takeScreenshot(void) {
+// The picture as the core made it, unscaled, to a PNG at path.
+static bool writePng(const char* path) {
 	if (!app.picture || !app.gameWidth) {
-		return;
+		return false;
 	}
 	int const w = app.gameWidth, h = app.gameHeight;
 	uint8_t* rgb = pictureRgb();
@@ -374,36 +394,115 @@ void takeScreenshot(void) {
 	uint8_t* rows = malloc(raw);
 	uLongf compressedSize = compressBound(raw);
 	uint8_t* compressed = malloc(compressedSize);
-	if (!rgb || !rows || !compressed) {
-		free(rgb);
-		free(rows);
-		free(compressed);
-		return;
-	}
-	for (int y = 0; y < h; ++y) {
-		rows[y * (w * 3 + 1)] = 0;
-		memcpy(&rows[y * (w * 3 + 1) + 1], &rgb[y * w * 3], w * 3);
-	}
-	compress2(compressed, &compressedSize, rows, raw, 9);
-	char stamp[32], path[FILE_SIZE];
-	timestamp(stamp, sizeof(stamp));
-	snprintf(path, sizeof(path), "%s/%s-%s.png", shotDirectory, app.gameName, stamp);
-	FILE* f = fopen(path, "wb");
+	FILE* f = rgb && rows && compressed ? fopen(path, "wb") : NULL;
 	if (f) {
+		for (int y = 0; y < h; ++y) {
+			rows[y * (w * 3 + 1)] = 0;
+			memcpy(&rows[y * (w * 3 + 1) + 1], &rgb[y * w * 3], w * 3);
+		}
+		compress2(compressed, &compressedSize, rows, raw, 9);
 		static const uint8_t signature[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
 		uint8_t header[13] = { w >> 24, w >> 16, w >> 8, w, h >> 24, h >> 16, h >> 8, h, 8, 2, 0, 0, 0 };
 		fwrite(signature, 1, 8, f);
 		pngChunk(f, "IHDR", header, 13);
 		pngChunk(f, "IDAT", compressed, (uint32_t) compressedSize);
 		pngChunk(f, "IEND", NULL, 0);
+	}
+	bool const written = f && !ferror(f);
+	if (f) {
 		fclose(f);
-		osd("Screenshot: %s", path);
-	} else {
-		osd("Can't write the screenshot");
 	}
 	free(rgb);
 	free(rows);
 	free(compressed);
+	return written;
+}
+
+// An 8-bit RGB or RGBA PNG, not interlaced, as RGB rows; NULL if it's another kind or can't be read.
+uint8_t* readPng(const char* path, int* width, int* height) {
+	size_t size;
+	uint8_t* file = gameRead(path, &size);
+	static const uint8_t signature[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
+	if (!file || size < 33 || memcmp(file, signature, 8)) {
+		free(file);
+		return NULL;
+	}
+	uint32_t w = 0, h = 0;
+	int channels = 0;
+	uint8_t* packed = NULL;
+	size_t packedSize = 0;
+	bool ok = true;
+	for (size_t at = 8; ok && at + 12 <= size;) {
+		uint32_t const length = (uint32_t) file[at] << 24 | file[at + 1] << 16 | file[at + 2] << 8 | file[at + 3];
+		const uint8_t* const type = &file[at + 4];
+		const uint8_t* const data = &file[at + 8];
+		if (length > size - at - 12) {
+			ok = false;
+		} else if (!memcmp(type, "IHDR", 4) && length >= 13) {
+			w = (uint32_t) data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
+			h = (uint32_t) data[4] << 24 | data[5] << 16 | data[6] << 8 | data[7];
+			channels = data[9] == 2 ? 3 : data[9] == 6 ? 4 : 0;
+			ok = data[8] == 8 && channels && !data[12] && w && h && w <= 4096 && h <= 4096;
+		} else if (!memcmp(type, "IDAT", 4)) {
+			uint8_t* const grown = realloc(packed, packedSize + length);
+			ok = grown != NULL;
+			if (ok) {
+				packed = grown;
+				memcpy(packed + packedSize, data, length);
+				packedSize += length;
+			}
+		} else if (!memcmp(type, "IEND", 4)) {
+			break;
+		}
+		at += 12 + (size_t) length;
+	}
+	free(file);
+	size_t const stride = (size_t) w * channels, rawSize = (stride + 1) * h;
+	uint8_t* const raw = ok && packed && channels ? malloc(rawSize) : NULL;
+	uLongf unpacked = rawSize;
+	ok = raw && uncompress(raw, &unpacked, packed, packedSize) == Z_OK && unpacked == rawSize;
+	free(packed);
+	uint8_t* const rgb = ok ? malloc((size_t) w * h * 3) : NULL;
+	if (!rgb) {
+		free(raw);
+		return NULL;
+	}
+	// Each row's filter undone against the row above, already undone.
+	for (uint32_t y = 0; y < h; ++y) {
+		uint8_t* const row = raw + y * (stride + 1) + 1;
+		const uint8_t* const above = y ? row - (stride + 1) : NULL;
+		int const filter = row[-1];
+		for (size_t x = 0; x < stride; ++x) {
+			int const a = x >= (size_t) channels ? row[x - channels] : 0, b = above ? above[x] : 0;
+			int const c = above && x >= (size_t) channels ? above[x - channels] : 0;
+			int const p = a + b - c, pa = abs(p - a), pb = abs(p - b), pc = abs(p - c);
+			int const paeth = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+			int const add = filter == 1 ? a : filter == 2 ? b : filter == 3 ? (a + b) / 2 : filter == 4 ? paeth : 0;
+			row[x] = (uint8_t) (row[x] + add);
+		}
+		for (uint32_t x = 0; x < w; ++x) {
+			memcpy(&rgb[(y * w + x) * 3], &row[x * channels], 3);
+		}
+	}
+	free(raw);
+	*width = (int) w;
+	*height = (int) h;
+	return rgb;
+}
+
+// The picture as the core made it, unscaled, to a PNG in the screenshots folder.
+void takeScreenshot(void) {
+	if (!app.picture || !app.gameWidth) {
+		return;
+	}
+	char stamp[32], path[FILE_SIZE];
+	timestamp(stamp, sizeof(stamp));
+	snprintf(path, sizeof(path), "%s/%s-%s.png", shotDirectory, app.gameName, stamp);
+	if (writePng(path)) {
+		osd("Screenshot: %s", path);
+	} else {
+		osd("Can't write the screenshot");
+	}
 }
 
 // Recording: the picture goes to ffmpeg as it comes, the sound to a WAV beside it; stopping, ffmpeg

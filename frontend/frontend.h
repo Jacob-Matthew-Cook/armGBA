@@ -284,6 +284,10 @@ void uiCaptureBinding(int which, bool controller, bool hotkey);
 bool saveState(int slot);
 bool loadState(int slot);
 bool stateExists(int slot);
+// The picture saved with a state, and how many states have been saved.
+void stateThumbnailPath(char out[FILE_SIZE + 8], int slot);
+extern int statesSaved;
+uint8_t* readPng(const char* path, int* width, int* height);
 // Saves or loads the chosen slot from a hotkey or the menu, saying how it went.
 bool stateCommand(bool load);
 // The game as it was before the last state was loaded, until the game closes.

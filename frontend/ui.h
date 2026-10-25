@@ -33,6 +33,8 @@ struct Item {
 	bool game;
 	// A path, cut from its start when it doesn't fit.
 	bool path;
+	// Save State or Load State: selected, the slot's picture is shown.
+	bool state;
 };
 
 struct Menu {
@@ -58,6 +60,7 @@ void addChoice(const char* label, const char* value, ItemFunction function, int 
 void addInfo(const char* label, const char* value);
 void helpFor(const char* help);
 void asGame(void);
+void asState(void);
 // Opens a menu over the one shown, build making its rows each frame; back to the one before.
 void pushMenu(void (*build)(void), const char* title);
 void popMenu(void);

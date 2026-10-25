@@ -1627,8 +1627,10 @@ static void gameTab(void) {
 	helpFor("Back to the game.");
 	snprintf(text, sizeof(text), stateExists(app.slot) ? "Slot %d" : "Slot %d \xC2\xB7 Empty", app.slot);
 	addValue("Save State", text, stateItem, 0);
+	asState();
 	helpFor("Saves the game as it is now in the slot shown; left and right change the slot.");
 	addValue("Load State", text, stateItem, 1);
+	asState();
 	helpFor("Goes back to the state in the slot shown. Undo Load State brings back what you had.");
 	if (canUndoLoad()) {
 		addItem("Undo Load State", undoLoad, 0);
