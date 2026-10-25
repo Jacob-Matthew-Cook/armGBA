@@ -389,10 +389,12 @@ void asState(void) {
 	}
 }
 
-// The item chosen once of those that ask twice; choosing it again does it, anything else forgets it.
+// The item chosen of those that ask more than once, and how many more times it asks; choosing it
+// that many times does it, anything else forgets it.
 static struct {
 	ItemFunction function;
 	int argument;
+	int left;
 } armed;
 
 static void disarm(void) {
@@ -621,6 +623,10 @@ static void activate(int delta) {
 	if (!delta && item->confirm && (armed.function != item->function || armed.argument != item->argument)) {
 		armed.function = item->function;
 		armed.argument = item->argument;
+		armed.left = item->confirm;
+		return;
+	}
+	if (!delta && item->confirm && --armed.left > 0) {
 		return;
 	}
 	disarm();
@@ -1708,11 +1714,11 @@ static void drawMenu(int width, int height, int u) {
 		enum FaceId const face = on ? FACE_STRONG : FACE_BODY;
 		int const ty = y + (rowH - size) / 2;
 		int valueL = textR;
-		// An item that asks twice says so once chosen.
+		// An item that asks more than once says how many more times once chosen.
 		char again[32];
 		const char* shownValue = item->value;
 		if (on && item->confirm && armed.function == item->function && armed.argument == item->argument) {
-			snprintf(again, sizeof(again), "Press %s again", lastInputPad ? "A" : "Enter");
+			snprintf(again, sizeof(again), armed.left > 1 ? "Press %s twice more" : "Press %s again", lastInputPad ? "A" : "Enter");
 			shownValue = again;
 		}
 		// A value is right-aligned; with arrows round it, kept for clicks, when it's selected and can change.

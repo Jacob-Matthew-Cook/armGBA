@@ -25,8 +25,9 @@ struct Item {
 	int argument;
 	bool header;
 	bool adjustable;
-	// Asks to be chosen twice, as it ends or throws away the game's progress.
-	bool confirm;
+	// How many more times it asks to be chosen, as it ends or throws away the game's progress or the
+	// settings: 0 none.
+	int confirm;
 	// What it does, shown under the menu while it's selected.
 	const char* help;
 	// A game: indented from the menu's own rows, or as a header, panning across when it's too long.

@@ -172,11 +172,11 @@ GPU's. Extras has cheats (RetroArch's `.cht` files can be added), netplay and Re
 Rows ending in "..." open a page; rows with a value step through it. The line under the menu says
 what the selected item does. With a controller, the buttons bound to A and B choose and go back, and
 in the game list L and R jump by letter; on the keyboard, typing a name's start finds it. Restart,
-Close Game, Quit, Reset Config and Reset Controls and Hotkeys ask for a second press. Netplay is
-armgba to armgba: Together, the default, runs every player's console on every device, kept in step
-with rollback; Separate carries the link cable between two devices each running its own game.
-`--host` (Together), `--host-separate` and `--connect ADDRESS` start it from the command line.
-Achievements need the system's libcurl, and recording its ffmpeg.
+Close Game and Quit (with a game running) ask for a second press, Reset Config and Reset Controls
+and Hotkeys for a third. Netplay is armgba to armgba: Together, the default, runs every player's
+console on every device, kept in step with rollback; Separate carries the link cable between two
+devices each running its own game. `--host` (Together), `--host-separate` and `--connect ADDRESS`
+start it from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
 `~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`. BIOS and boot
