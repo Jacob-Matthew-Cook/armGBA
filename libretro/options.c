@@ -82,7 +82,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  { { "grayscale", "Grayscale" }, { "measured", "Game Boy" }, { "pocket measured", "Game Boy Pocket" }, { "light", "Game Boy Light (Backlit)" }, { NULL, NULL } },
 	  "grayscale" },
 	{ "armgba_gb_contrast", "Game Boy Contrast", NULL,
-	  "The original Game Boy's contrast wheel: lower fades the screen, higher darkens it (on Grayscale, sharpens it). The right stick turns it while playing; R3 resets it to 50%.", NULL, "video",
+	  "The original Game Boy's contrast wheel: lower fades the screen, higher darkens it. The right stick turns it while playing; R3 resets it to 50%.", NULL, "video",
 	  { { "-5", "0%" }, { "-4", "10%" }, { "-3", "20%" }, { "-2", "30%" }, { "-1", "40%" }, { "0", "50%" },
 	    { "1", "60%" }, { "2", "70%" }, { "3", "80%" }, { "4", "90%" }, { "5", "100%" }, { NULL, NULL } }, "0" },
 	{ "armgba_gb_advance_border", "Game Boy on GBA: Border", NULL,

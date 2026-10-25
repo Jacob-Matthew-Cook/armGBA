@@ -473,24 +473,30 @@ void setColors() {
 	// screen's own path, from the screen switched off through the four shades to its darkest, so
 	// its color changes along the way as a real screen's does: the lightest a little past the screen
 	// switched off, the others by their brightness, the darkest nine tenths of the way.
-	auto const contrasted = [&now](int shade) {
-		auto const linear = [](unsigned long color, int bits) {
-			double const c = (color >> bits & 0xFF) / 255.0;
-			return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-		};
-		auto const luminance = [&](unsigned long color) {
-			return 0.2126 * linear(color, 16) + 0.7152 * linear(color, 8) + 0.0722 * linear(color, 0);
-		};
+	auto const linear = [](unsigned long color, int bits) {
+		double const c = (color >> bits & 0xFF) / 255.0;
+		return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+	};
+	auto const luminance = [&](unsigned long color) {
+		return 0.2126 * linear(color, 16) + 0.7152 * linear(color, 8) + 0.0722 * linear(color, 0);
+	};
+	// Where a shade sits on the wheel's S-curve at the middle of its turn (before), from its darkness
+	// in linear light, and where the turn moves it (after): 0 the screen switched off, 1 its darkest.
+	auto const wheel = [&](Screen const& on, int shade, double places[6]) {
 		double const lightest = 0.03, darkest = 0.95, width = 0.12 / (std::log((1 - lightest) / lightest) * 2.12);
-		unsigned long const path[6] = { now.off, now.shades[0], now.shades[1], now.shades[2], now.shades[3], now.full };
-		double places[6] = { 0, lightest, 0, 0, darkest, 1 };
-		double const top = luminance(now.shades[0]), bottom = luminance(now.shades[3]);
+		double const top = luminance(on.shades[0]), bottom = luminance(on.shades[3]);
+		places[0] = 0, places[1] = lightest, places[4] = darkest, places[5] = 1;
 		for (int k = 2; k <= 3; ++k) {
-			places[k] = lightest + (darkest - lightest) * (top - luminance(now.shades[k - 1])) / (top - bottom);
+			places[k] = lightest + (darkest - lightest) * (top - luminance(on.shades[k - 1])) / (top - bottom);
 		}
 		double const before = places[shade + 1];
 		double const voltage = (1 + width * std::log(before / (1 - before))) * (1 + 0.12 * contrast / 5);
-		double const after = 1 / (1 + std::exp(-(voltage - 1) / width));
+		return 1 / (1 + std::exp(-(voltage - 1) / width));
+	};
+	auto const contrasted = [&](Screen const& on, int shade) {
+		double places[6];
+		double const after = wheel(on, shade, places);
+		unsigned long const path[6] = { on.off, on.shades[0], on.shades[1], on.shades[2], on.shades[3], on.full };
 		int k = 0;
 		while (k < 4 && after > places[k + 1]) {
 			++k;
@@ -504,22 +510,29 @@ void setColors() {
 		}
 		return result;
 	};
+	// Grayscale is no real screen, and already white to black, so each shade moves as the Pocket's same
+	// shade does, by the share of the way that one goes to the Pocket's darkest when turned up, or to
+	// it switched off when turned down: to black, or to white.
+	auto const followed = [&](int shade) {
+		// The shares are of perceived brightness, so the faint picture a real screen keeps at either
+		// end of the wheel stays too.
+		auto const perceived = [&](unsigned long color) {
+			double const l = luminance(color);
+			return l <= 0.0031308 ? l * 12.92 : 1.055 * std::pow(l, 1 / 2.4) - 0.055;
+		};
+		Screen const& real = screens[2];
+		double const from = perceived(real.shades[shade]), to = perceived(contrasted(real, shade));
+		double const was = perceived(now.shades[shade]);
+		double const c = to <= from ? was * (1 - (from - to) / (from - perceived(real.full)))
+		                            : was + (1 - was) * (to - from) / (perceived(real.off) - from);
+		unsigned long const gray = (unsigned long) std::lround(std::min(std::max(c, 0.0), 1.0) * 255);
+		return gray << 16 | gray << 8 | gray;
+	};
 	// A Game Boy game started through a Game Boy Color's boot ROM keeps the colors the boot ROM
 	// gave it (a state stores them too), so they aren't replaced here.
 	if (!s->gb->isCgb() || (s->loadFlags & gambatte::GB::NO_BIOS)) {
-		// Grayscale is no real screen: already white to black, it has no darker to go, so turned up its
-		// middle grays move apart instead, white and black staying, by up to 2.25 times at the top.
-		auto const sharper = [&now](int shade) {
-			double const k = 1 + 0.25 * contrast;
-			unsigned long result = 0;
-			for (int bits = 0; bits < 24; bits += 8) {
-				double const c = (now.shades[shade] >> bits & 0xFF) / 255.0;
-				result |= (unsigned long) std::lround(std::min(std::max(0.5 + (c - 0.5) * k, 0.0), 1.0) * 255) << bits;
-			}
-			return result;
-		};
 		for (int i = 0; i < 4; ++i) {
-			shown[i] = !contrast ? now.shades[i] : screen == 0 && contrast > 0 ? sharper(i) : contrasted(i);
+			shown[i] = !contrast ? now.shades[i] : screen == 0 ? followed(i) : contrasted(now, i);
 		}
 		for (int i = 0; i < 12; ++i) {
 			s->gb->setDmgPaletteColor(i / 4, i % 4, shown[i % 4]);
