@@ -507,8 +507,19 @@ void setColors() {
 	// A Game Boy game started through a Game Boy Color's boot ROM keeps the colors the boot ROM
 	// gave it (a state stores them too), so they aren't replaced here.
 	if (!s->gb->isCgb() || (s->loadFlags & gambatte::GB::NO_BIOS)) {
+		// Grayscale is no real screen: already white to black, it has no darker to go, so turned up its
+		// middle grays move apart instead, white and black staying, by up to 2.25 times at the top.
+		auto const sharper = [&now](int shade) {
+			double const k = 1 + 0.25 * contrast;
+			unsigned long result = 0;
+			for (int bits = 0; bits < 24; bits += 8) {
+				double const c = (now.shades[shade] >> bits & 0xFF) / 255.0;
+				result |= (unsigned long) std::lround(std::min(std::max(0.5 + (c - 0.5) * k, 0.0), 1.0) * 255) << bits;
+			}
+			return result;
+		};
 		for (int i = 0; i < 4; ++i) {
-			shown[i] = contrast ? contrasted(i) : now.shades[i];
+			shown[i] = !contrast ? now.shades[i] : screen == 0 && contrast > 0 ? sharper(i) : contrasted(i);
 		}
 		for (int i = 0; i < 12; ++i) {
 			s->gb->setDmgPaletteColor(i / 4, i % 4, shown[i % 4]);
