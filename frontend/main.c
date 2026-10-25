@@ -607,7 +607,8 @@ static int facePlace(SDL_GameController* pad, int button) {
 	return button;
 }
 
-// A face button binding's name on the controller last pressed: what the button says and where it is.
+// A face button binding's name on the controller last pressed, else the first: what the button says
+// and where it is.
 const char* faceName(int binding) {
 	static const char* const names[4][4] = {
 		[FACE_PLACES] = { "B (Bottom)", "A (Right)", "Y (Left)", "X (Top)" },
@@ -615,11 +616,18 @@ const char* faceName(int binding) {
 		[FACE_NINTENDO] = { "B (Bottom)", "A (Right)", "Y (Left)", "X (Top)" },
 		[FACE_PLAYSTATION] = { "Cross (Bottom)", "Circle (Right)", "Square (Left)", "Triangle (Top)" },
 	};
-	int port = 0;
+	int port = -1;
 	for (int p = 0; p < PORTS; ++p) {
-		port = app.pads[p] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(app.pads[p])) == lastPressed ? p : port;
+		if (!app.pads[p]) {
+			continue;
+		}
+		port = port < 0 ? p : port;
+		if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(app.pads[p])) == lastPressed) {
+			port = p;
+			break;
+		}
 	}
-	if (!app.pads[port]) {
+	if (port < 0) {
 		return names[FACE_PLACES][binding];
 	}
 	return names[padFaces[port]][faceSwap(port) ? binding ^ 1 : binding];
