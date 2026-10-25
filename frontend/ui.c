@@ -395,6 +395,7 @@ static struct {
 	ItemFunction function;
 	int argument;
 	int left;
+	Uint32 since;
 } armed;
 
 static void disarm(void) {
@@ -620,14 +621,26 @@ static void activate(int delta) {
 	if (delta && !item->adjustable) {
 		return;
 	}
-	if (!delta && item->confirm && (armed.function != item->function || armed.argument != item->argument)) {
+	// The presses asked for, at the bottom left, even with Show Messages off; forgotten as that goes.
+	if (!delta && item->confirm) {
+		bool const fresh = armed.function != item->function || armed.argument != item->argument || SDL_GetTicks() - armed.since > MESSAGE_MS;
 		armed.function = item->function;
 		armed.argument = item->argument;
-		armed.left = item->confirm;
-		return;
-	}
-	if (!delta && item->confirm && --armed.left > 0) {
-		return;
+		armed.left = fresh ? item->confirm : armed.left - 1;
+		armed.since = SDL_GetTicks();
+		if (armed.left > 0) {
+			char asked[sizeof(messages[0].text)];
+			snprintf(asked, sizeof(asked), "%s: %s %s", item->label, lastInputTouch ? "tap it" : lastInputPad ? "press A" : "press Enter",
+			         armed.left > 1 ? "twice more" : "again");
+			// The next press's message takes the place of the last.
+			if (fresh) {
+				osd("%s", asked);
+			} else {
+				snprintf(messages[0].text, sizeof(messages[0].text), "%s", asked);
+			}
+			messages[0].until = armed.since + MESSAGE_MS;
+			return;
+		}
 	}
 	disarm();
 	item->function(item->argument, delta);
@@ -1714,13 +1727,7 @@ static void drawMenu(int width, int height, int u) {
 		enum FaceId const face = on ? FACE_STRONG : FACE_BODY;
 		int const ty = y + (rowH - size) / 2;
 		int valueL = textR;
-		// An item that asks more than once says how many more times once chosen.
-		char again[32];
 		const char* shownValue = item->value;
-		if (on && item->confirm && armed.function == item->function && armed.argument == item->argument) {
-			snprintf(again, sizeof(again), armed.left > 1 ? "Press %s twice more" : "Press %s again", lastInputPad ? "A" : "Enter");
-			shownValue = again;
-		}
 		// A value is right-aligned; with arrows round it, kept for clicks, when it's selected and can change.
 		if (shownValue[0]) {
 			char value[NAME_SIZE + 64];
