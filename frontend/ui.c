@@ -1489,7 +1489,8 @@ static void drawMenu(int width, int height, int u) {
 		m->selected = -1;
 		moveSelection(1);
 	}
-	int const size = u * 19 / 20, headerSize = u;
+	// Headers in the title's face, a tenth larger than the menu's unit; the rows nine tenths of it.
+	int const headerSize = u * 11 / 10, size = u * 9 / 10;
 	int rowH = u * 13 / 8;
 	// Two lines above the footer say what the selected item does, when this menu's items say.
 	// Room above the footer for what the selected item does: as many lines, up to HELP_LINES, as this
@@ -1609,8 +1610,8 @@ static void drawMenu(int width, int height, int u) {
 		// faint line across the rows it heads.
 		if (item->header) {
 			char header[NAME_SIZE + 64];
-			textFit(FACE_STRONG, headerSize, item->label, textR - textL, false, header, sizeof(header));
-			textDraw(FACE_STRONG, headerSize, textL, y + rowH - headerSize - u / 4, accent, header);
+			textFit(FACE_TITLE, headerSize, item->label, textR - textL, false, header, sizeof(header));
+			textDraw(FACE_TITLE, headerSize, textL, y + rowH - headerSize - u / 4, accent, header);
 			int const line = SDL_max(1, u / 16);
 			fillRect(textL, y + rowH - line, textR - textL, line, faded(accent, 90));
 			continue;
