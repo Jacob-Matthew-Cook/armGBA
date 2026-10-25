@@ -1468,6 +1468,23 @@ static void drawCapture(int width, int height, int u) {
 }
 
 // The menu on top: its rows, the help for the selected one and the footer's hints.
+// Text too long for its room pans across it, a unit a second, waiting at each end, then starts
+// again; since is when it was first shown. Returns whether it had to.
+static bool drawPanning(enum FaceId face, int size, int x, int y, int room, SDL_Color color, const char* text, Uint32 since, int u) {
+	int const over = textWidth(face, size, text) - room;
+	if (over <= 0) {
+		return false;
+	}
+	Uint32 const wait = 1500, pan = (Uint32) over * 1000 / (Uint32) SDL_max(1, u);
+	Uint32 const t = (SDL_GetTicks() - since) % (2 * wait + pan);
+	int const shift = t < wait ? 0 : t < wait + pan ? (int) ((t - wait) * (Uint32) over / pan) : over;
+	SDL_Rect const clip = { x, y - size / 2, room, size * 2 };
+	SDL_RenderSetClipRect(app.renderer, &clip);
+	textDraw(face, size, x - shift, y, color, text);
+	SDL_RenderSetClipRect(app.renderer, NULL);
+	return true;
+}
+
 static void drawMenu(int width, int height, int u) {
 	// Menus are built again each frame, so their values stay current; the game list, which can hold
 	// thousands of games, is kept until its folder changes.
@@ -1481,6 +1498,16 @@ static void drawMenu(int width, int height, int u) {
 	if (!selectable(m->selected)) {
 		m->selected = -1;
 		moveSelection(1);
+	}
+	// When the selection last moved, so a long row pans from its start.
+	static int sinceDepth, sinceSelected = -1;
+	static void (*sinceBuild)(void);
+	static Uint32 selectedSince;
+	if (depth != sinceDepth || m->build != sinceBuild || m->selected != sinceSelected) {
+		sinceDepth = depth;
+		sinceBuild = m->build;
+		sinceSelected = m->selected;
+		selectedSince = SDL_GetTicks();
 	}
 	// Headers in the title's face, a tenth larger than the menu's unit; the rows nine tenths of it.
 	int const headerSize = u * 11 / 10, size = u * 9 / 10;
@@ -1604,18 +1631,8 @@ static void drawMenu(int width, int height, int u) {
 		if (item->header) {
 			char header[NAME_SIZE + 64];
 			int const hy = y + rowH - headerSize - u / 4, room = textR - textL;
-			int const over = item->game ? textWidth(FACE_TITLE, headerSize, item->label) - room : 0;
-			if (over > 0) {
-				// A game's name too long for the row pans across, a unit a second, waiting at each end,
-				// then starts again.
-				Uint32 const wait = 1500, pan = (Uint32) over * 1000 / (Uint32) u;
-				Uint32 const t = SDL_GetTicks() % (2 * wait + pan);
-				int const shift = t < wait ? 0 : t < wait + pan ? (int) ((t - wait) * (Uint32) over / pan) : over;
-				SDL_Rect const clip = { textL, hy - headerSize / 2, room, headerSize * 2 };
-				SDL_RenderSetClipRect(app.renderer, &clip);
-				textDraw(FACE_TITLE, headerSize, textL - shift, hy, accent, item->label);
-				SDL_RenderSetClipRect(app.renderer, NULL);
-			} else {
+			// A game's name over its menu pans across when it's too long.
+			if (!item->game || !drawPanning(FACE_TITLE, headerSize, textL, hy, room, accent, item->label, 0, u)) {
 				textFit(FACE_TITLE, headerSize, item->label, room, false, header, sizeof(header));
 				textDraw(FACE_TITLE, headerSize, textL, hy, accent, header);
 			}
@@ -1658,8 +1675,11 @@ static void drawMenu(int width, int height, int u) {
 		char label[NAME_SIZE + 64];
 		// The label, cut to fit before the value.
 		int const labelL = textL + (item->game ? u : 0);
-		textFit(face, size, item->label, valueL - labelL - u, item->path || item->label[0] == '/', label, sizeof(label));
-		textDraw(face, size, labelL, ty, on ? white : item->function ? text : muted, label);
+		// The selected row's label pans across when it's too long, from its start each time it's selected.
+		if (!on || !drawPanning(face, size, labelL, ty, valueL - labelL - u, white, item->label, selectedSince, u)) {
+			textFit(face, size, item->label, valueL - labelL - u, item->path || item->label[0] == '/', label, sizeof(label));
+			textDraw(face, size, labelL, ty, on ? white : item->function ? text : muted, label);
+		}
 	}
 	// The scroll bar, which a finger or the mouse drags: wider while dragged, and grabbed anywhere
 	// two units in from the edge.
