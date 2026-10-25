@@ -163,19 +163,19 @@ Load Game, the AppImage's own settings and Quit: Video (window, scaling, vsync, 
 and messages on screen), Shaders for what the GPU draws (Sharp, Smooth, and its LCD grid and Game
 Boy pixel shadow), the sound's volume and latency, controls and fast-forward speed, rewind and
 run-ahead, Saves and Folders (Auto Save State, and where games, BIOS files, saves, states and
-screenshots are; the Games folder is found by itself, ROCKNIX's roms or a roms folder holding gb, gbc
-or gba, and Load Game opens there with those three first), the menus' look (accent color, size, background), and Reset Config. Game has the
-loaded game's ten state slots with Undo Load State, Restart, screenshots, recording and Close Game.
-Core has the core's options, in RetroArch's categories, with LCD Rendering in Video and on Shaders
-to pick the CPU's grid or the GPU's. Extras has cheats (RetroArch's `.cht` files can be added),
-netplay and RetroAchievements. Rows ending in "..." open a page; rows with a value step through it.
-The line under the menu says what the selected item does. With a controller, the buttons bound to A
-and B choose and go back, and in the game list L and R jump by letter; on the keyboard, typing a
-name's start finds it. Restart, Close Game, Quit, Reset Config and Reset Controls and Hotkeys ask
-for a second press. Netplay is armgba to armgba: Together, the default, runs every player's console on
-every device, kept in step with rollback; Separate carries the link cable between two devices each
-running its own game. `--host` (Together), `--host-separate` and `--connect ADDRESS` start it from
-the command line.
+screenshots are; the Games folder is found by itself, ROCKNIX's roms or a roms folder holding gb,
+gbc or gba, and Load Game opens there with those three first), the menus' look (accent color, size,
+background), and Reset Config. Game has the loaded game's state slots (0 to 99, each with a picture)
+with Undo Load State, Restart, screenshots, recording and Close Game. Core has the core's options,
+in RetroArch's categories, with LCD Rendering in Video and on Shaders to pick the CPU's grid or the
+GPU's. Extras has cheats (RetroArch's `.cht` files can be added), netplay and RetroAchievements.
+Rows ending in "..." open a page; rows with a value step through it. The line under the menu says
+what the selected item does. With a controller, the buttons bound to A and B choose and go back, and
+in the game list L and R jump by letter; on the keyboard, typing a name's start finds it. Restart,
+Close Game, Quit, Reset Config and Reset Controls and Hotkeys ask for a second press. Netplay is
+armgba to armgba: Together, the default, runs every player's console on every device, kept in step
+with rollback; Separate carries the link cable between two devices each running its own game.
+`--host` (Together), `--host-separate` and `--connect ADDRESS` start it from the command line.
 Achievements need the system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in

@@ -30,7 +30,7 @@ enum {
 	BUTTON_B = 0,
 	BUTTON_A = 8,
 	RECENT_MAX = 15,
-	SLOTS = 10,
+	SLOTS = 100,
 	OPTIONS_MAX = 160,
 	AUDIO_RATE = 32768,
 };

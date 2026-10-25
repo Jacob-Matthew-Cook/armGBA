@@ -1629,7 +1629,7 @@ static void gameTab(void) {
 	snprintf(text, sizeof(text), stateExists(app.slot) ? "%d" : "%d \xC2\xB7 Empty", app.slot);
 	addValue("State Slot", text, stateSlot, 0);
 	asState();
-	helpFor("The slot Save State and Load State use, one of ten; left and right change it.");
+	helpFor("The slot Save State and Load State use, 0 to 99; left and right change it, faster as they're held.");
 	addItem("Save State", stateItem, 0);
 	asState();
 	helpFor("Saves the game as it is now in the slot.");

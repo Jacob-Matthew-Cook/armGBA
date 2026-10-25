@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <zlib.h>
 
-// Save states: slot 0 is game.state, the others game.state1 to game.state9, as RetroArch names
+// Save states: slot 0 is game.state, the others game.state1 to game.state99, as RetroArch names
 // them; slot -1 is game.state.auto, saved on exit and loaded on start when asked.
 
 static void statePath(char out[FILE_SIZE], int slot) {
