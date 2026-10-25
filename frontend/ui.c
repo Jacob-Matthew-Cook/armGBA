@@ -1875,9 +1875,9 @@ void uiDraw(void) {
 	enum { PLAYING, REWINDING, FORWARDING, PAUSED } const state =
 		!app.loaded || app.menuOpen || !settings.showMessages ? PLAYING : app.rewinding ? REWINDING : app.fastForward ? FORWARDING : app.paused ? PAUSED : PLAYING;
 	if (state != PLAYING) {
-		int const icon = u * 3 / 5, w = u + icon, x = right - w + u / 2;
-		fillRounded((SDL_Rect) { right - w, u / 2, w, h }, h / 2, (SDL_Color) { 0, 0, 0, 150 });
-		float const top = u / 2 + (h - icon) / 2.0f, bottom = top + icon, middle = top + icon / 2.0f, half = icon / 2.0f;
+		int const icon = u * 6 / 5, w = u + icon, pill = icon + u * 3 / 5, x = right - w + u / 2;
+		fillRounded((SDL_Rect) { right - w, u / 2, w, pill }, pill / 2, (SDL_Color) { 0, 0, 0, 150 });
+		float const top = u / 2 + (pill - icon) / 2.0f, bottom = top + icon, middle = top + icon / 2.0f, half = icon / 2.0f;
 		if (state == PAUSED) {
 			fillRect(x + icon / 8, (int) top, icon / 4, icon, white);
 			fillRect(x + icon - icon / 8 - icon / 4, (int) top, icon / 4, icon, white);
