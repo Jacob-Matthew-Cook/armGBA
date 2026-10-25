@@ -239,7 +239,7 @@ void browserMenu(void) {
 	addInfo(length > NAME_SIZE ? where + length - NAME_SIZE : where, counts);
 	items[itemCount - 1].path = true;
 	// Shortcuts, under their own header: in the Games folder, its consoles' folders and the last
-	// game's; elsewhere, the way back to it. Then this folder's own.
+	// game's; outside it, the way back to it. Then this folder's own.
 	bool const home = !strcmp(browserPath, gamesDirectory);
 	bool listed = !strcmp(settings.directory, browserPath);
 	int shortcuts = 0;
@@ -248,7 +248,11 @@ void browserMenu(void) {
 		shortcuts += home && consoleDirectories[i][0];
 	}
 	bool const last = home && settings.directory[0] && !listed && !access(settings.directory, R_OK);
-	shortcuts += last + (!home && gamesDirectory[0]);
+	// Inside the Games folder, ".." leads back to it.
+	size_t const gamesLength = strlen(gamesDirectory);
+	bool const inside = gamesLength && !strncmp(browserPath, gamesDirectory, gamesLength) && browserPath[gamesLength] == '/';
+	bool const away = !home && !inside && gamesDirectory[0];
+	shortcuts += last + away;
 	if (!browserCheats && shortcuts) {
 		addHeader("Shortcuts");
 		for (int i = 0; home && i < CONSOLES; ++i) {
@@ -261,7 +265,7 @@ void browserMenu(void) {
 			addChoice("Last Game's Folder", folderName(settings.directory), browseTo, CONSOLES);
 			helpFor(settings.directory);
 		}
-		if (!home) {
+		if (away) {
 			addChoice("Games Folder", folderName(gamesDirectory), browseTo, CONSOLES + 1);
 			helpFor(gamesDirectory);
 		}
