@@ -96,7 +96,7 @@ static struct {
 // The footer's hints. Each has a slot as wide as its controller or keyboard form, so switching
 // between them moves nothing, and a click or a tap on one does what it says as it was last drawn: on
 // Change, Tabs and Letter, the left half goes back and the right half on.
-enum HintAction { HINT_NONE, HINT_SELECT, HINT_BACK, HINT_CHANGE, HINT_TABS, HINT_LETTER, HINT_TYPE, HINT_DELETE, HINT_CANCEL, HINT_DONE, HINT_PASTE };
+enum HintAction { HINT_SELECT, HINT_BACK, HINT_CHANGE, HINT_TABS, HINT_LETTER, HINT_TYPE, HINT_DELETE, HINT_CANCEL, HINT_DONE, HINT_PASTE };
 struct Hint {
 	const char* button;
 	bool round;
@@ -709,8 +709,6 @@ static void entryPaste(void) {
 // What a footer hint does when it's clicked or tapped; way is which half, -1 or 1.
 static void hintDo(enum HintAction action, int way) {
 	switch (action) {
-	case HINT_NONE:
-		break;
 	case HINT_SELECT:
 		confirm();
 		break;
@@ -1186,11 +1184,6 @@ static void drawHints(int x, int y, int u, const struct Hint* hints, int count) 
 		const struct Hint* const hint = &hints[i];
 		int const slot = SDL_max(hintWidth(u, hint->button, hint->round, hint->buttonLabel), hintWidth(u, hint->key, false, hint->keyLabel));
 		SDL_Rect const button = { x - pad, y - pad / 2, slot + 2 * pad, h + pad };
-		// An empty slot, keeping the rest in their places.
-		if (hint->action == HINT_NONE) {
-			x += slot + 2 * pad + u / 2;
-			continue;
-		}
 		fillBordered(button, button.h / 2, (SDL_Color) { 20, 26, 38, 255 }, edge, 1);
 		const char* const label = lastInputPad ? hint->buttonLabel : hint->keyLabel;
 		if (lastInputTouch) {
@@ -1445,9 +1438,9 @@ static void drawEntry(int width, int height, int u) {
 	int x = panel.x + u + u / 2;
 	y = drawFooter(panel, u);
 	static const struct Hint keyboardHints[] = {
-		{ "B", true, "Esc", "Cancel", "Cancel", HINT_CANCEL, HINT_CANCEL },
 		{ "A", true, "Enter", "Type", "Done", HINT_TYPE, HINT_DONE },
 		{ "X", true, "Bksp", "Delete", "Delete", HINT_DELETE, HINT_DELETE },
+		{ "B", true, "Esc", "Cancel", "Cancel", HINT_CANCEL, HINT_CANCEL },
 		{ "Start", false, "Ctrl+V", "Done", "Paste", HINT_DONE, HINT_PASTE },
 	};
 	drawHints(x, y, u, keyboardHints, 4);
@@ -1678,13 +1671,10 @@ static void drawMenu(int width, int height, int u) {
 	const char* backLabel = depth > 1 ? "Back" : app.loaded ? "Close" : NULL;
 	struct Hint hints[HINTS_MOST];
 	int count = 0;
-	// Back first, as on Android, then Select; with nothing to go back to, Back's place is left empty.
+	hints[count++] = (struct Hint) { "A", true, "Enter", "Select", "Select", HINT_SELECT, HINT_SELECT };
 	if (backLabel) {
 		hints[count++] = (struct Hint) { "B", true, "Esc", backLabel, backLabel, HINT_BACK, HINT_BACK };
-	} else {
-		hints[count++] = (struct Hint) { "B", true, "Esc", "Back", "Back", HINT_NONE, HINT_NONE };
 	}
-	hints[count++] = (struct Hint) { "A", true, "Enter", "Select", "Select", HINT_SELECT, HINT_SELECT };
 	if (adjustable) {
 		hints[count++] = (struct Hint) { "\xE2\x80\xB9 \xE2\x80\xBA", false, "\xE2\x86\x90 \xE2\x86\x92", "Change", "Change", HINT_CHANGE, HINT_CHANGE };
 	}
