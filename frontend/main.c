@@ -647,10 +647,48 @@ static bool nintendoListed(SDL_GameController* pad) {
 	return false;
 }
 
+// What a handheld's own buttons say, by its name as ROCKNIX's quirks have it: the device tree's model,
+// or on x86 its firmware's maker and product. A Retroid's are Nintendo's and an AYANEO's Xbox's;
+// others' aren't known.
+static enum Face handheldFace(void) {
+	static int face = -1;
+	if (face >= 0) {
+		return (enum Face) face;
+	}
+	char name[256] = "";
+	FILE* f = fopen("/proc/device-tree/model", "r");
+	if (f) {
+		size_t const length = fread(name, 1, sizeof(name) - 1, f);
+		name[length] = '\0';
+		fclose(f);
+	}
+	bool const tree = name[0];
+	for (int i = 0; i < 2 && !tree; ++i) {
+		f = fopen(i ? "/sys/class/dmi/id/product_name" : "/sys/class/dmi/id/sys_vendor", "r");
+		char part[128] = "";
+		if (f && fgets(part, sizeof(part), f)) {
+			part[strcspn(part, "\n")] = '\0';
+			strncat(name, part, sizeof(name) - strlen(name) - 2);
+			strcat(name, " ");
+		}
+		if (f) {
+			fclose(f);
+		}
+	}
+	face = !strncmp(name, "Retroid", 7) ? FACE_NINTENDO : !strncasecmp(name, "AYANEO", 6) || !strncasecmp(name, "AYA NEO", 7) ? FACE_XBOX : FACE_PLACES;
+	return (enum Face) face;
+}
+
 static enum Face faceOf(SDL_GameController* pad) {
 	// Retroid's have Nintendo's letters, in its Xbox mode too.
 	if (SDL_GameControllerGetVendor(pad) == 0x2022) {
 		return FACE_NINTENDO;
+	}
+	// ROCKNIX's InputPlumber shows a handheld's own controls as a DualSense or an Xbox controller,
+	// whatever its buttons say, so they go by the handheld's.
+	const char* const shown = SDL_GameControllerName(pad);
+	if (shown && strstr(shown, "InputPlumber")) {
+		return handheldFace();
 	}
 	switch (SDL_GameControllerGetType(pad)) {
 	case SDL_CONTROLLER_TYPE_XBOX360:
@@ -1749,11 +1787,19 @@ int main(int argc, char** argv) {
 	}
 	findAccelerometer();
 	if (listControllers) {
-		// Each joystick SDL sees: its GUID, whether a mapping makes it a controller, its name.
+		// Each joystick SDL sees: its GUID, whether a mapping makes it a controller, its name, and for a
+		// controller its mapping's name and the letters its face buttons are taken to have.
+		static const char* const letters[] = { "unknown, by position", "Xbox", "Nintendo", "PlayStation" };
 		for (int i = 0; i < SDL_NumJoysticks(); ++i) {
 			char guid[33];
 			SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(i), guid, sizeof(guid));
-			printf("%s %s %s\n", guid, SDL_IsGameController(i) ? "mapped  " : "unmapped", SDL_JoystickNameForIndex(i));
+			printf("%s %s %s", guid, SDL_IsGameController(i) ? "mapped  " : "unmapped", SDL_JoystickNameForIndex(i));
+			SDL_GameController* const pad = SDL_IsGameController(i) ? SDL_GameControllerOpen(i) : NULL;
+			if (pad) {
+				printf(" (%s; letters: %s)", SDL_GameControllerName(pad), letters[faceOf(pad)]);
+				SDL_GameControllerClose(pad);
+			}
+			printf("\n");
 		}
 		return 0;
 	}
