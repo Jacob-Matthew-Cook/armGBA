@@ -1687,7 +1687,7 @@ static void drawMenu(int width, int height, int u) {
 	for (int i = m->scroll; i < itemCount && shownCount < rows; ++i, ++shownCount) {
 		struct Item* item = &items[i];
 		int const y = top + shownCount * rowH;
-		stateBottom = item->state ? y + rowH : stateBottom;
+		stateBottom = item->state && stateBottom < 0 ? y + rowH : stateBottom;
 		itemRects[shownCount] = (SDL_Rect) { pillL, y, pillR - pillL, rowH };
 		arrowLeft[shownCount] = arrowRight[shownCount] = -1;
 		// A header: bold, a little larger than the rows under it, toward the foot of its row, over a
@@ -1745,9 +1745,10 @@ static void drawMenu(int width, int height, int u) {
 			textDraw(face, size, labelL, ty, on ? white : item->function ? text : muted, label);
 		}
 	}
-	// With Save State or Load State selected, the slot's picture under them, down to the help.
+	// With State Slot, Save State or Load State selected, the slot's picture under State Slot, beside
+	// the rows without a value, down to the help.
 	if (stateBottom >= 0 && selectable(m->selected) && items[m->selected].state) {
-		drawThumbnail(textL, textR, stateBottom + u / 2, footerTop(panel, u) - helpH - u / 2, u);
+		drawThumbnail(textL, textR, stateBottom + u / 4, footerTop(panel, u) - helpH - u / 2, u);
 	}
 	// The scroll bar, which a finger or the mouse drags: wider while dragged, and grabbed anywhere
 	// two units in from the edge.
