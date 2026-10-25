@@ -1668,7 +1668,7 @@ static void drawMenu(int width, int height, int u) {
 	int const y = drawFooter(panel, u);
 	// The footer's hints, for a controller or the keyboard, whichever was used last.
 	bool const adjustable = selectable(m->selected) && items[m->selected].adjustable;
-	const char* backLabel = depth > 1 ? "Back" : app.loaded ? "Close" : NULL;
+	const char* backLabel = depth > 1 ? "Back" : app.loaded ? "Resume" : NULL;
 	struct Hint hints[HINTS_MOST];
 	int count = 0;
 	hints[count++] = (struct Hint) { "A", true, "Enter", "Select", "Select", HINT_SELECT, HINT_SELECT };
