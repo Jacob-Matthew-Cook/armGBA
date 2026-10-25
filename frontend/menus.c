@@ -779,7 +779,7 @@ enum {
 	SET_MENU_SIZE,
 	SET_DIM,
 	SET_TOUCH,
-	SET_FACE_BUTTONS,
+	SET_SWAP_FACE_BUTTONS,
 };
 
 // A setting's row (SET_*): left and right step a value or turn it over, as choosing it does. The
@@ -861,8 +861,8 @@ static void changeSetting(int which, int delta) {
 		settings.fastForward = speeds[wrap(at, d, 6)];
 		break;
 	}
-	case SET_FACE_BUTTONS:
-		settings.faceLetters = !settings.faceLetters;
+	case SET_SWAP_FACE_BUTTONS:
+		settings.swapFaceButtons = !settings.swapFaceButtons;
 		break;
 	case SET_TOUCH:
 		settings.touchControls = !settings.touchControls;
@@ -1072,8 +1072,8 @@ static void controlsMenu(void) {
 	addValue("On-Screen Controls", onOff(settings.touchControls), changeSetting, SET_TOUCH);
 	helpFor("A controller on the screen, played by touch, there while no other controller is connected.");
 #endif
-	addValue("Face Buttons", settings.faceLetters ? "By Letter" : "By Position", changeSetting, SET_FACE_BUTTONS);
-	helpFor("By Letter: the game's A is the controller's A, or Cross. By Position: A is the right face button and B the bottom one, as on a Game Boy and in RetroArch. Controllers with unknown letters go by position.");
+	addValue("Swap A/B and X/Y", onOff(settings.swapFaceButtons), changeSetting, SET_SWAP_FACE_BUTTONS);
+	helpFor("Off: A is the right face button and B the bottom one, as on a Game Boy and in RetroArch. On: A is the bottom one and B the right; X and Y swap too. On every controller.");
 	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
 	helpFor("How fast the Fast-Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);

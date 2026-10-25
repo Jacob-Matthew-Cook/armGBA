@@ -125,9 +125,9 @@ struct Settings {
 	bool showMessages;
 	// On-Screen Controls (Android), shown while no controller is connected.
 	bool touchControls;
-	// Face Buttons: by letter, the game's A is the controller's A; by position, A is the right face
-	// button, as on a Game Boy and in RetroArch.
-	bool faceLetters;
+	// Swap A/B and X/Y: off, A is the right face button, as on a Game Boy and in RetroArch; on, A is
+	// the bottom one, on every controller.
+	bool swapFaceButtons;
 	// The menus' look: the accent color, their size as a percentage, and how far the game behind them
 	// is dimmed (0 to 2).
 	int accent;
