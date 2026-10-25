@@ -1541,6 +1541,7 @@ static void addRecent(int index) {
 		snprintf(folder, sizeof(folder), "%.*s", (int) (path + length - start), start);
 	}
 	addChoice(name, folder, recentChoose, index);
+	asGame();
 }
 
 static void recentMenu(void) {

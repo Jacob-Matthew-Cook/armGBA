@@ -29,6 +29,8 @@ struct Item {
 	bool confirm;
 	// What it does, shown under the menu while it's selected.
 	const char* help;
+	// A game, indented from the menu's own rows.
+	bool game;
 };
 
 struct Menu {
@@ -53,6 +55,7 @@ void addValue(const char* label, const char* value, ItemFunction function, int a
 void addChoice(const char* label, const char* value, ItemFunction function, int argument);
 void addInfo(const char* label, const char* value);
 void helpFor(const char* help);
+void asGame(void);
 // Opens a menu over the one shown, build making its rows each frame; back to the one before.
 void pushMenu(void (*build)(void), const char* title);
 void popMenu(void);

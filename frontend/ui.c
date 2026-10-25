@@ -361,6 +361,13 @@ void helpFor(const char* help) {
 	}
 }
 
+// The item just added is a game.
+void asGame(void) {
+	if (itemCount) {
+		items[itemCount - 1].game = true;
+	}
+}
+
 // The item chosen once of those that ask twice; choosing it again does it, anything else forgets it.
 static struct {
 	ItemFunction function;
@@ -1540,8 +1547,15 @@ static void drawMenu(int width, int height, int u) {
 	}
 	// Keep the selection in view; the mouse wheel moves the view too.
 	lastRowH = rowH;
-	if (!viewHeld && m->selected >= 0 && (m->selected < m->scroll || m->selected >= m->scroll + rows)) {
-		m->scroll = m->selected < m->scroll ? m->selected : m->selected - rows + 1;
+	// Going up, the headers and info rows just above it come into view too, the first ones at the
+	// top when it wraps round.
+	if (!viewHeld && m->selected >= 0 && m->selected < m->scroll) {
+		m->scroll = m->selected;
+		while (m->scroll > 0 && !selectable(m->scroll - 1) && m->selected - m->scroll < rows - 1) {
+			--m->scroll;
+		}
+	} else if (!viewHeld && m->selected >= 0 && m->selected >= m->scroll + rows) {
+		m->scroll = m->selected - rows + 1;
 	}
 	lastMaxScroll = SDL_max(0, itemCount - rows);
 	m->scroll = SDL_max(0, SDL_min(m->scroll, itemCount - rows));
@@ -1635,8 +1649,9 @@ static void drawMenu(int width, int height, int u) {
 		}
 		char label[NAME_SIZE + 64];
 		// The label, cut to fit before the value.
-		textFit(face, size, item->label, valueL - textL - u, item->label[0] == '/', label, sizeof(label));
-		textDraw(face, size, textL, ty, on ? white : item->function ? text : muted, label);
+		int const labelL = textL + (item->game ? u : 0);
+		textFit(face, size, item->label, valueL - labelL - u, item->label[0] == '/', label, sizeof(label));
+		textDraw(face, size, labelL, ty, on ? white : item->function ? text : muted, label);
 	}
 	// The scroll bar, which a finger or the mouse drags: wider while dragged, and grabbed anywhere
 	// two units in from the edge.
