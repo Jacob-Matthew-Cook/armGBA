@@ -1078,7 +1078,7 @@ static void controlsMenu(void) {
 	helpFor("How fast the Fast-Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);
 	helpFor("Puts every button, key and hotkey back as it first was.");
-	items[itemCount - 1].confirm = 2;
+	items[itemCount - 1].confirm = true;
 }
 
 static void appearanceMenu(void) {
@@ -1605,7 +1605,7 @@ static void generalTab(void) {
 	addHeader("Settings");
 	addSettingsPages();
 	addItem("Reset Config", resetConfig, 0);
-	items[itemCount - 1].confirm = 2;
+	items[itemCount - 1].confirm = true;
 	helpFor("Puts every setting and emulator option back as it first was. Your RetroAchievements login, netplay name, folders "
 	        "and recent games stay.");
 	addItem("Quit", misc, 2);
