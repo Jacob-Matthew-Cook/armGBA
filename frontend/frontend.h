@@ -23,6 +23,8 @@ enum {
 	// A directory, a file name and its extension.
 	FILE_SIZE = PATH_SIZE + NAME_SIZE + 16,
 	PORTS = 4,
+	// Game Boy, Game Boy Color, Game Boy Advance.
+	CONSOLES = 3,
 	BUTTONS = 16,
 	// In libretro's order: B is the first button, A the ninth.
 	BUTTON_B = 0,
@@ -106,7 +108,12 @@ struct Settings {
 	char cheevosUser[64];
 	char cheevosToken[64];
 	bool hardcore;
+	// The last game's folder.
 	char directory[PATH_SIZE];
+	// The Games folder and its consoles' (Game Boy, Game Boy Color, Game Boy Advance): "" for Auto, found
+	// by name, or a folder chosen.
+	char gamesFolder[PATH_SIZE];
+	char consoleFolders[CONSOLES][PATH_SIZE];
 	// The Folders: "" for Auto (armGBA's for states and screenshots), "armgba" or "retroarch" for
 	// theirs, or a folder typed in.
 	char biosFolder[PATH_SIZE];
@@ -164,6 +171,10 @@ extern char configDirectory[PATH_SIZE];
 // The BIOS, save, state and screenshot folders in use, chosen by the Folders settings (the save folder
 // as each game loads), and armGBA's own.
 extern char systemDirectory[PATH_SIZE];
+// The Games folder and its consoles' as chosen, "" for a console's not found.
+extern char gamesDirectory[PATH_SIZE];
+extern char consoleDirectories[CONSOLES][PATH_SIZE];
+extern const char* const consoleNames[CONSOLES];
 extern char ownSystemDirectory[PATH_SIZE];
 extern char saveDirectory[PATH_SIZE];
 extern char ownSaveDirectory[PATH_SIZE];
@@ -213,6 +224,7 @@ void recreateRenderer(void);
 void applyWindowSize(void);
 void refreshShownOptions(void);
 void chooseFolders(void);
+void chooseGameFolders(void);
 const char* retroarchFolder(const char* which);
 void writeSaves(void);
 void runFrames(void);

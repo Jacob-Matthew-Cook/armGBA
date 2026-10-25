@@ -14,11 +14,13 @@
 #include "games.h"
 #include "patch.h"
 
+#include <dirent.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -30,6 +32,9 @@ struct App app = { .format = RETRO_PIXEL_FORMAT_0RGB1555, .avEnable = RETRO_AV_E
 
 char configDirectory[PATH_SIZE];
 char systemDirectory[PATH_SIZE];
+char gamesDirectory[PATH_SIZE];
+char consoleDirectories[CONSOLES][PATH_SIZE];
+const char* const consoleNames[CONSOLES] = { "Game Boy", "Game Boy Color", "Game Boy Advance" };
 char ownSystemDirectory[PATH_SIZE];
 char saveDirectory[PATH_SIZE];
 char ownSaveDirectory[PATH_SIZE];
@@ -217,6 +222,102 @@ static void chooseFolder(char out[PATH_SIZE], const char* setting, const char* o
 	}
 }
 
+// A folder in parent named one of names, any case.
+static bool findFolder(char out[PATH_SIZE], const char* parent, const char* const* names) {
+	DIR* const dir = opendir(parent);
+	struct dirent* e;
+	bool found = false;
+	while (dir && !found && (e = readdir(dir))) {
+		for (const char* const* name = names; *name && !found; ++name) {
+			if (!strcasecmp(e->d_name, *name)) {
+				snprintf(out, PATH_SIZE, "%s/%s", parent, e->d_name);
+				found = isFolder(out);
+			}
+		}
+	}
+	if (dir) {
+		closedir(dir);
+	}
+	return found;
+}
+
+static const char* const consoleFolderNames[CONSOLES][4] = {
+	{ "gb", "gameboy", "game boy", NULL },
+	{ "gbc", "gameboycolor", "game boy color", NULL },
+	{ "gba", "gameboyadvance", "game boy advance", NULL },
+};
+
+static bool holdsConsoles(const char* folder) {
+	char found[PATH_SIZE];
+	for (int i = 0; i < CONSOLES; ++i) {
+		if (findFolder(found, folder, consoleFolderNames[i])) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// A roms folder holding a console's folder in base, or in its games-internal or games-external, as
+// ROCKNIX lays out a card.
+static bool gamesIn(char out[PATH_SIZE], const char* base) {
+	static const char* const roms[] = { "roms", NULL };
+	static const char* const parts[] = { "", "/games-internal", "/games-external" };
+	for (int i = 0; i < 3; ++i) {
+		char at[PATH_SIZE];
+		snprintf(at, sizeof(at), "%s%s", base, parts[i]);
+		if (findFolder(out, at, roms) && holdsConsoles(out)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// The Games folder: Auto is ROCKNIX's roms, a roms folder with a console's folder in it in the home
+// folder (Android's shared storage) or on a card, the folder above the last game's if that's a
+// console's, else the last game's folder. Each console's: Auto is a folder in it named for the
+// console, if there is one.
+void chooseGameFolders(void) {
+	const char* const home = getenv("HOME") ? getenv("HOME") : ".";
+	bool found = settings.gamesFolder[0];
+	snprintf(gamesDirectory, PATH_SIZE, "%s", settings.gamesFolder);
+	if (!found && isFolder("/storage/roms")) {
+		snprintf(gamesDirectory, PATH_SIZE, "/storage/roms");
+		found = true;
+	}
+	found = found || gamesIn(gamesDirectory, home);
+#ifdef __ANDROID__
+	DIR* const cards = found ? NULL : opendir("/storage");
+	struct dirent* e;
+	while (cards && !found && (e = readdir(cards))) {
+		char card[PATH_SIZE];
+		snprintf(card, sizeof(card), "/storage/%s", e->d_name);
+		found = e->d_name[0] != '.' && strcmp(e->d_name, "emulated") && strcmp(e->d_name, "self") && gamesIn(gamesDirectory, card);
+	}
+	if (cards) {
+		closedir(cards);
+	}
+#endif
+	if (!found) {
+		snprintf(gamesDirectory, PATH_SIZE, "%s", settings.directory);
+		char* const slash = strrchr(gamesDirectory, '/');
+		bool console = false;
+		for (int i = 0; slash && i < CONSOLES; ++i) {
+			for (const char* const* name = consoleFolderNames[i]; *name; ++name) {
+				console |= !strcasecmp(slash + 1, *name);
+			}
+		}
+		if (console && slash != gamesDirectory) {
+			*slash = '\0';
+		}
+	}
+	for (int i = 0; i < CONSOLES; ++i) {
+		snprintf(consoleDirectories[i], PATH_SIZE, "%s", settings.consoleFolders[i]);
+		if (!consoleDirectories[i][0] && !findFolder(consoleDirectories[i], gamesDirectory, consoleFolderNames[i])) {
+			consoleDirectories[i][0] = '\0';
+		}
+	}
+}
+
 // The BIOS, state and screenshot folders, as the Folders say. Auto BIOS is armGBA's when it holds a
 // BIOS or boot ROM, RetroArch's otherwise. The core reads the BIOS folder as each game loads.
 void chooseFolders(void) {
@@ -227,6 +328,7 @@ void chooseFolders(void) {
 	chooseFolder(systemDirectory, bios, ownSystemDirectory, retroarch.system, false);
 	chooseFolder(stateDirectory, settings.stateFolder, ownStateDirectory, "", true);
 	chooseFolder(shotDirectory, settings.shotFolder, ownShotDirectory, retroarch.shots, true);
+	chooseGameFolders();
 }
 
 // The save folder for the game at path, as it loads, so a change can't put the running game's save

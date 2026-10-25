@@ -163,7 +163,8 @@ Load Game, the AppImage's own settings and Quit: Video (window, scaling, vsync, 
 and messages on screen), Shaders for what the GPU draws (Sharp, Smooth, and its LCD grid and Game
 Boy pixel shadow), the sound's volume and latency, controls and fast-forward speed, rewind and
 run-ahead, Saves and Folders (Auto Save State, and where games, BIOS files, saves, states and
-screenshots are), the menus' look (accent color, size, background), and Reset Config. Game has the
+screenshots are; the Games folder is found by itself, ROCKNIX's roms or a roms folder holding gb, gbc
+or gba, and Load Game opens there with those three first), the menus' look (accent color, size, background), and Reset Config. Game has the
 loaded game's ten state slots with Undo Load State, Restart, screenshots, recording and Close Game.
 Core has the core's options, in RetroArch's categories, with LCD Rendering in Video and on Shaders
 to pick the CPU's grid or the GPU's. Extras has cheats (RetroArch's `.cht` files can be added),

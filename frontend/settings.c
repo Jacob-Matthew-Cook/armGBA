@@ -200,6 +200,11 @@ static void takeSetting(const char* key, const char* value) {
 		settings.dim = n >= 0 && n <= 2 ? n : 1;
 	} else if (!strcmp(key, "directory")) {
 		copyText(settings.directory, sizeof(settings.directory), value);
+	} else if (!strcmp(key, "games_folder")) {
+		copyText(settings.gamesFolder, sizeof(settings.gamesFolder), strcmp(value, "auto") ? value : "");
+	} else if (!strcmp(key, "gb_folder") || !strcmp(key, "gbc_folder") || !strcmp(key, "gba_folder")) {
+		int const console = !strcmp(key, "gb_folder") ? 0 : !strcmp(key, "gbc_folder") ? 1 : 2;
+		copyText(settings.consoleFolders[console], sizeof(settings.consoleFolders[console]), strcmp(value, "auto") ? value : "");
 	} else if (!strcmp(key, "bios_folder")) {
 		copyText(settings.biosFolder, sizeof(settings.biosFolder), strcmp(value, "auto") ? value : "");
 	} else if (!strcmp(key, "save_folder")) {
@@ -290,6 +295,9 @@ void settingsWrite(void) {
 	fprintf(f, "directory = \"%s\"\nbios_folder = \"%s\"\nsave_folder = \"%s\"\nstate_folder = \"%s\"\nscreenshot_folder = \"%s\"\n",
 	        settings.directory, settings.biosFolder[0] ? settings.biosFolder : "auto", settings.saveFolder[0] ? settings.saveFolder : "auto",
 	        settings.stateFolder[0] ? settings.stateFolder : "armgba", settings.shotFolder[0] ? settings.shotFolder : "armgba");
+	fprintf(f, "games_folder = \"%s\"\ngb_folder = \"%s\"\ngbc_folder = \"%s\"\ngba_folder = \"%s\"\n",
+	        settings.gamesFolder[0] ? settings.gamesFolder : "auto", settings.consoleFolders[0][0] ? settings.consoleFolders[0] : "auto",
+	        settings.consoleFolders[1][0] ? settings.consoleFolders[1] : "auto", settings.consoleFolders[2][0] ? settings.consoleFolders[2] : "auto");
 	fprintf(f, "fast_forward = %d\nshow_messages = %s\ntouch_controls = %s\nface_buttons = %s\n", settings.fastForward,
 	        no[settings.showMessages], no[settings.touchControls], settings.faceLetters ? "letter" : "position");
 	for (int i = 0; i < BUTTONS; ++i) {

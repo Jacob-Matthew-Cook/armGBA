@@ -182,6 +182,14 @@ static void readBrowser(void) {
 }
 
 static void browse(int index, int delta);
+static void browseTo(int which, int delta);
+
+// A folder's name without the folders it's in.
+static const char* folderName(const char* path) {
+	const char* const slash = strrchr(path, '/');
+	return slash && slash[1] ? slash + 1 : path;
+}
+
 
 // "3,753" for 3753.
 static void grouped(char* out, size_t size, int n) {
@@ -211,6 +219,26 @@ void browserMenu(void) {
 	addInfo(name, counts);
 	addItem("..", browse, -1);
 	helpFor(browserPath);
+	// In the Games folder, its consoles' folders and the last game's; elsewhere, the way back to it.
+	if (!browserCheats && !strcmp(browserPath, gamesDirectory)) {
+		for (int i = 0; i < CONSOLES; ++i) {
+			if (consoleDirectories[i][0]) {
+				addChoice(consoleNames[i], folderName(consoleDirectories[i]), browseTo, i);
+				helpFor(consoleDirectories[i]);
+			}
+		}
+		bool listed = !strcmp(settings.directory, browserPath);
+		for (int i = 0; i < CONSOLES; ++i) {
+			listed |= !strcmp(settings.directory, consoleDirectories[i]);
+		}
+		if (settings.directory[0] && !listed && !access(settings.directory, R_OK)) {
+			addChoice("Last Game's Folder", folderName(settings.directory), browseTo, CONSOLES);
+			helpFor(settings.directory);
+		}
+	} else if (!browserCheats && gamesDirectory[0]) {
+		addChoice("Games Folder", folderName(gamesDirectory), browseTo, CONSOLES + 1);
+		helpFor(gamesDirectory);
+	}
 	if (!browserCount && access(browserPath, R_OK)) {
 		addInfo("Can't open this folder", "");
 		return;
@@ -366,6 +394,15 @@ static void browse(int index, int delta) {
 		}
 	} else if (loadGame(path)) {
 		uiCloseMenu();
+	}
+}
+
+// A game list shortcut: a console's folder, the last game's, or the Games folder.
+static void browseTo(int which, int delta) {
+	if (!delta) {
+		const char* const path = which < CONSOLES ? consoleDirectories[which] : which == CONSOLES ? settings.directory : gamesDirectory;
+		snprintf(browserPath, sizeof(browserPath), "%s", path);
+		stack[depth - 1].selected = -1;
 	}
 }
 
@@ -1047,22 +1084,32 @@ static void addSettingsPages(void) {
 
 // Saves and Folders: where games, BIOS files, saves, states and screenshots are. Each folder's row
 // opens its choices: Auto, armGBA's and RetroArch's where it has them, or a folder typed in.
-enum { FOLDER_GAMES, FOLDER_BIOS, FOLDER_SAVES, FOLDER_STATES, FOLDER_SHOTS, FOLDERS };
+enum { FOLDER_GAMES, FOLDER_GB, FOLDER_GBC, FOLDER_GBA, FOLDER_BIOS, FOLDER_SAVES, FOLDER_STATES, FOLDER_SHOTS, FOLDERS };
 static const struct {
 	const char* label;
 	char* setting;
 	// armGBA's own folder; what retroarchFolder calls RetroArch's, or NULL; and whether "" is Auto
-	// rather than armGBA's.
+	// rather than armGBA's, and what Auto is.
 	const char* own;
 	const char* retroarch;
 	bool automatic;
+	const char* autoHelp;
 	const char* help;
 } folders[FOLDERS] = {
-	{ "Games", settings.directory, NULL, NULL, false, "Where Load Game opens; the folder of the last game loaded." },
-	{ "BIOS", settings.biosFolder, ownSystemDirectory, "bios", true, "Read as each game loads." },
-	{ "Saves", settings.saveFolder, ownSaveDirectory, "saves", true, "Games' saves; in RetroArch's, shared with RetroArch. Applies when a game loads." },
-	{ "States", settings.stateFolder, ownStateDirectory, NULL, false, "Save states, kept apart from RetroArch's, which it compresses." },
-	{ "Screenshots", settings.shotFolder, ownShotDirectory, "screenshots", false, "Screenshots and recordings." },
+	{ "Games", settings.gamesFolder, NULL, NULL, true, "ROCKNIX's roms folder, or a roms folder with gb, gbc or gba in it, in internal storage or on a card; else found from the last game's folder.",
+	  "The folder with your games (ROMs), where Load Game opens." },
+	{ "Game Boy", settings.consoleFolders[0], NULL, NULL, true, "A folder in the Games folder named gb or Game Boy.",
+	  "Listed first in Load Game." },
+	{ "Game Boy Color", settings.consoleFolders[1], NULL, NULL, true, "A folder in the Games folder named gbc or Game Boy Color.",
+	  "Listed first in Load Game." },
+	{ "Game Boy Advance", settings.consoleFolders[2], NULL, NULL, true, "A folder in the Games folder named gba or Game Boy Advance.",
+	  "Listed first in Load Game." },
+	{ "BIOS", settings.biosFolder, ownSystemDirectory, "bios", true, "armGBA's own folder if it has a BIOS or boot ROM, RetroArch's otherwise.",
+	  "Read as each game loads." },
+	{ "Saves", settings.saveFolder, ownSaveDirectory, "saves", true, "armGBA's own folder for a game with its save there, RetroArch's otherwise.",
+	  "Games' saves; in RetroArch's, shared with RetroArch. Applies when a game loads." },
+	{ "States", settings.stateFolder, ownStateDirectory, NULL, false, NULL, "Save states, kept apart from RetroArch's, which it compresses." },
+	{ "Screenshots", settings.shotFolder, ownShotDirectory, "screenshots", false, NULL, "Screenshots and recordings." },
 };
 static int folderShown;
 
@@ -1070,7 +1117,11 @@ static int folderShown;
 static const char* folderPath(int which) {
 	switch (which) {
 	case FOLDER_GAMES:
-		return settings.directory;
+		return gamesDirectory;
+	case FOLDER_GB:
+	case FOLDER_GBC:
+	case FOLDER_GBA:
+		return consoleDirectories[which - FOLDER_GB][0] ? consoleDirectories[which - FOLDER_GB] : NULL;
 	case FOLDER_BIOS:
 		return systemDirectory;
 	case FOLDER_SAVES:
@@ -1084,13 +1135,7 @@ static const char* folderPath(int which) {
 
 static bool folderTypedIn(int which) {
 	const char* const setting = folders[which].setting;
-	return which == FOLDER_GAMES || (setting[0] && strcmp(setting, "armgba") && strcmp(setting, "retroarch"));
-}
-
-// A folder's name without the folders it's in.
-static const char* folderName(const char* path) {
-	const char* const slash = strrchr(path, '/');
-	return slash && slash[1] ? slash + 1 : path;
+	return setting[0] && strcmp(setting, "armgba") && strcmp(setting, "retroarch");
 }
 
 static void folderTyped(const char* text) {
@@ -1192,8 +1237,7 @@ static void folderMenu(void) {
 	static char help[4][PATH_SIZE + 200];
 	if (folders[which].automatic) {
 		addChoice("Auto", !setting[0] ? "In Use" : "", folderPick, 0);
-		helpFor(which == FOLDER_BIOS ? "armGBA's own folder if it has a BIOS or boot ROM, RetroArch's otherwise."
-		                             : "armGBA's own folder for a game with its save there, RetroArch's otherwise.");
+		helpFor(folders[which].autoHelp);
 	}
 	if (folders[which].own) {
 		bool const own = folders[which].automatic ? !strcmp(setting, "armgba") : !setting[0];
@@ -1233,6 +1277,8 @@ static void addFolder(int which) {
 	snprintf(label, sizeof(label), "%s...", folders[which].label);
 	if (folderTypedIn(which)) {
 		snprintf(value, sizeof(value), "%s", folderName(setting));
+	} else if (!setting[0] && !folders[which].own) {
+		snprintf(value, sizeof(value), "Auto (%s)", path ? folderName(path) : "None");
 	} else if (setting[0] || !folders[which].automatic) {
 		snprintf(value, sizeof(value), "%s", !strcmp(setting, "retroarch") ? "RetroArch's" : "armGBA's");
 	} else if (path) {
@@ -1250,8 +1296,12 @@ static void foldersMenu(void) {
 	addHeader("Saves");
 	addValue("Auto Save State", onOff(settings.autoState), changeSetting, SET_AUTO_STATE);
 	helpFor("Saves a state when the game closes and loads it when the game starts again.");
-	addHeader("Folders");
-	for (int i = 0; i < FOLDERS; ++i) {
+	addHeader("Game Folders");
+	for (int i = FOLDER_GAMES; i <= FOLDER_GBA; ++i) {
+		addFolder(i);
+	}
+	addHeader("Data Folders");
+	for (int i = FOLDER_BIOS; i < FOLDERS; ++i) {
 		addFolder(i);
 	}
 }
@@ -1271,6 +1321,8 @@ static void resetConfig(int argument, int delta) {
 	memcpy(settings.host, kept.host, sizeof(settings.host));
 	settings.netPort = kept.netPort;
 	memcpy(settings.directory, kept.directory, sizeof(settings.directory));
+	memcpy(settings.gamesFolder, kept.gamesFolder, sizeof(settings.gamesFolder));
+	memcpy(settings.consoleFolders, kept.consoleFolders, sizeof(settings.consoleFolders));
 	memcpy(settings.biosFolder, kept.biosFolder, sizeof(settings.biosFolder));
 	memcpy(settings.saveFolder, kept.saveFolder, sizeof(settings.saveFolder));
 	memcpy(settings.stateFolder, kept.stateFolder, sizeof(settings.stateFolder));
@@ -1584,6 +1636,7 @@ void uiOpenMenu(void) {
 	while (depth > 1 && (stack[depth - 1].build == browserMenu || stack[depth - 1].build == recentMenu)) {
 		--depth;
 	}
-	snprintf(browserPath, sizeof(browserPath), "%s", settings.directory);
+	chooseGameFolders();
+	snprintf(browserPath, sizeof(browserPath), "%s", gamesDirectory);
 	browserCheats = false;
 }
