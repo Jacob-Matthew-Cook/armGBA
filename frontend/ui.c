@@ -1430,9 +1430,9 @@ static void drawEntry(int width, int height, int u) {
 	int x = panel.x + u + u / 2;
 	y = drawFooter(panel, u);
 	static const struct Hint keyboardHints[] = {
+		{ "B", true, "Esc", "Cancel", "Cancel", HINT_CANCEL, HINT_CANCEL },
 		{ "A", true, "Enter", "Type", "Done", HINT_TYPE, HINT_DONE },
 		{ "X", true, "Bksp", "Delete", "Delete", HINT_DELETE, HINT_DELETE },
-		{ "B", true, "Esc", "Cancel", "Cancel", HINT_CANCEL, HINT_CANCEL },
 		{ "Start", false, "Ctrl+V", "Done", "Paste", HINT_DONE, HINT_PASTE },
 	};
 	drawHints(x, y, u, keyboardHints, 4);
@@ -1654,10 +1654,11 @@ static void drawMenu(int width, int height, int u) {
 	const char* backLabel = depth > 1 ? "Back" : app.loaded ? "Close" : NULL;
 	struct Hint hints[HINTS_MOST];
 	int count = 0;
-	hints[count++] = (struct Hint) { "A", true, "Enter", "Select", "Select", HINT_SELECT, HINT_SELECT };
+	// Back first, as on Android, then Select.
 	if (backLabel) {
 		hints[count++] = (struct Hint) { "B", true, "Esc", backLabel, backLabel, HINT_BACK, HINT_BACK };
 	}
+	hints[count++] = (struct Hint) { "A", true, "Enter", "Select", "Select", HINT_SELECT, HINT_SELECT };
 	if (adjustable) {
 		hints[count++] = (struct Hint) { "\xE2\x80\xB9 \xE2\x80\xBA", false, "\xE2\x86\x90 \xE2\x86\x92", "Change", "Change", HINT_CHANGE, HINT_CHANGE };
 	}
