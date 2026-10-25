@@ -217,27 +217,40 @@ void browserMenu(void) {
 	}
 	snprintf(counts, sizeof(counts), "%s %s%s", games, browserCheats ? "cheat files" : browserCount - folders == 1 ? "game" : "games", folderCount);
 	addInfo(name, counts);
-	addItem("..", browse, -1);
-	helpFor(browserPath);
-	// In the Games folder, its consoles' folders and the last game's; elsewhere, the way back to it.
-	if (!browserCheats && !strcmp(browserPath, gamesDirectory)) {
-		for (int i = 0; i < CONSOLES; ++i) {
+	// Shortcuts, under their own header: in the Games folder, its consoles' folders and the last
+	// game's; elsewhere, the way back to it. Then this folder's own.
+	bool const home = !strcmp(browserPath, gamesDirectory);
+	bool listed = !strcmp(settings.directory, browserPath);
+	int shortcuts = 0;
+	for (int i = 0; i < CONSOLES; ++i) {
+		listed |= !strcmp(settings.directory, consoleDirectories[i]);
+		shortcuts += home && consoleDirectories[i][0];
+	}
+	bool const last = home && settings.directory[0] && !listed && !access(settings.directory, R_OK);
+	shortcuts += last + (!home && gamesDirectory[0]);
+	if (!browserCheats && shortcuts) {
+		addHeader("Shortcuts");
+		for (int i = 0; home && i < CONSOLES; ++i) {
 			if (consoleDirectories[i][0]) {
 				addChoice(consoleNames[i], folderName(consoleDirectories[i]), browseTo, i);
 				helpFor(consoleDirectories[i]);
 			}
 		}
-		bool listed = !strcmp(settings.directory, browserPath);
-		for (int i = 0; i < CONSOLES; ++i) {
-			listed |= !strcmp(settings.directory, consoleDirectories[i]);
-		}
-		if (settings.directory[0] && !listed && !access(settings.directory, R_OK)) {
+		if (last) {
 			addChoice("Last Game's Folder", folderName(settings.directory), browseTo, CONSOLES);
 			helpFor(settings.directory);
 		}
-	} else if (!browserCheats && gamesDirectory[0]) {
-		addChoice("Games Folder", folderName(gamesDirectory), browseTo, CONSOLES + 1);
-		helpFor(gamesDirectory);
+		if (!home) {
+			addChoice("Games Folder", folderName(gamesDirectory), browseTo, CONSOLES + 1);
+			helpFor(gamesDirectory);
+		}
+		addHeader("This Folder");
+	}
+	addItem("..", browse, -1);
+	helpFor(browserPath);
+	// Outside the Games folder, a folder opens on "..", as before the shortcuts.
+	if (!home && stack[depth - 1].selected < 0) {
+		stack[depth - 1].selected = itemCount - 1;
 	}
 	if (!browserCount && access(browserPath, R_OK)) {
 		addInfo("Can't open this folder", "");
