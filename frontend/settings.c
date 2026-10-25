@@ -78,8 +78,8 @@ void settingsDefaults(void) {
 	memcpy(settings.keys, keys, sizeof(keys));
 	memcpy(settings.pad, pad, sizeof(pad));
 	memcpy(settings.hotkeys, hotkeys, sizeof(hotkeys));
-	// ROCKNIX's hotkeys: with the Hotkey, North for the menu, Start to quit, R and L to save and load a
-	// state, R2 to fast-forward, L2 to rewind and West for the frame rate.
+	// ROCKNIX's hotkeys: with the Hotkey, X for the menu, Start to quit, R and L to save and load a
+	// state, R2 to fast-forward, L2 to rewind and Y for the frame rate.
 	settings.padHotkey = PAD_AUTO;
 	for (int i = 0; i < ACTIONS; ++i) {
 		settings.padHotkeys[i] = PAD_NONE;
@@ -424,14 +424,18 @@ const char* scancodeName(SDL_Scancode code) {
 	return *name ? name : "None";
 }
 
-// A controller button by where it is, which every layout agrees on: the face buttons' letters differ
-// between makers.
+// A controller button by RetroArch's RetroPad letters, as on a Game Boy: A on the right, B at the
+// bottom, X at the top, Y on the left; the face buttons with where they are, which Swap A/B and X/Y
+// turns round.
 const char* padName(int binding) {
+	static const char* const faces[2][4] = {
+		{ "B (Bottom)", "A (Right)", "Y (Left)", "X (Top)" },
+		{ "B (Right)", "A (Bottom)", "Y (Top)", "X (Left)" },
+	};
+	if (binding >= SDL_CONTROLLER_BUTTON_A && binding <= SDL_CONTROLLER_BUTTON_Y) {
+		return faces[settings.xboxLayout][binding];
+	}
 	static const char* const names[SDL_CONTROLLER_BUTTON_MAX] = {
-		[SDL_CONTROLLER_BUTTON_A] = "South",
-		[SDL_CONTROLLER_BUTTON_B] = "East",
-		[SDL_CONTROLLER_BUTTON_X] = "West",
-		[SDL_CONTROLLER_BUTTON_Y] = "North",
 		[SDL_CONTROLLER_BUTTON_BACK] = "Select",
 		[SDL_CONTROLLER_BUTTON_GUIDE] = "Home",
 		[SDL_CONTROLLER_BUTTON_START] = "Start",

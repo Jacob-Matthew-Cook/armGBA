@@ -478,11 +478,11 @@ static void audioSample(int16_t left, int16_t right) {
 static void inputPoll(void) {
 }
 
-// The face buttons by place, as the bindings mean them: with the Nintendo Button Layout, A on the
-// right; with Xbox's, A at the bottom, A and B and X and Y swapped. Android handhelds with a Nintendo
-// layout name their face buttons by label, A on the right, where SDL means places, A at the bottom,
-// so theirs are swapped too; controllers SDL knows (Xbox, PlayStation, Switch and others) give places
-// already. The On-Screen Controls keep their letters.
+// The face buttons by place, as the bindings mean them: A on the right, as RetroArch's RetroPad has
+// it; with Swap A/B and X/Y on, A at the bottom, A and B and X and Y swapped. Android handhelds
+// with a Nintendo layout name their face buttons by label, A on the right, where SDL means places,
+// A at the bottom, so theirs are swapped too; controllers SDL knows (Xbox, PlayStation, Switch and
+// others) give places already. The On-Screen Controls keep their letters.
 static int facePlace(SDL_GameController* pad, int button) {
 	if (!pad || button < SDL_CONTROLLER_BUTTON_A || button > SDL_CONTROLLER_BUTTON_Y ||
 	    SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_VIRTUAL) {

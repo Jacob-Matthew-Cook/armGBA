@@ -145,16 +145,16 @@ then named `armgba_libretro_android.so`:
 Debian 11 container (Docker), with SDL2 built in; they need only glibc 2.29 or later.
 
 Run `armgba game.gba` (or a `.gb`, `.gbc`, `.zip` or `.7z`), or drop a game on the window. Esc, a
-controller's Hotkey + North or a right-click opens the menu, which the keyboard, a controller or the
+controller's Hotkey + X or a right-click opens the menu, which the keyboard, a controller or the
 mouse moves through. A controller's hotkeys are ROCKNIX's: the Hotkey (Home, or Select without it)
 with Start quits (pressed twice), R and L save and load a state, R2 turns fast-forward on and off,
-L2 rewinds, West shows the frame rate. Arrow keys, X = A, Z = B, A = L, S = R, Enter = Start,
-Backspace = Select, C and V turbo B and A; controllers work too, one per player. Tab fast-forwards
-while held, R rewinds, P pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its
-slot, F12 takes a screenshot, F9 starts and stops recording, F11 goes full screen, F3 shows the
-frame rate. The menu changes all of these, and the Hotkey too. Controls' Button Layout puts A on the
-right face button and B at the bottom (Nintendo, the default) or A at the bottom and B on the right
-(Xbox).
+L2 rewinds, Y shows the frame rate. Arrow keys, X = A, Z = B, A = L, S = R, Enter = Start, Backspace
+= Select, C and V turbo B and A; controllers work too, one per player. Tab fast-forwards while held,
+R rewinds, P pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its slot, F12
+takes a screenshot, F9 starts and stops recording, F11 goes full screen, F3 shows the frame rate.
+The menu changes all of these, and the Hotkey too. A controller's face buttons go by RetroArch's
+RetroPad letters, as on a Game Boy: A on the right, B at the bottom, X at the top, Y on the left.
+Controls' Swap A/B and X/Y puts A at the bottom and B on the right, as an Xbox controller's letters.
 
 The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyboard; left and right
 too on a row without a value), and it opens again where it was left. General has the recent games,
