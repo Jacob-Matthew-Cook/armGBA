@@ -78,13 +78,14 @@ void settingsDefaults(void) {
 	memcpy(settings.keys, keys, sizeof(keys));
 	memcpy(settings.pad, pad, sizeof(pad));
 	memcpy(settings.hotkeys, hotkeys, sizeof(hotkeys));
-	// ROCKNIX's hotkeys: with the Hotkey, X for the menu, Start to quit, R and L to save and load a
-	// state, R2 to fast-forward, L2 to rewind and Y for the frame rate.
+	// ROCKNIX's hotkeys: with the Hotkey, X for the menu, A to pause, Start to quit, R and L to save and
+	// load a state, R2 to fast-forward, L2 to rewind and Y for the frame rate.
 	settings.padHotkey = PAD_AUTO;
 	for (int i = 0; i < ACTIONS; ++i) {
 		settings.padHotkeys[i] = PAD_NONE;
 	}
 	settings.padHotkeys[ACT_MENU] = SDL_CONTROLLER_BUTTON_Y;
+	settings.padHotkeys[ACT_PAUSE] = SDL_CONTROLLER_BUTTON_B;
 	settings.padHotkeys[ACT_QUIT] = SDL_CONTROLLER_BUTTON_START;
 	settings.padHotkeys[ACT_SAVE_STATE] = SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
 	settings.padHotkeys[ACT_LOAD_STATE] = SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
