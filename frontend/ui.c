@@ -43,7 +43,7 @@ enum {
 	// How long a tab takes to slide in.
 	SLIDE_MS = 180,
 	// The most lines the help above the footer takes.
-	HELP_LINES = 4,
+	HELP_LINES = 3,
 };
 
 // The menu shown, built again each frame, and the menus opened to reach it.
@@ -1115,7 +1115,7 @@ static SDL_Color faded(SDL_Color c, int alpha) {
 }
 
 // A 24th of the height or a 40th of the width, whichever is less, times the menu size.
-// On a phone played by touch, a quarter larger, for fingers.
+// On a phone played by touch, an eighth larger, for fingers.
 static bool phoneScreen(void) {
 	static int phone = -1;
 	if (phone < 0) {
@@ -1131,7 +1131,7 @@ static bool phoneScreen(void) {
 static int unitFor(int width, int height) {
 	int const shortSide = SDL_min(width, height), longSide = SDL_max(width, height);
 	int const u = SDL_max(10, SDL_min(shortSide / 24, longSide / 40) * settings.menuSize / 100);
-	return touchOnly() && phoneScreen() ? u * 5 / 4 : u;
+	return touchOnly() && phoneScreen() ? u * 9 / 8 : u;
 }
 
 // A button or key in the footer's hints: a circle for a controller's buttons, a key cap otherwise.
@@ -1196,22 +1196,31 @@ static void drawHints(int x, int y, int u, const struct Hint* hints, int count) 
 // they don't fit beside it.
 static bool tabsOwnRow;
 
+// The row with ARMGBA, and the tabs' own row.
+static int titleRowHeight(int u) {
+	return u * 11 / 4;
+}
+
+static int tabsRowHeight(int u) {
+	return u * 2;
+}
+
 static int headerHeight(int u) {
-	return u * 7 / 2 + (tabsOwnRow ? u * 5 / 2 : 0);
+	return titleRowHeight(u) + (tabsOwnRow ? tabsRowHeight(u) : 0);
 }
 
 // The header (ARMGBA and where you are) across the window, panel; returns where the content starts.
 static int drawPanel(SDL_Rect panel, int u, const char* where) {
-	int const headerH = headerHeight(u), titleRow = u * 7 / 2, inset = u + u / 2;
-	int const titleSize = u * 9 / 5, whereSize = u * 9 / 10;
+	int const headerH = headerHeight(u), titleRow = titleRowHeight(u), inset = u + u / 2;
+	int const titleSize = u * 8 / 5, whereSize = u * 9 / 10;
 	// On Android, a back button before the title, for touch, where Back is a gesture.
 	int left = panel.x + inset;
 	backRect = (SDL_Rect) { 0, 0, 0, 0 };
 #ifdef __ANDROID__
-	int const size = u * 2;
+	int const size = u * 7 / 4;
 	backRect = (SDL_Rect) { left - u / 2, panel.y + (titleRow - size) / 2, size, size };
 	fillRounded(backRect, size / 2, keyFill);
-	int const arrow = u * 3 / 2, aw = textWidth(FACE_STRONG, arrow, "\xE2\x80\xB9");
+	int const arrow = u * 4 / 3, aw = textWidth(FACE_STRONG, arrow, "\xE2\x80\xB9");
 	textDraw(FACE_STRONG, arrow, backRect.x + (size - aw) / 2, backRect.y + (size - arrow) / 2 - arrow / 10, white, "\xE2\x80\xB9");
 	left = backRect.x + size + u / 2;
 #endif
@@ -1239,6 +1248,25 @@ static const char* helpLineFrom(const char* text, int width, int size, char line
 		snprintf(trial, sizeof(trial), "%.*s", (int) (end - text), text);
 		if (textWidth(FACE_BODY, size, trial) > width && line[0]) {
 			break;
+		}
+		// A word too long for a line on its own, such as a path, goes on the next line after a slash, or
+		// where it runs out of room.
+		if (textWidth(FACE_BODY, size, trial) > width) {
+			int fit = 0, slash = 0;
+			for (int n = 1; text + n <= end && n < 511; ++n) {
+				if ((text[n] & 0xC0) == 0x80) {
+					continue;
+				}
+				snprintf(trial, sizeof(trial), "%.*s", n, text);
+				if (textWidth(FACE_BODY, size, trial) > width) {
+					break;
+				}
+				fit = n;
+				slash = text[n - 1] == '/' ? n : slash;
+			}
+			int const cut = SDL_max(1, slash ? slash : fit);
+			snprintf(line, 512, "%.*s", cut, text);
+			return text + cut;
 		}
 		snprintf(line, 512, "%s", trial);
 		next = *end ? end + 1 : end;
@@ -1277,7 +1305,7 @@ static void drawTabs(SDL_Rect panel, int u) {
 	int const size = u, gap = u * 3 / 2, headerH = headerHeight(u), inset = u + u / 2;
 	// On a row of their own, each in an equal share of the width.
 	if (tabsOwnRow) {
-		int const rowY = panel.y + u * 7 / 2, rowH = u * 5 / 2, share = (panel.w - 2 * inset) / TABS;
+		int const rowY = panel.y + titleRowHeight(u), rowH = tabsRowHeight(u), share = (panel.w - 2 * inset) / TABS;
 		int const ty = rowY + (rowH - size) / 2 - u / 4;
 		for (int i = 0; i < TABS; ++i) {
 			int const w = textWidth(FACE_STRONG, size, tabNames[i]), x = panel.x + inset + share * i + (share - w) / 2;
@@ -1451,7 +1479,7 @@ static void drawMenu(int width, int height, int u) {
 	// Two lines above the footer say what the selected item does, when this menu's items say.
 	// Room above the footer for what the selected item does: as many lines, up to HELP_LINES, as this
 	// menu's longest help takes (worked out once for each menu and size), so the rows don't move.
-	int const helpSize = u * 17 / 20, helpLine = u * 23 / 20, helpWidth = width - u * 4;
+	int const helpSize = u * 3 / 4, helpLine = u, helpWidth = width - u * 4;
 	// Pages built by one function (Core's categories, the folders) differ by their help.
 	uintptr_t helpTexts = 0;
 	for (int i = 0; i < itemCount; ++i) {
@@ -1473,15 +1501,15 @@ static void drawMenu(int width, int height, int u) {
 			}
 		}
 	}
-	int const helpH = helpLines ? helpLine * helpLines + u / 2 : 0;
+	int const helpH = helpLines ? helpLine * helpLines + u / 3 : 0;
 	// The tabs go under ARMGBA when they don't fit beside it.
 	int tabsW = 0;
 	for (int i = 0; i < TABS; ++i) {
 		tabsW += textWidth(FACE_STRONG, u, tabNames[i]) + (i ? u * 3 / 2 : 0);
 	}
-	int brandW = textWidth(FACE_TITLE, u * 9 / 5, "ARMGBA") + u * 2;
+	int brandW = textWidth(FACE_TITLE, u * 8 / 5, "ARMGBA") + u * 2;
 #ifdef __ANDROID__
-	brandW += u * 2 + u / 2;
+	brandW += u * 7 / 4 + u / 2;
 #endif
 	tabsOwnRow = depth == 1 && 2 * (u + u / 2) + brandW + tabsW > width;
 	int const chrome = headerHeight(u) + u / 4 + u / 4 + u * 9 / 4 + helpH;
@@ -1617,7 +1645,7 @@ static void drawMenu(int width, int height, int u) {
 	// The help shares the footer's darker band.
 	fillRect(panel.x, footerTop(panel, u) - helpH, panel.w, helpH, helpBand);
 	if (helpH && selectable(m->selected) && items[m->selected].help) {
-		drawHelp(items[m->selected].help, textL, footerTop(panel, u) - helpH + u / 4, textR - textL, helpSize, helpLine, helpLines);
+		drawHelp(items[m->selected].help, textL, footerTop(panel, u) - helpH + u / 6, textR - textL, helpSize, helpLine, helpLines);
 	}
 	int x = panel.x + u + u / 2;
 	int const y = drawFooter(panel, u);
