@@ -399,12 +399,11 @@ void asState(void) {
 	}
 }
 
-// The item chosen of those that ask more than once, and how many more times it asks; choosing it
-// that many times does it, anything else forgets it.
+// The item chosen once of those that ask twice, and when; choosing it again does it, anything else
+// forgets it.
 static struct {
 	ItemFunction function;
 	int argument;
-	int left;
 	Uint32 since;
 } armed;
 
@@ -631,26 +630,16 @@ static void activate(int delta) {
 	if (delta && !item->adjustable) {
 		return;
 	}
-	// The presses asked for, at the bottom left, even with Show Messages off; forgotten as that goes.
-	if (!delta && item->confirm) {
-		bool const fresh = armed.function != item->function || armed.argument != item->argument || SDL_GetTicks() - armed.since > MESSAGE_MS;
+	// The second press asked for at the bottom left, even with Show Messages off, and forgotten as that
+	// goes.
+	if (!delta && item->confirm && (armed.function != item->function || armed.argument != item->argument ||
+	                                SDL_GetTicks() - armed.since > MESSAGE_MS)) {
 		armed.function = item->function;
 		armed.argument = item->argument;
-		armed.left = fresh ? item->confirm : armed.left - 1;
 		armed.since = SDL_GetTicks();
-		if (armed.left > 0) {
-			char asked[sizeof(messages[0].text)];
-			snprintf(asked, sizeof(asked), "%s: %s %s", item->label, lastInputTouch ? "tap it" : lastInputPad ? "press A" : "press Enter",
-			         armed.left > 1 ? "twice more" : "again");
-			// The next press's message takes the place of the last.
-			if (fresh) {
-				osd("%s", asked);
-			} else {
-				snprintf(messages[0].text, sizeof(messages[0].text), "%s", asked);
-			}
-			messages[0].until = armed.since + MESSAGE_MS;
-			return;
-		}
+		osd("%s: %s again", item->label, lastInputTouch ? "tap it" : lastInputPad ? "press A" : "press Enter");
+		messages[0].until = armed.since + MESSAGE_MS;
+		return;
 	}
 	disarm();
 	item->function(item->argument, delta);
