@@ -265,6 +265,7 @@ void touchUpdate(void);
 bool touchOnly(void);
 bool touchEvent(const SDL_Event* event);
 void touchDraw(void);
+void touchHideMenuButton(void);
 // Quits on the Quit hotkey's second press within three seconds; the first says so.
 void requestQuit(bool controller);
 
@@ -276,7 +277,8 @@ void uiCloseMenu(void);
 bool uiEvent(const SDL_Event* event);
 void uiDraw(void);
 void osd(const char* format, ...);
-// The messages and the presses a row asked for forgotten, as the app comes back.
+// The messages, the press a row asked for and the menu button forgotten, as the app starts or comes
+// back: on Android its clock stops while it's away, and starts again with the app in the same process.
 void osdClear(void);
 // A small sync arrow at the top left for a moment: netplay took the host's state.
 void osdResync(void);

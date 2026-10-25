@@ -335,6 +335,10 @@ static void label(const char* text, float x, float y, int size, SDL_Color color)
 }
 
 // Dark and see-through with a light edge, to show on light and dark games alike; light when pressed.
+void touchHideMenuButton(void) {
+	menuShownUntil = 0;
+}
+
 void touchDraw(void) {
 	if (!overGame()) {
 		return;

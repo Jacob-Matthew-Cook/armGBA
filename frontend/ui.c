@@ -195,6 +195,7 @@ void osdClear(void) {
 	}
 	resyncUntil = 0;
 	disarm();
+	touchHideMenuButton();
 }
 
 // A circular arrow centered at x, y, radius r: an arc most of the way round, clockwise, and its head.

@@ -1650,7 +1650,6 @@ static void handleEvent(const SDL_Event* given) {
 		}
 		writeSaves();
 		break;
-	// Android's clock stops while the app is away, so what was shown before it went is put away.
 	case SDL_APP_DIDENTERFOREGROUND:
 		osdClear();
 		break;
@@ -1784,6 +1783,7 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "armgba: %s\n", SDL_GetError());
 		return 1;
 	}
+	osdClear();
 	findAccelerometer();
 	if (listControllers) {
 		// Each joystick SDL sees: its GUID, whether a mapping makes it a controller, its name, and for a
