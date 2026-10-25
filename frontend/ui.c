@@ -1861,13 +1861,39 @@ void uiDraw(void) {
 		capture.open = false;
 	}
 	// The frame rate, at the top right.
+	int const size = u * 13 / 20, h = u * 5 / 4;
+	int right = width - u / 2;
 	if (settings.showFps && app.loaded) {
 		char fps[32];
 		snprintf(fps, sizeof(fps), "%.1f FPS", app.fps);
-		int const size = u * 13 / 20, h = u * 5 / 4;
 		int const w = textWidth(FACE_STRONG, size, fps) + u;
-		fillRounded((SDL_Rect) { width - w - u / 2, u / 2, w, h }, h / 2, (SDL_Color) { 0, 0, 0, 150 });
-		textDraw(FACE_STRONG, size, width - w - u / 2 + u / 2, u / 2 + (h - size) / 2, white, fps);
+		fillRounded((SDL_Rect) { right - w, u / 2, w, h }, h / 2, (SDL_Color) { 0, 0, 0, 150 });
+		textDraw(FACE_STRONG, size, right - w + u / 2, u / 2 + (h - size) / 2, white, fps);
+		right -= w + u / 4;
+	}
+	// Left of it, outside the menus, a symbol while the game is rewinding, fast-forwarding or paused.
+	enum { PLAYING, REWINDING, FORWARDING, PAUSED } const state =
+		!app.loaded || app.menuOpen || !settings.showMessages ? PLAYING : app.rewinding ? REWINDING : app.fastForward ? FORWARDING : app.paused ? PAUSED : PLAYING;
+	if (state != PLAYING) {
+		int const icon = u * 3 / 5, w = u + icon, x = right - w + u / 2;
+		fillRounded((SDL_Rect) { right - w, u / 2, w, h }, h / 2, (SDL_Color) { 0, 0, 0, 150 });
+		float const top = u / 2 + (h - icon) / 2.0f, bottom = top + icon, middle = top + icon / 2.0f, half = icon / 2.0f;
+		if (state == PAUSED) {
+			fillRect(x + icon / 8, (int) top, icon / 4, icon, white);
+			fillRect(x + icon - icon / 8 - icon / 4, (int) top, icon / 4, icon, white);
+		} else {
+			// Two arrows, pointing right for fast-forward and left for rewind.
+			float const way = state == FORWARDING ? 1 : -1, from = state == FORWARDING ? x : x + icon;
+			for (int k = 0; k < 2; ++k) {
+				float const back = from + way * half * k;
+				SDL_Vertex const arrow[3] = {
+					{ { back, top }, white, { 0, 0 } },
+					{ { back, bottom }, white, { 0, 0 } },
+					{ { back + way * half, middle }, white, { 0, 0 } },
+				};
+				SDL_RenderGeometry(app.renderer, NULL, arrow, 3, NULL, 0);
+			}
+		}
 	}
 	// Netplay taking the host's state: a sync arrow at the top left, fading out over its last half second.
 	Uint32 const now = SDL_GetTicks();
