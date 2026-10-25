@@ -1603,8 +1603,22 @@ static void drawMenu(int width, int height, int u) {
 		// faint line across the rows it heads.
 		if (item->header) {
 			char header[NAME_SIZE + 64];
-			textFit(FACE_TITLE, headerSize, item->label, textR - textL, false, header, sizeof(header));
-			textDraw(FACE_TITLE, headerSize, textL, y + rowH - headerSize - u / 4, accent, header);
+			int const hy = y + rowH - headerSize - u / 4, room = textR - textL;
+			int const over = item->game ? textWidth(FACE_TITLE, headerSize, item->label) - room : 0;
+			if (over > 0) {
+				// A game's name too long for the row pans across, a unit a second, waiting at each end,
+				// then starts again.
+				Uint32 const wait = 1500, pan = (Uint32) over * 1000 / (Uint32) u;
+				Uint32 const t = SDL_GetTicks() % (2 * wait + pan);
+				int const shift = t < wait ? 0 : t < wait + pan ? (int) ((t - wait) * (Uint32) over / pan) : over;
+				SDL_Rect const clip = { textL, hy - headerSize / 2, room, headerSize * 2 };
+				SDL_RenderSetClipRect(app.renderer, &clip);
+				textDraw(FACE_TITLE, headerSize, textL - shift, hy, accent, item->label);
+				SDL_RenderSetClipRect(app.renderer, NULL);
+			} else {
+				textFit(FACE_TITLE, headerSize, item->label, room, false, header, sizeof(header));
+				textDraw(FACE_TITLE, headerSize, textL, hy, accent, header);
+			}
 			int const line = SDL_max(1, u / 16);
 			fillRect(textL, y + rowH - line, textR - textL, line, faded(accent, 90));
 			continue;

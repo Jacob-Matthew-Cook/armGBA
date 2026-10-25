@@ -1622,6 +1622,7 @@ static void gameTab(void) {
 		return;
 	}
 	addHeader(app.gameName);
+	asGame();
 	addItem("Resume", resume, 0);
 	helpFor("Back to the game.");
 	snprintf(text, sizeof(text), stateExists(app.slot) ? "Slot %d" : "Slot %d \xC2\xB7 Empty", app.slot);

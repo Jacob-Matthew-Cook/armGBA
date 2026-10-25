@@ -29,7 +29,7 @@ struct Item {
 	bool confirm;
 	// What it does, shown under the menu while it's selected.
 	const char* help;
-	// A game, indented from the menu's own rows.
+	// A game: indented from the menu's own rows, or as a header, panning across when it's too long.
 	bool game;
 	// A path, cut from its start when it doesn't fit.
 	bool path;
