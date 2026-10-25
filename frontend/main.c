@@ -546,6 +546,10 @@ static bool nintendoListed(SDL_GameController* pad) {
 }
 
 static enum Face faceOf(SDL_GameController* pad) {
+	// Retroid's have Nintendo's letters, in its Xbox mode too.
+	if (SDL_GameControllerGetVendor(pad) == 0x2022) {
+		return FACE_NINTENDO;
+	}
 	switch (SDL_GameControllerGetType(pad)) {
 	case SDL_CONTROLLER_TYPE_XBOX360:
 	case SDL_CONTROLLER_TYPE_XBOXONE:
@@ -588,11 +592,15 @@ static enum Face padFaces[PORTS];
 static bool padByLetter[PORTS];
 static SDL_JoystickID lastPressed = -1;
 
+// By Letter, an Xbox or PlayStation controller's A or Cross, at the bottom, is the game's A.
+static bool letterSwap(int port) {
+	return settings.faceLetters && (padFaces[port] == FACE_XBOX || padFaces[port] == FACE_PLAYSTATION);
+}
+
 // Whether a controller's A and B, X and Y swap to the places the bindings mean: A on the right, as
-// RetroArch's RetroPad has it. By Letter, the game's A is the controller's A or Cross, at the bottom.
+// RetroArch's RetroPad has it.
 static bool faceSwap(int port) {
-	bool const bottomA = padFaces[port] == FACE_XBOX || padFaces[port] == FACE_PLAYSTATION;
-	return padByLetter[port] ^ (settings.faceLetters && bottomA);
+	return padByLetter[port] ^ letterSwap(port);
 }
 
 static int facePlace(SDL_GameController* pad, int button) {
@@ -630,7 +638,7 @@ const char* faceName(int binding) {
 	if (port < 0) {
 		return names[FACE_PLACES][binding];
 	}
-	return names[padFaces[port]][faceSwap(port) ? binding ^ 1 : binding];
+	return names[padFaces[port]][letterSwap(port) ? binding ^ 1 : binding];
 }
 
 // A controller binding's state.
