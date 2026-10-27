@@ -62,6 +62,15 @@ static struct {
 	uint8_t turboA[MAX_PLAYERS], turboB[MAX_PLAYERS], turboL, turboR;
 	uint8_t solarHeld, flickHeld;
 } pressed;
+// Shared Controls with one console: everyone's buttons, or one player's at a time, passed around.
+enum { SHARED_OFF, SHARED_EVERYONE, SHARED_PASS };
+static int sharedControls;
+// Who has the console with Pass Around, whose controllers hold the Switch Controller Combo, and
+// whether the one who just took over still holds its buttons, which the game doesn't see; kept in
+// a state, after the rest, so a rollback replays it alike.
+static struct {
+	uint8_t holder, comboHeld, taking;
+} passed;
 static retro_set_rumble_state_t setRumble;
 static bool rumbling;
 int threadedVideo;
@@ -630,6 +639,13 @@ static void readOptions(void) {
 		{ "off", SWITCH_OFF },
 	};
 	switchController = optionChoice("armgba_switch_controller", switchChoices, COUNT(switchChoices), SWITCH_L_R_A_B);
+	static const struct Choice sharedChoices[] = {
+		{ "everyone", SHARED_EVERYONE },
+		{ "pass around", SHARED_PASS },
+	};
+	// Only with Link Mode off: the link modes give each player a console.
+	const char* const link = option("armgba_link_mode");
+	sharedControls = !link || !strcmp(link, "off") ? optionChoice("armgba_shared_controls", sharedChoices, COUNT(sharedChoices), SHARED_OFF) : SHARED_OFF;
 	const char* const follows = option("armgba_r2_follows");
 	r2Follows = follows && *follows >= '1' && *follows <= '4' ? *follows - '1' : -1;
 	playerNumbers = optionIs("armgba_player_numbers", "enabled");
@@ -1335,6 +1351,7 @@ void retro_reset(void) {
 	// Restart can come straight after an option change, before a frame has read it, so read the
 	// options first.
 	readOptions();
+	memset(&passed, 0, sizeof(passed));
 	applyLinkOptions();
 	offerLinkNetplay();
 	if (gameBoy) {
@@ -1489,6 +1506,17 @@ static bool allHeld(uint16_t keys, uint16_t wanted) {
 	return (keys & wanted) == wanted;
 }
 
+// As in mGBA's core by default, pressing opposite directions together presses neither.
+static uint16_t withoutOpposites(uint16_t keys) {
+	if (allHeld(keys, KEY_LEFT | KEY_RIGHT)) {
+		keys &= ~(KEY_LEFT | KEY_RIGHT);
+	}
+	if (allHeld(keys, KEY_UP | KEY_DOWN)) {
+		keys &= ~(KEY_UP | KEY_DOWN);
+	}
+	return keys;
+}
+
 // Returns the buttons held on a controller, as KEY_ bits.
 static uint16_t readKeys(unsigned port) {
 	static const unsigned buttons[10] = {
@@ -1525,14 +1553,7 @@ static uint16_t readKeys(unsigned port) {
 	if (port == 0 && switchController >= SWITCH_START_L3 && switchStick(stick) && inputState(0, RETRO_DEVICE_JOYPAD, 0, stick)) {
 		keys &= ~KEY_START;
 	}
-	// As in mGBA's core by default, pressing opposite directions together presses neither.
-	if (allHeld(keys, KEY_LEFT | KEY_RIGHT)) {
-		keys &= ~(KEY_LEFT | KEY_RIGHT);
-	}
-	if (allHeld(keys, KEY_UP | KEY_DOWN)) {
-		keys &= ~(KEY_UP | KEY_DOWN);
-	}
-	return keys;
+	return withoutOpposites(keys);
 }
 
 // On the Game Boy Advance model, L or R switches between the game's own size and stretched across
@@ -1562,27 +1583,32 @@ static bool switchOn(void) {
 	return switchController != SWITCH_OFF && togetherRunning() && !netplaySeen && playersHere > 1;
 }
 
-// Whether controller 1 holds the Switch Controller Combo buttons.
-static bool switchHeld(int port) {
-	static struct {
-		size_t count;
-		unsigned buttons[4];
-	} const combos[] = {
-		[SWITCH_L_R_A_B] = { 4, { RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B } },
-		[SWITCH_L3_R3] = { 2, { RETRO_DEVICE_ID_JOYPAD_L3, RETRO_DEVICE_ID_JOYPAD_R3 } },
-		[SWITCH_START_L2_R2] = { 3, { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_L2, RETRO_DEVICE_ID_JOYPAD_R2 } },
-		[SWITCH_START_L3] = { 2, { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_L3 } },
-		[SWITCH_START_R3] = { 2, { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_R3 } },
-	};
-	if (port != 0 || !switchOn()) {
-		return false;
-	}
-	for (size_t k = 0; k < combos[switchController].count; ++k) {
-		if (!inputState(0, RETRO_DEVICE_JOYPAD, 0, combos[switchController].buttons[k])) {
+// Each Switch Controller Combo's buttons, and the game's buttons among them.
+static const struct {
+	size_t count;
+	unsigned buttons[4];
+	uint16_t keys;
+} combos[] = {
+	[SWITCH_L_R_A_B] = { 4, { RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_R, RETRO_DEVICE_ID_JOYPAD_A, RETRO_DEVICE_ID_JOYPAD_B }, KEY_L | KEY_R | KEY_A | KEY_B },
+	[SWITCH_L3_R3] = { 2, { RETRO_DEVICE_ID_JOYPAD_L3, RETRO_DEVICE_ID_JOYPAD_R3 }, 0 },
+	[SWITCH_START_L2_R2] = { 3, { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_L2, RETRO_DEVICE_ID_JOYPAD_R2 }, KEY_START },
+	[SWITCH_START_L3] = { 2, { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_L3 }, KEY_START },
+	[SWITCH_START_R3] = { 2, { RETRO_DEVICE_ID_JOYPAD_START, RETRO_DEVICE_ID_JOYPAD_R3 }, KEY_START },
+};
+
+// Whether a controller holds a combo's buttons.
+static bool comboHeld(int combo, int port) {
+	for (size_t k = 0; k < combos[combo].count; ++k) {
+		if (!inputState(port, RETRO_DEVICE_JOYPAD, 0, combos[combo].buttons[k])) {
 			return false;
 		}
 	}
 	return true;
+}
+
+// Whether controller 1 holds the Switch Controller Combo buttons.
+static bool switchHeld(int port) {
+	return port == 0 && switchOn() && comboHeld(switchController, 0);
 }
 
 // Whether controller 1's L3 or R3 is one of the Switch Controller Combo buttons now, so it only
@@ -1624,6 +1650,38 @@ static void readControllerSwitch(void) {
 	char name[48];
 	snprintf(name, sizeof(name), "Controller 1: Player %d's Console", controllerFocus + 1);
 	notify(name, 120);
+}
+
+// Shared Controls with one console: every player's buttons, or Pass Around's holder's, another
+// player taking over with the Switch Controller Combo (L + R + A + B when it's off); the one who
+// takes over isn't seen pressing the combo's buttons until letting go of them. Turbo L and R come
+// from controller 1, as without it.
+static uint16_t readSharedKeys(bool shoulders) {
+	uint16_t keys[MAX_PLAYERS], everyone = 0;
+	for (int port = 0; port < MAX_PLAYERS; ++port) {
+		keys[port] = readKeys((unsigned) port) | (port == 0 && shoulders ? readTurboShoulders() : 0);
+		everyone |= keys[port];
+	}
+	if (sharedControls == SHARED_EVERYONE) {
+		return withoutOpposites(everyone);
+	}
+	int const combo = switchController == SWITCH_OFF ? SWITCH_L_R_A_B : switchController;
+	for (int port = 0; port < MAX_PLAYERS; ++port) {
+		bool const held = comboHeld(combo, port), was = passed.comboHeld >> port & 1;
+		passed.comboHeld = (uint8_t) (held ? passed.comboHeld | 1 << port : passed.comboHeld & ~(1 << port));
+		if (held && !was && port != passed.holder) {
+			passed.holder = (uint8_t) port;
+			passed.taking = 1;
+			if (!rerunning()) {
+				char message[40];
+				snprintf(message, sizeof(message), "Player %d has the controls", port + 1);
+				notify(message, 120);
+			}
+		}
+	}
+	uint16_t const own = keys[passed.holder % MAX_PLAYERS];
+	passed.taking = passed.taking && (own & combos[combo].keys);
+	return passed.taking ? own & ~combos[combo].keys : own;
 }
 
 // L2 or R2 held fast-forwards at RetroArch's maximum run speed; with the consoles here only L2, as
@@ -2237,7 +2295,7 @@ static void runAdvancesFrame(void) {
 static void runOneGameBoy(void) {
 	const int16_t* samples;
 	size_t frames;
-	uint16_t keys = readKeys(0);
+	uint16_t keys = sharedControls != SHARED_OFF ? readSharedKeys(false) : readKeys(0);
 	readTilt(keys);
 	readContrast();
 	readRestarts(&keys);
@@ -2268,7 +2326,7 @@ static void sendOneAdvanceSound(void) {
 }
 
 static void runOneAdvance(void) {
-	uint16_t keys = readKeys(0) | readTurboShoulders();
+	uint16_t keys = sharedControls != SHARED_OFF ? readSharedKeys(true) : readKeys(0) | readTurboShoulders();
 	readRestarts(&keys);
 	gbaSetKeys(gba, keys);
 	readSensors(keys);
@@ -2444,7 +2502,7 @@ static size_t extraStateSize(void) {
 }
 
 size_t retro_serialize_size(void) {
-	return consolesStateSize() + extraStateSize() + sizeof(pressed) + 1 + sizeof(sessionTag);
+	return consolesStateSize() + extraStateSize() + sizeof(pressed) + 1 + sizeof(sessionTag) + sizeof(passed);
 }
 
 bool retro_serialize(void* data, size_t size) {
@@ -2459,13 +2517,15 @@ bool retro_serialize(void* data, size_t size) {
 	at += sizeof(pressed);
 	*at++ = (uint8_t) solarLevel;
 	memcpy(at, &sessionTag, sizeof(sessionTag));
+	memcpy(at + sizeof(sessionTag), &passed, sizeof(passed));
 	return true;
 }
 
 bool retro_unserialize(const void* data, size_t size) {
 	checkNetplay();
-	size_t const buttons = sizeof(pressed) + 1;
-	bool const full = size >= retro_serialize_size(), older = size == retro_serialize_size() - buttons;
+	// A state from before Pass Around was kept is as long as this one without it.
+	size_t const buttons = sizeof(pressed) + 1, unpassed = retro_serialize_size() - sizeof(passed);
+	bool const full = size >= unpassed, older = size == unpassed - buttons, holding = size >= retro_serialize_size();
 	bool const tagged = full || older;
 	if (!(tagged || (size == consolesStateSize() && !togetherRunning())) || !loadConsoles(data, consolesStateSize())) {
 		return false;
@@ -2486,6 +2546,11 @@ bool retro_unserialize(const void* data, size_t size) {
 		uint32_t tag;
 		memcpy(&tag, at, sizeof(tag));
 		loadedTag(tag);
+		if (holding) {
+			memcpy(&passed, at + sizeof(tag), sizeof(passed));
+		} else {
+			memset(&passed, 0, sizeof(passed));
+		}
 	}
 	return true;
 }

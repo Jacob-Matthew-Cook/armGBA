@@ -65,6 +65,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Solar Sensor | Game Boy Advance | 0 (Dark) to 10 (Full Sun), 5 by default |
 | | Restart Combo | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
 | Link | Link Mode (applies on restart) | Both | Off, Together, Separate, GameCube (Game Boy Advance) |
+| | Shared Controls (Link Mode Off) | Both | Off, Everyone (every player's buttons at once), Pass Around (one player at a time, taking over with the Switch Controller Combo) |
 | Link: Players | Number of Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | Link: Connection | Cartridge (applies on restart) | Game Boy Advance | Inserted, Removed (Separate, GameCube) |
@@ -250,6 +251,7 @@ usual netplay.
 | You want to… | Use |
 | --- | --- |
 | Play alone | Link Mode Off |
+| Share one game, everyone at once or passing it around, on one device or over netplay | Link Mode Off with Shared Controls |
 | Play together on one device, or smooth netplay | Together |
 | Link with someone who has only their own game, or whose device is too slow for two consoles | Separate |
 | Trade or battle in Pokemon FireRed, LeafGreen or Emerald over Wi-Fi | Separate with the Wireless Adapter |

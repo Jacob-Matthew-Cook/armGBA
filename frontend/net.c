@@ -767,8 +767,11 @@ bool netHost(bool together) {
 	self = 0;
 	libretroSetNetplayPlayer(self);
 	resetSync();
-	if (linkMode(together ? "together" : "separate")) {
-		osd(together ? "Restarted with every player's console" : "Restarted for the link cable");
+	// With Shared Controls, the players share the one console instead of having one each.
+	const char* const sharing = optionValue("armgba_shared_controls");
+	bool const shared = together && (!strcmp(sharing, "everyone") || !strcmp(sharing, "pass around"));
+	if (linkMode(!together ? "separate" : shared ? "off" : "together")) {
+		osd(!together ? "Restarted for the link cable" : shared ? "Restarted with one console, shared" : "Restarted with every player's console");
 	}
 	if (together) {
 		roll.joined[0] = 0;

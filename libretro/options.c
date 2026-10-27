@@ -18,7 +18,7 @@
 
 struct retro_core_options_v2* coreOptions;
 // Which options were last shown, once set.
-static bool optionsShown[32];
+static bool optionsShown[40];
 static bool optionsShownSet;
 
 static void fillTurboPeriods(struct retro_core_option_v2_definition* definitions) {
@@ -142,6 +142,9 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  NULL, "link",
 	  { { "off", "Off" }, { "together", "Together" }, { "separate", "Separate" }, { "gamecube", "GameCube" }, { NULL, NULL } },
 	  "off" },
+	{ "armgba_shared_controls", "Shared Controls", NULL,
+	  "With Link Mode off, more players can play the one console, in netplay or with more controllers. Everyone: every player's buttons at once. Pass Around: one player at a time; another takes over with the Switch Controller Combo.",
+	  NULL, "link", { { "off", "Off" }, { "everyone", "Everyone" }, { "pass around", "Pass Around" }, { NULL, NULL } }, "off" },
 	{ "armgba_link_players", "Number of Players", NULL,
 	  "How many consoles run. Four Game Boy Advances need a fast device. Applies on Restart.",
 	  NULL, "link_players", { { "2", NULL }, { "3", NULL }, { "4", NULL }, { NULL, NULL } }, "2" },
@@ -175,7 +178,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  NULL, "link_screens",
 	  { { "auto", "Auto" }, { "1", "Player 1" }, { "2", "Player 2" }, { "3", "Player 3" }, { "4", "Player 4" }, { NULL, NULL } }, "auto" },
 	{ "armgba_switch_controller", "Switch Controller Combo", NULL,
-	  "Buttons that move controller 1 to the next player's console, the other controllers moving along, so one controller can play them all. Stick clicks used here only switch. Not in netplay.",
+	  "Buttons that move controller 1 to the next player's console, the other controllers moving along, so one controller can play them all. Stick clicks used here only switch. Not in netplay. With Shared Controls on Pass Around, they take over the console, in netplay too (L + R + A + B when Off).",
 	  NULL, "link_screens",
 	  { { "l r a b", "L + R + A + B" }, { "l3 r3", "L3 + R3" }, { "start l2 r2", "Start + L2 + R2" }, { "start l3", "Start + L3" }, { "start r3", "Start + R3" }, { "off", "Off" }, { NULL, NULL } },
 	  "l r a b" },
@@ -316,7 +319,8 @@ bool showOptions(void) {
 		{ "armgba_link_l2", together },
 		{ "armgba_r2_follows", together },
 		{ "armgba_player_numbers", together },
-		{ "armgba_switch_controller", together },
+		{ "armgba_switch_controller", together || optionIs("armgba_shared_controls", "pass around") },
+		{ "armgba_shared_controls", optionIs("armgba_link_mode", "off") },
 		{ "armgba_player2_game", together },
 		{ "armgba_new_save", together },
 		{ "armgba_load_into", together },
