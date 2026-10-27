@@ -1275,19 +1275,25 @@ static bool loadHostGame(const char* name, uint32_t crc) {
 	if (strchr(name, '/')) {
 		return false;
 	}
-	char beside[PATH_SIZE];
+	char own[PATH_SIZE], beside[PATH_SIZE];
+	snprintf(own, sizeof(own), "%s", app.loaded ? app.gamePath : "");
 	snprintf(beside, sizeof(beside), "%s", app.gamePath);
 	char* const slash = strrchr(beside, '/');
 	*(slash ? slash : beside) = '\0';
-	if (findHostGame(beside, name, crc, 0) || findHostGame(settings.directory, name, crc, 0)) {
-		return true;
+	bool found = findHostGame(beside, name, crc, 0) || findHostGame(settings.directory, name, crc, 0);
+	for (int c = 0; c < CONSOLES && !found; ++c) {
+		found = findHostGame(consoleDirectories[c], name, crc, 1);
 	}
-	for (int c = 0; c < CONSOLES; ++c) {
-		if (findHostGame(consoleDirectories[c], name, crc, 1)) {
-			return true;
+	found = found || findHostGame(gamesDirectory, name, crc, 2);
+	// None was the host's: this device's own game again, not a file of that name it tried.
+	if (!found && app.loaded && strcmp(app.gamePath, own)) {
+		loadingForSession = true;
+		if (!*own || !loadGame(own)) {
+			unloadGame();
 		}
+		loadingForSession = false;
 	}
-	return findHostGame(gamesDirectory, name, crc, 2);
+	return found;
 }
 
 // The text at *at, moving *at past it; NULL if it doesn't end before end.
