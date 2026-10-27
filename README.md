@@ -358,7 +358,8 @@ boot ROM on every device, or armGBA's, which every device has.
   (RetroArch's Start Core, or the app's Start Save Manager on the Netplay page), host or join, then
   Send Save, in Saves, sends one of the saves found in RetroArch's saves folder and ROM folder, as
   its `retroarch.cfg` names them, and their `gb`, `gbc` and `gba` folders (on ROCKNIX, `roms/gba`,
-  `gb` and `gbc`), with each folder's armGBA/Player 2 to 4 saves. The other
+  `gb` and `gbc`), with each folder's armGBA/Player 2 to 4 saves; in the app, its own Saves folder
+  and game folders instead, as Saves and Folders sets them. The other
   device puts it where Receive Saves Into says, backing up the save it replaces. Auto takes a
   save to player 2's on the host and to your own save on a device that joined, so before playing
   Together, the joining player sends their save in, and afterwards the host sends Player 2's back,

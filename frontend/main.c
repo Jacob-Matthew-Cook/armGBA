@@ -11,6 +11,7 @@
 #include "frontend.h"
 #include "gb.h"
 #include "lcd.h"
+#include "link.h"
 #include "games.h"
 #include "patch.h"
 
@@ -276,6 +277,8 @@ static bool gamesIn(char out[PATH_SIZE], const char* base) {
 // folder (Android's shared storage) or on a card, the folder above the last game's if that's a
 // console's, else the last game's folder. Each console's: Auto is a folder in it named for the
 // console, if there is one.
+static void tellSaveFolders(void);
+
 void chooseGameFolders(void) {
 	const char* const home = getenv("HOME") ? getenv("HOME") : ".";
 	bool found = settings.gamesFolder[0];
@@ -316,10 +319,40 @@ void chooseGameFolders(void) {
 			consoleDirectories[i][0] = '\0';
 		}
 	}
+	tellSaveFolders();
 }
 
 // The BIOS, state and screenshot folders, as the Folders say. Auto BIOS is armGBA's when it holds a
 // BIOS or boot ROM, RetroArch's otherwise. The core reads the BIOS folder as each game loads.
+// Save Manager's folders, from the app's own settings as retroarch.cfg's are in RetroArch, so it needs
+// no RetroArch: armGBA's save folder, a typed one, or RetroArch's only when Saves is set to it; the
+// game folders, first when saves are kept in each game's folder.
+static void tellSaveFolders(void) {
+	const char* const chosen = settings.saveFolder;
+	bool const theirs = !strcmp(chosen, "retroarch");
+	bool const typed = chosen[0] && strcmp(chosen, "armgba") && strcmp(chosen, "retroarch") && strcmp(chosen, "beside");
+	const char* saves[3];
+	const char* games[1 + CONSOLES];
+	int saveCount = 0, gameCount = 0;
+	saves[saveCount++] = ownSaveDirectory;
+	if (typed) {
+		saves[saveCount++] = chosen;
+	}
+	if (theirs && retroarch.found && !retroarch.savesBesideGame && retroarch.saves[0]) {
+		saves[saveCount++] = retroarch.saves;
+	}
+	if (gamesDirectory[0]) {
+		games[gameCount++] = gamesDirectory;
+	}
+	for (int c = 0; c < CONSOLES; ++c) {
+		if (consoleDirectories[c][0]) {
+			games[gameCount++] = consoleDirectories[c];
+		}
+	}
+	bool const gamesFirst = !strcmp(chosen, "beside") || (theirs && retroarch.found && retroarch.savesBesideGame);
+	libretroSaveManagerFolders(saves, saveCount, games, gameCount, gamesFirst);
+}
+
 void chooseFolders(void) {
 	const char* bios = settings.biosFolder;
 	if (!bios[0]) {

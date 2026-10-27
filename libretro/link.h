@@ -53,6 +53,11 @@ bool linkSession(void);
 bool linkHosting(void);
 // Whether the core started with no game: Save Manager, or waiting for a single-pak game.
 bool noGameLoaded(void);
+// The standalone frontend's folders for Save Manager, from its own settings, in place of RetroArch's
+// retroarch.cfg: save folders (searched with their gb, gbc, gba and armGBA folders), game folders
+// (with their gb, gbc and gba folders), and whether the game folders come first, as with saves kept
+// beside the games.
+void libretroSaveManagerFolders(const char* const* saves, int saveCount, const char* const* games, int gameCount, bool gamesFirst);
 // Called before each Game Boy Advance frame: keeps the cable checked during it.
 void linkGbaFrame(struct GBA*);
 // Whether the frame stopped early, with exact timing, to wait for the console leading; it goes on

@@ -1077,12 +1077,49 @@ static void addRomFolders(void) {
 	}
 }
 
-// The ROM folders come first when RetroArch keeps saves beside the games, so a save received goes
-// there.
+// The standalone frontend's folders, from its own settings, in place of retroarch.cfg's.
+enum { APP_FOLDERS = 8 };
+static struct {
+	bool set;
+	char saves[APP_FOLDERS][PATH_SIZE];
+	char games[APP_FOLDERS][PATH_SIZE];
+	int saveCount, gameCount;
+	bool gamesFirst;
+} appFolders;
+
+void libretroSaveManagerFolders(const char* const* saves, int saveCount, const char* const* games, int gameCount, bool gamesFirst) {
+	appFolders.set = true;
+	appFolders.saveCount = saveCount < APP_FOLDERS ? saveCount : APP_FOLDERS;
+	appFolders.gameCount = gameCount < APP_FOLDERS ? gameCount : APP_FOLDERS;
+	for (int i = 0; i < appFolders.saveCount; ++i) {
+		snprintf(appFolders.saves[i], PATH_SIZE, "%s", saves[i]);
+	}
+	for (int i = 0; i < appFolders.gameCount; ++i) {
+		snprintf(appFolders.games[i], PATH_SIZE, "%s", games[i]);
+	}
+	appFolders.gamesFirst = gamesFirst;
+}
+
+static void addAppFolders(bool games) {
+	int const count = games ? appFolders.gameCount : appFolders.saveCount;
+	for (int i = 0; i < count; ++i) {
+		const char* const folder = games ? appFolders.games[i] : appFolders.saves[i];
+		addManagerFolder(folder);
+		addConsoleFolders(folder, !games);
+	}
+}
+
+// The standalone frontend's folders, or RetroArch's, the ROM folders first when RetroArch keeps saves
+// beside the games, so a save received goes there.
 static void findManagerFolders(void) {
+	managerFolderCount = 0;
+	if (appFolders.set) {
+		addAppFolders(appFolders.gamesFirst);
+		addAppFolders(!appFolders.gamesFirst);
+		return;
+	}
 	char beside[PATH_SIZE];
 	bool const romsFirst = retroarchFolder("savefiles_in_content_dir", beside) && !strcmp(beside, "true");
-	managerFolderCount = 0;
 	if (romsFirst) {
 		addRomFolders();
 	}
