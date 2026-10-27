@@ -46,6 +46,8 @@ const struct RfuAir* linkAir(void);
 void linkSetWireless(bool);
 // Whether a netplay session is on, during which time runs at the same speed for every player.
 bool linkSession(void);
+// Whether this device hosts the session.
+bool linkHosting(void);
 // Called before each Game Boy Advance frame: keeps the cable checked during it.
 void linkGbaFrame(struct GBA*);
 // Whether the frame stopped early, with exact timing, to wait for the console leading; it goes on

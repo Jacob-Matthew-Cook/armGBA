@@ -208,7 +208,8 @@ found by a broadcast on the netplay port and updated while shown, with each host
 players; choosing it again scans afresh. Join a Host... takes an address. In Together, a player who
 joined can Send My Save: their own save of the game goes into their console, which restarts, and
 the host backs up the one it replaces; as they leave, the session's save becomes theirs, their old
-one backed up. `--host` (as
+one backed up. Start Save Manager closes the game for Save Manager (see Backups); `--host
+--no-cartridge` starts it hosting. `--host` (as
 Link Mode says), `--host-off`, `--host-together`, `--host-separate` and `--connect ADDRESS` start it
 from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
 
@@ -341,7 +342,14 @@ boot ROM on every device, or armGBA's, which every device has.
 - In Separate, linked devices swap their current saves as they connect, and Send Save sends the
   current save, a backup, or a remote or received save, when chosen. The other device keeps it in
   armGBA/Received, and Load Save lists it as Received, going to player 2 when there is one, or
-  player 1. This is the way to bring a player's own save to the host before playing Together.
+  player 1.
+- Save Manager moves saves between devices with no game loaded: start the core with no game
+  (RetroArch's Start Core, or the app's Start Save Manager on the Netplay page), host or join, then
+  Send a Save, in Saves, sends one of the saves found in the save folder and the game folders (on
+  ROCKNIX, `roms/gba`, `gb` and `gbc`), with each folder's armGBA/Player 2 to 4 saves. The other
+  device puts it where Received Saves Go To says, backing up the save it replaces. Auto takes a
+  save to player 2's on the host and to your own save on a device that joined, so before playing
+  Together, the joining player sends their save in, and afterwards the host sends Player 2's back.
 - Backups Kept: 10 per player unless chosen. A save the same as its newest backup isn't backed up
   again.
 - Player 1's Save Folder can keep player 1's save in armGBA/Player 1 too, beside the other players'.

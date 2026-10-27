@@ -1005,6 +1005,10 @@ bool linkSession(void) {
 	return session;
 }
 
+bool linkHosting(void) {
+	return session && self == 0;
+}
+
 bool linkExactOn(void) {
 	return exactOn();
 }

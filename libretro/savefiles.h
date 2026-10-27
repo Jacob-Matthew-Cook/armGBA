@@ -43,5 +43,7 @@ size_t backupStamps(const char* savePath, char (*stamps)[BACKUP_STAMP], size_t m
 void newBackupStamp(const char* savePath, char stamp[BACKUP_STAMP]);
 // The file of the save's backup with this stamp.
 void backupFilePath(const char* savePath, const char* stamp, char* out, size_t outSize);
+// Whether a file's name is a backup's, Game.<stamp>.srm.
+bool isBackupName(const char* name);
 
 #endif

@@ -11,6 +11,7 @@
 #include "gb.h"
 #include "link.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +43,9 @@ struct SaveChoices {
 };
 static struct SaveChoices loadChoices;
 static struct SaveChoices sendChoices;
+// Save Manager's Send a Save.
+static struct SaveChoices managerChoices;
+static void fillManagerChoices(void);
 static struct retro_core_option_v2_definition* backUpOption;
 static struct retro_core_option_v2_definition* loadIntoOption;
 static char playerValues[MAX_PLAYERS][2];
@@ -623,9 +627,10 @@ static void addBackupChoices(struct SaveChoices* list, const char* file, int mos
 // Fills Back Up Save's and Load Save Into's choices with the players playing, and Load Save's and
 // Send Save's with their saves.
 void fillSaveChoices(void) {
-	if (!loadChoices.option || !sendChoices.option || !backUpOption || !loadIntoOption) {
+	if (!loadChoices.option || !sendChoices.option || !backUpOption || !loadIntoOption || !managerChoices.option) {
 		return;
 	}
+	fillManagerChoices();
 	const char* value = option("armgba_list_saves");
 	backupsListed = value ? atoi(value) : 0;
 	backupsListed = backupsListed > 0 && backupsListed <= BACKUP_CHOICES ? backupsListed : 10;
@@ -882,15 +887,11 @@ const char* libretroTakeSave(int player, const void* save, size_t size, const vo
 	return NULL;
 }
 
-bool libretroKeepSave(int player, const char* file, const char* rtcFile) {
-	char base[SAVE_PATH_SIZE], rtcBase[SAVE_PATH_SIZE], stamp[BACKUP_STAMP];
-	size_t size, rtcSize, oldSize = 0, oldRtcSize = 0;
-	void* save = saveMemory(player, &size);
-	void* rtc = rtcMemory(player, &rtcSize);
-	if (!save || !size) {
-		return false;
-	}
-	backupFiles(0, base, rtcBase);
+// Puts a save, and clock, in file and rtcFile, what they held backed up with base's backups first.
+static bool replaceSaveFile(const char* file, const char* rtcFile, const char* base, const char* rtcBase, const void* save, size_t size,
+                            const void* rtc, size_t rtcSize) {
+	char stamp[BACKUP_STAMP];
+	size_t oldSize, oldRtcSize;
 	void* old = readWholeFile(file, &oldSize);
 	void* oldRtc = readWholeFile(rtcFile, &oldRtcSize);
 	int const backedUp = old ? writeBackup(base, rtcBase, old, oldSize, oldRtc, oldRtcSize, stamp) : 0;
@@ -905,6 +906,15 @@ bool libretroKeepSave(int player, const char* file, const char* rtcFile) {
 		writeWholeFile(rtcFile, rtc, rtcSize);
 	}
 	return writeWholeFile(file, save, size);
+}
+
+bool libretroKeepSave(int player, const char* file, const char* rtcFile) {
+	char base[SAVE_PATH_SIZE], rtcBase[SAVE_PATH_SIZE];
+	size_t size, rtcSize;
+	void* save = saveMemory(player, &size);
+	void* rtc = rtcMemory(player, &rtcSize);
+	backupFiles(0, base, rtcBase);
+	return save && size && replaceSaveFile(file, rtcFile, base, rtcBase, save, size, rtc, rtcSize);
 }
 
 // Sends player 1's save of this game to the other player of a Separate link: when chosen (asked),
@@ -924,7 +934,9 @@ static void sendSave(bool asked) {
 }
 
 void sendSaveOnPairing(void) {
-	sendSave(false);
+	if (!noGameLoaded()) {
+		sendSave(false);
+	}
 }
 
 static void sendBackup(int source, int from, const char* stamp) {
@@ -951,7 +963,13 @@ static void sendBackup(int source, int from, const char* stamp) {
 
 // A save the other player sent, of the game named, kept as a received save of that game, unless the
 // newest one received already holds it.
+static void managerReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);
+
 void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize) {
+	if (noGameLoaded()) {
+		managerReceived(game, save, size, rtc, rtcSize);
+		return;
+	}
 	// The game's file, for where its saves are: player 1's, a game beside it, or else beside player 1's.
 	char path[PATH_SIZE];
 	char name[1024];
@@ -977,6 +995,218 @@ void saveReceived(const char* game, const uint8_t* save, size_t size, const uint
 		snprintf(message, sizeof(message), "Received the other player's save of %s", game);
 		showMessage(message);
 	}
+}
+
+// Save Manager: started with no game, Send a Save lists the saves in the save folder and the
+// folders in it, and in the Game Boy, Game Boy Color and Game Boy Advance game folders beside the
+// system folder, where ROCKNIX keeps saves, each with its armGBA/Player 2 to 4 saves. A save the
+// other device sends goes where Received Saves Go To says, the one it replaces backed up.
+enum { MANAGER_FOLDERS = 32, MANAGER_FOUND = 2048 };
+static char managerFolders[MANAGER_FOLDERS][PATH_SIZE];
+static int managerFolderCount;
+struct Managed {
+	int folder;
+	int player;
+	char name[256];
+	time_t time;
+};
+static struct Managed managed[BACKUP_CHOICES];
+static int managedCount;
+
+static void addManagerFolder(const char* path) {
+	char real[PATH_SIZE];
+	struct stat info;
+	if (managerFolderCount >= MANAGER_FOLDERS || !realpath(path, real) || stat(real, &info) || !S_ISDIR(info.st_mode)) {
+		return;
+	}
+	for (int i = 0; i < managerFolderCount; ++i) {
+		if (!strcmp(managerFolders[i], real)) {
+			return;
+		}
+	}
+	snprintf(managerFolders[managerFolderCount++], PATH_SIZE, "%s", real);
+}
+
+static void findManagerFolders(void) {
+	managerFolderCount = 0;
+	const char* directory = NULL;
+	if (environment(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &directory) && directory && *directory) {
+		addManagerFolder(directory);
+		DIR* folder = opendir(directory);
+		for (struct dirent* entry; folder && (entry = readdir(folder));) {
+			char path[PATH_SIZE];
+			if (entry->d_name[0] != '.' && snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name) < (int) sizeof(path)) {
+				addManagerFolder(path);
+			}
+		}
+		if (folder) {
+			closedir(folder);
+		}
+	}
+	static const char* const consoles[] = { "gba", "gbc", "gb" };
+	if (environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory) && directory && *directory) {
+		for (size_t i = 0; i < sizeof(consoles) / sizeof(consoles[0]); ++i) {
+			char path[PATH_SIZE];
+			snprintf(path, sizeof(path), "%s/../%s", directory, consoles[i]);
+			addManagerFolder(path);
+		}
+	}
+}
+
+static void managedFiles(const struct Managed* save, char file[SAVE_PATH_SIZE], char rtcFile[SAVE_PATH_SIZE]) {
+	const char* const folder = managerFolders[save->folder];
+	if (save->player) {
+		snprintf(file, SAVE_PATH_SIZE, "%s/armGBA/Player %d/%s.srm", folder, save->player + 1, save->name);
+		snprintf(rtcFile, SAVE_PATH_SIZE, "%s/armGBA/Player %d/%s.rtc", folder, save->player + 1, save->name);
+	} else {
+		snprintf(file, SAVE_PATH_SIZE, "%s/%s.srm", folder, save->name);
+		snprintf(rtcFile, SAVE_PATH_SIZE, "%s/%s.rtc", folder, save->name);
+	}
+}
+
+// The saves, not backups, in one folder, as a player's.
+static void findSavesIn(int folder, int player, const char* path, struct Managed* found, int* count) {
+	DIR* listing = opendir(path);
+	for (struct dirent* entry; listing && (entry = readdir(listing)) && *count < MANAGER_FOUND;) {
+		size_t const length = strlen(entry->d_name);
+		if (length <= 4 || length - 4 >= sizeof(found->name) || strcmp(entry->d_name + length - 4, ".srm") || isBackupName(entry->d_name)) {
+			continue;
+		}
+		struct Managed* const save = &found[(*count)++];
+		save->folder = folder;
+		save->player = player;
+		snprintf(save->name, sizeof(save->name), "%.*s", (int) (length - 4), entry->d_name);
+		char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE];
+		struct stat info;
+		managedFiles(save, file, rtcFile);
+		save->time = stat(file, &info) ? 0 : info.st_mtime;
+	}
+	if (listing) {
+		closedir(listing);
+	}
+}
+
+static int newestFirst(const void* a, const void* b) {
+	time_t const x = ((const struct Managed*) a)->time, y = ((const struct Managed*) b)->time;
+	return (y > x) - (y < x);
+}
+
+// Send a Save's choices: the newest saves found.
+static void fillManagerChoices(void) {
+	startChoices(&managerChoices);
+	managedCount = 0;
+	struct Managed* found = noGameLoaded() ? malloc(MANAGER_FOUND * sizeof(*found)) : NULL;
+	if (!found) {
+		return;
+	}
+	int count = 0;
+	findManagerFolders();
+	for (int folder = 0; folder < managerFolderCount; ++folder) {
+		findSavesIn(folder, 0, managerFolders[folder], found, &count);
+		for (int player = 1; player < MAX_PLAYERS; ++player) {
+			char path[SAVE_PATH_SIZE];
+			snprintf(path, sizeof(path), "%.4095s/armGBA/Player %d", managerFolders[folder], player + 1);
+			findSavesIn(folder, player, path, found, &count);
+		}
+	}
+	qsort(found, (size_t) count, sizeof(*found), newestFirst);
+	managedCount = count < BACKUP_CHOICES ? count : BACKUP_CHOICES;
+	memcpy(managed, found, (size_t) managedCount * sizeof(*found));
+	free(found);
+	for (int i = 0; i < managedCount; ++i) {
+		char value[12], label[80], player[24] = "";
+		if (managed[i].player) {
+			snprintf(player, sizeof(player), " (Player %d)", managed[i].player + 1);
+		}
+		snprintf(value, sizeof(value), "%d", i);
+		snprintf(label, sizeof(label), "%.*s%s", (int) (sizeof(label) - 1 - strlen(player)), managed[i].name, player);
+		addChoice(&managerChoices, value, label);
+	}
+}
+
+static void managerSend(int which) {
+	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE], message[400];
+	size_t size, rtcSize;
+	managedFiles(&managed[which], file, rtcFile);
+	void* save = readWholeFile(file, &size);
+	void* rtc = readWholeFile(rtcFile, &rtcSize);
+	if (!save) {
+		snprintf(message, sizeof(message), "Send a Save: that save is gone");
+	} else if (!linkSendSave(managed[which].name, save, size, rtc, rtcSize)) {
+		snprintf(message, sizeof(message), "Send a Save: no one is linked. Host or join in netplay first");
+	} else {
+		snprintf(message, sizeof(message), "Sent %.300s to the other device", managerChoices.labels[which]);
+	}
+	showMessage(message);
+	free(save);
+	free(rtc);
+}
+
+// Whether a folder has a file named name.<anything>, such as the game's own file.
+static bool hasFileNamed(const char* folder, const char* name) {
+	size_t const length = strlen(name);
+	bool found = false;
+	DIR* listing = opendir(folder);
+	for (struct dirent* entry; listing && !found && (entry = readdir(listing));) {
+		found = !strncmp(entry->d_name, name, length) && entry->d_name[length] == '.';
+	}
+	if (listing) {
+		closedir(listing);
+	}
+	return found;
+}
+
+// Where a save the other device sent goes: the player Received Saves Go To names (Auto: player 2 on
+// the host, the device's own save elsewhere), in the folder with that save already, else the game's
+// own save, else the game, else the save folder.
+static void managerReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize) {
+	char message[400];
+	const char* const into = option("armgba_manager_into");
+	int player = into && into[0] >= '1' && into[0] <= '4' ? into[0] - '1' : 0;
+	if (into && !strcmp(into, "auto")) {
+		player = linkHosting() ? 1 : 0;
+	}
+	findManagerFolders();
+	if (!*game || strchr(game, '/') || game[0] == '.' || strlen(game) >= sizeof(managed[0].name) || !managerFolderCount) {
+		showMessage("Save Manager: a save arrived that can't be kept here");
+		return;
+	}
+	struct Managed target = { -1, player, "", 0 };
+	snprintf(target.name, sizeof(target.name), "%s", game);
+	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE];
+	for (int pass = 0; pass < 3 && target.folder < 0; ++pass) {
+		for (int folder = 0; folder < managerFolderCount && target.folder < 0; ++folder) {
+			struct Managed probe = target;
+			probe.folder = folder;
+			probe.player = pass ? 0 : player;
+			managedFiles(&probe, file, rtcFile);
+			if (pass < 2 ? !access(file, F_OK) : hasFileNamed(managerFolders[folder], game)) {
+				target.folder = folder;
+			}
+		}
+	}
+	target.folder = target.folder < 0 ? 0 : target.folder;
+	char base[SAVE_PATH_SIZE], rtcBase[SAVE_PATH_SIZE];
+	managedFiles(&target, file, rtcFile);
+	if (player) {
+		snprintf(base, sizeof(base), "%s", file);
+		snprintf(rtcBase, sizeof(rtcBase), "%s", rtcFile);
+	} else {
+		snprintf(base, sizeof(base), "%s/armGBA/Player 1/%s.srm", managerFolders[target.folder], game);
+		snprintf(rtcBase, sizeof(rtcBase), "%s/armGBA/Player 1/%s.rtc", managerFolders[target.folder], game);
+	}
+	char whose[24] = "your save";
+	if (player) {
+		snprintf(whose, sizeof(whose), "player %d's save", player + 1);
+	}
+	bool const replaced = !access(file, F_OK);
+	if (replaceSaveFile(file, rtcFile, base, rtcBase, save, size, rtc, rtcSize)) {
+		snprintf(message, sizeof(message), "Received %.300s: it's now %s%s", game, whose, replaced ? ", the old one backed up" : "");
+	} else {
+		snprintf(message, sizeof(message), "Received %.300s, but it couldn't be written", game);
+	}
+	showMessage(message);
+	offerSaveChoices();
 }
 
 // Back Up Save and Load Save act once when chosen, then go back to Off. Chosen when a game starts,
@@ -1007,6 +1237,15 @@ void readSaveActions(bool act) {
 			sendBackup(FROM_RECEIVED, 0, send + 2);
 		}
 	}
+	value = option("armgba_manager_send");
+	if (value && strcmp(value, "off")) {
+		int const which = atoi(value);
+		struct retro_variable off = { "armgba_manager_send", "off" };
+		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
+		if (act && which >= 0 && which < managedCount) {
+			managerSend(which);
+		}
+	}
 	value = option("armgba_load_save");
 	if (value && strcmp(value, "off")) {
 		char load[BACKUP_STAMP + 4];
@@ -1031,6 +1270,7 @@ void readSaveActions(bool act) {
 void findSaveOptions(void) {
 	loadChoices.option = optionDefinition("armgba_load_save");
 	sendChoices.option = optionDefinition("armgba_send_save");
+	managerChoices.option = optionDefinition("armgba_manager_send");
 	backUpOption = optionDefinition("armgba_back_up_save");
 	loadIntoOption = optionDefinition("armgba_load_into");
 }

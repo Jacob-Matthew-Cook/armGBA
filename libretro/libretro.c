@@ -1035,10 +1035,17 @@ static void stopOthers(void) {
 	othersBare = false;
 }
 
-// Offers RetroArch the netplay that carries the cable when Link Mode is Separate, and its usual
-// netplay otherwise.
+// Started with no game: a Game Boy Advance whose cartridge stays out, with no save, and Save Manager.
+static bool noGame;
+
+bool noGameLoaded(void) {
+	return noGame;
+}
+
+// Offers RetroArch the netplay that carries the cable when Link Mode is Separate or there is no game,
+// and its usual netplay otherwise.
 static void offerLinkNetplay(void) {
-	linkSetNetplay(separateWanted() && !togetherRunning());
+	linkSetNetplay((separateWanted() || noGame) && !togetherRunning());
 }
 
 static bool runningAsWanted(void) {
@@ -1175,8 +1182,6 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 // comes from RetroArch's save file once the console has been reset. Returns whether it went back in.
 static bool cartridgeOut;
 static bool cartridgeSaveUnread;
-// Started with no game: a Game Boy Advance whose cartridge stays out, with no save.
-static bool noGame;
 
 static bool applyCartridge(void) {
 	const char* value = option("armgba_link_cartridge");
@@ -1187,7 +1192,10 @@ static bool applyCartridge(void) {
 	}
 	if (out) {
 		gbaLoadRom(gba, "", 0);
-		notify(linked ? "No cartridge: waiting for a game over the cable" : "No cartridge: a game comes over the cable with Link Mode Separate or GameCube", 240);
+		notify(noGame   ? "Save Manager: link in netplay, then send saves from the core's Saves options. A single-pak game can come over the cable"
+		       : linked ? "No cartridge: waiting for a game over the cable"
+		                : "No cartridge: a game comes over the cable with Link Mode Separate or GameCube",
+		       noGame ? 600 : 240);
 	} else {
 		size_t size;
 		void* data = readPatched(firstPath, &size);

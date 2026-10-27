@@ -1506,8 +1506,8 @@ static void portDone(const char* text) {
 }
 
 // Netplay's rows: Your Name (0), Create a Host Session (1), Join (3), Disconnect (4), Port (5),
-// Your Cartridge (7), Scan for Local Hosts (8), which scans afresh when chosen again, and Send My
-// Save (9).
+// Your Cartridge (7), Scan for Local Hosts (8), which scans afresh when chosen again, Send My Save
+// (9) and Start Save Manager (10).
 static void netAction(int which, int delta) {
 	if (which == 7) {
 		joinNoCartridge = !joinNoCartridge;
@@ -1542,6 +1542,9 @@ static void netAction(int which, int delta) {
 		break;
 	case 9:
 		netSendSave();
+		break;
+	case 10:
+		loadNoCartridge();
 		break;
 	case 5: {
 		char port[16];
@@ -1579,13 +1582,36 @@ static void addNetplayLink(void) {
 	}
 }
 
+// Save Manager: the core's Saves options, with no game.
+static void openSaveManager(int argument, int delta) {
+	(void) argument;
+	for (int c = 0; c < categoryCount && !delta; ++c) {
+		if (!strcmp(categories[c].key, "saves")) {
+			openCategory(c, 0);
+		}
+	}
+}
+
+static void addSaveManager(void) {
+	addHeader("Save Manager");
+	if (app.noCartridge) {
+		addItem("Send and Receive Saves...", openSaveManager, 0);
+		helpFor("Send a Save sends one of your saves to the device you're linked with; Received Saves Go To says where theirs go.");
+	} else {
+		addItem("Start Save Manager", netAction, 10);
+		items[itemCount - 1].confirm = app.loaded;
+		helpFor("Closes the game and starts with none, to send saves between devices: host or join here, then send and "
+		        "receive saves.");
+	}
+}
+
 // A host the Join list found.
 static void joinFound(int which, int delta) {
 	const struct NetHost* hosts;
 	if (delta || which >= netScan(&hosts)) {
 		return;
 	}
-	if (joinNoCartridge && hosts[which].how != LINK_SEPARATE) {
+	if ((joinNoCartridge || app.noCartridge) && hosts[which].how != LINK_SEPARATE) {
 		osd("Netplay: joining with your cartridge removed needs a host on Link Mode Separate");
 		return;
 	}
@@ -1645,6 +1671,7 @@ static void netplayMenu(void) {
 				                                        "controller here is a player.");
 			}
 		}
+		addSaveManager();
 	} else {
 		if (netCanSendSave()) {
 			addItem("Send My Save", netAction, 9);
@@ -1654,6 +1681,9 @@ static void netplayMenu(void) {
 		}
 		addItem("Disconnect", netAction, 4);
 		helpFor("Leaves netplay; the game carries on here.");
+		if (app.noCartridge) {
+			addSaveManager();
+		}
 	}
 }
 

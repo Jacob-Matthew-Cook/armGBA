@@ -1819,7 +1819,7 @@ static bool actionHeld(enum Action action) {
 int main(int argc, char** argv) {
 	const char* game = NULL;
 	const char* connectTo = NULL;
-	// --no-cartridge: no game, the core's cartridge out, for joining a host on Separate.
+	// --no-cartridge: no game, the core's cartridge out, for Save Manager or a single-pak game.
 	bool noCartridge = false;
 	bool listControllers = false;
 	// Hosting from the command line: --host links as Link Mode says; --host-off, --host-together and
@@ -1868,7 +1868,7 @@ int main(int argc, char** argv) {
 		} else if (!strcmp(argv[i], "--controllers")) {
 			listControllers = true;
 		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-off | --host-together | --host-separate | --connect ADDRESS [--no-cartridge]] [--port N] [--controllers] [game]\n\n"
+			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-off | --host-together | --host-separate | --connect ADDRESS] [--no-cartridge] [--port N] [--controllers] [game]\n\n"
 			       "Esc, the controller's Guide button or a right-click opens the menu, where everything else is.\n"
 			       "Settings: ~/.config/armgba; saves, states, screenshots and cheats: ~/.local/share/armgba.\n");
 			return 0;
@@ -1940,6 +1940,10 @@ int main(int argc, char** argv) {
 	setPadForPort();
 	if (connectTo && (noCartridge || !game)) {
 		netJoin(connectTo, noCartridge);
+	} else if (host && noCartridge) {
+		if (loadNoCartridge()) {
+			netHost(NULL);
+		}
 	} else if (game && loadGame(game)) {
 		if (host) {
 			netHost(hostLink);

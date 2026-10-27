@@ -845,7 +845,8 @@ static void hearBroadcasts(bool on);
 // console the players share. The game restarts if it started with another link mode.
 bool netHost(const char* link) {
 	char mode[16];
-	snprintf(mode, sizeof(mode), "%s", link ? link : optionValue("armgba_link_mode"));
+	// With no cartridge, Save Manager and single-pak games link Separate.
+	snprintf(mode, sizeof(mode), "%s", app.noCartridge ? "separate" : link ? link : optionValue("armgba_link_mode"));
 	bool const separate = !strcmp(mode, "separate"), oneConsole = !strcmp(mode, "off");
 	// Every device runs every console, Together's or Off's one; Separate, each device its own.
 	bool const together = !separate;
@@ -855,10 +856,6 @@ bool netHost(const char* link) {
 	}
 	if (!separate && !oneConsole && strcmp(mode, "together")) {
 		osd("Netplay: Link Mode can be Off, Together or Separate");
-		return false;
-	}
-	if (app.noCartridge && together) {
-		osd("Netplay: with no cartridge, host on Link Mode Separate");
 		return false;
 	}
 	listener = listenOn(AF_INET6);

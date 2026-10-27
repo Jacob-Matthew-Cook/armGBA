@@ -186,6 +186,15 @@ static bool isStamp(const char* name, size_t length) {
 	return true;
 }
 
+bool isBackupName(const char* name) {
+	const char* const end = strrchr(name, '.');
+	const char* start = end;
+	while (start && start > name && start[-1] != '.') {
+		--start;
+	}
+	return start && start > name && isStamp(start, (size_t) (end - start));
+}
+
 // A stamp's count among backups from the same second: 1 for the first, which has none.
 static int stampCount(const char* stamp) {
 	return stamp[STAMP_TIME] ? atoi(stamp + STAMP_TIME + 1) : 1;
