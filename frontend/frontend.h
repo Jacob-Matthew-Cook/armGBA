@@ -200,6 +200,8 @@ struct App {
 	bool loaded;
 	// The core started with no game, a Game Boy Advance with its cartridge out.
 	bool noCartridge;
+	// A session this device joined in Off or Together ended: its game, the host's, closes.
+	bool sessionEnded;
 	char gamePath[PATH_SIZE];
 	char gameName[NAME_SIZE];
 	const void* gameData;
@@ -287,6 +289,8 @@ void uiOpenMenu(void);
 void uiPickGame(const char* title, const char* wanted, bool (*picked)(const char* path));
 bool uiPickingGame(void);
 void uiCloseMenu(void);
+// Closes the game, the menu open on General.
+void uiCloseGame(void);
 bool uiEvent(const SDL_Event* event);
 void uiDraw(void);
 void osd(const char* format, ...);
@@ -375,6 +379,8 @@ void netIdle(void);
 bool netPacketInterface(const struct retro_netpacket_callback* callback);
 int netPlayers(void);
 bool netRunning(void);
+// Whether this device joined a session in Off or Together, running the host's game.
+bool netInHostsGame(void);
 uint16_t netInput(unsigned port, unsigned id);
 bool netRollingBack(void);
 void netInit(void);

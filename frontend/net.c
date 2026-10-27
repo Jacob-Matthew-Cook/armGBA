@@ -849,6 +849,7 @@ bool netHost(const char* link) {
 	// Every device runs every console, Together's or Off's one; Separate, each device its own.
 	bool const together = !separate;
 	netStop();
+	app.sessionEnded = false;
 	if (!app.loaded) {
 		return false;
 	}
@@ -908,6 +909,7 @@ bool netHost(const char* link) {
 // Separate to send a single-pak game over the cable.
 bool netJoin(const char* address, bool noCartridge) {
 	netStop();
+	app.sessionEnded = false;
 	writeSaves();
 	if (noCartridge && !app.noCartridge && !loadNoCartridge()) {
 		return false;
@@ -992,6 +994,7 @@ void netStop(void) {
 	if (netMode == NET_JOINED) {
 		libretroSessionEnded();
 	}
+	app.sessionEnded |= netInHostsGame() && app.loaded;
 	for (int i = 0; i < PEERS; ++i) {
 		closeConnection(&connections[i]);
 	}
@@ -1040,6 +1043,10 @@ int netPlayers(void) {
 
 bool netRunning(void) {
 	return netMode != NET_OFF;
+}
+
+bool netInHostsGame(void) {
+	return netMode == NET_JOINED && netTogether && roll.synced;
 }
 
 bool netRollingBack(void) {

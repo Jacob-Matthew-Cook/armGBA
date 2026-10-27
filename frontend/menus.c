@@ -491,13 +491,18 @@ static void openBrowser(int argument, int delta) {
 }
 
 // Then General, with the recent games.
+void uiCloseGame(void) {
+	unloadGame();
+	SDL_SetWindowTitle(app.window, "armGBA");
+	uiOpenMenu();
+	recentCount = recentList(recentGames, RECENT_MAX);
+	showTab(TAB_GENERAL, 0);
+}
+
 static void closeGame(int argument, int delta) {
 	(void) argument;
 	if (!delta) {
-		unloadGame();
-		SDL_SetWindowTitle(app.window, "armGBA");
-		recentCount = recentList(recentGames, RECENT_MAX);
-		showTab(TAB_GENERAL, 0);
+		uiCloseGame();
 	}
 }
 
@@ -1699,7 +1704,7 @@ static void netplayMenu(void) {
 			        "your progress becomes your save as you leave.");
 		}
 		addItem("Disconnect", netAction, 4);
-		helpFor("Leaves netplay; the game carries on here.");
+		helpFor(netInHostsGame() ? "Leaves netplay and closes the game, which is the host's." : "Leaves netplay; the game carries on here.");
 		if (app.noCartridge) {
 			addSaveManager();
 		}

@@ -1032,10 +1032,13 @@ void unloadGame(void) {
 	if (!app.loaded) {
 		return;
 	}
+	// The host's game from a session isn't this device's to keep a state of.
+	bool const hostsGame = netInHostsGame() || app.sessionEnded;
 	netStop();
+	app.sessionEnded = false;
 	recordStop();
 	app.fastForwardOn = false;
-	if (settings.autoState && !cheevosHardcore() && !app.noCartridge) {
+	if (settings.autoState && !cheevosHardcore() && !app.noCartridge && !hostsGame) {
 		saveState(-1);
 	}
 	cheevosUnloadGame();
@@ -1739,7 +1742,7 @@ static void handleEvent(const SDL_Event* given) {
 	// Android may end an app it has sent to the background without a word, so its save, and the state
 	// when Save and Load State on Exit and Start is on, are written as on quitting.
 	case SDL_APP_WILLENTERBACKGROUND:
-		if (app.loaded && settings.autoState && !cheevosHardcore()) {
+		if (app.loaded && settings.autoState && !cheevosHardcore() && !netInHostsGame() && !app.sessionEnded) {
 			saveState(-1);
 		}
 		writeSaves();
@@ -1970,6 +1973,10 @@ int main(int argc, char** argv) {
 		app.rewinding = settings.rewind && !cheevosHardcore() && !netRunning() && actionHeld(ACT_REWIND);
 		cheevosIdle();
 		netScanIdle();
+		if (app.sessionEnded) {
+			uiCloseGame();
+			osd("Netplay: the session ended, so its game closed");
+		}
 		// Paused, in the menus or without a game: only the picture. Netplay runs on behind the menus.
 		bool const idle = !app.loaded || ((app.paused || app.menuOpen) && !netRunning());
 		if (idle) {

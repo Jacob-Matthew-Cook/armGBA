@@ -212,7 +212,8 @@ found by a broadcast on the netplay port and updated while shown, with each host
 players; choosing it again scans afresh. Join a Host... takes an address. In Together, a player who
 joined can Send My Save: their own save of the game goes into their console, which restarts, and
 the host backs up the one it replaces; with Keep My Netplay Progress on, their progress becomes their
-save as they leave. Start Save Manager closes the game for Save Manager (see Backups); `--host
+save as they leave. A device that joined Off or Together closes the game as the session ends,
+whether it leaves or the host does, since the game it ran was the host's; no state is kept of it. Start Save Manager closes the game for Save Manager (see Backups); `--host
 --no-cartridge` starts it hosting. `--host` (as
 Link Mode says), `--host-off`, `--host-together`, `--host-separate` and `--connect ADDRESS` start it
 from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
