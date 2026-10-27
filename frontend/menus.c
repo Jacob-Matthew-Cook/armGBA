@@ -1553,7 +1553,7 @@ static void netAction(int which, int delta) {
 		break;
 	case 1:
 		if (!app.loaded) {
-			osd("Netplay: load your game first");
+			osd("Netplay: load a game to host, or Start Save Manager");
 		} else if (netHost(NULL)) {
 			uiCloseMenu();
 		}
@@ -1657,9 +1657,7 @@ static void netplayMenu(void) {
 		addNetplayLink();
 		addHeader("Host");
 		addItem("Create a Host Session", netAction, 1);
-		helpFor("Hosts the loaded game, linked as Core's Link Mode says. Off: one console every player shares, as Shared "
-		        "Controls says. Together: every player's console on every device. Separate: two devices, each its own. In Off "
-		        "and Together, each controller here is a player.");
+		helpFor("Hosts the loaded game, linked as Link Mode above says. In Off and Together, each controller here is a player.");
 		addHeader("Join");
 		addValue("Your Cartridge", joinNoCartridge ? "Removed" : "Inserted", netAction, 7);
 		helpFor("Removed: joins with no game, for a single-pak game the host's console sends over the cable, as a real one "
@@ -1706,8 +1704,8 @@ static void netplayMenu(void) {
 		if (netCanSendSave()) {
 			addItem("Send My Save", netAction, 9);
 			items[itemCount - 1].confirm = true;
-			helpFor("Puts your save of this game in your console, which restarts. With Keep My Netplay Progress on, in Saves, "
-			        "your progress becomes your save as you leave.");
+			helpFor("Puts your save of this game in your console, which restarts. With Keep My Netplay Progress on, your "
+			        "progress is saved to it as you leave.");
 		}
 		addItem("Disconnect", netAction, 4);
 		helpFor(netClosesOnLeaving() ? "Leaves netplay and closes the game, which is the host's."
