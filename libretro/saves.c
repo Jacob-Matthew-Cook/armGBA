@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 // Saves the core reads and writes itself: the other players' saves (where RetroArch keeps their
@@ -37,6 +38,8 @@ static unsigned keptCheck;
 static uint8_t* ownSave;
 static size_t ownSaveSize;
 static bool ownSaveRead, sessionSaveOurs;
+// Whether this session's joining message has been shown.
+static bool joinTold;
 static void keepOwnProgress(void);
 
 // The Saves options' lists. An option holds Off, 126 choices and the end of the list.
@@ -423,7 +426,7 @@ void forgetSaves(void) {
 	}
 	free(ownSave);
 	ownSave = NULL;
-	ownSaveRead = sessionSaveOurs = false;
+	ownSaveRead = sessionSaveOurs = joinTold = false;
 	copySaves = 0;
 }
 
@@ -890,19 +893,29 @@ void checkSessionSave(void) {
 		ownSaveRead = true;
 		ownSave = saveFiles(0, file, rtcFile) ? readWholeFile(file, &ownSaveSize) : NULL;
 	}
-	size_t size;
+	size_t size = 0;
 	const uint8_t* save = sessionSaveOurs ? NULL : saveMemory(joinedPlayer(), &size);
+	// Already its own, or Off, with no console of this device's own.
 	if (!save || !size) {
+		if (!joinTold) {
+			notify("Netplay: your own saves won't change; the session's saves are copied to armGBA/Remote when it ends", 360);
+		}
+		joinTold = true;
 		return;
 	}
 	// With no save of its own, a new save is as good as one.
 	sessionSaveOurs = ownSave ? !memcmp(ownSave, save, ownSaveSize < size ? ownSaveSize : size) : blankSave(save, size);
+	bool const keeping = optionIs("armgba_keep_progress", "enabled");
 	if (sessionSaveOurs && ownSave) {
-		notify(optionIs("armgba_keep_progress", "enabled")
-		         ? "Netplay: your console has your own save; your progress becomes your save as the session ends"
-		         : "Netplay: your console has your own save. To keep your progress, turn on Keep My Netplay Progress in Saves",
+		notify(keeping ? "Netplay: you're playing on your own save; your progress will be saved to it when the session ends"
+		               : "Netplay: you're playing on your own save. To keep your progress in it, turn on Keep My Netplay Progress in Saves",
+		       360);
+	} else if (!joinTold) {
+		notify(sessionSaveOurs && keeping ? "Netplay: you're on a new save; your progress will become your save when the session ends"
+		                                  : "Netplay: your own saves won't change; the session's saves are copied to armGBA/Remote when it ends",
 		       360);
 	}
+	joinTold = true;
 }
 
 // As the session ends: the player's progress becomes this device's own save, the old one backed up.
@@ -918,8 +931,8 @@ static void keepOwnProgress(void) {
 	void* rtc = rtcMemory(player, &rtcSize);
 	bool const kept = save && size && saveFiles(0, file, rtcFile) && backupFiles(0, base, rtcBase)
 	               && replaceSaveFile(file, rtcFile, base, rtcBase, save, size, rtc, rtcSize);
-	notify(kept ? "Netplay: your progress from the session is now your save; the old one is backed up"
-	            : "Netplay: your progress from the session couldn't be written; your save is unchanged",
+	notify(kept ? "Netplay: your progress from the session is saved to your own save; the old one is backed up"
+	            : "Netplay: your progress from the session couldn't be saved; your own save is unchanged",
 	       360);
 }
 
@@ -930,7 +943,7 @@ void libretroSessionEnded(void) {
 	}
 	free(ownSave);
 	ownSave = NULL;
-	ownSaveRead = sessionSaveOurs = false;
+	ownSaveRead = sessionSaveOurs = joinTold = false;
 }
 
 static void managerReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);
@@ -1060,13 +1073,20 @@ static void fillManagerChoices(void) {
 	managedCount = count < BACKUP_CHOICES ? count : BACKUP_CHOICES;
 	memcpy(managed, found, (size_t) managedCount * sizeof(*found));
 	free(found);
+	// "Game (Player 2): 2026-10-27 17:35:42", as Load Save names backups.
 	for (int i = 0; i < managedCount; ++i) {
-		char value[12], label[80], player[24] = "";
+		char value[12], label[80], after[48] = "", when[24] = "";
+		struct tm const* local = localtime(&managed[i].time);
+		if (local) {
+			strftime(when, sizeof(when), ": %Y-%m-%d %H:%M:%S", local);
+		}
 		if (managed[i].player) {
-			snprintf(player, sizeof(player), " (Player %d)", managed[i].player + 1);
+			snprintf(after, sizeof(after), " (Player %d)%s", managed[i].player + 1, when);
+		} else {
+			snprintf(after, sizeof(after), "%s", when);
 		}
 		snprintf(value, sizeof(value), "%d", i);
-		snprintf(label, sizeof(label), "%.*s%s", (int) (sizeof(label) - 1 - strlen(player)), managed[i].name, player);
+		snprintf(label, sizeof(label), "%.*s%s", (int) (sizeof(label) - 1 - strlen(after)), managed[i].name, after);
 		addChoice(&managerChoices, value, label);
 	}
 }
@@ -1082,7 +1102,7 @@ static void managerSend(int which) {
 	} else if (!linkSendSave(managed[which].name, save, size, rtc, rtcSize)) {
 		snprintf(message, sizeof(message), "Send Save: no one is linked. Host or join in netplay first");
 	} else {
-		snprintf(message, sizeof(message), "Sent %.300s to the other device", managerChoices.labels[which]);
+		snprintf(message, sizeof(message), "Sent %.300s%s to the other device", managed[which].name, managed[which].player ? " (another player's)" : "");
 	}
 	showMessage(message);
 	free(save);
@@ -1148,9 +1168,9 @@ static void managerReceived(const char* game, const uint8_t* save, size_t size, 
 	}
 	bool const replaced = !access(file, F_OK);
 	if (replaceSaveFile(file, rtcFile, base, rtcBase, save, size, rtc, rtcSize)) {
-		snprintf(message, sizeof(message), "Received %.300s: it's now %s%s", game, whose, replaced ? ", the old one backed up" : "");
+		snprintf(message, sizeof(message), "Received %.300s and saved it as %s%s", game, whose, replaced ? "; the old one is backed up" : "");
 	} else {
-		snprintf(message, sizeof(message), "Received %.300s, but it couldn't be written", game);
+		snprintf(message, sizeof(message), "Received %.300s, but couldn't save it", game);
 	}
 	showMessage(message);
 	offerSaveChoices();

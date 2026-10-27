@@ -1416,7 +1416,7 @@ static void hostTakeSave(struct Connection* c, const uint8_t* p, size_t size) {
 	snprintf((char*) answer + 1, sizeof(answer) - 1, "%s", why ? why : "");
 	sendTo(c, MSG_SAVE_IN, answer, 2 + strlen((const char*) answer + 1));
 	if (why) {
-		osd("Netplay: player %d's save didn't go in: %s", player + 1, why);
+		osd("Netplay: player %d's save couldn't be loaded: %s", player + 1, why);
 		return;
 	}
 	for (int i = 0; i < STATES; ++i) {
@@ -1426,7 +1426,7 @@ static void hostTakeSave(struct Connection* c, const uint8_t* p, size_t size) {
 		struct Connection* const other = &connections[i];
 		other->wantsState |= other->fd >= 0 && roll.joined[other->id] != INT_MAX && roll.left[other->id] == INT_MAX;
 	}
-	osd("Player %d sent their save; their console restarted", player + 1);
+	osd("Netplay: player %d sent their save; their console restarted with it", player + 1);
 }
 
 // Messages as they come.
@@ -1553,9 +1553,9 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 	case MSG_SAVE_IN:
 		if (!host && size >= 2) {
 			if (p[0]) {
-				osd("Your save is in; your console restarted");
+				osd("Netplay: your save is loaded; your console restarted with it");
 			} else {
-				osd("Netplay: your save didn't go in: %.*s", (int) strnlen((const char*) p + 1, size - 1), (const char*) p + 1);
+				osd("Netplay: your save couldn't be loaded: %.*s", (int) strnlen((const char*) p + 1, size - 1), (const char*) p + 1);
 			}
 		}
 		break;

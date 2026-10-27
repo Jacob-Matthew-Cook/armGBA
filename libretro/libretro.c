@@ -2517,9 +2517,6 @@ static void loadedTag(uint32_t tag, bool byNetplay) {
 	if (netplaySeen && !byNetplay) {
 		return;
 	}
-	if (netplaySeen && tag != sessionTag && !netplayJoined) {
-		notify("Netplay: this device's saves stay as they were; the session's are kept as backups when it ends", 240);
-	}
 	netplayJoined |= netplaySeen && tag != sessionTag;
 	sessionSaveDue |= netplayJoined && byNetplay;
 	sessionTag = tag;

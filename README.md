@@ -96,7 +96,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | Saves | Back Up Save | Both | Off, then each player |
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
 | | Load Save Into | Both | Same Player, then each player (Together) |
-| | Send Save | Both | Off, then the saves found, newest first (Save Manager, with no game) |
+| | Send Save | Both | Off, then the saves found, newest first, with their times (Save Manager, with no game) |
 | | Receive Saves Into | Both | Auto (default), Your Save, Player 2's to Player 4's Save (Save Manager) |
 | Saves: Settings | Keep My Netplay Progress | Both | Off (default), On |
 | | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
