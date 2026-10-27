@@ -81,6 +81,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Restart Combo | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
 | Link | Link Mode (applies on restart) | Both | Off, Together, Separate, GameCube (Game Boy Advance) |
 | | Shared Controls (Link Mode Off) | Both | Off, Everyone (every player's buttons at once), Pass Around (one player at a time, taking over with the Switch Controller Combo) |
+| | When a Joined Session Ends | Both | Close the Game (default), Keep Playing in Off |
 | Link: Players | Number of Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | Link: Connection | Cartridge (applies on restart) | Game Boy Advance | Inserted, Removed (Separate, GameCube) |
@@ -213,7 +214,10 @@ players; choosing it again scans afresh. Join a Host... takes an address. In Tog
 joined can Send My Save: their own save of the game goes into their console, which restarts, and
 the host backs up the one it replaces; with Keep My Netplay Progress on, their progress becomes their
 save as they leave. A device that joined Off or Together closes the game as the session ends,
-whether it leaves or the host does, since the game it ran was the host's; no state is kept of it. Start Save Manager closes the game for Save Manager (see Backups); `--host
+whether it leaves or the host does, since the game it ran was the host's, and keeps no state of
+it; with Link's When a Joined Session Ends on Keep Playing in Off, an Off session's console runs on.
+In RetroArch the core does the same, closing the content when RetroArch's netplay ends (RetroArch
+newer than 1.22.2, as ROCKNIX's is). Either way the session's saves are kept in armGBA/Remote. Start Save Manager closes the game for Save Manager (see Backups); `--host
 --no-cartridge` starts it hosting. `--host` (as
 Link Mode says), `--host-off`, `--host-together`, `--host-separate` and `--connect ADDRESS` start it
 from the command line. Achievements need the system's libcurl, and recording its ffmpeg.

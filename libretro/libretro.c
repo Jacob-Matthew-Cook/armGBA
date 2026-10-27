@@ -205,6 +205,8 @@ static int netplayPlayer = -1;
 static int netplayClient = -1;
 // A state from another device's session loaded: Keep My Netplay Progress looks at it next frame.
 static bool sessionSaveDue;
+// RetroArch said which client this device is in a session it joined, and the session's end was seen.
+static bool clientTold, sessionOver;
 static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game: the choices offered, and the game running (empty for player 1's).
@@ -1354,6 +1356,7 @@ void retro_unload_game(void) {
 	netplaySeen = false;
 	netplayJoined = false;
 	sessionSaveDue = false;
+	clientTold = sessionOver = false;
 	noGame = false;
 	sharedHinted = false;
 	memset(&passed, 0, sizeof(passed));
@@ -2449,8 +2452,32 @@ static void showOptionsForNetplay(void) {
 	}
 }
 
+// A session this device joined in RetroArch ends as RetroArch stops saying which client it is. Its game,
+// the host's, closes, unless When a Joined Session Ends keeps an Off session's console going.
+static void watchSessionEnd(void) {
+	unsigned client = 0;
+	if (!netplayJoined || sessionOver) {
+		return;
+	}
+	if (environment(RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX, &client)) {
+		clientTold = true;
+		return;
+	}
+	if (!clientTold) {
+		return;
+	}
+	sessionOver = true;
+	if (optionIs("armgba_link_mode", "off") && optionIs("armgba_session_end", "keep off")) {
+		notify("Netplay: the session ended; play on here, its saves kept only in armGBA/Remote", 360);
+		return;
+	}
+	notify("Netplay: the session ended, so its game closes", 240);
+	environment(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
+}
+
 void retro_run(void) {
 	showOptionsForNetplay();
+	watchSessionEnd();
 	if (sessionSaveDue) {
 		sessionSaveDue = false;
 		checkSessionSave();

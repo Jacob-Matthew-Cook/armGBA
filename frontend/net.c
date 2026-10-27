@@ -355,7 +355,7 @@ static const char* baseName(const char* path) {
 // how the game runs, only this device's save files.
 static bool ownOption(const char* key) {
 	static const char* const own[] = {
-		"armgba_back_up_save", "armgba_load_save", "armgba_load_into", "armgba_send_save", "armgba_receive_into", "armgba_keep_progress", "armgba_player1_saves",
+		"armgba_back_up_save", "armgba_load_save", "armgba_load_into", "armgba_send_save", "armgba_receive_into", "armgba_keep_progress", "armgba_session_end", "armgba_player1_saves",
 		"armgba_keep_saves", "armgba_list_saves", "armgba_safe_saves",
 	};
 	for (size_t i = 0; i < sizeof(own) / sizeof(*own); ++i) {
@@ -994,7 +994,13 @@ void netStop(void) {
 	if (netMode == NET_JOINED) {
 		libretroSessionEnded();
 	}
-	app.sessionEnded |= netInHostsGame() && app.loaded;
+	if (netInHostsGame() && app.loaded) {
+		app.hostsGame = true;
+		app.sessionEnded = netClosesOnLeaving();
+		if (!app.sessionEnded) {
+			osd("Netplay: the session ended; play on here, its saves kept only in armGBA/Remote");
+		}
+	}
 	for (int i = 0; i < PEERS; ++i) {
 		closeConnection(&connections[i]);
 	}
@@ -1047,6 +1053,10 @@ bool netRunning(void) {
 
 bool netInHostsGame(void) {
 	return netMode == NET_JOINED && netTogether && roll.synced;
+}
+
+bool netClosesOnLeaving(void) {
+	return netInHostsGame() && (sessionLink() != LINK_OFF || strcmp(optionValue("armgba_session_end"), "keep off"));
 }
 
 bool netRollingBack(void) {

@@ -1704,7 +1704,9 @@ static void netplayMenu(void) {
 			        "your progress becomes your save as you leave.");
 		}
 		addItem("Disconnect", netAction, 4);
-		helpFor(netInHostsGame() ? "Leaves netplay and closes the game, which is the host's." : "Leaves netplay; the game carries on here.");
+		helpFor(netClosesOnLeaving() ? "Leaves netplay and closes the game, which is the host's."
+		        : netInHostsGame()   ? "Leaves netplay; the host's game carries on here, its saves kept only in armGBA/Remote."
+		                             : "Leaves netplay; the game carries on here.");
 		if (app.noCartridge) {
 			addSaveManager();
 		}

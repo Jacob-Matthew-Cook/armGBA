@@ -1033,9 +1033,9 @@ void unloadGame(void) {
 		return;
 	}
 	// The host's game from a session isn't this device's to keep a state of.
-	bool const hostsGame = netInHostsGame() || app.sessionEnded;
 	netStop();
-	app.sessionEnded = false;
+	bool const hostsGame = app.hostsGame;
+	app.hostsGame = app.sessionEnded = false;
 	recordStop();
 	app.fastForwardOn = false;
 	if (settings.autoState && !cheevosHardcore() && !app.noCartridge && !hostsGame) {
@@ -1742,7 +1742,7 @@ static void handleEvent(const SDL_Event* given) {
 	// Android may end an app it has sent to the background without a word, so its save, and the state
 	// when Save and Load State on Exit and Start is on, are written as on quitting.
 	case SDL_APP_WILLENTERBACKGROUND:
-		if (app.loaded && settings.autoState && !cheevosHardcore() && !netInHostsGame() && !app.sessionEnded) {
+		if (app.loaded && settings.autoState && !cheevosHardcore() && !netInHostsGame() && !app.hostsGame) {
 			saveState(-1);
 		}
 		writeSaves();
