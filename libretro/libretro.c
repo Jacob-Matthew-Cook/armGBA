@@ -2456,14 +2456,13 @@ static void showOptionsForNetplay(void) {
 // the host's, closes, unless Keep Playing on Disconnect keeps it going.
 static void watchSessionEnd(void) {
 	unsigned client = 0;
-	if (!netplayJoined || sessionOver) {
-		return;
-	}
+	// A session joined again, playing on after the last one, is watched in turn.
 	if (environment(RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX, &client)) {
 		clientTold = true;
+		sessionOver = false;
 		return;
 	}
-	if (!clientTold) {
+	if (!netplayJoined || !clientTold || sessionOver) {
 		return;
 	}
 	sessionOver = true;

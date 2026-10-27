@@ -35,8 +35,8 @@ uint32_t libretroFirmwareCrc(const char** option);
 // console on the host, the save it replaces backed up, and the console restarted; returns why not, or
 // NULL.
 const char* libretroTakeSave(int player, const void* save, size_t size, const void* rtc, size_t rtcSize);
-// The standalone frontend's session this device joined ended: with Keep My Netplay Progress, the
-// player's progress becomes this device's own save.
+// A session this device joined ended, in the standalone frontend or RetroArch: with Keep My Netplay
+// Progress, the player's progress becomes this device's own save.
 void libretroSessionEnded(void);
 // The loaded console: a Game Boy Advance, a Game Boy (gba NULL), or none.
 void linkSetGba(struct GBA*);

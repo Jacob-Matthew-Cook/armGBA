@@ -1705,7 +1705,7 @@ static void netplayMenu(void) {
 		}
 		addItem("Disconnect", netAction, 4);
 		helpFor(netClosesOnLeaving() ? "Leaves netplay and closes the game, which is the host's."
-		        : netInHostsGame()   ? "Leaves netplay; the host's game carries on here, its saves kept only in armGBA/Remote."
+		        : netInHostsGame()   ? "Leaves netplay; the host's game carries on here, and from then only armGBA/Remote keeps its saves."
 		                             : "Leaves netplay; the game carries on here.");
 		if (app.noCartridge) {
 			addSaveManager();
@@ -1890,7 +1890,7 @@ static void gameTab(void) {
 	addItem("Cheats...", openCheats, 0);
 	helpFor("This game's cheats: add codes, load RetroArch cheat files, turn them on or off.");
 	addItem("Saves...", openSaves, 0);
-	helpFor("Backs up a save, loads a backup, or sends one to the device you're linked with.");
+	helpFor("Backs up and loads saves; with no game, Save Manager sends and receives them.");
 	addItem("Restart", restart, 0);
 	items[itemCount - 1].confirm = true;
 	helpFor("Starts the game again from the beginning; the game's own save is kept.");
