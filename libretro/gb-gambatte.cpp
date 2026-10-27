@@ -100,7 +100,7 @@ unsigned long const RTC_SECOND = 0x400000;
 struct Console {
 	gambatte::GB* gb;
 	// The CRC of the boot ROM from the system folder it started with, 0 for armGBA's or none.
-	std::uint32_t bootCrc;
+	uint32_t bootCrc;
 	// Whether Gambatte's serial port goes to another Game Boy.
 	bool linked;
 	unsigned loadFlags;
