@@ -964,8 +964,8 @@ static void changeSetting(int which, int delta) {
 // shadow.
 static void addLcdRendering(void) {
 	addValue("LCD Rendering", settings.lcdOnGpu ? "GPU" : "CPU", changeSetting, SET_LCD_RENDERING);
-	helpFor("Who draws the LCD grid and the Game Boy pixel shadow: CPU, the emulator (set in Core \xE2\x80\xBA Video), or GPU, at the size "
-	        "the picture is shown (set in General \xE2\x80\xBA Shaders). Only one is used.");
+	helpFor("Who draws the LCD grid and the Game Boy pixel shadow: the CPU (set in Core \xE2\x80\xBA Video), or the GPU at the size "
+	        "shown (set in General \xE2\x80\xBA Shaders).");
 }
 
 // General > Video: the window, how the picture is scaled and shown, and what's drawn over it. The
@@ -1168,8 +1168,7 @@ static void playersMenu(void) {
 		char label[16];
 		snprintf(label, sizeof(label), "Player %d", p + 1);
 		addValue(label, app.pads[p] ? playerPadName(p) : p ? "None" : firstAlone, choosePlayer, p);
-		helpFor("The controller this player uses. Left and right pick another connected controller, and the player who had it "
-		        "takes this one's. Remembered for when they connect again.");
+		helpFor("This player's controller. Left and right swap in another connected one. Remembered for when it connects again.");
 	}
 }
 
@@ -1612,9 +1611,8 @@ static void addSaveManager(void) {
 	} else {
 		addItem("Start Save Manager", netAction, 10);
 		items[itemCount - 1].confirm = app.loaded;
-		helpFor(app.loaded ? "Closes the game and starts with none, to send saves between devices: host or join here, then send "
-		                     "and receive saves."
-		                   : "Starts with no game, to send saves between devices: host or join here, then send and receive saves.");
+		helpFor(app.loaded ? "Closes the game to send saves between devices: host or join here, then send and receive them."
+		                   : "Starts with no game, to send saves between devices: host or join here, then send and receive them.");
 	}
 }
 
@@ -1654,10 +1652,8 @@ static void addFoundHosts(void) {
 		         hosts[i].players, hosts[i].most);
 		addChoice(label, value, joinFound, i);
 		asGame();
-		helpFor(hosts[i].how == LINK_SEPARATE ? "Joins this session. Separate: you play your own game, or Your Cartridge: Removed for a "
-		                                        "single-pak game."
-		                                      : "Joins this session. Your copy of the host's game loads by itself, and each controller "
-		                                        "here is a player.");
+		helpFor(hosts[i].how == LINK_SEPARATE ? "Joins with your own game, or with Your Cartridge: Removed for a single-pak game."
+		                                      : "Joins; your copy of the host's game loads by itself.");
 	}
 }
 
@@ -1713,8 +1709,8 @@ static void netplayMenu(void) {
 	                     : "Scans this network for sessions, and lists them below as they're found.");
 	addFoundHosts();
 	addChoice("Join a Host...", settings.host, netAction, 3);
-	helpFor("Type the host's name or address, with :port if it isn't the usual one. In Off and Together, your copy of the "
-	        "host's game loads by itself, and each controller here is a player.");
+	helpFor("The host's name or address, with :port if it isn't the usual one. In Off and Together, your copy of the host's "
+	        "game loads by itself.");
 	addSaveManager();
 	addNetplayLink();
 	addHeader("Settings");
@@ -1728,8 +1724,8 @@ static void netplayMenu(void) {
 	addValue("Input Delay", text, changeSetting, SET_INPUT_DELAY);
 	helpFor("How long each player's buttons wait, with Link Mode Off or Together, so fewer corrections show. More suits a slow network.");
 	addValue("Your Cartridge", joinNoCartridge ? "Removed" : "Inserted", netAction, 7);
-	helpFor("Removed: joins with no game, for a single-pak game the host's console sends over the cable, as a real one "
-	        "does. Needs a host on Link Mode Separate. The game file is never sent.");
+	helpFor("Removed: joins with no game, for a single-pak game the host sends over the cable. Needs a host on Link Mode "
+	        "Separate. No game file is ever sent.");
 	// A joining device's own choices for when the session ends.
 	for (int i = 0; i < optionCount; ++i) {
 		if (!strcmp(options[i].key, "armgba_keep_playing") || !strcmp(options[i].key, "armgba_keep_progress")) {
