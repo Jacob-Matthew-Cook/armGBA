@@ -232,6 +232,8 @@ void chooseFolders(void);
 void chooseGameFolders(void);
 const char* retroarchFolder(const char* which);
 void writeSaves(void);
+// The loaded game's save file, game.srm, or its clock's, game.rtc.
+void savePath(char out[FILE_SIZE], const char* extension);
 void runFrames(void);
 void setPadForPort(void);
 void swapPlayers(int a, int b);
@@ -258,6 +260,8 @@ uint32_t padBit(int binding);
 // The core's (libretro/saves.c): writes a whole file, the old one kept whole until the new one is,
 // with Safe Saves on; false if it couldn't.
 bool writeWholeFile(const char* path, const void* data, size_t size);
+// Reads a whole file, to be freed; NULL if there is none, or it is empty.
+void* readWholeFile(const char* path, size_t* size);
 // Whether a button or trigger pressed on a controller, with its Hotkey held, is action's; both are
 // then kept from the game until let go.
 bool padHotkeyPressed(SDL_JoystickID which, int binding, int action);
@@ -363,6 +367,9 @@ void netScanIdle(void);
 void netScanStop(void);
 bool netJoin(const char* address, bool noCartridge);
 void netStop(void);
+// Send My Save: whether it can be sent now, and sending it.
+bool netCanSendSave(void);
+void netSendSave(void);
 void netFrame(void);
 void netIdle(void);
 bool netPacketInterface(const struct retro_netpacket_callback* callback);

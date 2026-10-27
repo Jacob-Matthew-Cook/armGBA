@@ -149,8 +149,7 @@ bool writeWholeFile(const char* path, const void* data, size_t size) {
 	return written;
 }
 
-// Reads a whole file; NULL if there is none, or it is empty.
-static void* readWholeFile(const char* path, size_t* size) {
+void* readWholeFile(const char* path, size_t* size) {
 	*size = 0;
 	FILE* f = fopen(path, "rb");
 	if (!f) {
@@ -857,6 +856,55 @@ static void backUpSave(int player) {
 		}
 	}
 	notify(message, 240);
+}
+
+const char* libretroTakeSave(int player, const void* save, size_t size, const void* rtc, size_t rtcSize) {
+	char base[SAVE_PATH_SIZE], rtcBase[SAVE_PATH_SIZE], stamp[BACKUP_STAMP];
+	size_t have, rtcHave;
+	void* rtcHere;
+	void* memory = player >= 0 && player < MAX_PLAYERS ? liveSave(player, &have, &rtcHere, &rtcHave) : NULL;
+	if (!memory || !have || !backupFiles(player, base, rtcBase)) {
+		return "that console has no save";
+	}
+	if (strcmp(gameOf(player), firstPath)) {
+		return "that console plays another game";
+	}
+	if (backUpPlayer(player, stamp) < 0) {
+		return "the save it replaces can't be backed up";
+	}
+	memset(memory, 0xFF, have);
+	memcpy(memory, save, size < have ? size : have);
+	if (rtcHere && rtcSize == rtcHave) {
+		memcpy(rtcHere, rtc, rtcSize);
+	}
+	pruneBackups(base, rtcBase);
+	restartConsole(player);
+	return NULL;
+}
+
+bool libretroKeepSave(int player, const char* file, const char* rtcFile) {
+	char base[SAVE_PATH_SIZE], rtcBase[SAVE_PATH_SIZE], stamp[BACKUP_STAMP];
+	size_t size, rtcSize, oldSize = 0, oldRtcSize = 0;
+	void* save = saveMemory(player, &size);
+	void* rtc = rtcMemory(player, &rtcSize);
+	if (!save || !size) {
+		return false;
+	}
+	backupFiles(0, base, rtcBase);
+	void* old = readWholeFile(file, &oldSize);
+	void* oldRtc = readWholeFile(rtcFile, &oldRtcSize);
+	int const backedUp = old ? writeBackup(base, rtcBase, old, oldSize, oldRtc, oldRtcSize, stamp) : 0;
+	free(old);
+	free(oldRtc);
+	if (backedUp < 0) {
+		return false;
+	}
+	pruneBackups(base, rtcBase);
+	makeFolders(file);
+	if (rtc && rtcSize) {
+		writeWholeFile(rtcFile, rtc, rtcSize);
+	}
+	return writeWholeFile(file, save, size);
 }
 
 // Sends player 1's save of this game to the other player of a Separate link: when chosen (asked),

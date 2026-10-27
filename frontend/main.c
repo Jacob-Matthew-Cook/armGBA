@@ -971,7 +971,7 @@ const char* playerPadName(int port) {
 
 // Saves, by the game's name: game.srm and game.rtc, as RetroArch names them.
 
-static void savePath(char out[FILE_SIZE], const char* extension) {
+void savePath(char out[FILE_SIZE], const char* extension) {
 	snprintf(out, FILE_SIZE, "%s/%s.%s", saveDirectory, app.gameName, extension);
 }
 

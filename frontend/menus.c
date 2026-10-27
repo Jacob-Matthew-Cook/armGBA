@@ -1506,7 +1506,8 @@ static void portDone(const char* text) {
 }
 
 // Netplay's rows: Your Name (0), Create a Host Session (1), Join (3), Disconnect (4), Port (5),
-// Your Cartridge (7) and Scan for Local Hosts (8), which scans afresh when chosen again.
+// Your Cartridge (7), Scan for Local Hosts (8), which scans afresh when chosen again, and Send My
+// Save (9).
 static void netAction(int which, int delta) {
 	if (which == 7) {
 		joinNoCartridge = !joinNoCartridge;
@@ -1538,6 +1539,9 @@ static void netAction(int which, int delta) {
 		break;
 	case 4:
 		netStop();
+		break;
+	case 9:
+		netSendSave();
 		break;
 	case 5: {
 		char port[16];
@@ -1642,6 +1646,12 @@ static void netplayMenu(void) {
 			}
 		}
 	} else {
+		if (netCanSendSave()) {
+			addItem("Send My Save", netAction, 9);
+			items[itemCount - 1].confirm = true;
+			helpFor("Puts your save of this game in your console, which restarts. As you leave, the session's save becomes "
+			        "yours, and your old one is kept as a backup.");
+		}
 		addItem("Disconnect", netAction, 4);
 		helpFor("Leaves netplay; the game carries on here.");
 	}

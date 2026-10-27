@@ -205,7 +205,10 @@ two levels down), if it's the same file as the host's, and if it isn't there by 
 list opens to choose your copy; Separate needs your own game, or Your
 Cartridge: Removed. Join's Scan for Local Hosts lists the sessions on the local network below it,
 found by a broadcast on the netplay port and updated while shown, with each host's Link Mode and
-players; choosing it again scans afresh. Join a Host... takes an address. `--host` (as
+players; choosing it again scans afresh. Join a Host... takes an address. In Together, a player who
+joined can Send My Save: their own save of the game goes into their console, which restarts, and
+the host backs up the one it replaces; as they leave, the session's save becomes theirs, their old
+one backed up. `--host` (as
 Link Mode says), `--host-off`, `--host-together`, `--host-separate` and `--connect ADDRESS` start it
 from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
 

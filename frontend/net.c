@@ -69,6 +69,8 @@ enum Message {
 	MSG_PING,
 	MSG_PONG,
 	MSG_CANT_JOIN, // client: why it's leaving, a CANT_ reason, and for CANT_GAME the game's name
+	MSG_SAVE,      // client, Together: its player, the save's size, its save, then its clock's
+	MSG_SAVE_IN,   // host: whether it went in, or why not
 };
 
 // Why a client can't join a host's session.
@@ -123,6 +125,8 @@ static bool loadingForSession;
 static uint8_t* heldWelcome;
 static size_t heldWelcomeSize;
 static char heldGame[256];
+// Send My Save went in: as the session ends, this device's player's save there becomes its own.
+static bool saveSent;
 
 struct Check {
 	int frame;
@@ -909,6 +913,7 @@ bool netHost(const char* link) {
 // Separate to send a single-pak game over the cable.
 bool netJoin(const char* address, bool noCartridge) {
 	netStop();
+	writeSaves();
 	if (noCartridge && !app.noCartridge && !loadNoCartridge()) {
 		return false;
 	}
@@ -987,6 +992,17 @@ void netStop(void) {
 		packetsStarted = false;
 		if (packets && packets->stop) {
 			packets->stop();
+		}
+	}
+	if (saveSent) {
+		saveSent = false;
+		char file[FILE_SIZE], rtcFile[FILE_SIZE];
+		savePath(file, "srm");
+		savePath(rtcFile, "rtc");
+		if (libretroKeepSave(self, file, rtcFile)) {
+			osd("Netplay: your save from the session is yours now; your old one is backed up");
+		} else {
+			osd("Netplay: your save from the session couldn't be written; your old one is unchanged");
 		}
 	}
 	for (int i = 0; i < PEERS; ++i) {
@@ -1373,6 +1389,59 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 	setStatus();
 }
 
+// Send My Save: a joining player's own save of the game, put in their console on the host, which
+// restarts it; every device then takes the host's state, the states from before gone.
+bool netCanSendSave(void) {
+	return netMode == NET_JOINED && sessionLink() == LINK_TOGETHER && roll.synced;
+}
+
+void netSendSave(void) {
+	char file[FILE_SIZE], rtcFile[FILE_SIZE];
+	size_t size, rtcSize;
+	savePath(file, "srm");
+	savePath(rtcFile, "rtc");
+	uint8_t* save = readWholeFile(file, &size);
+	uint8_t* rtc = readWholeFile(rtcFile, &rtcSize);
+	uint8_t* message = save ? malloc(5 + size + rtcSize) : NULL;
+	if (!save) {
+		osd("Netplay: you have no save of this game to send");
+	} else if (message && netCanSendSave()) {
+		message[0] = (uint8_t) self;
+		put32(message + 1, (uint32_t) size);
+		memcpy(message + 5, save, size);
+		if (rtc) {
+			memcpy(message + 5 + size, rtc, rtcSize);
+		}
+		sendTo(&connections[0], MSG_SAVE, message, 5 + size + rtcSize);
+		osd("Netplay: sending your save...");
+	}
+	free(message);
+	free(rtc);
+	free(save);
+}
+
+static void hostTakeSave(struct Connection* c, const uint8_t* p, size_t size) {
+	int const player = p[0];
+	size_t const saveSize = get32(p + 1);
+	const char* why = sessionLink() != LINK_TOGETHER ? "the host isn't on Link Mode Together"
+	                                                 : libretroTakeSave(player, p + 5, saveSize, p + 5 + saveSize, size - 5 - saveSize);
+	uint8_t answer[128] = { why == NULL };
+	snprintf((char*) answer + 1, sizeof(answer) - 1, "%s", why ? why : "");
+	sendTo(c, MSG_SAVE_IN, answer, 2 + strlen((const char*) answer + 1));
+	if (why) {
+		osd("Netplay: player %d's save didn't go in: %s", player + 1, why);
+		return;
+	}
+	for (int i = 0; i < STATES; ++i) {
+		roll.stateFrames[i] = -1;
+	}
+	for (int i = 0; i < PEERS; ++i) {
+		struct Connection* const other = &connections[i];
+		other->wantsState |= other->fd >= 0 && roll.joined[other->id] != INT_MAX && roll.left[other->id] == INT_MAX;
+	}
+	osd("Player %d sent their save; their console restarted", player + 1);
+}
+
 // Messages as they come.
 
 // One message. Everything from the network is checked before it is used. The host takes nothing but
@@ -1489,6 +1558,21 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 		}
 		break;
 	}
+	case MSG_SAVE:
+		if (host && netTogether && size >= 5 && owns(c, p[0]) && get32(p + 1) <= size - 5) {
+			hostTakeSave(c, p, size);
+		}
+		break;
+	case MSG_SAVE_IN:
+		if (!host && size >= 2) {
+			saveSent |= p[0];
+			if (p[0]) {
+				osd("Your save is in; your console restarted");
+			} else {
+				osd("Netplay: your save didn't go in: %.*s", (int) strnlen((const char*) p + 1, size - 1), (const char*) p + 1);
+			}
+		}
+		break;
 	case MSG_PING:
 		sendTo(c, MSG_PONG, p, size);
 		break;
