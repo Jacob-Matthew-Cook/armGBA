@@ -237,6 +237,17 @@ static bool isPartner(uint16_t id) {
 	return onCable() && id != self && (cable[0] == id || cable[1] == id);
 }
 
+static void tell(const char* text) {
+	if (*text && environment) {
+		struct retro_message message = { text, 300 };
+		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &message);
+	}
+}
+
+// When this player found itself left off the host's cable, told only if that lasts: the host's first
+// cable can come before it has heard which console this player has. 0 when on it.
+static int64_t offCableSince;
+
 // Tells the player when the cable changes, and how it is timed when it connects.
 static void announce(void) {
 	static int shown = -1;
@@ -244,6 +255,7 @@ static void announce(void) {
 	if (state == shown) {
 		return;
 	}
+	offCableSince = 0;
 	char const* port = wireless ? "Wireless Adapter" : "Link cable";
 	char const* timing = wireless                                ? ""
 	                   : console == CONSOLE_GBA || exact.wanted ? ", exact timing: linking may slow on Wi-Fi"
@@ -253,18 +265,23 @@ static void announce(void) {
 		snprintf(text, sizeof(text), "%s: player %d of 2%s", port, cable[0] == self ? 1 : 2, timing);
 	} else if (shown == 2) {
 		snprintf(text, sizeof(text), "%s: the other player left", port);
-	} else if (state == 1 && self != cable[0]) {
-		snprintf(text, sizeof(text), "%s: the host is playing a different console, or the link is taken", port);
 	} else {
+		offCableSince = state == 1 && self != cable[0] ? now() : 0;
 		text[0] = '\0';
 	}
 	shown = state;
-	if (*text && environment) {
-		struct retro_message message = { text, 300 };
-		environment(RETRO_ENVIRONMENT_SET_MESSAGE, &message);
-	}
+	tell(text);
 	if (state == 2 && partnerJoined) {
 		partnerJoined();
+	}
+}
+
+// Still off the host's cable two seconds on: the host plays another console, or the cable is taken.
+static void offCableLasted(void) {
+	if (offCableSince && now() - offCableSince > 2000000000LL) {
+		offCableSince = 0;
+		tell(wireless ? "Wireless Adapter: the host is playing a different console, or the link is taken"
+		              : "Link cable: the host is playing a different console, or the link is taken");
 	}
 }
 
@@ -855,6 +872,7 @@ static void sessionPoll(void) {
 	static unsigned frames;
 	if (session) {
 		sendSavePiece();
+		offCableLasted();
 	}
 	if (!session || ++frames % 30) {
 		return;
