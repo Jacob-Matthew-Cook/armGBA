@@ -228,6 +228,9 @@ bool netplaySeen;
 enum { SWITCH_OFF, SWITCH_L_R_A_B, SWITCH_L3_R3, SWITCH_START_L2_R2, SWITCH_START_L3, SWITCH_START_R3 };
 static int switchController = SWITCH_L_R_A_B;
 static int controllerFocus;
+// Keep Playing on Disconnect: the session ended and the game plays on, controller 1 on this device's
+// player's console, as without netplay.
+static bool playingOn;
 static bool switchStick(unsigned button);
 static bool contrastClick(void);
 // In rollback netplay every device runs the host's session. Each device tags its session, and the
@@ -1356,7 +1359,7 @@ void retro_unload_game(void) {
 	netplaySeen = false;
 	netplayJoined = false;
 	sessionSaveDue = false;
-	clientTold = sessionOver = false;
+	clientTold = sessionOver = playingOn = false;
 	noGame = false;
 	sharedHinted = false;
 	memset(&passed, 0, sizeof(passed));
@@ -1631,7 +1634,7 @@ bool rerunning(void) {
 
 // Whether Switch Controller Combo works now: on, with the consoles here and not in netplay.
 static bool switchOn(void) {
-	return switchController != SWITCH_OFF && togetherRunning() && !netplaySeen && playersHere > 1;
+	return switchController != SWITCH_OFF && togetherRunning() && (!netplaySeen || playingOn) && playersHere > 1;
 }
 
 // Each Switch Controller Combo's buttons, and the game's buttons among them.
@@ -1672,7 +1675,7 @@ static bool switchStick(unsigned button) {
 
 // The controller that plays console i: controller 1 plays controllerFocus's.
 static int portFor(int i) {
-	if (netplaySeen || controllerFocus >= playersHere) {
+	if ((netplaySeen && !playingOn) || controllerFocus >= playersHere) {
 		controllerFocus = 0;
 	}
 	return (i - controllerFocus + playersHere) % playersHere;
@@ -1821,6 +1824,13 @@ static void readRestarts(const uint16_t keys[]) {
 
 void libretroSetNetplayPlayer(int player) {
 	netplayPlayer = player;
+	playingOn &= player < 0;
+}
+
+void libretroPlayOn(void) {
+	int const player = joinedPlayer();
+	playingOn = true;
+	controllerFocus = player < playersHere ? player : 0;
 }
 
 // The way of showing the screens step ways on from now, wrapping round.
@@ -1851,7 +1861,7 @@ static void readScreensKeys(void) {
 	if (rerunning()) {
 		return;
 	}
-	bool const netplay = netplaySeen || netplayPlayer >= 0;
+	bool const netplay = (netplaySeen && !playingOn) || netplayPlayer >= 0;
 	if (netplaySeen) {
 		unsigned client = 0;
 		bool const told = environment(RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX, &client) && client < MAX_PLAYERS;
@@ -2459,7 +2469,7 @@ static void watchSessionEnd(void) {
 	// A session joined again, playing on after the last one, is watched in turn.
 	if (environment(RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX, &client)) {
 		clientTold = true;
-		sessionOver = false;
+		sessionOver = playingOn = false;
 		return;
 	}
 	if (!netplayJoined || !clientTold || sessionOver) {
@@ -2468,6 +2478,7 @@ static void watchSessionEnd(void) {
 	sessionOver = true;
 	libretroSessionEnded();
 	if (optionIs("armgba_keep_playing", "enabled")) {
+		libretroPlayOn();
 		notify("Netplay: the session ended; you can play on, but from here only armGBA/Remote keeps this game's saves", 360);
 		return;
 	}

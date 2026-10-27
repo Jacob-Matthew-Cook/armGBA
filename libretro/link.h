@@ -38,6 +38,8 @@ const char* libretroTakeSave(int player, const void* save, size_t size, const vo
 // A session this device joined ended, in the standalone frontend or RetroArch: with Keep My Netplay
 // Progress, the player's progress becomes this device's own save.
 void libretroSessionEnded(void);
+// Keep Playing on Disconnect: the game plays on, controller 1 staying on this device's player.
+void libretroPlayOn(void);
 // The loaded console: a Game Boy Advance, a Game Boy (gba NULL), or none.
 void linkSetGba(struct GBA*);
 void linkSetGameBoy(bool loaded);

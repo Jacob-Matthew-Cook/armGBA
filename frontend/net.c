@@ -998,6 +998,7 @@ void netStop(void) {
 		app.hostsGame = true;
 		app.sessionEnded = netClosesOnLeaving();
 		if (!app.sessionEnded) {
+			libretroPlayOn();
 			osd("Netplay: the session ended; you can play on, but from here only armGBA/Remote keeps this game's saves");
 		}
 	}

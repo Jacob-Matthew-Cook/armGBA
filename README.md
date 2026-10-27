@@ -215,7 +215,7 @@ joined can Send My Save: their own save of the game goes into their console, whi
 the host backs up the one it replaces; with Keep My Netplay Progress on, their progress becomes their
 save as they leave. A device that joined Off or Together closes the game as the session ends,
 whether it leaves or the host does, since the game it ran was the host's, and keeps no state of
-it; with Link's Keep Playing on Disconnect on, the game runs on, the controller on player 1.
+it; with Link's Keep Playing on Disconnect on, the game runs on, the controller still on its player.
 In RetroArch the core does the same, closing the content when RetroArch's netplay ends (RetroArch
 newer than 1.22.2, as ROCKNIX's is). Either way the session's saves are kept in armGBA/Remote. Start Save Manager closes the game for Save Manager (see Backups); `--host
 --no-cartridge` starts it hosting. `--host` (as

@@ -187,7 +187,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  "Shows each player's number, faintly, at the top left of their screen.",
 	  NULL, "link_screens", { { "disabled", "Off" }, { "enabled", "On" }, { NULL, NULL } }, "enabled" },
 	{ "armgba_keep_playing", "Keep Playing on Disconnect", NULL,
-	  "On a device that joined netplay in Off or Together, which runs the host's game: Off closes the game as the session ends. On keeps it running here, with your controller on player 1, and from then only armGBA/Remote keeps its saves.",
+	  "On a device that joined netplay in Off or Together, which runs the host's game: Off closes the game as the session ends. On keeps it running here, your controller still on your player, and from then only armGBA/Remote keeps its saves.",
 	  NULL, "link", { { "disabled", "Off" }, { "enabled", "On" }, { NULL, NULL } }, "disabled" },
 	{ "armgba_send_save", "Send Save", NULL,
 	  "Save Manager, with the core started with no game: sends the chosen save to the other device in netplay. Lists the saves in the save folder and the game folders, newest first.",

@@ -964,11 +964,14 @@ void saveReceived(const char* game, const uint8_t* save, size_t size, const uint
 enum { MANAGER_FOLDERS = 32, MANAGER_FOUND = 2048 };
 static char managerFolders[MANAGER_FOLDERS][PATH_SIZE];
 static int managerFolderCount;
+// A save found, and its choice's value: a hash of where it is, so a list made again while it's shown
+// doesn't turn a choice into another save.
 struct Managed {
 	int folder;
 	int player;
 	char name[256];
 	time_t time;
+	uint32_t id;
 };
 static struct Managed managed[BACKUP_CHOICES];
 static int managedCount;
@@ -1040,6 +1043,10 @@ static void findSavesIn(int folder, int player, const char* path, struct Managed
 		struct stat info;
 		managedFiles(save, file, rtcFile);
 		save->time = stat(file, &info) ? 0 : info.st_mtime;
+		save->id = 2166136261u;
+		for (const char* c = file; *c; ++c) {
+			save->id = (save->id ^ (uint8_t) *c) * 16777619u;
+		}
 	}
 	if (listing) {
 		closedir(listing);
@@ -1085,7 +1092,7 @@ static void fillManagerChoices(void) {
 		} else {
 			snprintf(after, sizeof(after), "%s", when);
 		}
-		snprintf(value, sizeof(value), "%d", i);
+		snprintf(value, sizeof(value), "%08x", (unsigned) managed[i].id);
 		snprintf(label, sizeof(label), "%.*s%s", (int) (sizeof(label) - 1 - strlen(after)), managed[i].name, after);
 		addChoice(&managerChoices, value, label);
 	}
@@ -1138,7 +1145,7 @@ static void managerReceived(const char* game, const uint8_t* save, size_t size, 
 		showMessage("Save Manager: a save arrived that can't be kept here");
 		return;
 	}
-	struct Managed target = { -1, player, "", 0 };
+	struct Managed target = { -1, player, "", 0, 0 };
 	snprintf(target.name, sizeof(target.name), "%s", game);
 	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE];
 	for (int pass = 0; pass < 3 && target.folder < 0; ++pass) {
@@ -1190,11 +1197,17 @@ void readSaveActions(bool act) {
 	}
 	value = option("armgba_send_save");
 	if (value && strcmp(value, "off")) {
-		int const which = atoi(value);
+		uint32_t const id = (uint32_t) strtoul(value, NULL, 16);
 		struct retro_variable off = { "armgba_send_save", "off" };
 		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
-		if (act && which >= 0 && which < managedCount) {
+		int which = 0;
+		while (which < managedCount && managed[which].id != id) {
+			++which;
+		}
+		if (act && which < managedCount) {
 			managerSend(which);
+		} else if (act) {
+			showMessage("Send Save: that save is gone");
 		}
 	}
 	value = option("armgba_load_save");
