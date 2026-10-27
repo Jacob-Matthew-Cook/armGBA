@@ -198,8 +198,8 @@ static int netplayPlayer = -1;
 #ifndef RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX
 #define RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX (82 | RETRO_ENVIRONMENT_EXPERIMENTAL)
 #endif
-// Its answer, asked once a session: -2 not yet asked, -1 none.
-static int netplayClient = -2;
+// Its answer, asked each frame as a device that joins gets its number only once connected; -1 none.
+static int netplayClient = -1;
 static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game: the choices offered, and the game running (empty for player 1's).
@@ -1310,7 +1310,7 @@ void retro_unload_game(void) {
 	netplaySeen = false;
 	netplayJoined = false;
 	sessionTag = 0;
-	netplayClient = -2;
+	netplayClient = -1;
 	updateRumble(false);
 	cheatsClear(&cheats, NULL);
 	for (size_t i = 0; i < cheatCodeCount; ++i) {
@@ -1780,9 +1780,10 @@ static void readScreensKeys(void) {
 		return;
 	}
 	bool const netplay = netplaySeen || netplayPlayer >= 0;
-	if (netplaySeen && netplayClient == -2) {
+	if (netplaySeen) {
 		unsigned client = 0;
-		netplayClient = environment(RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX, &client) && client < MAX_PLAYERS ? (int) client : -1;
+		bool const told = environment(RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX, &client) && client < MAX_PLAYERS;
+		netplayClient = told && !(client == 0 && netplayJoined) ? (int) client : -1;
 	}
 	int here = netplayJoined ? 1 : 0;
 	if (r2Follows >= 0) {
