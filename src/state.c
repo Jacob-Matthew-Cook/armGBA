@@ -92,6 +92,12 @@ static void leaveOutHost(const struct GBA* gba, struct GBA* saved) {
 	saved->exitLinkSlot = 0;
 	saved->siteReturnSlot = 0;
 	saved->siteValid = false;
+	// Scratch the generated code writes as it leaves, read at once: what's left of the last exit
+	// depends on how this device's recompiler cut the code into blocks.
+	saved->exitPc = 0;
+	memset(saved->exitOps, 0, sizeof(saved->exitOps));
+	saved->exitReason = 0;
+	saved->exitFlags = 0;
 	saved->lookupSlot = 0;
 	saved->hostStackSlot = 0;
 	saved->jitRunning = false;
