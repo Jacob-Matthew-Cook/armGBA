@@ -175,14 +175,14 @@ Rows ending in "..." open a page; rows with a value step through it. The line un
 what the selected item does. With a controller, the buttons bound to A and B choose and go back, and
 in the game list L and R jump by letter; on the keyboard, typing a name's start finds it. Restart,
 Close Game, Quit (with a game running), Reset Config and Reset Controls and Hotkeys ask for a second
-press, said at the bottom left. Netplay is armgba to armgba, and Create a Host Session links the
-devices as Core's Link Mode says: Off is one console every player shares, as Shared Controls says
+press, said at the bottom left. Netplay is armgba to armgba. Its page has Link Mode and Shared
+Controls, as Core's Link page has them, and Create a Host Session links the devices as they say: Off is one console every player shares, as Shared Controls says
 (everyone's buttons at once if it's off), for up to four players; Together runs every player's
 console on every device, kept in step with rollback; Separate carries the link cable between two
 devices each running its own game. Join lists the hosts on the local network, found by a broadcast
-on the netplay port, or takes an address. `--host` (as Link Mode says), `--host-off`,
-`--host-together`, `--host-separate` and `--connect ADDRESS` start it from the command line. Achievements need the
-system's libcurl, and recording its ffmpeg.
+on the netplay port, with each host's Link Mode and players, or takes an address. `--host` (as
+Link Mode says), `--host-off`, `--host-together`, `--host-separate` and `--connect ADDRESS` start it
+from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
 `~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`. BIOS and boot
@@ -249,12 +249,14 @@ of real ones; Grayscale is gambatte-libretro's. The Game Boy Color and Game Boy 
 correction is SameBoy's. The boot ROMs built in are armGBA's own.
 
 **Link play.** Link Mode picks how consoles link. Off, the default, is one console, with RetroArch's
-usual netplay.
+usual netplay; there, Shared Controls lets more players play it, and the first time another
+player's buttons do nothing, armGBA says so.
 
 | You want to… | Use |
 | --- | --- |
 | Play alone | Link Mode Off |
-| Share one game, everyone at once or passing it around, on one device or over netplay | Link Mode Off with Shared Controls |
+| Play one game with everyone's buttons at once, on one device or over netplay | Link Mode Off, Shared Controls: Everyone |
+| Take turns on one game, each player taking over with the Switch Controller Combo (L + R + A + B) | Link Mode Off, Shared Controls: Pass Around |
 | Play together on one device, or smooth netplay | Together |
 | Link with someone who has only their own game, or whose device is too slow for two consoles | Separate |
 | Trade or battle in Pokemon FireRed, LeafGreen or Emerald over Wi-Fi | Separate with the Wireless Adapter |

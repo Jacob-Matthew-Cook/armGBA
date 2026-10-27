@@ -660,27 +660,34 @@ static void optionChange(int index, int delta) {
 	refreshShownOptions();
 }
 
+// A core option's row, if it shows.
+static void addOption(int i) {
+	struct Option* o = &options[i];
+	// The core's LCD grid and pixel shadow show only with LCD Rendering on the CPU; the shadow's
+	// distance, on the GPU, with the app's own shadow on.
+	bool const cpuLcd = !strcmp(o->key, "armgba_lcd_grid") || !strcmp(o->key, "armgba_lcd_shadow");
+	bool const distance = !strcmp(o->key, "armgba_lcd_shadow_distance");
+	bool const shown = distance && settings.lcdOnGpu ? settings.gpuGrid && settings.shadow && libretroLcdShadow() : o->visible;
+	if (!shown || (cpuLcd && settings.lcdOnGpu)) {
+		return;
+	}
+	const char* label = o->value;
+	for (int v = 0; v < o->valueCount; ++v) {
+		if (!strcmp(o->values[v], o->value)) {
+			label = o->labels[v];
+		}
+	}
+	addValue(o->description ? o->description : o->key, label, optionChange, i);
+	helpFor(o->info);
+}
+
 // The visible core options in category, or those in none when category is NULL.
 static void addOptions(const char* category) {
 	for (int i = 0; i < optionCount; ++i) {
 		struct Option* o = &options[i];
-		bool const here = category ? o->category && !strcmp(o->category, category) : !o->category;
-		// The core's LCD grid and pixel shadow show only with LCD Rendering on the CPU; the shadow's
-		// distance, on the GPU, with the app's own shadow on.
-		bool const cpuLcd = !strcmp(o->key, "armgba_lcd_grid") || !strcmp(o->key, "armgba_lcd_shadow");
-		bool const distance = !strcmp(o->key, "armgba_lcd_shadow_distance");
-		bool const shown = distance && settings.lcdOnGpu ? settings.gpuGrid && settings.shadow && libretroLcdShadow() : o->visible;
-		if (!here || !shown || (cpuLcd && settings.lcdOnGpu)) {
-			continue;
+		if (category ? o->category && !strcmp(o->category, category) : !o->category) {
+			addOption(i);
 		}
-		const char* label = o->value;
-		for (int v = 0; v < o->valueCount; ++v) {
-			if (!strcmp(o->values[v], o->value)) {
-				label = o->labels[v];
-			}
-		}
-		addValue(o->description ? o->description : o->key, label, optionChange, i);
-		helpFor(o->info);
 	}
 }
 
@@ -1438,6 +1445,33 @@ static void netAction(int which, int delta) {
 	}
 }
 
+// Link Mode and Shared Controls, as Core's Link page shows them, and that page, which the host's
+// session follows.
+static void addNetplayLink(void) {
+	struct Option* const mode = optionFind("armgba_link_mode");
+	if (!mode) {
+		return;
+	}
+	addHeader("Link");
+	addOption((int) (mode - options));
+	struct Option* const shared = optionFind("armgba_shared_controls");
+	if (shared) {
+		addOption((int) (shared - options));
+	}
+	// The Link page, when it has more than these.
+	bool more = false;
+	for (int i = 0; i < optionCount; ++i) {
+		struct Option* const o = &options[i];
+		more |= o != mode && o != shared && o->visible && o->category && (!strcmp(o->category, "link") || isGroupOf(o->category, "link"));
+	}
+	for (int c = 0; c < categoryCount && more; ++c) {
+		if (!strcmp(categories[c].key, "link")) {
+			addItem("More Link Options...", openCategory, c);
+			helpFor(categories[c].info);
+		}
+	}
+}
+
 // A host the Join list found.
 static void joinFound(int which, int delta) {
 	const struct NetHost* hosts;
@@ -1458,6 +1492,7 @@ static void netplayMenu(void) {
 	addValue("Input Delay", text, changeSetting, SET_INPUT_DELAY);
 	helpFor("How long each player's buttons wait, with Link Mode Off or Together, so fewer corrections show. More suits a slow network.");
 	if (netMode == NET_OFF) {
+		addNetplayLink();
 		addHeader("Host");
 		addItem("Create a Host Session", netAction, 1);
 		helpFor("Hosts the loaded game, linked as Core's Link Mode says. Off: one console every player shares, as Shared "
@@ -1470,7 +1505,9 @@ static void netplayMenu(void) {
 		for (int i = 0; i < count; ++i) {
 			char label[192], value[64];
 			snprintf(label, sizeof(label), "%s: %s", hosts[i].nickname, hosts[i].game);
-			snprintf(value, sizeof(value), "Link Mode %s, %d/%d", netLinkNames[hosts[i].how], hosts[i].players, hosts[i].most);
+			static const char* const shared[] = { "", ", Everyone", ", Pass Around" };
+			snprintf(value, sizeof(value), "Link Mode %s%s, %d/%d", netLinkNames[hosts[i].how],
+			         hosts[i].how == LINK_OFF ? shared[hosts[i].shared] : "", hosts[i].players, hosts[i].most);
 			addChoice(label, value, joinFound, i);
 			helpFor("A host on this network. Joins it.");
 		}

@@ -65,6 +65,8 @@ static struct {
 // Shared Controls with one console: everyone's buttons, or one player's at a time, passed around.
 enum { SHARED_OFF, SHARED_EVERYONE, SHARED_PASS };
 static int sharedControls;
+// Link Mode is off, and whether this game has said that other players' buttons do nothing then.
+static bool oneConsole, sharedHinted;
 // Who has the console with Pass Around, whose controllers hold the Switch Controller Combo, and
 // whether the one who just took over still holds its buttons, which the game doesn't see; kept in
 // a state, after the rest, so a rollback replays it alike.
@@ -645,7 +647,8 @@ static void readOptions(void) {
 	};
 	// Only with Link Mode off: the link modes give each player a console.
 	const char* const link = option("armgba_link_mode");
-	sharedControls = !link || !strcmp(link, "off") ? optionChoice("armgba_shared_controls", sharedChoices, COUNT(sharedChoices), SHARED_OFF) : SHARED_OFF;
+	oneConsole = !link || !strcmp(link, "off");
+	sharedControls = oneConsole ? optionChoice("armgba_shared_controls", sharedChoices, COUNT(sharedChoices), SHARED_OFF) : SHARED_OFF;
 	const char* const follows = option("armgba_r2_follows");
 	r2Follows = follows && *follows >= '1' && *follows <= '4' ? *follows - '1' : -1;
 	playerNumbers = optionIs("armgba_player_numbers", "enabled");
@@ -1309,6 +1312,7 @@ void retro_unload_game(void) {
 	secondPath[0] = '\0';
 	netplaySeen = false;
 	netplayJoined = false;
+	sharedHinted = false;
 	sessionTag = 0;
 	netplayClient = -1;
 	updateRumble(false);
@@ -1682,6 +1686,26 @@ static uint16_t readSharedKeys(bool shoulders) {
 	uint16_t const own = keys[passed.holder % MAX_PLAYERS];
 	passed.taking = passed.taking && (own & combos[combo].keys);
 	return passed.taking ? own & ~combos[combo].keys : own;
+}
+
+// With Link Mode and Shared Controls off, only player 1 plays: the first time another player
+// presses a button, says how to share the console. Their buttons are read directly, as reading them
+// as keys would step their turbo.
+static void hintSharedControls(void) {
+	if (!oneConsole || sharedControls != SHARED_OFF || sharedHinted || rerunning()) {
+		return;
+	}
+	for (unsigned port = 1; port < MAX_PLAYERS; ++port) {
+		for (unsigned id = 0; id <= RETRO_DEVICE_ID_JOYPAD_R; ++id) {
+			if (inputState(port, RETRO_DEVICE_JOYPAD, 0, id)) {
+				char message[128];
+				snprintf(message, sizeof(message), "Player %u's buttons aren't used. To share this console, set Link > Shared Controls.", port + 1);
+				notify(message, 300);
+				sharedHinted = true;
+				return;
+			}
+		}
+	}
 }
 
 // L2 or R2 held fast-forwards at RetroArch's maximum run speed; with the consoles here only L2, as
@@ -2297,6 +2321,7 @@ static void runOneGameBoy(void) {
 	const int16_t* samples;
 	size_t frames;
 	uint16_t keys = sharedControls != SHARED_OFF ? readSharedKeys(false) : readKeys(0);
+	hintSharedControls();
 	readTilt(keys);
 	readContrast();
 	readRestarts(&keys);
@@ -2328,6 +2353,7 @@ static void sendOneAdvanceSound(void) {
 
 static void runOneAdvance(void) {
 	uint16_t keys = sharedControls != SHARED_OFF ? readSharedKeys(true) : readKeys(0) | readTurboShoulders();
+	hintSharedControls();
 	readRestarts(&keys);
 	gbaSetKeys(gba, keys);
 	readSensors(keys);

@@ -345,7 +345,8 @@ struct NetHost {
 	char address[64];
 	char nickname[32];
 	char game[128];
-	int how, players, most;
+	// Shared Controls: 0 off, 1 Everyone, 2 Pass Around.
+	int how, players, most, shared;
 	Uint32 seen;
 };
 int netScan(const struct NetHost** hosts);

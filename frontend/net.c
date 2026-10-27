@@ -1343,8 +1343,8 @@ void netFrame(void) {
 static const char probeTag[8] = "armGBA?", answerTag[8] = "armGBA!";
 
 enum {
-	// The tag, version, how, players, most players, port, nickname and game.
-	ANSWER_SIZE = 8 + 4 + 2 + 32 + 128,
+	// The tag, version, how, players, most players, port, nickname, game and Shared Controls.
+	ANSWER_SIZE = 8 + 4 + 2 + 32 + 128 + 1,
 	FOUND_FOR = 3000,
 };
 
@@ -1389,6 +1389,8 @@ static void answerProbes(void) {
 			put16(answer + 12, (unsigned) settings.netPort);
 			snprintf((char*) answer + 14, 32, "%s", settings.nickname);
 			snprintf((char*) answer + 46, 128, "%s", app.gameName);
+			const char* const shared = optionValue("armgba_shared_controls");
+			answer[174] = !strcmp(shared, "everyone") ? 1 : !strcmp(shared, "pass around") ? 2 : 0;
 			sendto(answerer, answer, sizeof(answer), 0, (struct sockaddr*) &from, length);
 		}
 		length = sizeof(from);
@@ -1443,6 +1445,7 @@ static void takeAnswers(Uint32 now) {
 		h->most = answer[11];
 		snprintf(h->nickname, sizeof(h->nickname), "%.31s", (const char*) answer + 14);
 		snprintf(h->game, sizeof(h->game), "%.127s", (const char*) answer + 46);
+		h->shared = answer[174] % 3;
 		h->seen = now;
 	}
 }
