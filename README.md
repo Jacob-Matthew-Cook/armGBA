@@ -284,6 +284,14 @@ The two ways to link:
   suits Wi-Fi and games that link in turns; Game Boy Link Timing set to Exact times them as Game
   Boy Advances are. The Wireless Adapter needs neither: each device runs freely.
 
+Single-pak games, such as Super Mario Advance's Mario Bros., send a program over the cable to
+consoles with no cartridge, as the real ones do. In Separate the player without the game needs no
+game file: RetroArch's Start Core starts armGBA with no cartridge, then they join, or in the app
+Netplay's Join without a Game Pak (`--connect ADDRESS --no-game-pak`). Only what the game sends
+over the cable crosses the network; armGBA never sends a game file, and in Together, where every
+device runs every console, each device needs the game (Player 2's Game: No Cartridge starts player
+2's console empty).
+
 **Backups.**
 
 - Back Up Save copies a player's save, as it is, to a file named for the time, such as

@@ -1395,11 +1395,14 @@ static void nicknameDone(const char* text) {
 	settingsWrite();
 }
 
+// Join without a Game Pak: joining starts the core with no game, for a single-pak game.
+static bool joinNoGamePak;
+
 // The host's address, kept for the next time.
 static void joinDone(const char* text) {
 	snprintf(settings.host, sizeof(settings.host), "%s", text);
 	settingsWrite();
-	if (netJoin(text)) {
+	if (netJoin(text, joinNoGamePak)) {
 		uiCloseMenu();
 	}
 }
@@ -1414,8 +1417,13 @@ static void portDone(const char* text) {
 	settingsWrite();
 }
 
-// Netplay's rows: Your Name (0), Create a Host Session (1), Join (3), Disconnect (4) and Port (5).
+// Netplay's rows: Your Name (0), Create a Host Session (1), Join (3), Disconnect (4), Port (5) and
+// Join without a Game Pak (7).
 static void netAction(int which, int delta) {
+	if (which == 7) {
+		joinNoGamePak = !joinNoGamePak;
+		return;
+	}
 	if (delta) {
 		return;
 	}
@@ -1475,9 +1483,14 @@ static void addNetplayLink(void) {
 // A host the Join list found.
 static void joinFound(int which, int delta) {
 	const struct NetHost* hosts;
-	if (!delta && which < netScan(&hosts)) {
-		joinDone(hosts[which].address);
+	if (delta || which >= netScan(&hosts)) {
+		return;
 	}
+	if (joinNoGamePak && hosts[which].how != LINK_SEPARATE) {
+		osd("Netplay: joining without a Game Pak needs a host on Link Mode Separate");
+		return;
+	}
+	joinDone(hosts[which].address);
 }
 
 static void netplayMenu(void) {
@@ -1498,6 +1511,9 @@ static void netplayMenu(void) {
 		helpFor("Hosts the loaded game, linked as Core's Link Mode says. Off: one console every player shares, as Shared "
 		        "Controls says. Together: every player's console on every device. Separate: two devices, each its own.");
 		addHeader("Join");
+		addValue("Join without a Game Pak", joinNoGamePak ? "On" : "Off", netAction, 7);
+		helpFor("On: joins with no game, the console's cartridge out, for a single-pak game the host's console sends over "
+		        "the cable, as a real one does. Needs a host on Link Mode Separate. The game file is never sent.");
 		addItem("Join a Host...", netAction, 3);
 		helpFor("Type the host's name or address.");
 		const struct NetHost* hosts;

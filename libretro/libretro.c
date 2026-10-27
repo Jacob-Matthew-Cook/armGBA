@@ -319,6 +319,8 @@ void retro_set_environment(retro_environment_t callback) {
 		{ NULL, NULL, NULL, 0, 0 },
 	};
 	callback(RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO, (void*) subsystems);
+	bool noGameStarts = true;
+	callback(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &noGameStarts);
 	struct retro_log_callback logging;
 	if (callback(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging)) {
 		logPrintf = logging.log;
@@ -1163,16 +1165,19 @@ static bool loadGameBoy(const struct retro_game_info* game, const struct retro_g
 // comes from RetroArch's save file once the console has been reset. Returns whether it went back in.
 static bool cartridgeOut;
 static bool cartridgeSaveUnread;
+// Started with no game: a Game Boy Advance whose cartridge stays out, with no save.
+static bool noGame;
 
 static bool applyCartridge(void) {
 	const char* value = option("armgba_link_cartridge");
-	bool const out = !gameBoy && (separateWanted() || gamecubeWanted()) && value && !strcmp(value, "removed");
+	bool const linked = separateWanted() || gamecubeWanted();
+	bool const out = noGame || (!gameBoy && linked && value && !strcmp(value, "removed"));
 	if (out == cartridgeOut || !gba) {
 		return false;
 	}
 	if (out) {
 		gbaLoadRom(gba, "", 0);
-		notify("No cartridge: waiting for a game over the cable", 240);
+		notify(linked ? "No cartridge: waiting for a game over the cable" : "No cartridge: a game comes over the cable with Link Mode Separate or GameCube", 240);
 	} else {
 		size_t size;
 		void* data = readPatched(firstPath, &size);
@@ -1206,7 +1211,9 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 		return false;
 	}
 	offerSecondGames(game->path, false);
-	recallSecondChoice();
+	if (!noGame) {
+		recallSecondChoice();
+	}
 	gbas[0] = gba = startAdvance(game);
 	gbaTogether = false;
 	playersHere = 1;
@@ -1218,12 +1225,14 @@ static bool loadAdvance(const struct retro_game_info* game, const struct retro_g
 	readOptions();
 	cartridgeOut = false;
 	applyCartridge();
-	cartridgeSaveUnread = cartridgeOut;
+	cartridgeSaveUnread = cartridgeOut && !noGame;
 	gbaReset(gba, skipBios);
-	readPlayerOneSave();
+	if (!noGame) {
+		readPlayerOneSave();
+	}
 	linkSetGba(gba);
 	attachPorts();
-	if (second || togetherWanted() || pairFile) {
+	if (!noGame && (second || togetherWanted() || pairFile)) {
 		startOthers(second, game->data, game->size);
 	}
 	offerLinkNetplay();
@@ -1273,9 +1282,21 @@ static bool loadPairFile(const struct retro_game_info* file) {
 	return loaded;
 }
 
+// No game: a Game Boy Advance with no cartridge, for a single-pak game another console sends over
+// the cable.
+static bool loadNoGame(void) {
+	static const struct retro_game_info none = { NULL, "", 0, NULL };
+	noGame = true;
+	gameBoy = false;
+	return loadAdvance(&none, NULL);
+}
+
 bool retro_load_game(const struct retro_game_info* game) {
 	readSaveActions(false);
-	if (!game || !game->data) {
+	if (!game) {
+		return loadNoGame();
+	}
+	if (!game->data) {
 		return false;
 	}
 	if (isPairFile(game->path)) {
@@ -1312,6 +1333,7 @@ void retro_unload_game(void) {
 	secondPath[0] = '\0';
 	netplaySeen = false;
 	netplayJoined = false;
+	noGame = false;
 	sharedHinted = false;
 	memset(&passed, 0, sizeof(passed));
 	sessionTag = 0;

@@ -796,6 +796,10 @@ bool netHost(const char* link) {
 		osd("Netplay: Link Mode can be Off, Together or Separate");
 		return false;
 	}
+	if (app.noGamePak && together) {
+		osd("Netplay: without a Game Pak, host on Link Mode Separate");
+		return false;
+	}
 	listener = listenOn(AF_INET6);
 	if (listener < 0) {
 		listener = listenOn(AF_INET);
@@ -837,9 +841,13 @@ bool netHost(const char* link) {
 }
 
 // Connects to a host, waiting up to five seconds for each address the name has, then says hello. The
-// host's welcome does the rest.
-bool netJoin(const char* address) {
+// host's welcome does the rest. Without a Game Pak, the core starts with no game first, for a host on
+// Separate to send a single-pak game over the cable.
+bool netJoin(const char* address, bool noGamePak) {
 	netStop();
+	if (noGamePak && !app.noGamePak && !loadNoGamePak()) {
+		return false;
+	}
 	if (!app.loaded) {
 		osd("Netplay: load your game first");
 		return false;
@@ -1100,6 +1108,12 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 	netTogether = p[0];
 	self = p[1];
 	libretroSetNetplayPlayer(self);
+	// Every device runs every console in Together and Off, so each needs the game.
+	if (netTogether && app.noGamePak) {
+		osd("Netplay: joining without a Game Pak needs a host on Link Mode Separate");
+		netStop();
+		return;
+	}
 	if (netTogether && gameCrc() != get32(p + 4) && !loadHostGame(game, get32(p + 4))) {
 		osd("Netplay: you need %s to join", game);
 		netStop();
