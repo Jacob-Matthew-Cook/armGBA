@@ -1240,33 +1240,27 @@ static void addSettingsPages(void) {
 }
 
 // Saves and Folders: where games, BIOS files, saves, states and screenshots are. Each folder's row
-// opens its choices: Auto, armGBA's and RetroArch's where it has them, or a folder typed in.
+// opens its choices: Auto, armGBA's own, for saves In Game Folder, or a folder typed in.
 enum { FOLDER_GAMES, FOLDER_GB, FOLDER_GBC, FOLDER_GBA, FOLDER_BIOS, FOLDER_SAVES, FOLDER_STATES, FOLDER_SHOTS, FOLDERS };
 static const struct {
 	const char* label;
 	char* setting;
-	// armGBA's own folder; what retroarchFolder calls RetroArch's, or NULL; and whether "" is Auto
-	// rather than armGBA's, and what Auto is.
+	// armGBA's own folder, or NULL; and what Auto is.
 	const char* own;
-	const char* retroarch;
-	bool automatic;
 	const char* autoHelp;
 	const char* help;
 } folders[FOLDERS] = {
-	{ "Games", settings.gamesFolder, NULL, NULL, true, "ROCKNIX's roms folder, or a roms folder with gb, gbc or gba in it, in internal storage or on a card; else found from the last game's folder.",
+	{ "Games", settings.gamesFolder, NULL, "ROCKNIX's roms folder, or a roms folder with gb, gbc or gba in it, in internal storage or on a card; else found from the last game's folder.",
 	  "The folder with your games (ROMs), where Load Game opens." },
-	{ "Game Boy", settings.consoleFolders[0], NULL, NULL, true, "A folder in the Games folder named gb or Game Boy.",
-	  "Listed first in Load Game." },
-	{ "Game Boy Color", settings.consoleFolders[1], NULL, NULL, true, "A folder in the Games folder named gbc or Game Boy Color.",
-	  "Listed first in Load Game." },
-	{ "Game Boy Advance", settings.consoleFolders[2], NULL, NULL, true, "A folder in the Games folder named gba or Game Boy Advance.",
-	  "Listed first in Load Game." },
-	{ "BIOS", settings.biosFolder, ownSystemDirectory, "bios", true, "armGBA's own folder if it has a BIOS or boot ROM, RetroArch's otherwise.",
-	  "Read as each game loads." },
-	{ "Saves", settings.saveFolder, ownSaveDirectory, "saves", true, "armGBA's own folder for a game with its save there, RetroArch's otherwise.",
-	  "Games' saves; in RetroArch's, shared with RetroArch. Applies when a game loads." },
-	{ "States", settings.stateFolder, ownStateDirectory, NULL, false, NULL, "Save states, kept apart from RetroArch's, which it compresses." },
-	{ "Screenshots", settings.shotFolder, ownShotDirectory, "screenshots", false, NULL, "Screenshots and recordings." },
+	{ "Game Boy", settings.consoleFolders[0], NULL, "A folder in the Games folder named gb or Game Boy.", "Listed first in Load Game." },
+	{ "Game Boy Color", settings.consoleFolders[1], NULL, "A folder in the Games folder named gbc or Game Boy Color.", "Listed first in Load Game." },
+	{ "Game Boy Advance", settings.consoleFolders[2], NULL, "A folder in the Games folder named gba or Game Boy Advance.", "Listed first in Load Game." },
+	{ "BIOS", settings.biosFolder, ownSystemDirectory, "ROCKNIX's roms/bios on ROCKNIX, armGBA's own folder elsewhere.", "Read as each game loads." },
+	{ "Saves", settings.saveFolder, ownSaveDirectory, "In each game's folder on ROCKNIX, as its other emulators keep them; armGBA's own folder elsewhere.",
+	  "Games' saves. Applies when a game loads." },
+	{ "States", settings.stateFolder, ownStateDirectory, "ROCKNIX's roms/savestates, a folder for each console, on ROCKNIX; armGBA's own folder elsewhere.",
+	  "Save states. Applies when a game loads." },
+	{ "Screenshots", settings.shotFolder, ownShotDirectory, "ROCKNIX's roms/screenshots on ROCKNIX, armGBA's own folder elsewhere.", "Screenshots and recordings." },
 };
 static int folderShown;
 
@@ -1284,7 +1278,7 @@ static const char* folderPath(int which) {
 	case FOLDER_SAVES:
 		return app.loaded ? saveDirectory : NULL;
 	case FOLDER_STATES:
-		return stateDirectory;
+		return app.loaded ? stateDirectory : NULL;
 	default:
 		return shotDirectory;
 	}
@@ -1292,7 +1286,7 @@ static const char* folderPath(int which) {
 
 static bool folderTypedIn(int which) {
 	const char* const setting = folders[which].setting;
-	return setting[0] && strcmp(setting, "armgba") && strcmp(setting, "retroarch") && strcmp(setting, "beside");
+	return setting[0] && strcmp(setting, "armgba") && strcmp(setting, "beside");
 }
 
 static void folderTyped(const char* text) {
@@ -1363,8 +1357,8 @@ void folderPickerPoll(void) {
 }
 #endif
 
-// A choice on a folder's page: 0 Auto, 1 armGBA's, 2 RetroArch's, 3 typed in, 4 from Android's picker,
-// 5 in the game's folder (saves).
+// A choice on a folder's page: 0 Auto, 1 armGBA's, 3 typed in, 4 from Android's picker, 5 in the game's
+// folder (saves).
 static void folderPick(int kind, int delta) {
 	if (delta) {
 		return;
@@ -1382,7 +1376,7 @@ static void folderPick(int kind, int delta) {
 		openEntry(folderTitle, "The folder's full path.", path ? path : folders[folderShown].own, false, folderTyped);
 		return;
 	}
-	const char* const kinds[6] = { "", folders[folderShown].automatic ? "armgba" : "", "retroarch", "", "", "beside" };
+	const char* const kinds[6] = { "", "armgba", "", "", "", "beside" };
 	snprintf(folders[folderShown].setting, PATH_SIZE, "%s", kinds[kind]);
 	chooseFolders();
 	settingsWrite();
@@ -1393,25 +1387,16 @@ static void folderMenu(void) {
 	const char* const setting = folders[which].setting;
 	bool const typed = folderTypedIn(which);
 	static char help[4][PATH_SIZE + 200];
-	if (folders[which].automatic) {
-		addChoice("Auto", !setting[0] ? "In Use" : "", folderPick, 0);
-		helpFor(folders[which].autoHelp);
-	}
+	addChoice("Auto", !setting[0] ? "In Use" : "", folderPick, 0);
+	helpFor(folders[which].autoHelp);
 	if (folders[which].own) {
-		bool const own = folders[which].automatic ? !strcmp(setting, "armgba") : !setting[0];
-		addChoice("armGBA's", own ? "In Use" : "", folderPick, 1);
+		addChoice("armGBA's", !strcmp(setting, "armgba") ? "In Use" : "", folderPick, 1);
 		snprintf(help[1], sizeof(help[1]), "armGBA's own: %s", folders[which].own);
 		helpFor(help[1]);
 	}
-	const char* const theirs = folders[which].retroarch ? retroarchFolder(folders[which].retroarch) : NULL;
-	if (theirs) {
-		addChoice("RetroArch's", !strcmp(setting, "retroarch") ? "In Use" : "", folderPick, 2);
-		snprintf(help[2], sizeof(help[2]), "RetroArch's, from its retroarch.cfg: %s", theirs);
-		helpFor(help[2]);
-	}
 	if (which == FOLDER_SAVES) {
 		addChoice("In Game Folder", !strcmp(setting, "beside") ? "In Use" : "", folderPick, 5);
-		helpFor("Each save in its game's folder, as RetroArch's Write Saves to Content Directory does.");
+		helpFor("Each save in its game's folder.");
 	}
 #ifdef __ANDROID__
 	addChoice("Choose a Folder...", typed ? folderName(setting) : "", folderPick, 4);
@@ -1439,14 +1424,12 @@ static void addFolder(int which) {
 	snprintf(label, sizeof(label), "%s...", folders[which].label);
 	if (folderTypedIn(which)) {
 		snprintf(value, sizeof(value), "%s", folderName(setting));
-	} else if (!setting[0] && !folders[which].own) {
-		snprintf(value, sizeof(value), "Auto (%s)", path ? folderName(path) : "None");
-	} else if (setting[0] || !folders[which].automatic) {
-		snprintf(value, sizeof(value), "%s", !strcmp(setting, "retroarch") ? "RetroArch's" : !strcmp(setting, "beside") ? "In Game Folder" : "armGBA's");
-	} else if (path) {
-		snprintf(value, sizeof(value), "Auto (%s)", !strcmp(path, folders[which].own) ? "armGBA's" : "RetroArch's");
+	} else if (!strcmp(setting, "armgba")) {
+		snprintf(value, sizeof(value), "armGBA's");
+	} else if (!strcmp(setting, "beside")) {
+		snprintf(value, sizeof(value), "In Game Folder");
 	} else {
-		snprintf(value, sizeof(value), "Auto");
+		snprintf(value, sizeof(value), "Auto (%s)", path ? folderName(path) : "None");
 	}
 	addChoice(label, value, openFolder, which);
 	static char help[FOLDERS][PATH_SIZE + 300];

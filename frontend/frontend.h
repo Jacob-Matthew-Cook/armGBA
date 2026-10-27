@@ -114,8 +114,8 @@ struct Settings {
 	// by name, or a folder chosen.
 	char gamesFolder[PATH_SIZE];
 	char consoleFolders[CONSOLES][PATH_SIZE];
-	// The Folders: "" for Auto (armGBA's for states and screenshots), "armgba" or "retroarch" for
-	// theirs, or a folder typed in.
+	// The Folders: "" for Auto (ROCKNIX's on ROCKNIX, armGBA's elsewhere), "armgba" for armGBA's, for
+	// saves "beside" for each game's folder, or a folder typed in.
 	char biosFolder[PATH_SIZE];
 	char saveFolder[PATH_SIZE];
 	char stateFolder[PATH_SIZE];
@@ -235,7 +235,6 @@ void applyWindowSize(void);
 void refreshShownOptions(void);
 void chooseFolders(void);
 void chooseGameFolders(void);
-const char* retroarchFolder(const char* which);
 void writeSaves(void);
 // The loaded game's save file, game.srm, or its clock's, game.rtc.
 void savePath(char out[FILE_SIZE], const char* extension);

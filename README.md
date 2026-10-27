@@ -226,12 +226,11 @@ from the command line. Achievements need the system's libcurl, and recording its
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
 `~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`. BIOS and boot
 ROM files go in `~/.config/armgba/system`, and saves, states, screenshots and cheats in
-`~/.local/share/armgba`. General's Saves and Folders can use RetroArch's folders instead, read from
-its `retroarch.cfg`: its BIOS folder, its saves (beside the game or in its saves folder, sorted as
-it sorts them), shared with RetroArch, and its screenshots. By itself the BIOS folder is RetroArch's
-when armGBA's has no BIOS or boot ROM, and a game's saves are RetroArch's unless armGBA's already
-has that game's save. Saves can also be In Game Folder, each beside its game, as RetroArch's Write
-Saves to Content Directory does. States stay armGBA's, as RetroArch compresses its own.
+`~/.local/share/armgba`. On ROCKNIX, as its other standalone emulators do, BIOS files are read from
+`roms/bios`, saves kept beside the games, states in `roms/savestates` by console (`gba`, `gb`, `gbc`)
+and screenshots in `roms/screenshots`. General's Saves and Folders changes each, to armGBA's own, a
+folder typed in, or for saves In Game Folder, beside each game. The app never reads RetroArch's
+settings.
 
 Game Boy Advance games run on Nintendo's `gba_bios.bin` from the system directory when it's there
 and BIOS is set to Nintendo's, and otherwise on armGBA's own open-source BIOS, built into the core.

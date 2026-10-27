@@ -97,127 +97,22 @@ static void dataDirectory(char* out, const char* xdg, const char* fallback, cons
 	makeDirectories(out);
 }
 
-// What RetroArch's retroarch.cfg says of its folders, when there is one: its BIOS and screenshot
-// folders (empty if they aren't there), and where it keeps saves.
-static struct {
-	bool found;
-	char system[PATH_SIZE];
-	char shots[PATH_SIZE];
-	// Saves: beside the game, or in saves, then in a folder named for the game's folder and one named
-	// for the core when it sorts them.
-	bool savesBesideGame;
-	char saves[PATH_SIZE];
-	bool sortByContent, sortByCore;
-} retroarch;
-
-// A folder retroarch.cfg names, as RetroArch reads it: "~" its home, ":" the folder retroarch.cfg is
-// in. False for "default" or nothing, which RetroArch takes as its own choice.
-static bool retroarchPath(char out[PATH_SIZE], const char* value, const char* configFolder) {
-	const char* const home = getenv("HOME") ? getenv("HOME") : ".";
-	if (!value[0] || !strcmp(value, "default")) {
-		return false;
-	}
-	if (value[0] == '~') {
-		snprintf(out, PATH_SIZE, "%s%s", home, value + 1);
-	} else if (value[0] == ':') {
-		snprintf(out, PATH_SIZE, "%s%s", configFolder, value + 1);
-	} else {
-		snprintf(out, PATH_SIZE, "%s", value);
-	}
-	return true;
-}
-
 static bool isFolder(const char* path) {
 	struct stat st;
 	return path[0] && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-// Reads the first retroarch.cfg found: XDG_CONFIG_HOME's, ~/.config's, then the Flatpak's.
-static void findRetroarch(void) {
-	const char* const home = getenv("HOME") ? getenv("HOME") : ".";
-	const char* const xdg = getenv("XDG_CONFIG_HOME");
-	char folders[3][PATH_SIZE];
-	snprintf(folders[0], PATH_SIZE, "%s/retroarch", xdg && *xdg ? xdg : "");
-	snprintf(folders[1], PATH_SIZE, "%s/.config/retroarch", home);
-	snprintf(folders[2], PATH_SIZE, "%s/.var/app/org.libretro.RetroArch/config/retroarch", home);
-	for (int i = xdg && *xdg ? 0 : 1; i < 3 && !retroarch.found; ++i) {
-		char path[PATH_SIZE + 16];
-		snprintf(path, sizeof(path), "%s/retroarch.cfg", folders[i]);
-		FILE* f = fopen(path, "r");
-		if (!f) {
-			continue;
-		}
-		retroarch.found = true;
-		snprintf(retroarch.system, PATH_SIZE, "%s/system", folders[i]);
-		retroarch.savesBesideGame = true;
-		char line[PATH_SIZE + 64];
-		while (fgets(line, sizeof(line), f)) {
-			char key[64];
-			const char* const open = strchr(line, '"');
-			const char* const close = open ? strchr(open + 1, '"') : NULL;
-			if (!close || sscanf(line, " %63[a-z_]", key) != 1) {
-				continue;
-			}
-			char value[PATH_SIZE];
-			snprintf(value, sizeof(value), "%.*s", (int) (close - open - 1), open + 1);
-			bool const yes = !strcmp(value, "true");
-			if (!strcmp(key, "system_directory")) {
-				retroarchPath(retroarch.system, value, folders[i]);
-			} else if (!strcmp(key, "screenshot_directory")) {
-				retroarchPath(retroarch.shots, value, folders[i]);
-			} else if (!strcmp(key, "savefile_directory")) {
-				retroarch.savesBesideGame = !retroarchPath(retroarch.saves, value, folders[i]);
-			} else if (!strcmp(key, "savefiles_in_content_dir")) {
-				retroarch.savesBesideGame |= yes;
-			} else if (!strcmp(key, "sort_savefiles_by_content_enable")) {
-				retroarch.sortByContent = yes;
-			} else if (!strcmp(key, "sort_savefiles_enable")) {
-				retroarch.sortByCore = yes;
-			}
-		}
-		fclose(f);
-		// savefiles_in_content_dir may come before or after savefile_directory.
-		if (retroarch.savesBesideGame) {
-			retroarch.saves[0] = '\0';
-		}
-	}
-	if (!isFolder(retroarch.system)) {
-		retroarch.system[0] = '\0';
-	}
-	if (!isFolder(retroarch.shots)) {
-		retroarch.shots[0] = '\0';
-	}
+// Whether this is ROCKNIX, whose standalone emulators keep BIOS files in roms/bios, saves beside the
+// games, states in roms/savestates by console and screenshots in roms/screenshots.
+static bool onRocknix(void) {
+	return isFolder("/storage/roms");
 }
 
-// RetroArch's folder which ("bios", "saves" or "screenshots") for the menu, or NULL if it has none;
-// its saves may be beside each game.
-const char* retroarchFolder(const char* which) {
-	if (!strcmp(which, "saves")) {
-		return !retroarch.found ? NULL : retroarch.savesBesideGame ? "beside each game" : retroarch.saves;
-	}
-	const char* const folder = !strcmp(which, "bios") ? retroarch.system : retroarch.shots;
-	return folder[0] ? folder : NULL;
-}
-
-// Whether folder holds a BIOS or boot ROM the core reads.
-static bool holdsBios(const char* folder) {
-	static const char* const names[] = { "gba_bios.bin", "gb_bios.bin", "dmg_boot.bin", "mgb_boot.bin", "gbc_bios.bin",
-		                                 "cgb_boot.bin", "cgb_agb_boot.bin", "cgb_agb0_boot.bin", "agb_boot.bin" };
-	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
-		char path[PATH_SIZE + 32];
-		snprintf(path, sizeof(path), "%s/%s", folder, names[i]);
-		if (access(path, R_OK) == 0) {
-			return true;
-		}
-	}
-	return false;
-}
-
-// One of the Folders: armGBA's own (setting "" or "armgba"), RetroArch's ("retroarch", when it has
-// one), or the folder typed in; made if it's written to and isn't there.
-static void chooseFolder(char out[PATH_SIZE], const char* setting, const char* own, const char* retroarchOwn, bool written) {
-	bool const theirs = !strcmp(setting, "retroarch") && retroarchOwn[0];
-	snprintf(out, PATH_SIZE, "%s", theirs ? retroarchOwn : !setting[0] || !strcmp(setting, "armgba") || !strcmp(setting, "retroarch") ? own : setting);
+// One of the Folders: Auto (setting ""), ROCKNIX's on ROCKNIX and armGBA's own elsewhere; armGBA's
+// own ("armgba"); or the folder typed in. Made if it's written to and isn't there.
+static void chooseFolder(char out[PATH_SIZE], const char* setting, const char* own, const char* rocknix, bool written) {
+	bool const automatic = !setting[0];
+	snprintf(out, PATH_SIZE, "%s", automatic && rocknix && onRocknix() ? rocknix : automatic || !strcmp(setting, "armgba") ? own : setting);
 	if (written) {
 		makeDirectories(out);
 	}
@@ -322,24 +217,21 @@ void chooseGameFolders(void) {
 	tellSaveFolders();
 }
 
-// The BIOS, state and screenshot folders, as the Folders say. Auto BIOS is armGBA's when it holds a
-// BIOS or boot ROM, RetroArch's otherwise. The core reads the BIOS folder as each game loads.
-// Save Manager's folders, from the app's own settings as retroarch.cfg's are in RetroArch, so it needs
-// no RetroArch: armGBA's save folder, a typed one, or RetroArch's only when Saves is set to it; the
-// game folders, first when saves are kept in each game's folder.
+// Save Manager's folders, from the app's own settings, as retroarch.cfg's are in RetroArch: armGBA's
+// save folder and a typed one, and the game folders, first when saves are kept in each game's folder.
+static bool savesBesideGames(void) {
+	return !strcmp(settings.saveFolder, "beside") || (!settings.saveFolder[0] && onRocknix());
+}
+
 static void tellSaveFolders(void) {
 	const char* const chosen = settings.saveFolder;
-	bool const theirs = !strcmp(chosen, "retroarch");
-	bool const typed = chosen[0] && strcmp(chosen, "armgba") && strcmp(chosen, "retroarch") && strcmp(chosen, "beside");
-	const char* saves[3];
+	bool const typed = chosen[0] && strcmp(chosen, "armgba") && strcmp(chosen, "beside");
+	const char* saves[2];
 	const char* games[1 + CONSOLES];
 	int saveCount = 0, gameCount = 0;
 	saves[saveCount++] = ownSaveDirectory;
 	if (typed) {
 		saves[saveCount++] = chosen;
-	}
-	if (theirs && retroarch.found && !retroarch.savesBesideGame && retroarch.saves[0]) {
-		saves[saveCount++] = retroarch.saves;
 	}
 	if (gamesDirectory[0]) {
 		games[gameCount++] = gamesDirectory;
@@ -349,63 +241,37 @@ static void tellSaveFolders(void) {
 			games[gameCount++] = consoleDirectories[c];
 		}
 	}
-	bool const gamesFirst = !strcmp(chosen, "beside") || (theirs && retroarch.found && retroarch.savesBesideGame);
-	libretroSaveManagerFolders(saves, saveCount, games, gameCount, gamesFirst);
+	libretroSaveManagerFolders(saves, saveCount, games, gameCount, savesBesideGames());
 }
 
+// The BIOS and screenshot folders, as the Folders say; the core reads the BIOS folder as each game
+// loads.
 void chooseFolders(void) {
-	const char* bios = settings.biosFolder;
-	if (!bios[0]) {
-		bios = !retroarch.system[0] || holdsBios(ownSystemDirectory) ? "armgba" : "retroarch";
-	}
-	chooseFolder(systemDirectory, bios, ownSystemDirectory, retroarch.system, false);
-	chooseFolder(stateDirectory, settings.stateFolder, ownStateDirectory, "", true);
-	chooseFolder(shotDirectory, settings.shotFolder, ownShotDirectory, retroarch.shots, true);
+	chooseFolder(systemDirectory, settings.biosFolder, ownSystemDirectory, "/storage/roms/bios", false);
+	chooseFolder(shotDirectory, settings.shotFolder, ownShotDirectory, "/storage/roms/screenshots", true);
 	chooseGameFolders();
 }
 
-// The save folder for the game at path, as it loads, so a change can't put the running game's save
-// over another: RetroArch's as RetroArch picks it, beside the game or in its saves folder, sorted as
-// it sorts them, or in the game's folder. Auto is armGBA's when it has this game's save, RetroArch's
-// otherwise.
-static void chooseSaveFolder(const char* path) {
-	char gameFolder[PATH_SIZE], name[NAME_SIZE];
+// The save and state folders for the game at path, as it loads, so a change can't put the running
+// game's save over another: its own folder for saves kept beside the games; ROCKNIX's savestates
+// folder named for the game's folder, as gba.
+static void chooseGameDataFolders(const char* path) {
+	char gameFolder[PATH_SIZE], states[PATH_SIZE];
 	snprintf(gameFolder, sizeof(gameFolder), "%s", path);
 	char* const slash = strrchr(gameFolder, '/');
-	snprintf(name, sizeof(name), "%s", slash ? slash + 1 : path);
-	char* const dot = strrchr(name, '.');
-	if (dot && dot != name) {
-		*dot = '\0';
-	}
 	if (slash) {
 		*slash = '\0';
 	} else {
 		snprintf(gameFolder, sizeof(gameFolder), ".");
 	}
-	char theirs[PATH_SIZE] = "";
-	if (retroarch.found) {
-		snprintf(theirs, PATH_SIZE, "%s", retroarch.savesBesideGame ? gameFolder : retroarch.saves);
-		if (!retroarch.savesBesideGame && retroarch.sortByContent) {
-			const char* const folderName = strrchr(gameFolder, '/') ? strrchr(gameFolder, '/') + 1 : gameFolder;
-			size_t const length = strlen(theirs);
-			snprintf(theirs + length, PATH_SIZE - length, "/%s", folderName);
-		}
-		if (!retroarch.savesBesideGame && retroarch.sortByCore) {
-			size_t const length = strlen(theirs);
-			snprintf(theirs + length, PATH_SIZE - length, "/armGBA");
-		}
-	}
-	const char* chosen = settings.saveFolder;
-	if (!strcmp(chosen, "beside")) {
+	const char* const console = strrchr(gameFolder, '/') ? strrchr(gameFolder, '/') + 1 : gameFolder;
+	snprintf(states, sizeof(states), "/storage/roms/savestates/%s", console);
+	if (savesBesideGames()) {
 		snprintf(saveDirectory, PATH_SIZE, "%s", gameFolder);
-		return;
+	} else {
+		chooseFolder(saveDirectory, settings.saveFolder, ownSaveDirectory, NULL, true);
 	}
-	if (!chosen[0]) {
-		char own[FILE_SIZE];
-		snprintf(own, sizeof(own), "%s/%s.srm", ownSaveDirectory, name);
-		chosen = !theirs[0] || access(own, R_OK) == 0 ? "armgba" : "retroarch";
-	}
-	chooseFolder(saveDirectory, chosen, ownSaveDirectory, theirs, true);
+	chooseFolder(stateDirectory, settings.stateFolder, ownStateDirectory, states, true);
 }
 
 // The core's log, to stderr.
@@ -1149,7 +1015,7 @@ bool loadGame(const char* path) {
 	// A patch beside it applies, as in RetroArch.
 	char patchName[NAME_SIZE];
 	int const patches = patchGame(path, &data, &size, patchName, sizeof(patchName));
-	chooseSaveFolder(path);
+	chooseGameDataFolders(path);
 	retro_set_environment(environment);
 	retro_init();
 	struct retro_game_info game = { named, data, size, NULL };
@@ -1879,7 +1745,6 @@ int main(int argc, char** argv) {
 	settingsDefaults();
 	dataDirectory(configDirectory, "XDG_CONFIG_HOME", ".config", "");
 	dataDirectory(ownSystemDirectory, "XDG_CONFIG_HOME", ".config", "/system");
-	findRetroarch();
 	dataDirectory(ownSaveDirectory, "XDG_DATA_HOME", ".local/share", "/saves");
 	dataDirectory(ownStateDirectory, "XDG_DATA_HOME", ".local/share", "/states");
 	dataDirectory(ownShotDirectory, "XDG_DATA_HOME", ".local/share", "/screenshots");
