@@ -1938,8 +1938,8 @@ int main(int argc, char** argv) {
 	// A game given loads, and hosts or joins if asked; without one, the menu opens.
 	cheevosInit();
 	setPadForPort();
-	if (connectTo && noCartridge) {
-		netJoin(connectTo, true);
+	if (connectTo && (noCartridge || !game)) {
+		netJoin(connectTo, noCartridge);
 	} else if (game && loadGame(game)) {
 		if (host) {
 			netHost(hostLink);
@@ -1969,6 +1969,9 @@ int main(int argc, char** argv) {
 		// Paused, in the menus or without a game: only the picture. Netplay runs on behind the menus.
 		bool const idle = !app.loaded || ((app.paused || app.menuOpen) && !netRunning());
 		if (idle) {
+			if (!app.loaded && netRunning()) {
+				netIdle();
+			}
 			present();
 			if (!settings.vsync) {
 				SDL_Delay(16);

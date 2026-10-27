@@ -1571,7 +1571,8 @@ static void netplayMenu(void) {
 		helpFor("Removed: joins with no game, for a single-pak game the host's console sends over the cable, as a real one "
 		        "does. Needs a host on Link Mode Separate. The game file is never sent.");
 		addItem("Join a Host...", netAction, 3);
-		helpFor("Type the host's name or address. In Off and Together, each controller here is a player.");
+		helpFor("Type the host's name or address. In Off and Together, your copy of the host's game loads by itself, and each "
+		        "controller here is a player.");
 		const struct NetHost* hosts;
 		int const count = netScan(&hosts);
 		for (int i = 0; i < count; ++i) {
@@ -1581,7 +1582,8 @@ static void netplayMenu(void) {
 			snprintf(value, sizeof(value), "Link Mode %s%s, %d/%d", netLinkNames[hosts[i].how],
 			         hosts[i].how == LINK_OFF ? shared[hosts[i].shared] : "", hosts[i].players, hosts[i].most);
 			addChoice(label, value, joinFound, i);
-			helpFor("Joins this host on your network. In Off and Together, each controller here is a player.");
+			helpFor("Joins this host on your network. In Off and Together, your copy of the host's game loads by itself, and each "
+			        "controller here is a player.");
 		}
 		if (!count) {
 			addInfo("Hosts", "Looking on this network...");

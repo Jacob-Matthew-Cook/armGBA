@@ -362,6 +362,7 @@ void netScanStop(void);
 bool netJoin(const char* address, bool noCartridge);
 void netStop(void);
 void netFrame(void);
+void netIdle(void);
 bool netPacketInterface(const struct retro_netpacket_callback* callback);
 int netPlayers(void);
 bool netRunning(void);

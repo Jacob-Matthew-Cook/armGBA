@@ -20,6 +20,7 @@
 #include "link.h"
 
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -33,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <zlib.h>
 
@@ -906,10 +908,6 @@ bool netJoin(const char* address, bool noCartridge) {
 	if (noCartridge && !app.noCartridge && !loadNoCartridge()) {
 		return false;
 	}
-	if (!app.loaded) {
-		osd("Netplay: load your game first");
-		return false;
-	}
 	// name, name:port, [IPv6 address]:port, or an IPv6 address alone.
 	char name[256], port[16];
 	snprintf(name, sizeof(name), "%s", address);
@@ -963,11 +961,13 @@ bool netJoin(const char* address, bool noCartridge) {
 	resetSync();
 	struct retro_system_info info;
 	retro_get_system_info(&info);
-	// The version, name, core version, and how many players this device's controllers make.
-	uint8_t message[1 + 32 + 64 + 1] = { VERSION };
+	// The version, name, core version, how many players this device's controllers make, and whether
+	// it has a game, its own or its cartridge removed.
+	uint8_t message[1 + 32 + 64 + 2] = { VERSION };
 	snprintf((char*) message + 1, 32, "%s", settings.nickname);
 	snprintf((char*) message + 33, 64, "%s", info.library_version);
 	message[97] = (uint8_t) localPlayers();
+	message[98] = app.loaded;
 	sendTo(&connections[0], MSG_HELLO, message, sizeof(message));
 	setStatus();
 	return true;
@@ -1088,6 +1088,12 @@ static void hostHello(struct Connection* c, const uint8_t* p, size_t size) {
 		refuse(c, "The host runs another version of armGBA");
 		return;
 	}
+	// Separate, each device plays its own game.
+	if (!netTogether && size >= 99 && !p[98]) {
+		osd("Netplay: %.31s can't join: on Link Mode Separate they need a game loaded", (const char*) p + 1);
+		refuse(c, "The host is on Link Mode Separate: load your own game, or set Your Cartridge to Removed");
+		return;
+	}
 	// Together, a player for each of the device's controllers, as many as there's room for.
 	int const wanted = netTogether && size >= 98 ? SDL_max(1, SDL_min(PEERS, p[97])) : 1;
 	int count = 0;
@@ -1176,27 +1182,58 @@ static void cantJoin(int why, const char* game) {
 
 // The host's game, beside this device's game or in the game list's folder. The host gives a file's
 // name, never a path.
+static bool tryHostGame(const char* path, uint32_t crc) {
+	loadingForSession = true;
+	bool const loaded = access(path, R_OK) == 0 && loadGame(path);
+	loadingForSession = false;
+	return loaded && gameCrc() == crc;
+}
+
+// The host's game by its name in a folder, or in its subfolders depth levels down.
+static bool findHostGame(const char* folder, const char* name, uint32_t crc, int depth) {
+	char path[FILE_SIZE];
+	if (!folder[0]) {
+		return false;
+	}
+	snprintf(path, sizeof(path), "%s/%s", folder, name);
+	if (tryHostGame(path, crc)) {
+		return true;
+	}
+	DIR* const entries = depth > 0 ? opendir(folder) : NULL;
+	struct dirent* entry;
+	bool found = false;
+	while (entries && !found && (entry = readdir(entries))) {
+		struct stat info;
+		snprintf(path, sizeof(path), "%s/%s", folder, entry->d_name);
+		bool const folderHere = entry->d_type == DT_DIR || (entry->d_type == DT_UNKNOWN && !stat(path, &info) && S_ISDIR(info.st_mode));
+		found = entry->d_name[0] != '.' && folderHere && findHostGame(path, name, crc, depth - 1);
+	}
+	if (entries) {
+		closedir(entries);
+	}
+	return found;
+}
+
+// The host's game: the file of its name beside this device's game, in the game list's folder, the
+// Game Boy, Game Boy Color and Game Boy Advance folders, or the Games folder and its subfolders, and
+// only if its CRC is the host's game's. The host gives a file's name, never a path.
 static bool loadHostGame(const char* name, uint32_t crc) {
-	const char* folders[2] = { app.gamePath, settings.directory };
 	if (strchr(name, '/')) {
 		return false;
 	}
-	for (int i = 0; i < 2; ++i) {
-		char path[FILE_SIZE];
-		snprintf(path, sizeof(path), "%s", folders[i]);
-		char* end = i == 0 ? strrchr(path, '/') : path + strlen(path);
-		if (!end) {
-			continue;
-		}
-		snprintf(end, sizeof(path) - (end - path), "/%s", name);
-		loadingForSession = true;
-		bool const loaded = access(path, R_OK) == 0 && loadGame(path);
-		loadingForSession = false;
-		if (loaded && gameCrc() == crc) {
+	char beside[PATH_SIZE];
+	snprintf(beside, sizeof(beside), "%s", app.gamePath);
+	char* const slash = strrchr(beside, '/');
+	*(slash ? slash : beside) = '\0';
+	if (findHostGame(beside, name, crc, 0) || findHostGame(settings.directory, name, crc, 0)) {
+		return true;
+	}
+	for (int c = 0; c < CONSOLES; ++c) {
+		if (findHostGame(consoleDirectories[c], name, crc, 1)) {
 			return true;
 		}
 	}
-	return false;
+	return findHostGame(gamesDirectory, name, crc, 2);
 }
 
 // The text at *at, moving *at past it; NULL if it doesn't end before end.
@@ -1696,6 +1733,12 @@ void netScanStop(void) {
 		scanner = -1;
 	}
 	foundCount = 0;
+}
+
+// With no game loaded, netplay's messages are still read, as a device that joined without one waits
+// for the host's welcome to load its game.
+void netIdle(void) {
+	pump();
 }
 
 // No connections yet.

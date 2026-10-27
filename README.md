@@ -198,8 +198,11 @@ Controls, as Core's Link page has them, and Create a Host Session links the devi
 (everyone's buttons at once if it's off), for up to four players; Together runs every player's
 console on every device, kept in step with rollback; Separate carries the link cable between two
 devices each running its own game. In Off and Together, each controller on a device is a player, in
-order, as far as the session's players go; Separate is a player a device. Join lists the hosts on the
-local network, found by a broadcast on the netplay port, with each host's Link Mode and players, or
+order, as far as the session's players go; Separate is a player a device. Off and Together need no
+game loaded to join: the host's game loads from your folders by its file name (beside your game, in
+the game list's folder, the Game Boy, Game Boy Color and Game Boy Advance folders, or the Games folder
+two levels down), if it's the same file as the host's; Separate needs your own game, or Your
+Cartridge: Removed. Join lists the hosts on the local network, found by a broadcast on the netplay port, with each host's Link Mode and players, or
 takes an address. `--host` (as
 Link Mode says), `--host-off`, `--host-together`, `--host-separate` and `--connect ADDRESS` start it
 from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
