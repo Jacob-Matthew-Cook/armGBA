@@ -379,8 +379,6 @@ void optionSet(struct Option* option, const char* value) {
 	}
 }
 
-// The core's options and their categories, as it defines them, each taking its value from armgba.cfg.
-// An option defined again keeps its first definition.
 static void optionValues(struct Option* o, const struct retro_core_option_v2_definition* d) {
 	for (int v = 0; v < o->valueCount; ++v) {
 		free(o->values[v]);
@@ -400,6 +398,8 @@ static void optionValues(struct Option* o, const struct retro_core_option_v2_def
 	}
 }
 
+// The core's options and their categories, as it defines them, each taking its value from armgba.cfg.
+// An option defined again takes its new choices.
 void optionsDefine(const struct retro_core_options_v2* definitions) {
 	for (const struct retro_core_option_v2_category* c = definitions->categories; c && c->key && categoryCount < 32; ++c) {
 		bool known = false;

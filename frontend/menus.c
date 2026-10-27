@@ -220,11 +220,11 @@ static void shownPath(char* out, size_t size, const char* path) {
 	snprintf(out, size, "%s", path);
 }
 
-// The game list: the folder's path and counts, "..", then each folder and game.
 // Set while the game list chooses a game for uiPickGame, with the game it's looking for.
 static bool (*gamePicked)(const char* path);
 static char gameWanted[NAME_SIZE];
 
+// The game list: the folder's path and counts, "..", then each folder and game.
 void browserMenu(void) {
 	readBrowser();
 	if (gamePicked) {
