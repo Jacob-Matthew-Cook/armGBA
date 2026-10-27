@@ -25,9 +25,6 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 - **Not Nintendo.** armGBA is an independent project, not affiliated with or endorsed by Nintendo.
   Game Boy, Game Boy Pocket, Game Boy Light, Game Boy Color and Game Boy Advance are trademarks of
   Nintendo, and the consoles' BIOS and boot ROMs are Nintendo's copyright.
-- **Free.** armGBA is free and makes no money: no ads, no paid features. Its license (see License)
-  lets anyone share copies, even for a fee, but only with the complete source under the same
-  license, and never with games or Nintendo's BIOS or boot ROMs, which would be piracy.
 
 ## Controls
 
