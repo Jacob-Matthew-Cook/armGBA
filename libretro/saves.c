@@ -953,7 +953,7 @@ void saveReceived(const char* game, const uint8_t* save, size_t size, const uint
 	if (noGameLoaded()) {
 		managerReceived(game, save, size, rtc, rtcSize);
 	} else {
-		showMessage("The other device sent a save: receiving saves needs Save Manager, the core started with no game");
+		showMessage("The other device sent a save, but only Save Manager, the core started with no game, takes saves");
 	}
 }
 
@@ -1109,7 +1109,11 @@ static void managerSend(int which) {
 	} else if (!linkSendSave(managed[which].name, save, size, rtc, rtcSize)) {
 		snprintf(message, sizeof(message), "Send Save: no one is linked. Host or join in netplay first");
 	} else {
-		snprintf(message, sizeof(message), "Sent %.300s%s to the other device", managed[which].name, managed[which].player ? " (another player's)" : "");
+		char whose[32] = "your save";
+		if (managed[which].player) {
+			snprintf(whose, sizeof(whose), "player %d's save", managed[which].player + 1);
+		}
+		snprintf(message, sizeof(message), "Sent %s of %.300s to the other device", whose, managed[which].name);
 	}
 	showMessage(message);
 	free(save);

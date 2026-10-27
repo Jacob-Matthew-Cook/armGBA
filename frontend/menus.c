@@ -1664,6 +1664,12 @@ static void netplayMenu(void) {
 		addValue("Your Cartridge", joinNoCartridge ? "Removed" : "Inserted", netAction, 7);
 		helpFor("Removed: joins with no game, for a single-pak game the host's console sends over the cable, as a real one "
 		        "does. Needs a host on Link Mode Separate. The game file is never sent.");
+		// A joining device's own choices for when the session ends.
+		for (int i = 0; i < optionCount; ++i) {
+			if (!strcmp(options[i].key, "armgba_keep_progress") || !strcmp(options[i].key, "armgba_keep_playing")) {
+				addOption(i);
+			}
+		}
 		addItem("Join a Host...", netAction, 3);
 		helpFor("Type the host's name or address. In Off and Together, your copy of the host's game loads by itself, and each "
 		        "controller here is a player.");

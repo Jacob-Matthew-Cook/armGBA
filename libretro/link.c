@@ -260,8 +260,13 @@ static void announce(void) {
 	                   : console == CONSOLE_GBA || exact.wanted ? ", exact timing: linking may slow on Wi-Fi"
 	                                                            : ". If the game errors, try Game Boy Link Timing: Exact";
 	char text[160];
-	if (state == 2) {
+	// With no game, the link carries Save Manager's saves, or a single-pak game the other sends.
+	if (state == 2 && noGameLoaded()) {
+		snprintf(text, sizeof(text), "Linked with the other device: Save Manager can send saves now");
+	} else if (state == 2) {
 		snprintf(text, sizeof(text), "%s: player %d of 2%s", port, cable[0] == self ? 1 : 2, timing);
+	} else if (shown == 2 && noGameLoaded()) {
+		snprintf(text, sizeof(text), "The other device left");
 	} else if (shown == 2) {
 		snprintf(text, sizeof(text), "%s: the other player left", port);
 	} else {

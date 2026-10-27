@@ -51,6 +51,8 @@ void linkSetWireless(bool);
 bool linkSession(void);
 // Whether this device hosts the session.
 bool linkHosting(void);
+// Whether the core started with no game: Save Manager, or waiting for a single-pak game.
+bool noGameLoaded(void);
 // Called before each Game Boy Advance frame: keeps the cable checked during it.
 void linkGbaFrame(struct GBA*);
 // Whether the frame stopped early, with exact timing, to wait for the console leading; it goes on

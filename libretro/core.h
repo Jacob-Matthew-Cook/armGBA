@@ -126,8 +126,6 @@ void keepSession(void);
 // holds this device's own save, looked at as the host's states load.
 int joinedPlayer(void);
 void checkSessionSave(void);
-// Started with no game: Save Manager.
-bool noGameLoaded(void);
 void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);
 
 // options.c: the options given to the frontend (NULL to an older frontend, which has plain

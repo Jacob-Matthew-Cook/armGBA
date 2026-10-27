@@ -878,7 +878,7 @@ bool netHost(const char* link) {
 	if (oneConsole && !strcmp(optionValue("armgba_shared_controls"), "off")) {
 		setOption("armgba_shared_controls", "everyone");
 	}
-	if (linkMode(mode)) {
+	if (linkMode(mode) && !app.noCartridge) {
 		osd(separate ? "Restarted for the link cable" : oneConsole ? "Restarted with one console, shared" : "Restarted with every player's console");
 	}
 	if (together) {
@@ -1387,7 +1387,7 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 			osd("Joined as %s", playersText(self, selfCount));
 		}
 	} else {
-		if (linkMode("separate")) {
+		if (linkMode("separate") && !app.noCartridge) {
 			osd("Restarted for the link cable");
 		}
 		if (!startPackets()) {
@@ -1395,7 +1395,7 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 			netStop();
 			return;
 		}
-		osd("Joined the link cable");
+		osd(app.noCartridge ? "Joined" : "Joined the link cable");
 	}
 	setStatus();
 }
