@@ -673,9 +673,24 @@ static void pickerMenu(void) {
 	}
 }
 
+// The options that act once chosen, then go back to Off: chosen only from their list, so a press
+// left or right doesn't load or send a save.
+static bool actsOnce(const struct Option* o) {
+	static const char* const keys[] = { "armgba_back_up_save", "armgba_load_save", "armgba_send_save", "armgba_manager_send" };
+	for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+		if (!strcmp(o->key, keys[i])) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static void optionChange(int index, int delta) {
 	struct Option* o = &options[index];
-	if (!delta && o->valueCount > 2) {
+	if (delta && actsOnce(o)) {
+		return;
+	}
+	if (!delta && (o->valueCount > 2 || actsOnce(o))) {
 		pickerOption = index;
 		pushMenu(pickerMenu, o->description ? o->description : o->key);
 		return;
@@ -708,7 +723,11 @@ static void addOption(int i) {
 			label = o->labels[v];
 		}
 	}
-	addValue(o->description ? o->description : o->key, label, optionChange, i);
+	if (actsOnce(o)) {
+		addChoice(o->description ? o->description : o->key, label, optionChange, i);
+	} else {
+		addValue(o->description ? o->description : o->key, label, optionChange, i);
+	}
 	helpFor(o->info);
 }
 
@@ -1582,8 +1601,8 @@ static void addNetplayLink(void) {
 	}
 }
 
-// Save Manager: the core's Saves options, with no game.
-static void openSaveManager(int argument, int delta) {
+// The core's Saves options: backing up, loading and sending saves, and with no game Save Manager.
+static void openSaves(int argument, int delta) {
 	(void) argument;
 	for (int c = 0; c < categoryCount && !delta; ++c) {
 		if (!strcmp(categories[c].key, "saves")) {
@@ -1595,8 +1614,8 @@ static void openSaveManager(int argument, int delta) {
 static void addSaveManager(void) {
 	addHeader("Save Manager");
 	if (app.noCartridge) {
-		addItem("Send and Receive Saves...", openSaveManager, 0);
-		helpFor("Send a Save sends one of your saves to the device you're linked with; Received Saves Go To says where theirs go.");
+		addItem("Send and Receive Saves...", openSaves, 0);
+		helpFor("Send Save sends one of your saves to the device you're linked with; Receive Saves Into says where theirs go.");
 	} else {
 		addItem("Start Save Manager", netAction, 10);
 		items[itemCount - 1].confirm = app.loaded;
@@ -1863,6 +1882,8 @@ static void gameTab(void) {
 	}
 	addItem("Cheats...", openCheats, 0);
 	helpFor("This game's cheats: add codes, load RetroArch cheat files, turn them on or off.");
+	addItem("Saves...", openSaves, 0);
+	helpFor("Backs up a save, loads a backup, or sends one to the device you're linked with.");
 	addItem("Restart", restart, 0);
 	items[itemCount - 1].confirm = true;
 	helpFor("Starts the game again from the beginning; the game's own save is kept.");

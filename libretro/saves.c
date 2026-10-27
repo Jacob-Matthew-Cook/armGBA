@@ -43,7 +43,7 @@ struct SaveChoices {
 };
 static struct SaveChoices loadChoices;
 static struct SaveChoices sendChoices;
-// Save Manager's Send a Save.
+// Save Manager's Send Save.
 static struct SaveChoices managerChoices;
 static void fillManagerChoices(void);
 static struct retro_core_option_v2_definition* backUpOption;
@@ -992,15 +992,15 @@ void saveReceived(const char* game, const uint8_t* save, size_t size, const uint
 		pruneBackups(file, rtcFile);
 		offerSaveChoices();
 		char message[1200];
-		snprintf(message, sizeof(message), "Received the other player's save of %s", game);
+		snprintf(message, sizeof(message), "Received the other player's save of %s; Load Save lists it under Received", game);
 		showMessage(message);
 	}
 }
 
-// Save Manager: started with no game, Send a Save lists the saves in the save folder and the
+// Save Manager: started with no game, Send Save lists the saves in the save folder and the
 // folders in it, and in the Game Boy, Game Boy Color and Game Boy Advance game folders beside the
 // system folder, where ROCKNIX keeps saves, each with its armGBA/Player 2 to 4 saves. A save the
-// other device sends goes where Received Saves Go To says, the one it replaces backed up.
+// other device sends goes where Receive Saves Into says, the one it replaces backed up.
 enum { MANAGER_FOLDERS = 32, MANAGER_FOUND = 2048 };
 static char managerFolders[MANAGER_FOLDERS][PATH_SIZE];
 static int managerFolderCount;
@@ -1091,7 +1091,7 @@ static int newestFirst(const void* a, const void* b) {
 	return (y > x) - (y < x);
 }
 
-// Send a Save's choices: the newest saves found.
+// Send Save's choices with no game: the newest saves found.
 static void fillManagerChoices(void) {
 	startChoices(&managerChoices);
 	managedCount = 0;
@@ -1131,9 +1131,9 @@ static void managerSend(int which) {
 	void* save = readWholeFile(file, &size);
 	void* rtc = readWholeFile(rtcFile, &rtcSize);
 	if (!save) {
-		snprintf(message, sizeof(message), "Send a Save: that save is gone");
+		snprintf(message, sizeof(message), "Send Save: that save is gone");
 	} else if (!linkSendSave(managed[which].name, save, size, rtc, rtcSize)) {
-		snprintf(message, sizeof(message), "Send a Save: no one is linked. Host or join in netplay first");
+		snprintf(message, sizeof(message), "Send Save: no one is linked. Host or join in netplay first");
 	} else {
 		snprintf(message, sizeof(message), "Sent %.300s to the other device", managerChoices.labels[which]);
 	}
@@ -1156,7 +1156,7 @@ static bool hasFileNamed(const char* folder, const char* name) {
 	return found;
 }
 
-// Where a save the other device sent goes: the player Received Saves Go To names (Auto: player 2 on
+// Where a save the other device sent goes: the player Receive Saves Into names (Auto: player 2 on
 // the host, the device's own save elsewhere), in the folder with that save already, else the game's
 // own save, else the game, else the save folder.
 static void managerReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize) {

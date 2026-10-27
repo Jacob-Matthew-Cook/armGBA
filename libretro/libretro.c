@@ -1192,7 +1192,7 @@ static bool applyCartridge(void) {
 	}
 	if (out) {
 		gbaLoadRom(gba, "", 0);
-		notify(noGame   ? "Save Manager: link in netplay, then send saves from the core's Saves options. A single-pak game can come over the cable"
+		notify(noGame   ? "Save Manager: link in netplay, then Send Save in the core's Saves options"
 		       : linked ? "No cartridge: waiting for a game over the cable"
 		                : "No cartridge: a game comes over the cable with Link Mode Separate or GameCube",
 		       noGame ? 600 : 240);
@@ -2435,7 +2435,18 @@ static void runOneAdvance(void) {
 	sendOneAdvanceSound();
 }
 
+// Load Save waits for netplay to end, its options hidden while it's on.
+static void showOptionsForNetplay(void) {
+	static bool was;
+	bool const now = netplaySeen || linkSession();
+	if (now != was) {
+		was = now;
+		showOptions();
+	}
+}
+
 void retro_run(void) {
+	showOptionsForNetplay();
 	readNewerPlayerOne();
 	bool updated = false;
 	if (environment(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated) {

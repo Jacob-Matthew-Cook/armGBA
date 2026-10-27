@@ -11,6 +11,7 @@
 #include "core.h"
 #include "gba.h"
 #include "lcd.h"
+#include "link.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,10 +186,10 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	{ "armgba_player_numbers", "Show Player Numbers", NULL,
 	  "Shows each player's number, faintly, at the top left of their screen.",
 	  NULL, "link_screens", { { "disabled", "Off" }, { "enabled", "On" }, { NULL, NULL } }, "enabled" },
-	{ "armgba_manager_send", "Send a Save", NULL,
+	{ "armgba_manager_send", "Send Save", NULL,
 	  "Save Manager, with the core started with no game: sends the chosen save to the other device in netplay. Lists the saves in the save folder and the game folders, newest first.",
 	  NULL, "saves", { { "off", "Off" }, { NULL, NULL } }, "off" },
-	{ "armgba_manager_into", "Received Saves Go To", NULL,
+	{ "armgba_manager_into", "Receive Saves Into", NULL,
 	  "Save Manager: where a save the other device sends goes, the one it replaces backed up first. Auto: player 2's save on the host, for playing Together, and your own save on a device that joined.",
 	  NULL, "saves",
 	  { { "auto", "Auto" }, { "1", "Your Save" }, { "2", "Player 2's Save" }, { "3", "Player 3's Save" }, { "4", "Player 4's Save" }, { NULL, NULL } },
@@ -331,10 +332,10 @@ bool showOptions(void) {
 		{ "armgba_shared_controls", optionIs("armgba_link_mode", "off") },
 		{ "armgba_player2_game", together },
 		{ "armgba_new_save", together },
-		{ "armgba_load_into", together },
+		{ "armgba_load_into", together && !netplaySeen && !linkSession() },
 		{ "armgba_send_save", separateWanted() && !noGameLoaded() },
 		{ "armgba_back_up_save", !noGameLoaded() },
-		{ "armgba_load_save", !noGameLoaded() },
+		{ "armgba_load_save", !noGameLoaded() && !netplaySeen && !linkSession() },
 		{ "armgba_manager_send", noGameLoaded() },
 		{ "armgba_manager_into", noGameLoaded() },
 		{ "armgba_player1_saves", !noGameLoaded() },

@@ -185,11 +185,13 @@ and Folders (Auto Save State, and where games, BIOS files, saves, states and
 screenshots are; the Games folder is found by itself, ROCKNIX's roms or a roms folder holding gb,
 gbc or gba, and Load Game opens there with those three first), the menus' look (accent color, size,
 background), and Reset All Settings. Game has the loaded game's state slots (0 to 99, each with a
-picture) with Undo Load State, its cheats (RetroArch's `.cht` files can be added), Restart, Take
+picture) with Undo Load State, its cheats (RetroArch's `.cht` files can be added), its saves (Core's
+Saves: backing up, loading and sending), Restart, Take
 Screenshot, recording and Close Game. Core has the core's options,
 in RetroArch's categories, with LCD Rendering in Video and on Shaders to pick the CPU's grid or the
 GPU's. Extras has netplay and RetroAchievements.
-Rows ending in "..." open a page; rows with a value step through it. The line under the menu says
+Rows ending in "..." open a page; rows with a value step through it, except Back Up Save, Load Save
+and Send Save, which act once chosen from their list. The line under the menu says
 what the selected item does. With a controller, the buttons bound to A and B choose and go back, and
 in the game list L and R jump by letter; on the keyboard, typing a name's start finds it. Restart,
 Close Game, Quit (with a game running), Reset All Settings and Reset Controls and Hotkeys ask for a second
@@ -345,9 +347,9 @@ boot ROM on every device, or armGBA's, which every device has.
   player 1.
 - Save Manager moves saves between devices with no game loaded: start the core with no game
   (RetroArch's Start Core, or the app's Start Save Manager on the Netplay page), host or join, then
-  Send a Save, in Saves, sends one of the saves found in the save folder and the game folders (on
+  Send Save, in Saves, sends one of the saves found in the save folder and the game folders (on
   ROCKNIX, `roms/gba`, `gb` and `gbc`), with each folder's armGBA/Player 2 to 4 saves. The other
-  device puts it where Received Saves Go To says, backing up the save it replaces. Auto takes a
+  device puts it where Receive Saves Into says, backing up the save it replaces. Auto takes a
   save to player 2's on the host and to your own save on a device that joined, so before playing
   Together, the joining player sends their save in, and afterwards the host sends Player 2's back.
 - Backups Kept: 10 per player unless chosen. A save the same as its newest backup isn't backed up
