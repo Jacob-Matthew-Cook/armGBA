@@ -334,9 +334,22 @@ enum NetMode {
 extern enum NetMode netMode;
 extern bool netTogether;
 extern char netStatus[256];
-// Hosting: every player's console on every device, each device its own, or one console every player shares.
-enum { HOST_TOGETHER, HOST_SEPARATE, HOST_SINGLE };
-bool netHost(int how);
+// Link Mode in netplay: every player's console on every device, each device its own, or one console every player shares.
+enum { LINK_TOGETHER, LINK_SEPARATE, LINK_OFF };
+bool netHost(const char* link);
+void netGameStarted(void);
+extern const char* const netLinkNames[];
+// A host found on the local network.
+enum { NET_HOSTS_MOST = 8 };
+struct NetHost {
+	char address[64];
+	char nickname[32];
+	char game[128];
+	int how, players, most;
+	Uint32 seen;
+};
+int netScan(const struct NetHost** hosts);
+void netScanStop(void);
 bool netJoin(const char* address);
 void netStop(void);
 void netFrame(void);

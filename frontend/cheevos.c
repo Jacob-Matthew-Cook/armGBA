@@ -373,6 +373,7 @@ static void event(const rc_client_event_t* e, rc_client_t* from) {
 		break;
 	case RC_CLIENT_EVENT_RESET:
 		retro_reset();
+		netGameStarted();
 		osd("Hardcore mode: the game started again");
 		break;
 	case RC_CLIENT_EVENT_SERVER_ERROR:

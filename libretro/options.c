@@ -138,7 +138,7 @@ static struct retro_core_option_v2_definition optionDefinitions[] = {
 	  { { "l r start", "L + R + Start" }, { "l r a b", "L + R + A + B" }, { "l3 r3", "L3 + R3" }, { "select start a b", "Select + Start + A + B" }, { "off", "Off" }, { NULL, NULL } },
 	  "l r start" },
 	{ "armgba_link_mode", "Link Mode", NULL,
-	  "Together: 2 to 4 consoles on each device, for one-device multiplayer or smooth netplay. Separate: each netplay device runs its own console. GameCube: link to Dolphin. Applies on Restart.",
+	  "Off: one console; in netplay the players share it, as Shared Controls says. Together: 2 to 4 consoles on each device, for one-device multiplayer or smooth netplay. Separate: each netplay device runs its own console. GameCube: link to Dolphin. Applies on Restart.",
 	  NULL, "link",
 	  { { "off", "Off" }, { "together", "Together" }, { "separate", "Separate" }, { "gamecube", "GameCube" }, { NULL, NULL } },
 	  "off" },

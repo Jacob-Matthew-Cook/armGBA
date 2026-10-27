@@ -64,6 +64,7 @@ static void restart(int argument, int delta) {
 	(void) argument;
 	if (!delta && !netRunning()) {
 		retro_reset();
+		netGameStarted();
 		cheevosReset();
 		uiCloseMenu();
 	}
@@ -1406,8 +1407,7 @@ static void portDone(const char* text) {
 	settingsWrite();
 }
 
-// Netplay's rows: Your Name (0), hosting Together (1), the default, Separate (2) or Single (6),
-// Join (3), Disconnect (4) and Port (5).
+// Netplay's rows: Your Name (0), Create a Host Session (1), Join (3), Disconnect (4) and Port (5).
 static void netAction(int which, int delta) {
 	if (delta) {
 		return;
@@ -1417,11 +1417,9 @@ static void netAction(int which, int delta) {
 		openEntry("Your Name", "Shown to the other players.", settings.nickname, false, nicknameDone);
 		break;
 	case 1:
-	case 2:
-	case 6:
 		if (!app.loaded) {
 			osd("Netplay: load your game first");
-		} else if (netHost(which == 1 ? HOST_TOGETHER : which == 2 ? HOST_SEPARATE : HOST_SINGLE)) {
+		} else if (netHost(NULL)) {
 			uiCloseMenu();
 		}
 		break;
@@ -1440,6 +1438,14 @@ static void netAction(int which, int delta) {
 	}
 }
 
+// A host the Join list found.
+static void joinFound(int which, int delta) {
+	const struct NetHost* hosts;
+	if (!delta && which < netScan(&hosts)) {
+		joinDone(hosts[which].address);
+	}
+}
+
 static void netplayMenu(void) {
 	addInfo("Status", netStatus[0] ? netStatus : "Not connected");
 	addChoice("Your Name", settings.nickname, netAction, 0);
@@ -1450,20 +1456,27 @@ static void netplayMenu(void) {
 	helpFor("The network port the host listens on; everyone uses the same one.");
 	snprintf(text, sizeof(text), "%d %s", settings.inputDelay, frames(settings.inputDelay));
 	addValue("Input Delay", text, changeSetting, SET_INPUT_DELAY);
-	helpFor("How long each player's buttons wait in Together, so fewer corrections show. More suits a slow network.");
+	helpFor("How long each player's buttons wait, with Link Mode Off or Together, so fewer corrections show. More suits a slow network.");
 	if (netMode == NET_OFF) {
 		addHeader("Host");
-		addItem("Together", netAction, 1);
-		helpFor("Hosts the loaded game: every device runs every player's console, with rollback, so the link never waits on the network.");
-		addItem("Separate", netAction, 2);
-		helpFor("Hosts the loaded game: each device runs its own console and game, joined by the link cable over the network. Two "
-		        "players.");
-		addItem("Single", netAction, 6);
-		helpFor("Hosts the loaded game as one console every player shares, with rollback: everyone's buttons at once, or passed "
-		        "around, as Core's Shared Controls says.");
+		addItem("Create a Host Session", netAction, 1);
+		helpFor("Hosts the loaded game, linked as Core's Link Mode says. Off: one console every player shares, as Shared "
+		        "Controls says. Together: every player's console on every device. Separate: two devices, each its own.");
 		addHeader("Join");
 		addItem("Join a Host...", netAction, 3);
 		helpFor("Type the host's name or address.");
+		const struct NetHost* hosts;
+		int const count = netScan(&hosts);
+		for (int i = 0; i < count; ++i) {
+			char label[192], value[64];
+			snprintf(label, sizeof(label), "%s: %s", hosts[i].nickname, hosts[i].game);
+			snprintf(value, sizeof(value), "Link Mode %s, %d/%d", netLinkNames[hosts[i].how], hosts[i].players, hosts[i].most);
+			addChoice(label, value, joinFound, i);
+			helpFor("A host on this network. Joins it.");
+		}
+		if (!count) {
+			addInfo("Hosts", "Looking on this network...");
+		}
 	} else {
 		addItem("Disconnect", netAction, 4);
 		helpFor("Leaves netplay; the game carries on here.");

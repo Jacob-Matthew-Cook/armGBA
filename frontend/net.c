@@ -19,9 +19,12 @@
 #include "frontend.h"
 #include "link.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <limits.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -78,7 +81,8 @@ struct Connection {
 	size_t outSize, outCap;
 };
 
-static int listener = -1;
+// The host's listening socket, and its socket for probes from devices looking for hosts.
+static int listener = -1, answerer = -1;
 // The host's connections to its players, or a client's to the host (connections[0]).
 static struct Connection connections[PEERS];
 static int self;
@@ -227,19 +231,25 @@ static void closeConnection(struct Connection* c) {
 // The netplay menu's status line.
 static const char* optionValue(const char* key);
 
+const char* const netLinkNames[] = { "Together", "Separate", "Off" };
+
+static int sessionLink(void) {
+	return !netTogether ? LINK_SEPARATE : !strcmp(optionValue("armgba_link_mode"), "off") ? LINK_OFF : LINK_TOGETHER;
+}
+
 static void setStatus(void) {
 	if (netMode == NET_OFF) {
 		netStatus[0] = '\0';
 		return;
 	}
 	int const players = netPlayers();
-	const char* how = !netTogether ? "Separate" : !strcmp(optionValue("armgba_link_mode"), "off") ? "Single" : "Together";
+	const char* const how = netLinkNames[sessionLink()];
 	if (netMode == NET_HOSTING) {
-		snprintf(netStatus, sizeof(netStatus), players > 1 ? "Hosting %s: %d players" : "Hosting %s, waiting for players", how, players);
+		snprintf(netStatus, sizeof(netStatus), players > 1 ? "Hosting, Link Mode %s: %d players" : "Hosting, Link Mode %s, waiting for players", how, players);
 	} else if (!connections[0].welcomed) {
 		snprintf(netStatus, sizeof(netStatus), "Joining...");
 	} else {
-		snprintf(netStatus, sizeof(netStatus), "Player %d, %s, %u ms", self + 1, how, (unsigned) roll.rtt);
+		snprintf(netStatus, sizeof(netStatus), "Player %d, Link Mode %s, %u ms", self + 1, how, (unsigned) roll.rtt);
 	}
 }
 
@@ -316,13 +326,21 @@ static bool localSecondGame(const char* hostValue, const char** value) {
 	return false;
 }
 
-// The link mode a session needs; the game starts again when it changes.
+// The link mode the running game started with, as Link Mode applies on Restart.
+static char linkStarted[16];
+
+void netGameStarted(void) {
+	snprintf(linkStarted, sizeof(linkStarted), "%s", optionValue("armgba_link_mode"));
+}
+
+// The link mode a session needs; the game starts again when it started with another.
 static bool linkMode(const char* mode) {
-	if (!strcmp(optionValue("armgba_link_mode"), mode)) {
+	if (!strcmp(optionValue("armgba_link_mode"), mode) && !strcmp(linkStarted, mode)) {
 		return false;
 	}
 	setOption("armgba_link_mode", mode);
 	retro_reset();
+	netGameStarted();
 	return true;
 }
 
@@ -715,9 +733,16 @@ static uint32_t gameCrc(void) {
 	return app.gameData ? (uint32_t) crc32(0, app.gameData, (uInt) app.gameSize) : 0;
 }
 
-// Together takes up to the core's link players; Separate is two.
+// Together takes up to the core's link players, Off four and Separate two.
 static int playersMost(void) {
-	return netTogether ? SDL_max(2, SDL_min(PEERS, atoi(optionValue("armgba_link_players")))) : 2;
+	switch (sessionLink()) {
+	case LINK_TOGETHER:
+		return SDL_max(2, SDL_min(PEERS, atoi(optionValue("armgba_link_players"))));
+	case LINK_OFF:
+		return PEERS;
+	default:
+		return 2;
+	}
 }
 
 // A listening socket on the netplay port, for IPv4 and IPv6 both when family is AF_INET6.
@@ -750,11 +775,20 @@ static void useSocket(struct Connection* c, int fd) {
 	c->fd = fd;
 }
 
-// Hosts the loaded game, as Together, Separate or Single; the game restarts if the link mode must change.
-bool netHost(int how) {
-	bool const together = how != HOST_SEPARATE, single = how == HOST_SINGLE;
+static int answerOn(void);
+
+// Hosts the loaded game, linked as Link Mode says or as given: Together, Separate, or Off for one
+// console the players share. The game restarts if it started with another link mode.
+bool netHost(const char* link) {
+	char mode[16];
+	snprintf(mode, sizeof(mode), "%s", link ? link : optionValue("armgba_link_mode"));
+	bool const together = strcmp(mode, "separate"), single = !strcmp(mode, "off");
 	netStop();
 	if (!app.loaded) {
+		return false;
+	}
+	if (together && !single && strcmp(mode, "together")) {
+		osd("Netplay: Link Mode can be Off, Together or Separate");
 		return false;
 	}
 	listener = listenOn(AF_INET6);
@@ -765,16 +799,18 @@ bool netHost(int how) {
 		osd("Netplay: can't use port %d", settings.netPort);
 		return false;
 	}
+	netScanStop();
+	answerer = answerOn();
 	netTogether = together;
 	netMode = NET_HOSTING;
 	self = 0;
 	libretroSetNetplayPlayer(self);
 	resetSync();
-	// Single: one console the players share, as Shared Controls says, or everyone's buttons at once.
+	// Off: one console the players share, as Shared Controls says, or everyone's buttons at once.
 	if (single && !strcmp(optionValue("armgba_shared_controls"), "off")) {
 		setOption("armgba_shared_controls", "everyone");
 	}
-	if (linkMode(!together ? "separate" : single ? "off" : "together")) {
+	if (linkMode(mode)) {
 		osd(!together ? "Restarted for the link cable" : single ? "Restarted with one console, shared" : "Restarted with every player's console");
 	}
 	if (together) {
@@ -847,6 +883,7 @@ bool netJoin(const char* address) {
 		osd("Netplay: no answer from %s", address);
 		return false;
 	}
+	netScanStop();
 	useSocket(&connections[0], fd);
 	connections[0].id = 0;
 	netMode = NET_JOINED;
@@ -879,6 +916,10 @@ void netStop(void) {
 	if (listener >= 0) {
 		close(listener);
 		listener = -1;
+	}
+	if (answerer >= 0) {
+		close(answerer);
+		answerer = -1;
 	}
 	freeStates();
 	restoreOptions();
@@ -1076,6 +1117,7 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 	connections[0].welcomed = true;
 	if (netTogether) {
 		retro_reset();
+		netGameStarted();
 		sendTo(&connections[0], MSG_READY, NULL, 0);
 		osd("Joined as player %d", self + 1);
 	} else {
@@ -1236,7 +1278,10 @@ static bool readFrom(struct Connection* c) {
 }
 
 // Takes new players, sends what's queued and reads what's come. A client whose host left stops.
+static void answerProbes(void);
+
 static void pump(void) {
+	answerProbes();
 	int fd;
 	while (listener >= 0 && (fd = accept(listener, NULL, NULL)) >= 0) {
 		struct Connection* c = NULL;
@@ -1290,6 +1335,153 @@ void netFrame(void) {
 	for (int i = 0; i < PEERS; ++i) {
 		flushOne(&connections[i]);
 	}
+}
+
+// Finding hosts on the local network: a device looking broadcasts a probe to the netplay port each
+// second, and hosts answer with who they are and what they're hosting.
+
+static const char probeTag[8] = "armGBA?", answerTag[8] = "armGBA!";
+
+enum {
+	// The tag, version, how, players, most players, port, nickname and game.
+	ANSWER_SIZE = 8 + 4 + 2 + 32 + 128,
+	FOUND_FOR = 3000,
+};
+
+static int scanner = -1;
+static struct NetHost found[NET_HOSTS_MOST];
+static int foundCount;
+static Uint32 probedAt;
+
+static int udpSocket(void) {
+	int const fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd >= 0) {
+		fcntl(fd, F_SETFL, O_NONBLOCK);
+	}
+	return fd;
+}
+
+// A host's socket for probes, on the netplay port.
+static int answerOn(void) {
+	int const fd = udpSocket();
+	int const yes = 1;
+	struct sockaddr_in any = { .sin_family = AF_INET, .sin_port = htons((uint16_t) settings.netPort), .sin_addr.s_addr = htonl(INADDR_ANY) };
+	if (fd >= 0 && (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) || bind(fd, (struct sockaddr*) &any, sizeof(any)))) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+static void answerProbes(void) {
+	uint8_t probe[16];
+	struct sockaddr_storage from;
+	socklen_t length = sizeof(from);
+	ssize_t n;
+	while (answerer >= 0 && (n = recvfrom(answerer, probe, sizeof(probe), 0, (struct sockaddr*) &from, &length)) >= 0) {
+		if (n == 9 && !memcmp(probe, probeTag, 8) && probe[8] == VERSION) {
+			uint8_t answer[ANSWER_SIZE] = { 0 };
+			memcpy(answer, answerTag, 8);
+			answer[8] = VERSION;
+			answer[9] = (uint8_t) sessionLink();
+			answer[10] = (uint8_t) netPlayers();
+			answer[11] = (uint8_t) playersMost();
+			put16(answer + 12, (unsigned) settings.netPort);
+			snprintf((char*) answer + 14, 32, "%s", settings.nickname);
+			snprintf((char*) answer + 46, 128, "%s", app.gameName);
+			sendto(answerer, answer, sizeof(answer), 0, (struct sockaddr*) &from, length);
+		}
+		length = sizeof(from);
+	}
+}
+
+// To every network's broadcast address, as 255.255.255.255 leaves by only one.
+static void probe(void) {
+	uint8_t message[9];
+	memcpy(message, probeTag, 8);
+	message[8] = VERSION;
+	struct sockaddr_in to = { .sin_family = AF_INET, .sin_port = htons((uint16_t) settings.netPort), .sin_addr.s_addr = htonl(INADDR_BROADCAST) };
+	sendto(scanner, message, sizeof(message), 0, (struct sockaddr*) &to, sizeof(to));
+	struct ifaddrs* interfaces;
+	if (getifaddrs(&interfaces)) {
+		return;
+	}
+	for (struct ifaddrs* i = interfaces; i; i = i->ifa_next) {
+		if (i->ifa_addr && i->ifa_addr->sa_family == AF_INET && i->ifa_broadaddr && (i->ifa_flags & IFF_BROADCAST) && (i->ifa_flags & IFF_UP)) {
+			to.sin_addr = ((struct sockaddr_in*) i->ifa_broadaddr)->sin_addr;
+			sendto(scanner, message, sizeof(message), 0, (struct sockaddr*) &to, sizeof(to));
+		}
+	}
+	freeifaddrs(interfaces);
+}
+
+static void takeAnswers(Uint32 now) {
+	uint8_t answer[ANSWER_SIZE + 1];
+	struct sockaddr_in from;
+	socklen_t length = sizeof(from);
+	ssize_t n;
+	while ((n = recvfrom(scanner, answer, sizeof(answer), 0, (struct sockaddr*) &from, &length)) >= 0) {
+		length = sizeof(from);
+		if (n != ANSWER_SIZE || memcmp(answer, answerTag, 8) || answer[8] != VERSION || answer[9] > LINK_OFF || from.sin_family != AF_INET) {
+			continue;
+		}
+		char ip[INET_ADDRSTRLEN], address[sizeof(found[0].address)];
+		inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip));
+		snprintf(address, sizeof(address), "%s:%u", ip, get16(answer + 12));
+		int i = 0;
+		while (i < foundCount && strcmp(found[i].address, address)) {
+			++i;
+		}
+		if (i == NET_HOSTS_MOST) {
+			continue;
+		}
+		foundCount += i == foundCount;
+		struct NetHost* h = &found[i];
+		snprintf(h->address, sizeof(h->address), "%s", address);
+		h->how = answer[9];
+		h->players = answer[10];
+		h->most = answer[11];
+		snprintf(h->nickname, sizeof(h->nickname), "%.31s", (const char*) answer + 14);
+		snprintf(h->game, sizeof(h->game), "%.127s", (const char*) answer + 46);
+		h->seen = now;
+	}
+}
+
+// Looks for hosts while it's called, as each frame the Join list is shown: a probe each second, and a
+// host not heard from in three dropped.
+int netScan(const struct NetHost** hosts) {
+	Uint32 const now = SDL_GetTicks();
+	if (scanner < 0) {
+		int const yes = 1;
+		scanner = udpSocket();
+		if (scanner < 0) {
+			return 0;
+		}
+		setsockopt(scanner, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
+		probedAt = now - 1000;
+	}
+	if (now - probedAt >= 1000) {
+		probedAt = now;
+		probe();
+	}
+	takeAnswers(now);
+	int kept = 0;
+	for (int i = 0; i < foundCount; ++i) {
+		if (now - found[i].seen < FOUND_FOR) {
+			found[kept++] = found[i];
+		}
+	}
+	foundCount = kept;
+	*hosts = found;
+	return foundCount;
+}
+
+void netScanStop(void) {
+	if (scanner >= 0) {
+		close(scanner);
+		scanner = -1;
+	}
+	foundCount = 0;
 }
 
 // No connections yet.

@@ -1047,6 +1047,7 @@ bool loadGame(const char* path) {
 	}
 	app.loaded = true;
 	app.paused = false;
+	netGameStarted();
 	readSave(RETRO_MEMORY_SAVE_RAM, 0, "srm");
 	readSave(RETRO_MEMORY_RTC, 1, "rtc");
 	cheatListLoad();
@@ -1597,6 +1598,7 @@ static void doAction(enum Action action) {
 	case ACT_RESET:
 		if (!netRunning()) {
 			retro_reset();
+			netGameStarted();
 			cheevosReset();
 			osd("Restarted");
 		}
@@ -1726,8 +1728,10 @@ int main(int argc, char** argv) {
 	const char* game = NULL;
 	const char* connectTo = NULL;
 	bool listControllers = false;
-	// Hosting from the command line: 0 off, 1 Together, 2 Separate.
-	int hostMode = 0;
+	// Hosting from the command line: --host links as Link Mode says; --host-off, --host-together and
+	// --host-separate as they say.
+	bool host = false;
+	const char* hostLink = NULL;
 #ifdef __ANDROID__
 	// On Android, armgba's folder is at the shared storage's top, where a file manager reaches it, and
 	// the game list starts there.
@@ -1756,9 +1760,11 @@ int main(int argc, char** argv) {
 		} else if (!strcmp(argv[i], "--scale") && i + 1 < argc) {
 			int const scale = atoi(argv[++i]);
 			settings.scale = SDL_max(1, SDL_min(8, scale));
-		} else if (!strcmp(argv[i], "--host") || !strcmp(argv[i], "--host-together") || !strcmp(argv[i], "--host-separate") ||
-		           !strcmp(argv[i], "--host-single")) {
-			hostMode = !strcmp(argv[i], "--host-separate") ? 2 : !strcmp(argv[i], "--host-single") ? 3 : 1;
+		} else if (!strcmp(argv[i], "--host")) {
+			host = true;
+		} else if (!strncmp(argv[i], "--host-", 7)) {
+			host = true;
+			hostLink = argv[i] + 7;
 		} else if (!strcmp(argv[i], "--connect") && i + 1 < argc) {
 			connectTo = argv[++i];
 		} else if (!strcmp(argv[i], "--port") && i + 1 < argc) {
@@ -1766,7 +1772,7 @@ int main(int argc, char** argv) {
 		} else if (!strcmp(argv[i], "--controllers")) {
 			listControllers = true;
 		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-separate | --host-single | --connect ADDRESS] [--port N] [--controllers] [game]\n\n"
+			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-off | --host-together | --host-separate | --connect ADDRESS] [--port N] [--controllers] [game]\n\n"
 			       "Esc, the controller's Guide button or a right-click opens the menu, where everything else is.\n"
 			       "Settings: ~/.config/armgba; saves, states, screenshots and cheats: ~/.local/share/armgba.\n");
 			return 0;
@@ -1837,8 +1843,8 @@ int main(int argc, char** argv) {
 	cheevosInit();
 	setPadForPort();
 	if (game && loadGame(game)) {
-		if (hostMode) {
-			netHost(hostMode == 2 ? HOST_SEPARATE : hostMode == 3 ? HOST_SINGLE : HOST_TOGETHER);
+		if (host) {
+			netHost(hostLink);
 		} else if (connectTo) {
 			netJoin(connectTo);
 		}

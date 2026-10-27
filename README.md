@@ -175,11 +175,13 @@ Rows ending in "..." open a page; rows with a value step through it. The line un
 what the selected item does. With a controller, the buttons bound to A and B choose and go back, and
 in the game list L and R jump by letter; on the keyboard, typing a name's start finds it. Restart,
 Close Game, Quit (with a game running), Reset Config and Reset Controls and Hotkeys ask for a second
-press, said at the bottom left. Netplay is armgba to armgba: Together, the default, runs every
-player's console on every device, kept in step with rollback; Separate carries the link cable
-between two devices each running its own game; Single is one console every player shares, as Shared
-Controls says (everyone's buttons at once if it's off). `--host` (Together), `--host-separate`,
-`--host-single` and `--connect ADDRESS` start it from the command line. Achievements need the
+press, said at the bottom left. Netplay is armgba to armgba, and Create a Host Session links the
+devices as Core's Link Mode says: Off is one console every player shares, as Shared Controls says
+(everyone's buttons at once if it's off), for up to four players; Together runs every player's
+console on every device, kept in step with rollback; Separate carries the link cable between two
+devices each running its own game. Join lists the hosts on the local network, found by a broadcast
+on the netplay port, or takes an address. `--host` (as Link Mode says), `--host-off`,
+`--host-together`, `--host-separate` and `--connect ADDRESS` start it from the command line. Achievements need the
 system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
