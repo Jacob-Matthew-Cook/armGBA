@@ -71,6 +71,7 @@ enum Message {
 	MSG_CANT_JOIN, // client: why it's leaving, a CANT_ reason, and for CANT_GAME the game's name
 	MSG_SAVE,      // client, Together: its player, the save's size, its save, then its clock's
 	MSG_SAVE_IN,   // host: whether it went in, or why not
+	MSG_NAMES,     // host: each device's first player, its players and its name
 };
 
 // Why a client can't join a host's session.
@@ -125,6 +126,8 @@ static bool loadingForSession;
 static uint8_t* heldWelcome;
 static size_t heldWelcomeSize;
 static char heldGame[256];
+// Each player's name, as the host tells a device that joined; the host knows its connections'.
+static char names[PEERS][32];
 
 struct Check {
 	int frame;
@@ -1024,6 +1027,7 @@ void netStop(void) {
 	netMode = NET_OFF;
 	netTogether = false;
 	selfCount = 1;
+	memset(names, 0, sizeof(names));
 	libretroSetNetplayPlayer(-1);
 	setStatus();
 }
@@ -1052,6 +1056,24 @@ bool netRunning(void) {
 	return netMode != NET_OFF;
 }
 
+bool netOwnAddress(char out[64]) {
+	struct ifaddrs* interfaces;
+	bool found = false;
+	if (getifaddrs(&interfaces)) {
+		return false;
+	}
+	for (struct ifaddrs* i = interfaces; i && !found; i = i->ifa_next) {
+		if (i->ifa_addr && i->ifa_addr->sa_family == AF_INET && (i->ifa_flags & IFF_UP) && !(i->ifa_flags & IFF_LOOPBACK)) {
+			char ip[INET_ADDRSTRLEN];
+			inet_ntop(AF_INET, &((struct sockaddr_in*) i->ifa_addr)->sin_addr, ip, sizeof(ip));
+			snprintf(out, 64, "%s:%d", ip, settings.netPort);
+			found = true;
+		}
+	}
+	freeifaddrs(interfaces);
+	return found;
+}
+
 bool netInHostsGame(void) {
 	return netMode == NET_JOINED && netTogether && roll.synced;
 }
@@ -1065,6 +1087,48 @@ bool netRollingBack(void) {
 }
 
 // The host.
+
+const char* netPlayerName(int player) {
+	if (netMode == NET_OFF || player < 0 || player >= PEERS) {
+		return NULL;
+	}
+	if (netMode == NET_JOINED) {
+		return names[player][0] ? names[player] : NULL;
+	}
+	if (isLocal(player)) {
+		return settings.nickname;
+	}
+	for (int i = 0; i < PEERS; ++i) {
+		if (connections[i].welcomed && owns(&connections[i], player)) {
+			return connections[i].nickname;
+		}
+	}
+	return NULL;
+}
+
+bool netPlayerHere(int player) {
+	return netMode != NET_OFF && isLocal(player);
+}
+
+// Every device's players' names, to every device, as one joins or leaves.
+static void sendNames(void) {
+	uint8_t message[1 + (PEERS + 1) * 34];
+	int count = 0;
+	uint8_t* at = message + 1;
+	for (int i = -1; i < PEERS; ++i) {
+		struct Connection const* c = i < 0 ? NULL : &connections[i];
+		if (c && (c->fd < 0 || !c->welcomed)) {
+			continue;
+		}
+		at[0] = (uint8_t) (c ? c->id : self);
+		at[1] = (uint8_t) (c ? c->count : selfCount);
+		snprintf((char*) at + 2, 32, "%.31s", c ? c->nickname : settings.nickname);
+		at += 34;
+		++count;
+	}
+	message[0] = (uint8_t) count;
+	sendOthers(-1, MSG_NAMES, message, (size_t) (at - message));
+}
 
 // An option as the session has it: a host running armGBA's firmware, its system folder having no
 // Nintendo BIOS or boot ROM, has the players run armGBA's too.
@@ -1162,6 +1226,7 @@ static void hostHello(struct Connection* c, const uint8_t* p, size_t size) {
 	c->welcomed = true;
 	sendTo(c, MSG_WELCOME, message, length);
 	free(message);
+	sendNames();
 	// Together, a player has joined once their firmware is the host's and they're ready.
 	if (!netTogether) {
 		osd("%s joined", c->nickname);
@@ -1184,6 +1249,7 @@ static void playerGone(struct Connection* c) {
 	if (!turnedAway) {
 		osd("%s left", name);
 	}
+	sendNames();
 	if (netTogether) {
 		for (int q = id; q < id + count; ++q) {
 			if (roll.joined[q] != INT_MAX && roll.left[q] == INT_MAX) {
@@ -1580,6 +1646,17 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 				osd("Netplay: your save is loaded; your console restarted with it");
 			} else {
 				osd("Netplay: your save couldn't be loaded: %.*s", (int) strnlen((const char*) p + 1, size - 1), (const char*) p + 1);
+			}
+		}
+		break;
+	case MSG_NAMES:
+		if (!host && size >= 1) {
+			memset(names, 0, sizeof(names));
+			for (int i = 0; i < p[0] && 1 + (size_t) (i + 1) * 34 <= size; ++i) {
+				const uint8_t* const entry = p + 1 + i * 34;
+				for (int q = entry[0]; q < entry[0] + entry[1] && q < PEERS; ++q) {
+					snprintf(names[q], sizeof(names[q]), "%.*s", (int) strnlen((const char*) entry + 2, 31), (const char*) entry + 2);
+				}
 			}
 		}
 		break;

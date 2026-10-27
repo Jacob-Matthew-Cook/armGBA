@@ -383,6 +383,11 @@ int netPlayers(void);
 bool netRunning(void);
 // Whether this device joined a session in Off or Together, running the host's game.
 bool netInHostsGame(void);
+// This device's address on the local network, as another device joins it, with the port.
+bool netOwnAddress(char out[64]);
+// A player's name in the session, and whether they play on this device.
+const char* netPlayerName(int player);
+bool netPlayerHere(int player);
 // Whether leaving that session closes the game, as Keep Playing on Disconnect says.
 bool netClosesOnLeaving(void);
 uint16_t netInput(unsigned port, unsigned id);

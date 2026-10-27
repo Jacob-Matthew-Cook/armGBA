@@ -210,8 +210,11 @@ two levels down), if it's the same file as the host's, and if it isn't there by 
 list opens to choose your copy; Separate needs your own game, or Your
 Cartridge: Removed. Join's Scan for Local Hosts lists the sessions on the local network below it,
 found by a broadcast on the netplay port and updated while shown, with each host's Link Mode and
-players; choosing it again scans afresh. Join a Host... takes an address. Join also has Keep Playing on
-Disconnect and Keep My Netplay Progress, as Core has them. In Together, a player who
+players; choosing it again scans afresh. Join a Host... takes an address. The page puts hosting and joining
+first and its settings last, as RetroArch's does; Settings also has Keep Playing on Disconnect and
+Keep My Netplay Progress, as Core has them. In a session it shows the players by name, and a host
+its own address for Join a Host... on another device; Disconnect asks again when it would close the
+game. In Together, a player who
 joined can Send My Save: their own save of the game goes into their console, which restarts, and
 the host backs up the one it replaces; with Keep My Netplay Progress on, their progress becomes their
 save as they leave. A device that joined Off or Together closes the game as the session ends,

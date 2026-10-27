@@ -1631,8 +1631,93 @@ static void joinFound(int which, int delta) {
 	joinDone(hosts[which].address);
 }
 
+// The hosts Scan for Local Hosts found, indented below it, each joined by choosing it.
+static void addFoundHosts(void) {
+	// Looking only once asked, and while this page shows.
+	static Uint32 builtAt;
+	findingHosts &= SDL_GetTicks() - builtAt < 1000;
+	builtAt = SDL_GetTicks();
+	if (!findingHosts) {
+		return;
+	}
+	const struct NetHost* hosts;
+	int const count = netScan(&hosts);
+	char found[32];
+	snprintf(found, sizeof(found), count ? "%d found" : "None yet", count);
+	addInfo("Scanning this network...", found);
+	asGame();
+	for (int i = 0; i < count; ++i) {
+		char label[192], value[64];
+		snprintf(label, sizeof(label), "%s: %s", hosts[i].nickname, hosts[i].game);
+		static const char* const shared[] = { "", ", Everyone", ", Pass Around" };
+		snprintf(value, sizeof(value), "Link Mode %s%s, %d/%d", netLinkNames[hosts[i].how], hosts[i].how == LINK_OFF ? shared[hosts[i].shared] : "",
+		         hosts[i].players, hosts[i].most);
+		addChoice(label, value, joinFound, i);
+		asGame();
+		helpFor(hosts[i].how == LINK_SEPARATE ? "Joins this session. Separate: you play your own game, or Your Cartridge: Removed for a "
+		                                        "single-pak game."
+		                                      : "Joins this session. Your copy of the host's game loads by itself, and each controller "
+		                                        "here is a player.");
+	}
+}
+
+// In a session: who plays, each player's name, this device's marked.
+static void addPlayers(void) {
+	addHeader("Players");
+	for (int player = 0; player < 4; ++player) {
+		const char* const name = netPlayerName(player);
+		if (!name) {
+			continue;
+		}
+		static char labels[4][16], values[4][48];
+		snprintf(labels[player], sizeof(labels[player]), "Player %d", player + 1);
+		snprintf(values[player], sizeof(values[player]), "%.31s%s", name, netPlayerHere(player) ? " (this device)" : "");
+		addInfo(labels[player], values[player]);
+	}
+}
+
+// Netplay, as RetroArch's: what to do first (host, join, Save Manager, or in a session its players,
+// Send My Save and Disconnect), then the settings, which a session takes as it starts.
 static void netplayMenu(void) {
 	addInfo("Status", netStatus[0] ? netStatus : "Not connected");
+	static char address[64];
+	if (netMode == NET_HOSTING && netOwnAddress(address)) {
+		addInfo("Your Address", address);
+		helpFor("What another device types in Join a Host... to join from beyond this network's scan.");
+	}
+	if (netMode != NET_OFF) {
+		addPlayers();
+		addHeader("Session");
+		if (netCanSendSave()) {
+			addItem("Send My Save", netAction, 9);
+			items[itemCount - 1].confirm = true;
+			helpFor("Puts your save of this game in your console, which restarts. With Keep My Netplay Progress on, your "
+			        "progress is saved to it as you leave.");
+		}
+		addItem("Disconnect", netAction, 4);
+		items[itemCount - 1].confirm = netClosesOnLeaving();
+		helpFor(netClosesOnLeaving() ? "Leaves netplay and closes the game, which is the host's."
+		        : netInHostsGame()   ? "Leaves netplay; the host's game carries on here, and from then only armGBA/Remote keeps its saves."
+		                             : "Leaves netplay; the game carries on here.");
+		if (app.noCartridge) {
+			addSaveManager();
+		}
+		return;
+	}
+	addHeader("Host");
+	addItem("Create a Host Session", netAction, 1);
+	helpFor("Hosts the loaded game, linked as Link Mode below says. In Off and Together, each controller here is a player.");
+	addHeader("Join");
+	addItem("Scan for Local Hosts", netAction, 8);
+	helpFor(findingHosts ? "Clears the list below and scans again. The list also updates by itself while it shows."
+	                     : "Scans this network for sessions, and lists them below as they're found.");
+	addFoundHosts();
+	addChoice("Join a Host...", settings.host, netAction, 3);
+	helpFor("Type the host's name or address, with :port if it isn't the usual one. In Off and Together, your copy of the "
+	        "host's game loads by itself, and each controller here is a player.");
+	addSaveManager();
+	addNetplayLink();
+	addHeader("Settings");
 	addChoice("Your Name", settings.nickname, netAction, 0);
 	helpFor("Shown to the other players.");
 	char text[32];
@@ -1642,66 +1727,13 @@ static void netplayMenu(void) {
 	snprintf(text, sizeof(text), "%d %s", settings.inputDelay, frames(settings.inputDelay));
 	addValue("Input Delay", text, changeSetting, SET_INPUT_DELAY);
 	helpFor("How long each player's buttons wait, with Link Mode Off or Together, so fewer corrections show. More suits a slow network.");
-	if (netMode == NET_OFF) {
-		addNetplayLink();
-		addHeader("Host");
-		addItem("Create a Host Session", netAction, 1);
-		helpFor("Hosts the loaded game, linked as Link Mode above says. In Off and Together, each controller here is a player.");
-		addHeader("Join");
-		addValue("Your Cartridge", joinNoCartridge ? "Removed" : "Inserted", netAction, 7);
-		helpFor("Removed: joins with no game, for a single-pak game the host's console sends over the cable, as a real one "
-		        "does. Needs a host on Link Mode Separate. The game file is never sent.");
-		// A joining device's own choices for when the session ends.
-		for (int i = 0; i < optionCount; ++i) {
-			if (!strcmp(options[i].key, "armgba_keep_progress") || !strcmp(options[i].key, "armgba_keep_playing")) {
-				addOption(i);
-			}
-		}
-		addItem("Join a Host...", netAction, 3);
-		helpFor("Type the host's name or address. In Off and Together, your copy of the host's game loads by itself, and each "
-		        "controller here is a player.");
-		addItem("Scan for Local Hosts", netAction, 8);
-		helpFor(findingHosts ? "Clears the list below and scans again. The list also updates by itself while it shows."
-		                     : "Scans this network for sessions, and lists them below as they're found.");
-		// Looking only once asked, and while this page shows.
-		static Uint32 builtAt;
-		findingHosts &= SDL_GetTicks() - builtAt < 1000;
-		builtAt = SDL_GetTicks();
-		if (findingHosts) {
-			const struct NetHost* hosts;
-			int const count = netScan(&hosts);
-			char found[32];
-			snprintf(found, sizeof(found), count ? "%d found" : "None yet", count);
-			addInfo("Scanning this network...", found);
-			asGame();
-			for (int i = 0; i < count; ++i) {
-				char label[192], value[64];
-				snprintf(label, sizeof(label), "%s: %s", hosts[i].nickname, hosts[i].game);
-				static const char* const shared[] = { "", ", Everyone", ", Pass Around" };
-				snprintf(value, sizeof(value), "Link Mode %s%s, %d/%d", netLinkNames[hosts[i].how],
-				         hosts[i].how == LINK_OFF ? shared[hosts[i].shared] : "", hosts[i].players, hosts[i].most);
-				addChoice(label, value, joinFound, i);
-				asGame();
-				helpFor(hosts[i].how == LINK_SEPARATE ? "Joins this session. Separate: you play your own game, or Your Cartridge: "
-				                                        "Removed for a single-pak game."
-				                                      : "Joins this session. Your copy of the host's game loads by itself, and each "
-				                                        "controller here is a player.");
-			}
-		}
-		addSaveManager();
-	} else {
-		if (netCanSendSave()) {
-			addItem("Send My Save", netAction, 9);
-			items[itemCount - 1].confirm = true;
-			helpFor("Puts your save of this game in your console, which restarts. With Keep My Netplay Progress on, your "
-			        "progress is saved to it as you leave.");
-		}
-		addItem("Disconnect", netAction, 4);
-		helpFor(netClosesOnLeaving() ? "Leaves netplay and closes the game, which is the host's."
-		        : netInHostsGame()   ? "Leaves netplay; the host's game carries on here, and from then only armGBA/Remote keeps its saves."
-		                             : "Leaves netplay; the game carries on here.");
-		if (app.noCartridge) {
-			addSaveManager();
+	addValue("Your Cartridge", joinNoCartridge ? "Removed" : "Inserted", netAction, 7);
+	helpFor("Removed: joins with no game, for a single-pak game the host's console sends over the cable, as a real one "
+	        "does. Needs a host on Link Mode Separate. The game file is never sent.");
+	// A joining device's own choices for when the session ends.
+	for (int i = 0; i < optionCount; ++i) {
+		if (!strcmp(options[i].key, "armgba_keep_playing") || !strcmp(options[i].key, "armgba_keep_progress")) {
+			addOption(i);
 		}
 	}
 }
