@@ -178,8 +178,10 @@ The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyb
 too on a row without a value), and it opens again where it was left. General has the recent games,
 Load Game, the AppImage's own settings and Quit: Video (window, scaling, vsync, and the frame rate
 and messages on screen), Shaders for what the GPU draws (Sharp, Smooth, and its LCD grid and Game
-Boy pixel shadow), the sound's volume and latency, controls, Fast-Forward and Rewind (with
-Run-Ahead), Saves and Folders (Auto Save State, and where games, BIOS files, saves, states and
+Boy pixel shadow), the sound's volume and latency, controls (with Players, which controller plays
+each player, as RetroArch's Device Index, remembered for when they connect again; a ROCKNIX
+handheld's own controls show as Built-In Controls), Fast-Forward and Rewind (with Run-Ahead), Saves
+and Folders (Auto Save State, and where games, BIOS files, saves, states and
 screenshots are; the Games folder is found by itself, ROCKNIX's roms or a roms folder holding gb,
 gbc or gba, and Load Game opens there with those three first), the menus' look (accent color, size,
 background), and Reset All Settings. Game has the loaded game's state slots (0 to 99, each with a

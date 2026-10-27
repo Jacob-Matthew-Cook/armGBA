@@ -1068,9 +1068,61 @@ static void keyControlsMenu(void) {
 	}
 }
 
+// Players: a player's row gives it the next connected controller, or none, in the order they
+// connected; the player that had it takes this one's, so each controller plays one player.
+static void choosePlayer(int port, int delta) {
+	SDL_GameController* order[PORTS + 1];
+	int count = 0;
+	bool empty = false;
+	for (int p = 0; p < PORTS; ++p) {
+		if (!app.pads[p]) {
+			empty = true;
+			continue;
+		}
+		SDL_JoystickID const id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(app.pads[p]));
+		int at = count++;
+		while (at > 0 && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(order[at - 1])) > id) {
+			order[at] = order[at - 1];
+			--at;
+		}
+		order[at] = app.pads[p];
+	}
+	if (empty) {
+		order[count++] = NULL;
+	}
+	int at = 0;
+	for (int i = 0; i < count; ++i) {
+		at = order[i] == app.pads[port] ? i : at;
+	}
+	SDL_GameController* const next = count > 1 ? order[wrap(at, delta ? delta : 1, count)] : app.pads[port];
+	for (int p = 0; p < PORTS; ++p) {
+		if (p != port && app.pads[p] == next) {
+			swapPlayers(port, p);
+			return;
+		}
+	}
+}
+
+static void playersMenu(void) {
+#ifdef __ANDROID__
+	const char* const firstAlone = settings.touchControls ? "On-Screen Controls" : "None";
+#else
+	const char* const firstAlone = "Keyboard";
+#endif
+	for (int p = 0; p < PORTS; ++p) {
+		char label[16];
+		snprintf(label, sizeof(label), "Player %d", p + 1);
+		addValue(label, app.pads[p] ? playerPadName(p) : p ? "None" : firstAlone, choosePlayer, p);
+		helpFor("The controller this player uses. Left and right pick another connected controller, and the player who had it "
+		        "takes this one's. Remembered for when they connect again.");
+	}
+}
+
 static void openControlsPage(int which, int delta) {
+	static void (*const pages[])(void) = { padControlsMenu, keyControlsMenu, playersMenu };
+	static const char* const titles[] = { "Controller", "Keyboard", "Players" };
 	if (!delta) {
-		pushMenu(which ? keyControlsMenu : padControlsMenu, which ? "Keyboard" : "Controller");
+		pushMenu(pages[which], titles[which]);
 	}
 }
 
@@ -1079,6 +1131,8 @@ static void controlsMenu(void) {
 	helpFor("The buttons and hotkeys on a controller, the same for each player's.");
 	addItem("Keyboard...", openControlsPage, 1);
 	helpFor("The keys and hotkeys on the keyboard, which plays player 1.");
+	addItem("Players...", openControlsPage, 2);
+	helpFor("Which controller plays each player, here and in netplay.");
 #ifdef __ANDROID__
 	addValue("On-Screen Controls", onOff(settings.touchControls), changeSetting, SET_TOUCH);
 	helpFor("A controller on the screen, played by touch, there while no other controller is connected.");

@@ -679,6 +679,13 @@ static enum Face handheldFace(void) {
 	return (enum Face) face;
 }
 
+// Whether a controller is the handheld's own controls: ROCKNIX's InputPlumber shows them as a
+// DualSense or an Xbox controller, which ROCKNIX's controller mappings name for InputPlumber.
+static bool builtIn(SDL_GameController* pad) {
+	const char* const shown = SDL_GameControllerName(pad);
+	return shown && strstr(shown, "InputPlumber");
+}
+
 static enum Face faceOf(SDL_GameController* pad) {
 	// Retroid's have Nintendo's letters, in its Xbox mode too.
 	if (SDL_GameControllerGetVendor(pad) == 0x2022) {
@@ -686,8 +693,7 @@ static enum Face faceOf(SDL_GameController* pad) {
 	}
 	// ROCKNIX's InputPlumber shows a handheld's own controls as a DualSense or an Xbox controller,
 	// whatever its buttons say, so they go by the handheld's.
-	const char* const shown = SDL_GameControllerName(pad);
-	if (shown && strstr(shown, "InputPlumber")) {
+	if (builtIn(pad)) {
 		return handheldFace();
 	}
 	switch (SDL_GameControllerGetType(pad)) {
@@ -730,6 +736,8 @@ static bool sentByLetter(SDL_GameController* pad) {
 
 static enum Face padFaces[PORTS];
 static bool padByLetter[PORTS];
+// Each player's controller is the handheld's own controls.
+static bool padBuiltIn[PORTS];
 static SDL_JoystickID lastPressed = -1;
 
 // Whether a controller's A and B, X and Y swap to the places the bindings mean: A on the right, as
@@ -870,6 +878,56 @@ static int16_t inputState(unsigned port, unsigned device, unsigned index, unsign
 }
 
 // Controllers take the players in the order they're plugged in.
+// The player a newly connected controller plays: the one it was given in Controls > Players, if
+// that's free, else the first free one.
+static int portFor(SDL_GameController* pad) {
+	char guid[33];
+	SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(SDL_GameControllerGetJoystick(pad)), guid, sizeof(guid));
+	for (int port = 0; port < PORTS; ++port) {
+		if (!app.pads[port] && !strcmp(settings.playerPads[port], guid)) {
+			return port;
+		}
+	}
+	for (int port = 0; port < PORTS; ++port) {
+		if (!app.pads[port]) {
+			return port;
+		}
+	}
+	return -1;
+}
+
+// Two players trade controllers, with what's kept for each, and the order is remembered.
+void swapPlayers(int a, int b) {
+	SDL_GameController* const pad = app.pads[a];
+	app.pads[a] = app.pads[b];
+	app.pads[b] = pad;
+	enum Face const face = padFaces[a];
+	padFaces[a] = padFaces[b];
+	padFaces[b] = face;
+	bool const byLetter = padByLetter[a];
+	padByLetter[a] = padByLetter[b];
+	padByLetter[b] = byLetter;
+	bool const own = padBuiltIn[a];
+	padBuiltIn[a] = padBuiltIn[b];
+	padBuiltIn[b] = own;
+	uint32_t const held = heldBack[a];
+	heldBack[a] = heldBack[b];
+	heldBack[b] = held;
+	for (int side = 0; side < 2; ++side) {
+		uint16_t const strength = rumbleStrength[a][side];
+		rumbleStrength[a][side] = rumbleStrength[b][side];
+		rumbleStrength[b][side] = strength;
+	}
+	for (int port = 0; port < PORTS; ++port) {
+		settings.playerPads[port][0] = '\0';
+		if (app.pads[port]) {
+			SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(SDL_GameControllerGetJoystick(app.pads[port])), settings.playerPads[port],
+			                          sizeof(settings.playerPads[port]));
+		}
+	}
+	settingsWrite();
+}
+
 void setPadForPort(void) {
 	touchUpdate();
 	for (int port = 0; port < PORTS; ++port) {
@@ -887,20 +945,28 @@ void setPadForPort(void) {
 		for (int port = 0; port < PORTS; ++port) {
 			open |= app.pads[port] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(app.pads[port])) == id;
 		}
-		for (int port = 0; port < PORTS && !open; ++port) {
-			if (!app.pads[port]) {
-				app.pads[port] = SDL_GameControllerOpen(i);
-				open = true;
-				padFaces[port] = app.pads[port] ? faceOf(app.pads[port]) : FACE_PLACES;
-#ifdef __ANDROID__
-				padByLetter[port] = app.pads[port] && sentByLetter(app.pads[port]);
-#endif
-				if (app.pads[port]) {
-					osd("Controller %d: %s", port + 1, SDL_GameControllerName(app.pads[port]));
-				}
+		SDL_GameController* const pad = open ? NULL : SDL_GameControllerOpen(i);
+		int const port = pad ? portFor(pad) : -1;
+		if (port < 0) {
+			if (pad) {
+				SDL_GameControllerClose(pad);
 			}
+			continue;
 		}
+		app.pads[port] = pad;
+		padFaces[port] = faceOf(pad);
+		padBuiltIn[port] = builtIn(pad);
+#ifdef __ANDROID__
+		padByLetter[port] = sentByLetter(pad);
+#endif
+		osd("Player %d: %s", port + 1, playerPadName(port));
 	}
+}
+
+// A player's controller as the menus name it: the handheld's own controls, or the controller's name.
+const char* playerPadName(int port) {
+	const char* const name = app.pads[port] ? SDL_GameControllerName(app.pads[port]) : NULL;
+	return !app.pads[port] ? NULL : padBuiltIn[port] ? "Built-In Controls" : name ? name : "Controller";
 }
 
 // Saves, by the game's name: game.srm and game.rtc, as RetroArch names them.

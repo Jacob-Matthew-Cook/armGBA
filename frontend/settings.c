@@ -219,6 +219,8 @@ static void takeSetting(const char* key, const char* value) {
 		settings.showMessages = yes;
 	} else if (!strcmp(key, "swap_face_buttons")) {
 		settings.swapFaceButtons = yes;
+	} else if (!strncmp(key, "player_pad_", 11) && atoi(key + 11) >= 1 && atoi(key + 11) <= PORTS) {
+		copyText(settings.playerPads[atoi(key + 11) - 1], sizeof(settings.playerPads[0]), value);
 	} else if (!strcmp(key, "touch_controls")) {
 		settings.touchControls = yes;
 	} else if (!strcmp(key, "hotkeypad")) {
@@ -300,6 +302,9 @@ void settingsWrite(void) {
 	        settings.consoleFolders[1][0] ? settings.consoleFolders[1] : "auto", settings.consoleFolders[2][0] ? settings.consoleFolders[2] : "auto");
 	fprintf(f, "fast_forward = %d\nshow_messages = %s\ntouch_controls = %s\nswap_face_buttons = %s\n", settings.fastForward,
 	        no[settings.showMessages], no[settings.touchControls], no[settings.swapFaceButtons]);
+	for (int i = 0; i < PORTS; ++i) {
+		fprintf(f, "player_pad_%d = \"%s\"\n", i + 1, settings.playerPads[i]);
+	}
 	for (int i = 0; i < BUTTONS; ++i) {
 		fprintf(f, "key_%d = %d\npad_%d = %d\n", i, settings.keys[i], i, settings.pad[i]);
 	}
