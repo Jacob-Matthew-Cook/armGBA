@@ -1452,6 +1452,8 @@ static void nicknameDone(const char* text) {
 
 // Your Cartridge: Removed starts the core with no game for joining, for a single-pak game.
 static bool joinNoCartridge;
+// Scan for Local Hosts was chosen: the sessions found are listed below it.
+static bool findingHosts;
 
 // The host's address, kept for the next time.
 static void joinDone(const char* text) {
@@ -1472,11 +1474,18 @@ static void portDone(const char* text) {
 	settingsWrite();
 }
 
-// Netplay's rows: Your Name (0), Create a Host Session (1), Join (3), Disconnect (4), Port (5) and
-// Your Cartridge (7).
+// Netplay's rows: Your Name (0), Create a Host Session (1), Join (3), Disconnect (4), Port (5),
+// Your Cartridge (7) and Scan for Local Hosts (8), which scans afresh when chosen again.
 static void netAction(int which, int delta) {
 	if (which == 7) {
 		joinNoCartridge = !joinNoCartridge;
+		return;
+	}
+	if (which == 8) {
+		if (!delta) {
+			netScanStop();
+			findingHosts = true;
+		}
 		return;
 	}
 	if (delta) {
@@ -1573,20 +1582,33 @@ static void netplayMenu(void) {
 		addItem("Join a Host...", netAction, 3);
 		helpFor("Type the host's name or address. In Off and Together, your copy of the host's game loads by itself, and each "
 		        "controller here is a player.");
-		const struct NetHost* hosts;
-		int const count = netScan(&hosts);
-		for (int i = 0; i < count; ++i) {
-			char label[192], value[64];
-			snprintf(label, sizeof(label), "%s: %s", hosts[i].nickname, hosts[i].game);
-			static const char* const shared[] = { "", ", Everyone", ", Pass Around" };
-			snprintf(value, sizeof(value), "Link Mode %s%s, %d/%d", netLinkNames[hosts[i].how],
-			         hosts[i].how == LINK_OFF ? shared[hosts[i].shared] : "", hosts[i].players, hosts[i].most);
-			addChoice(label, value, joinFound, i);
-			helpFor("Joins this host on your network. In Off and Together, your copy of the host's game loads by itself, and each "
-			        "controller here is a player.");
-		}
-		if (!count) {
-			addInfo("Hosts", "Looking on this network...");
+		addItem("Scan for Local Hosts", netAction, 8);
+		helpFor(findingHosts ? "Clears the list below and scans again. The list also updates by itself while it shows."
+		                     : "Scans this network for sessions, and lists them below as they're found.");
+		// Looking only once asked, and while this page shows.
+		static Uint32 builtAt;
+		findingHosts &= SDL_GetTicks() - builtAt < 1000;
+		builtAt = SDL_GetTicks();
+		if (findingHosts) {
+			const struct NetHost* hosts;
+			int const count = netScan(&hosts);
+			char found[32];
+			snprintf(found, sizeof(found), count ? "%d found" : "None yet", count);
+			addInfo("Scanning this network...", found);
+			asGame();
+			for (int i = 0; i < count; ++i) {
+				char label[192], value[64];
+				snprintf(label, sizeof(label), "%s: %s", hosts[i].nickname, hosts[i].game);
+				static const char* const shared[] = { "", ", Everyone", ", Pass Around" };
+				snprintf(value, sizeof(value), "Link Mode %s%s, %d/%d", netLinkNames[hosts[i].how],
+				         hosts[i].how == LINK_OFF ? shared[hosts[i].shared] : "", hosts[i].players, hosts[i].most);
+				addChoice(label, value, joinFound, i);
+				asGame();
+				helpFor(hosts[i].how == LINK_SEPARATE ? "Joins this session. Separate: you play your own game, or Your Cartridge: "
+				                                        "Removed for a single-pak game."
+				                                      : "Joins this session. Your copy of the host's game loads by itself, and each "
+				                                        "controller here is a player.");
+			}
 		}
 	} else {
 		addItem("Disconnect", netAction, 4);

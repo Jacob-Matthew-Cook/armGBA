@@ -202,8 +202,9 @@ order, as far as the session's players go; Separate is a player a device. Off an
 game loaded to join: the host's game loads from your folders by its file name (beside your game, in
 the game list's folder, the Game Boy, Game Boy Color and Game Boy Advance folders, or the Games folder
 two levels down), if it's the same file as the host's; Separate needs your own game, or Your
-Cartridge: Removed. Join lists the hosts on the local network, found by a broadcast on the netplay port, with each host's Link Mode and players, or
-takes an address. `--host` (as
+Cartridge: Removed. Join's Scan for Local Hosts lists the sessions on the local network below it,
+found by a broadcast on the netplay port and updated while shown, with each host's Link Mode and
+players; choosing it again scans afresh. Join a Host... takes an address. `--host` (as
 Link Mode says), `--host-off`, `--host-together`, `--host-separate` and `--connect ADDRESS` start it
 from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
 
