@@ -11,6 +11,24 @@ What armGBA adds is a recompiler for the Game Boy Advance's CPU, so games run wi
 handheld chips such as the Cortex-A35 and Cortex-A55. It stays accurate wherever a game could notice:
 interrupts, DMA, timers and what's on screen all happen when they would on the hardware.
 
+## Legal
+
+- **Your own games.** armGBA comes with no games and doesn't download any. Play only games you own,
+  dumped from your own cartridges or bought legally. armGBA doesn't support or promote piracy.
+- **Nothing is shared in multiplayer.** Netplay never sends a game, a BIOS or a boot ROM. Each player
+  uses their own files. In Together and Off, every device runs every player's console, so every
+  player needs their own legally owned copy of every game in the session, both games when player 2
+  plays another. A host on Nintendo's BIOS or boot ROM needs joiners with their own copy of the same
+  file; armGBA's open-source BIOS and boot ROMs are built in. In Separate, only what the game itself
+  sends over the emulated link cable crosses the network, such as a single-pak game's program, as
+  on the real hardware.
+- **Not Nintendo.** armGBA is an independent project, not affiliated with or endorsed by Nintendo.
+  Game Boy, Game Boy Pocket, Game Boy Light, Game Boy Color and Game Boy Advance are trademarks of
+  Nintendo, and the consoles' BIOS and boot ROMs are Nintendo's copyright.
+- **Free.** armGBA is free and makes no money: no ads, no paid features. Its license (see License)
+  lets anyone share copies, even for a fee, but only with the complete source under the same
+  license, and never with games or Nintendo's BIOS or boot ROMs, which would be piracy.
+
 ## Controls
 
 | Button | Game Boy Advance | Game Boy, Game Boy Color |
@@ -291,6 +309,11 @@ Netplay's Join without a Game Pak (`--connect ADDRESS --no-game-pak`). Only what
 over the cable crosses the network; armGBA never sends a game file, and in Together, where every
 device runs every console, each device needs the game (Player 2's Game: No Cartridge starts player
 2's console empty).
+
+Together and Off also need the same BIOS or boot ROM on every device. In the app, a host on
+Nintendo's turns away a player who doesn't have the same file, and both are told why; switching to
+armGBA's in Core > System lets everyone join. RetroArch doesn't check, so set the same BIOS or
+boot ROM on every device, or armGBA's, which every device has.
 
 **Backups.**
 
