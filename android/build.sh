@@ -51,7 +51,7 @@ javac -nowarn --release 8 -classpath "$platform" -d "$out/classes" \
 
 # The package: manifest and icon, then the code and libraries, aligned and signed.
 version=$(git -C "$root" rev-list --count HEAD)
-name="1.1-$(git -C "$root" rev-parse --short HEAD)"
+name="1.2-$(git -C "$root" rev-parse --short HEAD)"
 "$tools/aapt2" compile --dir "$here/res" -o "$out/res.zip"
 "$tools/aapt2" link -I "$platform" --manifest "$here/AndroidManifest.xml" -o "$out/apk/base.apk" "$out/res.zip" \
 	--min-sdk-version $api --target-sdk-version 34 --version-code "$version" --version-name "$name"
