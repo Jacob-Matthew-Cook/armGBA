@@ -979,7 +979,7 @@ static void gameplayMenu(void) {
 	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
 	helpFor("How fast the Fast-Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
 	addValue("Rewind", onOff(settings.rewind), changeSetting, SET_REWIND);
-	helpFor("Hold the Rewind hotkey to go back in time.");
+	helpFor("Goes back in time while the Rewind hotkey is held.");
 	snprintf(text, sizeof(text), "%d MB", settings.rewindMegabytes);
 	addValue("Rewind Buffer", text, changeSetting, SET_REWIND_SIZE);
 	helpFor("Memory kept for rewinding: more goes further back.");
@@ -1084,7 +1084,7 @@ static void controlsMenu(void) {
 	helpFor("A controller on the screen, played by touch, there while no other controller is connected.");
 #endif
 	addValue("Swap A/B and X/Y", onOff(settings.swapFaceButtons), changeSetting, SET_SWAP_FACE_BUTTONS);
-	helpFor("Off: A is the right face button and B the bottom one, as on a Game Boy and in RetroArch. On: A is the bottom one and B the right; X and Y swap too. On every controller.");
+	helpFor("Off: A is the right face button and B the bottom one, as on a Game Boy and in RetroArch. On: they swap, and X and Y too.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);
 	helpFor("Puts every button, key and hotkey back as it first was.");
 	items[itemCount - 1].confirm = true;
@@ -1115,13 +1115,13 @@ static void openSettingsPage(int which, int delta) {
 
 static void addSettingsPages(void) {
 	addItem("Video...", openSettingsPage, 0);
-	helpFor("The window, scaling, vsync, and the frame rate and messages on screen.");
+	helpFor("The window, VSync, scaling, and the frame rate and messages on screen.");
 	addItem("Shaders...", openSettingsPage, 1);
 	helpFor("The filter, and the GPU's LCD grid and Game Boy pixel shadow.");
 	addItem("Audio...", openSettingsPage, 2);
 	helpFor("The volume, and how long sound waits to play.");
 	addItem("Controls...", openSettingsPage, 3);
-	helpFor("Buttons and hotkeys, for controllers and the keyboard.");
+	helpFor("Buttons and hotkeys for controllers and the keyboard, and Swap A/B and X/Y.");
 	addItem("Fast-Forward and Rewind...", openSettingsPage, 4);
 	helpFor("Fast-forward's speed, going back in time, and Run-Ahead, which answers the buttons sooner.");
 	addItem("Saves and Folders...", openSettingsPage, 5);
@@ -1526,7 +1526,7 @@ static void netplayMenu(void) {
 			snprintf(value, sizeof(value), "Link Mode %s%s, %d/%d", netLinkNames[hosts[i].how],
 			         hosts[i].how == LINK_OFF ? shared[hosts[i].shared] : "", hosts[i].players, hosts[i].most);
 			addChoice(label, value, joinFound, i);
-			helpFor("A host on this network. Joins it.");
+			helpFor("Joins this host on your network.");
 		}
 		if (!count) {
 			addInfo("Hosts", "Looking on this network...");
@@ -1728,7 +1728,7 @@ static void gameTab(void) {
 // Extras: netplay and RetroAchievements.
 static void extrasTab(void) {
 	addItem("Netplay...", openNetplay, 0);
-	helpFor("Play linked with another device over the network.");
+	helpFor("Playing with other devices over the network: hosting, joining, and the link.");
 	addItem("Achievements...", openCheevos, 0);
 	helpFor("RetroAchievements: log in, hardcore mode, and this game's achievements.");
 }

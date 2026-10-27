@@ -798,12 +798,14 @@ static void hearBroadcasts(bool on);
 bool netHost(const char* link) {
 	char mode[16];
 	snprintf(mode, sizeof(mode), "%s", link ? link : optionValue("armgba_link_mode"));
-	bool const together = strcmp(mode, "separate"), single = !strcmp(mode, "off");
+	bool const separate = !strcmp(mode, "separate"), oneConsole = !strcmp(mode, "off");
+	// Every device runs every console, Together's or Off's one; Separate, each device its own.
+	bool const together = !separate;
 	netStop();
 	if (!app.loaded) {
 		return false;
 	}
-	if (together && !single && strcmp(mode, "together")) {
+	if (!separate && !oneConsole && strcmp(mode, "together")) {
 		osd("Netplay: Link Mode can be Off, Together or Separate");
 		return false;
 	}
@@ -828,11 +830,11 @@ bool netHost(const char* link) {
 	libretroSetNetplayPlayer(self);
 	resetSync();
 	// Off: one console the players share, as Shared Controls says, or everyone's buttons at once.
-	if (single && !strcmp(optionValue("armgba_shared_controls"), "off")) {
+	if (oneConsole && !strcmp(optionValue("armgba_shared_controls"), "off")) {
 		setOption("armgba_shared_controls", "everyone");
 	}
 	if (linkMode(mode)) {
-		osd(!together ? "Restarted for the link cable" : single ? "Restarted with one console, shared" : "Restarted with every player's console");
+		osd(separate ? "Restarted for the link cable" : oneConsole ? "Restarted with one console, shared" : "Restarted with every player's console");
 	}
 	if (together) {
 		roll.joined[0] = 0;
@@ -1510,8 +1512,8 @@ static void answerProbes(void) {
 			answer[10] = (uint8_t) netPlayers();
 			answer[11] = (uint8_t) playersMost();
 			put16(answer + 12, (unsigned) settings.netPort);
-			snprintf((char*) answer + 14, 32, "%s", settings.nickname);
-			snprintf((char*) answer + 46, 128, "%s", app.gameName);
+			snprintf((char*) answer + 14, 32, "%.31s", settings.nickname);
+			snprintf((char*) answer + 46, 128, "%.127s", app.gameName);
 			const char* const shared = optionValue("armgba_shared_controls");
 			answer[174] = !strcmp(shared, "everyone") ? 1 : !strcmp(shared, "pass around") ? 2 : 0;
 			sendto(answerer, answer, sizeof(answer), 0, (struct sockaddr*) &from, length);
