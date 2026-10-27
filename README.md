@@ -201,7 +201,8 @@ devices each running its own game. In Off and Together, each controller on a dev
 order, as far as the session's players go; Separate is a player a device. Off and Together need no
 game loaded to join: the host's game loads from your folders by its file name (beside your game, in
 the game list's folder, the Game Boy, Game Boy Color and Game Boy Advance folders, or the Games folder
-two levels down), if it's the same file as the host's; Separate needs your own game, or Your
+two levels down), if it's the same file as the host's, and if it isn't there by that name, the game
+list opens to choose your copy; Separate needs your own game, or Your
 Cartridge: Removed. Join's Scan for Local Hosts lists the sessions on the local network below it,
 found by a broadcast on the netplay port and updated while shown, with each host's Link Mode and
 players; choosing it again scans afresh. Join a Host... takes an address. `--host` (as

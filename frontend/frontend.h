@@ -280,6 +280,8 @@ void requestQuit(bool controller);
 bool uiInit(void);
 void uiRecreateTextures(void);
 void uiOpenMenu(void);
+void uiPickGame(const char* title, const char* wanted, bool (*picked)(const char* path));
+bool uiPickingGame(void);
 void uiCloseMenu(void);
 bool uiEvent(const SDL_Event* event);
 void uiDraw(void);

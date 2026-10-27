@@ -119,6 +119,10 @@ static struct {
 static int keptCount;
 // Set while a client loads the host's game, which would otherwise end the session.
 static bool loadingForSession;
+// The host's welcome, kept while the player chooses their copy of the host's game.
+static uint8_t* heldWelcome;
+static size_t heldWelcomeSize;
+static char heldGame[256];
 
 struct Check {
 	int frame;
@@ -999,6 +1003,11 @@ void netStop(void) {
 	}
 	freeStates();
 	restoreOptions();
+	if (heldWelcome) {
+		free(heldWelcome);
+		heldWelcome = NULL;
+		uiPickGame(NULL, NULL, NULL);
+	}
 	netMode = NET_OFF;
 	netTogether = false;
 	selfCount = 1;
@@ -1214,6 +1223,30 @@ static bool findHostGame(const char* folder, const char* name, uint32_t crc, int
 	return found;
 }
 
+static void clientWelcome(const uint8_t* p, size_t size);
+
+// A file chosen as the host's game: the welcome goes on if it is.
+static bool pickedHostGame(const char* path) {
+	if (!tryHostGame(path, get32(heldWelcome + 4))) {
+		osd("Netplay: that isn't %s, the host's game", heldGame);
+		return false;
+	}
+	uint8_t* const welcome = heldWelcome;
+	heldWelcome = NULL;
+	clientWelcome(welcome, heldWelcomeSize);
+	free(welcome);
+	return true;
+}
+
+// Leaving the game list without the host's game: the player can't join.
+static void heldWelcomeLeft(void) {
+	if (heldWelcome && !uiPickingGame()) {
+		cantJoin(CANT_GAME, heldGame);
+		osd("Netplay: you need %s to join", heldGame);
+		netStop();
+	}
+}
+
 // The host's game: the file of its name beside this device's game, in the game list's folder, the
 // Game Boy, Game Boy Color and Game Boy Advance folders, or the Games folder and its subfolders, and
 // only if its CRC is the host's game's. The host gives a file's name, never a path.
@@ -1268,6 +1301,16 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 		return;
 	}
 	if (netTogether && gameCrc() != get32(p + 4) && !loadHostGame(game, get32(p + 4))) {
+		// Not found by its name: the player can choose their copy, under another name.
+		heldWelcome = malloc(size);
+		if (heldWelcome) {
+			memcpy(heldWelcome, p, size);
+			heldWelcomeSize = size;
+			snprintf(heldGame, sizeof(heldGame), "%s", game);
+			osd("Netplay: %s isn't in your folders by that name: choose your copy", game);
+			uiPickGame("Choose Your Copy", game, pickedHostGame);
+			return;
+		}
 		cantJoin(CANT_GAME, game);
 		osd("Netplay: you need %s to join", game);
 		netStop();
@@ -1501,6 +1544,10 @@ static bool readFrom(struct Connection* c) {
 static void answerProbes(void);
 
 static void pump(void) {
+	heldWelcomeLeft();
+	if (netMode == NET_OFF) {
+		return;
+	}
 	answerProbes();
 	int fd;
 	while (listener >= 0 && (fd = accept(listener, NULL, NULL)) >= 0) {

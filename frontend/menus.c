@@ -221,8 +221,15 @@ static void shownPath(char* out, size_t size, const char* path) {
 }
 
 // The game list: the folder's path and counts, "..", then each folder and game.
+// Set while the game list chooses a game for uiPickGame, with the game it's looking for.
+static bool (*gamePicked)(const char* path);
+static char gameWanted[NAME_SIZE];
+
 void browserMenu(void) {
 	readBrowser();
+	if (gamePicked) {
+		addInfo("Looking For", gameWanted);
+	}
 	// The folder's name, and how many games and folders it holds.
 	int folders = 0;
 	for (int i = 0; i < browserCount; ++i) {
@@ -375,8 +382,8 @@ void browserFind(char c) {
 	}
 }
 
-// A game list row: ".." (index -1) goes up, selecting the folder left; a folder opens; a game loads; a
-// cheat file's cheats are added to the game's.
+// A game list row: ".." (index -1) goes up, selecting the folder left; a folder opens; a game loads,
+// or goes to uiPickGame's picked; a cheat file's cheats are added to the game's.
 static void browse(int index, int delta) {
 	if (delta) {
 		return;
@@ -432,9 +439,33 @@ static void browse(int index, int delta) {
 			osd(added == 1 ? "Added 1 cheat" : "Added %d cheats", added);
 			popMenu();
 		}
+	} else if (gamePicked) {
+		if (gamePicked(path)) {
+			gamePicked = NULL;
+			uiCloseMenu();
+		}
 	} else if (loadGame(path)) {
 		uiCloseMenu();
 	}
+}
+
+// The game list for choosing a game another way than playing it, netplay's copy of the host's: a
+// file chosen goes to picked, which says whether it's the one; the list stays open until it is.
+void uiPickGame(const char* title, const char* wanted, bool (*picked)(const char* path)) {
+	gamePicked = picked;
+	if (!picked) {
+		return;
+	}
+	snprintf(gameWanted, sizeof(gameWanted), "%s", wanted);
+	uiOpenMenu();
+	browserCheats = false;
+	snprintf(browserPath, sizeof(browserPath), "%s", gamesDirectory[0] ? gamesDirectory : settings.directory);
+	browserListed[0] = '\0';
+	pushMenu(browserMenu, title);
+}
+
+bool uiPickingGame(void) {
+	return gamePicked && app.menuOpen && depth && stack[depth - 1].build == browserMenu;
 }
 
 // A game list shortcut: a console's folder, the last game's, or the Games folder.
