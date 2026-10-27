@@ -66,7 +66,15 @@ enum Message {
 	MSG_PACKET,    // Separate: from, to, data
 	MSG_PING,
 	MSG_PONG,
-	MSG_FIRMWARE,  // client, Together: its system folder's firmware isn't the host's: none (0) or another (1)
+	MSG_CANT_JOIN, // client: why it's leaving, a CANT_ reason, and for CANT_GAME the game's name
+};
+
+// Why a client can't join a host's session.
+enum {
+	CANT_FIRMWARE,       // Together: no Nintendo BIOS or boot ROM, the host's being
+	CANT_OTHER_FIRMWARE, // Together: another Nintendo BIOS or boot ROM file
+	CANT_NO_GAME_PAK,    // Together: joining without a Game Pak
+	CANT_GAME,           // Together: not the host's game
 };
 
 enum NetMode netMode;
@@ -78,7 +86,7 @@ struct Connection {
 	int fd;
 	int id;
 	bool welcomed;
-	// A player whose firmware wasn't the host's, leaving.
+	// A player who can't join, leaving.
 	bool turnedAway;
 	bool wantsState;
 	char nickname[32];
@@ -1083,6 +1091,14 @@ static void playerGone(struct Connection* c) {
 
 // A client.
 
+// Tells the host why this device can't join, before it leaves.
+static void cantJoin(int why, const char* game) {
+	uint8_t message[1 + 256] = { (uint8_t) why };
+	size_t const length = game ? strnlen(game, 255) : 0;
+	memcpy(message + 1, game ? game : "", length);
+	sendTo(&connections[0], MSG_CANT_JOIN, message, 1 + length);
+}
+
 // The host's game, beside this device's game or in the game list's folder. The host gives a file's
 // name, never a path.
 static bool loadHostGame(const char* name, uint32_t crc) {
@@ -1133,11 +1149,13 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 	libretroSetNetplayPlayer(self);
 	// Every device runs every console in Together and Off, so each needs the game.
 	if (netTogether && app.noGamePak) {
+		cantJoin(CANT_NO_GAME_PAK, NULL);
 		osd("Netplay: joining without a Game Pak needs a host on Link Mode Separate");
 		netStop();
 		return;
 	}
 	if (netTogether && gameCrc() != get32(p + 4) && !loadHostGame(game, get32(p + 4))) {
+		cantJoin(CANT_GAME, game);
 		osd("Netplay: you need %s to join", game);
 		netStop();
 		return;
@@ -1167,8 +1185,8 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 		const char* firmware;
 		uint32_t const own = libretroFirmwareCrc(&firmware);
 		if (own != get32(p + 8)) {
-			uint8_t const other = own != 0;
-			sendTo(&connections[0], MSG_FIRMWARE, &other, 1);
+			bool const other = own != 0;
+			cantJoin(other ? CANT_OTHER_FIRMWARE : CANT_FIRMWARE, NULL);
 			if (other) {
 				osd("Netplay: the host's Nintendo %s isn't the same file as yours. Both can switch to armGBA's in Core > System",
 				    firmware);
@@ -1215,17 +1233,21 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 			clientWelcome(p, size);
 		}
 		break;
-	case MSG_FIRMWARE:
-		if (host && size == 1) {
+	case MSG_CANT_JOIN:
+		if (host && size >= 1) {
 			const char* firmware;
 			libretroFirmwareCrc(&firmware);
 			c->turnedAway = true;
-			if (p[0]) {
+			if (p[0] == CANT_OTHER_FIRMWARE) {
 				osd("Netplay: %s can't join: their Nintendo %s isn't the same as yours. Both can switch to armGBA's in Core > System",
 				    c->nickname, firmware);
-			} else {
+			} else if (p[0] == CANT_FIRMWARE) {
 				osd("Netplay: %s can't join without your Nintendo %s. To play together, switch to armGBA's in Core > System", c->nickname,
 				    firmware);
+			} else if (p[0] == CANT_NO_GAME_PAK) {
+				osd("Netplay: %s can't join without a Game Pak: Together and Off need the game on every device", c->nickname);
+			} else {
+				osd("Netplay: %s can't join: they don't have %.*s", c->nickname, (int) SDL_min(size - 1, 100), (const char*) p + 1);
 			}
 		}
 		break;

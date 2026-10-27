@@ -777,10 +777,10 @@ const char* gameOf(int player) {
 	return *chosen ? chosen : firstPath;
 }
 
-// Nintendo's gba_bios.bin from the system directory, or else armGBA's own BIOS, as BIOS picks.
 // The CRC of the BIOS read from the system folder, 0 when armGBA's runs.
 static uint32_t biosCrc;
 
+// Nintendo's gba_bios.bin from the system directory, or else armGBA's own BIOS, as BIOS picks.
 static bool loadBios(struct GBA* machine) {
 	const char* directory = NULL;
 	uint8_t bios[SIZE_BIOS];
