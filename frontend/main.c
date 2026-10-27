@@ -333,7 +333,8 @@ void chooseFolders(void) {
 
 // The save folder for the game at path, as it loads, so a change can't put the running game's save
 // over another: RetroArch's as RetroArch picks it, beside the game or in its saves folder, sorted as
-// it sorts them. Auto is armGBA's when it has this game's save, RetroArch's otherwise.
+// it sorts them, or in the game's folder. Auto is armGBA's when it has this game's save, RetroArch's
+// otherwise.
 static void chooseSaveFolder(const char* path) {
 	char gameFolder[PATH_SIZE], name[NAME_SIZE];
 	snprintf(gameFolder, sizeof(gameFolder), "%s", path);
@@ -362,6 +363,10 @@ static void chooseSaveFolder(const char* path) {
 		}
 	}
 	const char* chosen = settings.saveFolder;
+	if (!strcmp(chosen, "beside")) {
+		snprintf(saveDirectory, PATH_SIZE, "%s", gameFolder);
+		return;
+	}
 	if (!chosen[0]) {
 		char own[FILE_SIZE];
 		snprintf(own, sizeof(own), "%s/%s.srm", ownSaveDirectory, name);

@@ -1292,7 +1292,7 @@ static const char* folderPath(int which) {
 
 static bool folderTypedIn(int which) {
 	const char* const setting = folders[which].setting;
-	return setting[0] && strcmp(setting, "armgba") && strcmp(setting, "retroarch");
+	return setting[0] && strcmp(setting, "armgba") && strcmp(setting, "retroarch") && strcmp(setting, "beside");
 }
 
 static void folderTyped(const char* text) {
@@ -1363,7 +1363,8 @@ void folderPickerPoll(void) {
 }
 #endif
 
-// A choice on a folder's page: 0 Auto, 1 armGBA's, 2 RetroArch's, 3 typed in, 4 from Android's picker.
+// A choice on a folder's page: 0 Auto, 1 armGBA's, 2 RetroArch's, 3 typed in, 4 from Android's picker,
+// 5 in the game's folder (saves).
 static void folderPick(int kind, int delta) {
 	if (delta) {
 		return;
@@ -1381,7 +1382,7 @@ static void folderPick(int kind, int delta) {
 		openEntry(folderTitle, "The folder's full path.", path ? path : folders[folderShown].own, false, folderTyped);
 		return;
 	}
-	const char* const kinds[3] = { "", folders[folderShown].automatic ? "armgba" : "", "retroarch" };
+	const char* const kinds[6] = { "", folders[folderShown].automatic ? "armgba" : "", "retroarch", "", "", "beside" };
 	snprintf(folders[folderShown].setting, PATH_SIZE, "%s", kinds[kind]);
 	chooseFolders();
 	settingsWrite();
@@ -1407,6 +1408,10 @@ static void folderMenu(void) {
 		addChoice("RetroArch's", !strcmp(setting, "retroarch") ? "In Use" : "", folderPick, 2);
 		snprintf(help[2], sizeof(help[2]), "RetroArch's, from its retroarch.cfg: %s", theirs);
 		helpFor(help[2]);
+	}
+	if (which == FOLDER_SAVES) {
+		addChoice("In Game Folder", !strcmp(setting, "beside") ? "In Use" : "", folderPick, 5);
+		helpFor("Each save in its game's folder, as RetroArch's Write Saves to Content Directory does.");
 	}
 #ifdef __ANDROID__
 	addChoice("Choose a Folder...", typed ? folderName(setting) : "", folderPick, 4);
@@ -1437,7 +1442,7 @@ static void addFolder(int which) {
 	} else if (!setting[0] && !folders[which].own) {
 		snprintf(value, sizeof(value), "Auto (%s)", path ? folderName(path) : "None");
 	} else if (setting[0] || !folders[which].automatic) {
-		snprintf(value, sizeof(value), "%s", !strcmp(setting, "retroarch") ? "RetroArch's" : "armGBA's");
+		snprintf(value, sizeof(value), "%s", !strcmp(setting, "retroarch") ? "RetroArch's" : !strcmp(setting, "beside") ? "In Game Folder" : "armGBA's");
 	} else if (path) {
 		snprintf(value, sizeof(value), "Auto (%s)", !strcmp(path, folders[which].own) ? "armGBA's" : "RetroArch's");
 	} else {

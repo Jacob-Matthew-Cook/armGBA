@@ -230,7 +230,8 @@ ROM files go in `~/.config/armgba/system`, and saves, states, screenshots and ch
 its `retroarch.cfg`: its BIOS folder, its saves (beside the game or in its saves folder, sorted as
 it sorts them), shared with RetroArch, and its screenshots. By itself the BIOS folder is RetroArch's
 when armGBA's has no BIOS or boot ROM, and a game's saves are RetroArch's unless armGBA's already
-has that game's save. States stay armGBA's, as RetroArch compresses its own.
+has that game's save. Saves can also be In Game Folder, each beside its game, as RetroArch's Write
+Saves to Content Directory does. States stay armGBA's, as RetroArch compresses its own.
 
 Game Boy Advance games run on Nintendo's `gba_bios.bin` from the system directory when it's there
 and BIOS is set to Nintendo's, and otherwise on armGBA's own open-source BIOS, built into the core.
@@ -355,8 +356,9 @@ boot ROM on every device, or armGBA's, which every device has.
   the old one backed up. Otherwise this device's own save is never touched.
 - Save Manager moves saves between devices with no game loaded: start the core with no game
   (RetroArch's Start Core, or the app's Start Save Manager on the Netplay page), host or join, then
-  Send Save, in Saves, sends one of the saves found in the save folder and the game folders (on
-  ROCKNIX, `roms/gba`, `gb` and `gbc`), with each folder's armGBA/Player 2 to 4 saves. The other
+  Send Save, in Saves, sends one of the saves found in RetroArch's saves folder and ROM folder, as
+  its `retroarch.cfg` names them, and their `gb`, `gbc` and `gba` folders (on ROCKNIX, `roms/gba`,
+  `gb` and `gbc`), with each folder's armGBA/Player 2 to 4 saves. The other
   device puts it where Receive Saves Into says, backing up the save it replaces. Auto takes a
   save to player 2's on the host and to your own save on a device that joined, so before playing
   Together, the joining player sends their save in, and afterwards the host sends Player 2's back,

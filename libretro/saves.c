@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -957,9 +958,9 @@ void saveReceived(const char* game, const uint8_t* save, size_t size, const uint
 	}
 }
 
-// Save Manager: started with no game, Send Save lists the saves in the save folder and the
-// folders in it, and in the Game Boy, Game Boy Color and Game Boy Advance game folders beside the
-// system folder, where ROCKNIX keeps saves, each with its armGBA/Player 2 to 4 saves. A save the
+// Save Manager: started with no game, Send Save lists the saves in RetroArch's saves and ROM
+// folders and their Game Boy, Game Boy Color and Game Boy Advance folders, each with its
+// armGBA/Player 2 to 4 saves. A save the
 // other device sends goes where Receive Saves Into says, the one it replaces backed up.
 enum { MANAGER_FOLDERS = 32, MANAGER_FOUND = 2048 };
 static char managerFolders[MANAGER_FOLDERS][PATH_SIZE];
@@ -990,29 +991,104 @@ static void addManagerFolder(const char* path) {
 	snprintf(managerFolders[managerFolderCount++], PATH_SIZE, "%s", real);
 }
 
-static void findManagerFolders(void) {
-	managerFolderCount = 0;
-	const char* directory = NULL;
-	if (environment(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &directory) && directory && *directory) {
-		addManagerFolder(directory);
-		DIR* folder = opendir(directory);
-		for (struct dirent* entry; folder && (entry = readdir(folder));) {
-			char path[PATH_SIZE];
-			if (entry->d_name[0] != '.' && snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name) < (int) sizeof(path)) {
-				addManagerFolder(path);
+// A folder, or a setting, retroarch.cfg names, from the first one found where the app looks for it:
+// XDG_CONFIG_HOME's, ~/.config's, the Flatpak's. "~" is the home folder and ":" retroarch.cfg's own.
+static bool retroarchFolder(const char* key, char out[PATH_SIZE]) {
+	const char* const home = getenv("HOME") ? getenv("HOME") : ".";
+	const char* const xdg = getenv("XDG_CONFIG_HOME");
+	char folders[3][PATH_SIZE];
+	snprintf(folders[0], PATH_SIZE, "%s/retroarch", xdg && *xdg ? xdg : "");
+	snprintf(folders[1], PATH_SIZE, "%s/.config/retroarch", home);
+	snprintf(folders[2], PATH_SIZE, "%s/.var/app/org.libretro.RetroArch/config/retroarch", home);
+	for (int i = xdg && *xdg ? 0 : 1; i < 3; ++i) {
+		char path[PATH_SIZE + 16], line[PATH_SIZE + 64];
+		snprintf(path, sizeof(path), "%s/retroarch.cfg", folders[i]);
+		FILE* f = fopen(path, "r");
+		bool found = false;
+		while (f && !found && fgets(line, sizeof(line), f)) {
+			const char* const open = strchr(line, '"');
+			const char* const close = open ? strchr(open + 1, '"') : NULL;
+			size_t const keyLength = strlen(key);
+			if (!close || strncmp(line, key, keyLength) || (line[keyLength] != ' ' && line[keyLength] != '=') || close == open + 1 ||
+			    !strncmp(open + 1, "default", 7)) {
+				continue;
 			}
+			int const length = (int) (close - open - 2);
+			if (open[1] == '~') {
+				snprintf(out, PATH_SIZE, "%s%.*s", home, length, open + 2);
+			} else if (open[1] == ':') {
+				snprintf(out, PATH_SIZE, "%s%.*s", folders[i], length, open + 2);
+			} else {
+				snprintf(out, PATH_SIZE, "%.*s", length + 1, open + 1);
+			}
+			found = true;
 		}
-		if (folder) {
-			closedir(folder);
+		if (f) {
+			fclose(f);
+			return found;
 		}
 	}
-	static const char* const consoles[] = { "gba", "gbc", "gb" };
-	if (environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory) && directory && *directory) {
-		for (size_t i = 0; i < sizeof(consoles) / sizeof(consoles[0]); ++i) {
+	return false;
+}
+
+// A folder's Game Boy, Game Boy Color and Game Boy Advance folders, as gb, gbc and gba in any case,
+// and with saves its armGBA folder, as RetroArch sorts saves by content folder or by core.
+static void addConsoleFolders(const char* folder, bool saves) {
+	DIR* listing = opendir(folder);
+	for (struct dirent* entry; listing && (entry = readdir(listing));) {
+		if (!strcasecmp(entry->d_name, "gb") || !strcasecmp(entry->d_name, "gbc") || !strcasecmp(entry->d_name, "gba") ||
+		    (saves && !strcmp(entry->d_name, "armGBA"))) {
 			char path[PATH_SIZE];
-			snprintf(path, sizeof(path), "%s/../%s", directory, consoles[i]);
+			snprintf(path, sizeof(path), "%.2000s/%s", folder, entry->d_name);
 			addManagerFolder(path);
 		}
+	}
+	if (listing) {
+		closedir(listing);
+	}
+}
+
+// RetroArch's saves folder, as retroarch.cfg names it and as RetroArch gives it, and its ROM folder,
+// where its file browser starts, or beside the system folder, as ROCKNIX's roms/bios is; each with
+// its console folders.
+static void addSaveFolders(void) {
+	char folder[PATH_SIZE];
+	const char* directory = NULL;
+	if (retroarchFolder("savefile_directory", folder)) {
+		addManagerFolder(folder);
+		addConsoleFolders(folder, true);
+	}
+	if (environment(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &directory) && directory && *directory) {
+		addManagerFolder(directory);
+		addConsoleFolders(directory, true);
+	}
+}
+
+static void addRomFolders(void) {
+	char folder[PATH_SIZE];
+	const char* directory = NULL;
+	if (retroarchFolder("rgui_browser_directory", folder)) {
+		addManagerFolder(folder);
+		addConsoleFolders(folder, false);
+	}
+	if (environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &directory) && directory && *directory) {
+		snprintf(folder, sizeof(folder), "%s/..", directory);
+		addConsoleFolders(folder, false);
+	}
+}
+
+// The ROM folders come first when RetroArch keeps saves beside the games, so a save received goes
+// there.
+static void findManagerFolders(void) {
+	char beside[PATH_SIZE];
+	bool const romsFirst = retroarchFolder("savefiles_in_content_dir", beside) && !strcmp(beside, "true");
+	managerFolderCount = 0;
+	if (romsFirst) {
+		addRomFolders();
+	}
+	addSaveFolders();
+	if (!romsFirst) {
+		addRomFolders();
 	}
 }
 
