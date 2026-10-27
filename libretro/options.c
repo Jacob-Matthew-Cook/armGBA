@@ -335,7 +335,7 @@ bool showOptions(void) {
 		{ "armgba_shared_controls", optionIs("armgba_link_mode", "off") },
 		{ "armgba_player2_game", together },
 		{ "armgba_new_save", together },
-		{ "armgba_load_into", together && !netplaySeen && !linkSession() },
+		{ "armgba_load_into", together && !noGameLoaded() && !netplaySeen && !linkSession() },
 		{ "armgba_back_up_save", !noGameLoaded() && !netplayJoined },
 		{ "armgba_load_save", !noGameLoaded() && !netplaySeen && !linkSession() },
 		{ "armgba_send_save", noGameLoaded() },
