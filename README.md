@@ -98,7 +98,8 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Load Save Into | Both | Same Player, then each player (Together) |
 | | Send Save | Both | Off, then the saves found, newest first (Save Manager, with no game) |
 | | Receive Saves Into | Both | Auto (default), Your Save, Player 2's to Player 4's Save (Save Manager) |
-| Saves: Settings | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
+| Saves: Settings | Keep My Netplay Progress | Both | Off (default), On |
+| | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
 | | Player 1's Save Folder (applies when a game starts) | Both | Save Folder, armGBA/Player 1 Folder |
 | | Backups Kept | Both | 10, 5, 20, All |
 | | Backups Listed | Both | 10, 20, 40, 80, 126 |
@@ -210,8 +211,8 @@ Cartridge: Removed. Join's Scan for Local Hosts lists the sessions on the local 
 found by a broadcast on the netplay port and updated while shown, with each host's Link Mode and
 players; choosing it again scans afresh. Join a Host... takes an address. In Together, a player who
 joined can Send My Save: their own save of the game goes into their console, which restarts, and
-the host backs up the one it replaces; as they leave, the session's save becomes theirs, their old
-one backed up. Start Save Manager closes the game for Save Manager (see Backups); `--host
+the host backs up the one it replaces; with Keep My Netplay Progress on, their progress becomes their
+save as they leave. Start Save Manager closes the game for Save Manager (see Backups); `--host
 --no-cartridge` starts it hosting. `--host` (as
 Link Mode says), `--host-off`, `--host-together`, `--host-separate` and `--connect ADDRESS` start it
 from the command line. Achievements need the system's libcurl, and recording its ffmpeg.
@@ -342,13 +343,18 @@ boot ROM on every device, or armGBA's, which every device has.
   goes to the other person unless Load Save Into names a player: Remote Player 1 (the host) to
   player 2 here when there is one, Remote Player 2 to player 1. Hosting and joining in turn passes
   both players' saves each way.
+- Keep My Netplay Progress, off unless chosen: on a device that joined Together netplay, when its
+  player's console in the session started from this device's own save (sent in with Save Manager,
+  or the app's Send My Save), that console's save becomes this device's own as the session ends,
+  the old one backed up. Otherwise this device's own save is never touched.
 - Save Manager moves saves between devices with no game loaded: start the core with no game
   (RetroArch's Start Core, or the app's Start Save Manager on the Netplay page), host or join, then
   Send Save, in Saves, sends one of the saves found in the save folder and the game folders (on
   ROCKNIX, `roms/gba`, `gb` and `gbc`), with each folder's armGBA/Player 2 to 4 saves. The other
   device puts it where Receive Saves Into says, backing up the save it replaces. Auto takes a
   save to player 2's on the host and to your own save on a device that joined, so before playing
-  Together, the joining player sends their save in, and afterwards the host sends Player 2's back.
+  Together, the joining player sends their save in, and afterwards the host sends Player 2's back,
+  or Keep My Netplay Progress brings it home by itself.
 - Backups Kept: 10 per player unless chosen. A save the same as its newest backup isn't backed up
   again.
 - Player 1's Save Folder can keep player 1's save in armGBA/Player 1 too, beside the other players'.

@@ -125,8 +125,6 @@ static bool loadingForSession;
 static uint8_t* heldWelcome;
 static size_t heldWelcomeSize;
 static char heldGame[256];
-// Send My Save went in: as the session ends, this device's player's save there becomes its own.
-static bool saveSent;
 
 struct Check {
 	int frame;
@@ -357,7 +355,7 @@ static const char* baseName(const char* path) {
 // how the game runs, only this device's save files.
 static bool ownOption(const char* key) {
 	static const char* const own[] = {
-		"armgba_back_up_save", "armgba_load_save", "armgba_load_into", "armgba_send_save", "armgba_receive_into", "armgba_player1_saves",
+		"armgba_back_up_save", "armgba_load_save", "armgba_load_into", "armgba_send_save", "armgba_receive_into", "armgba_keep_progress", "armgba_player1_saves",
 		"armgba_keep_saves", "armgba_list_saves", "armgba_safe_saves",
 	};
 	for (size_t i = 0; i < sizeof(own) / sizeof(*own); ++i) {
@@ -991,16 +989,8 @@ void netStop(void) {
 			packets->stop();
 		}
 	}
-	if (saveSent) {
-		saveSent = false;
-		char file[FILE_SIZE], rtcFile[FILE_SIZE];
-		savePath(file, "srm");
-		savePath(rtcFile, "rtc");
-		if (libretroKeepSave(self, file, rtcFile)) {
-			osd("Netplay: your save from the session is yours now; your old one is backed up");
-		} else {
-			osd("Netplay: your save from the session couldn't be written; your old one is unchanged");
-		}
+	if (netMode == NET_JOINED) {
+		libretroSessionEnded();
 	}
 	for (int i = 0; i < PEERS; ++i) {
 		closeConnection(&connections[i]);
@@ -1562,7 +1552,6 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 		break;
 	case MSG_SAVE_IN:
 		if (!host && size >= 2) {
-			saveSent |= p[0];
 			if (p[0]) {
 				osd("Your save is in; your console restarted");
 			} else {

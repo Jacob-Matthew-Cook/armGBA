@@ -122,6 +122,10 @@ void readSaveActions(bool act);
 void saveOptionsChanged(void);
 // Netplay's saves: a joined session's kept for Load Save, and Save Manager's received.
 void keepSession(void);
+// Keep My Netplay Progress: on a device that joined, this device's player, and whether its console
+// holds this device's own save, looked at as the host's states load.
+int joinedPlayer(void);
+void checkSessionSave(void);
 // Started with no game: Save Manager.
 bool noGameLoaded(void);
 void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);

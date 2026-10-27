@@ -1695,8 +1695,8 @@ static void netplayMenu(void) {
 		if (netCanSendSave()) {
 			addItem("Send My Save", netAction, 9);
 			items[itemCount - 1].confirm = true;
-			helpFor("Puts your save of this game in your console, which restarts. As you leave, the session's save becomes "
-			        "yours, and your old one is kept as a backup.");
+			helpFor("Puts your save of this game in your console, which restarts. With Keep My Netplay Progress on, in Saves, "
+			        "your progress becomes your save as you leave.");
 		}
 		addItem("Disconnect", netAction, 4);
 		helpFor("Leaves netplay; the game carries on here.");

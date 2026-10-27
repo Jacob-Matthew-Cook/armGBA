@@ -203,6 +203,8 @@ static int netplayPlayer = -1;
 #endif
 // Its answer, asked each frame as a device that joins gets its number only once connected; -1 none.
 static int netplayClient = -1;
+// A state from another device's session loaded: Keep My Netplay Progress looks at it next frame.
+static bool sessionSaveDue;
 static int16_t mixedSamples[2 * 4096];
 
 // Player 2's game: the choices offered, and the game running (empty for player 1's).
@@ -1351,6 +1353,7 @@ void retro_unload_game(void) {
 	secondPath[0] = '\0';
 	netplaySeen = false;
 	netplayJoined = false;
+	sessionSaveDue = false;
 	noGame = false;
 	sharedHinted = false;
 	memset(&passed, 0, sizeof(passed));
@@ -2447,6 +2450,10 @@ static void showOptionsForNetplay(void) {
 
 void retro_run(void) {
 	showOptionsForNetplay();
+	if (sessionSaveDue) {
+		sessionSaveDue = false;
+		checkSessionSave();
+	}
 	readNewerPlayerOne();
 	bool updated = false;
 	if (environment(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated) {
@@ -2513,7 +2520,12 @@ static void loadedTag(uint32_t tag, bool byNetplay) {
 		notify("Netplay: this device's saves stay as they were; the session's are kept as backups when it ends", 240);
 	}
 	netplayJoined |= netplaySeen && tag != sessionTag;
+	sessionSaveDue |= netplayJoined && byNetplay;
 	sessionTag = tag;
+}
+
+int joinedPlayer(void) {
+	return netplayPlayer >= 0 ? netplayPlayer : netplayClient > 0 ? netplayClient : 1;
 }
 
 static bool saveConsoles(void* data, size_t size) {

@@ -32,6 +32,12 @@ static struct {
 	uint64_t hash;
 } keptSaves[MAX_PLAYERS];
 static unsigned keptCheck;
+// Keep My Netplay Progress, on a device that joined a session: its own save as the session found it,
+// and whether its player's console there has held that save, making the progress there its own.
+static uint8_t* ownSave;
+static size_t ownSaveSize;
+static bool ownSaveRead, sessionSaveOurs;
+static void keepOwnProgress(void);
 
 // The Saves options' lists. An option holds Off, 126 choices and the end of the list.
 enum { BACKUP_CHOICES = RETRO_NUM_CORE_OPTION_VALUES_MAX - 2 };
@@ -376,6 +382,7 @@ void readOtherSaves(void) {
 void writeCoreSaves(bool closing) {
 	if (netplaySeen && closing && netplayJoined) {
 		keepSession();
+		keepOwnProgress();
 	}
 	if (netplaySeen && (!closing || netplayJoined)) {
 		return;
@@ -414,6 +421,9 @@ void forgetSaves(void) {
 	for (int player = 0; player < MAX_PLAYERS; ++player) {
 		keptSaves[player].kept = false;
 	}
+	free(ownSave);
+	ownSave = NULL;
+	ownSaveRead = sessionSaveOurs = false;
 	copySaves = 0;
 }
 
@@ -874,13 +884,49 @@ static bool replaceSaveFile(const char* file, const char* rtcFile, const char* b
 	return writeWholeFile(file, save, size);
 }
 
-bool libretroKeepSave(int player, const char* file, const char* rtcFile) {
-	char base[SAVE_PATH_SIZE], rtcBase[SAVE_PATH_SIZE];
+void checkSessionSave(void) {
+	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE];
+	if (!ownSaveRead) {
+		ownSaveRead = true;
+		ownSave = saveFiles(0, file, rtcFile) ? readWholeFile(file, &ownSaveSize) : NULL;
+	}
+	size_t size;
+	const uint8_t* save = sessionSaveOurs ? NULL : saveMemory(joinedPlayer(), &size);
+	if (!save || !size) {
+		return;
+	}
+	// With no save of its own, a new save is as good as one.
+	sessionSaveOurs = ownSave ? !memcmp(ownSave, save, ownSaveSize < size ? ownSaveSize : size) : blankSave(save, size);
+	if (sessionSaveOurs && ownSave) {
+		notify(optionIs("armgba_keep_progress", "enabled")
+		         ? "Netplay: your console has your own save; your progress becomes your save as the session ends"
+		         : "Netplay: your console has your own save. To keep your progress, turn on Keep My Netplay Progress in Saves",
+		       360);
+	}
+}
+
+// As the session ends: the player's progress becomes this device's own save, the old one backed up.
+static void keepOwnProgress(void) {
+	if (!sessionSaveOurs || !optionIs("armgba_keep_progress", "enabled")) {
+		return;
+	}
+	sessionSaveOurs = false;
+	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE], base[SAVE_PATH_SIZE], rtcBase[SAVE_PATH_SIZE];
 	size_t size, rtcSize;
+	int const player = joinedPlayer();
 	void* save = saveMemory(player, &size);
 	void* rtc = rtcMemory(player, &rtcSize);
-	backupFiles(0, base, rtcBase);
-	return save && size && replaceSaveFile(file, rtcFile, base, rtcBase, save, size, rtc, rtcSize);
+	bool const kept = save && size && saveFiles(0, file, rtcFile) && backupFiles(0, base, rtcBase)
+	               && replaceSaveFile(file, rtcFile, base, rtcBase, save, size, rtc, rtcSize);
+	notify(kept ? "Netplay: your progress from the session is now your save; the old one is backed up"
+	            : "Netplay: your progress from the session couldn't be written; your save is unchanged",
+	       360);
+}
+
+void libretroSessionEnded(void) {
+	if (netplayJoined) {
+		keepOwnProgress();
+	}
 }
 
 static void managerReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);

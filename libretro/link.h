@@ -31,12 +31,13 @@ void libretroSetNetplayPlayer(int player);
 // ROMs, as a CRC (0 when they run armGBA's or none), and that option's name. Netplay devices running
 // every console must match.
 uint32_t libretroFirmwareCrc(const char** option);
-// A joining player's own save in the standalone frontend's Together netplay. On the host: put in that
-// player's console, the save it replaces backed up, and the console restarted; returns why not, or
-// NULL. On the device that joined, as the session ends: the player's save there written to file and
-// rtcFile, what they held backed up with player 1's backups.
+// A joining player's own save in the standalone frontend's Together netplay, put in that player's
+// console on the host, the save it replaces backed up, and the console restarted; returns why not, or
+// NULL.
 const char* libretroTakeSave(int player, const void* save, size_t size, const void* rtc, size_t rtcSize);
-bool libretroKeepSave(int player, const char* file, const char* rtcFile);
+// The standalone frontend's session this device joined ended: with Keep My Netplay Progress, the
+// player's progress becomes this device's own save.
+void libretroSessionEnded(void);
 // The loaded console: a Game Boy Advance, a Game Boy (gba NULL), or none.
 void linkSetGba(struct GBA*);
 void linkSetGameBoy(bool loaded);
