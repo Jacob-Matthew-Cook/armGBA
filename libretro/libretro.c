@@ -1313,6 +1313,7 @@ void retro_unload_game(void) {
 	netplaySeen = false;
 	netplayJoined = false;
 	sharedHinted = false;
+	memset(&passed, 0, sizeof(passed));
 	sessionTag = 0;
 	netplayClient = -1;
 	updateRumble(false);
@@ -2435,20 +2436,27 @@ static size_t consolesStateSize(void) {
 }
 
 // Also tells the Game Boy core whether this state is for rollback or run-ahead, which want it exact.
-static void checkNetplay(void) {
+// Returns whether netplay asks for this state.
+static bool checkNetplay(void) {
 	int context = RETRO_SAVESTATE_CONTEXT_NORMAL;
 	bool const told = environment(RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT, &context);
-	netplaySeen |= told && context == RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+	bool const forNetplay = told && context == RETRO_SAVESTATE_CONTEXT_ROLLBACK_NETPLAY;
+	netplaySeen |= forNetplay;
 	libretroGbExactStates(told && context != RETRO_SAVESTATE_CONTEXT_NORMAL);
 	// A tag of this device's own: the time, the processor time used and where this core sits in
 	// memory, which differ from one device to the next.
 	while (netplaySeen && !sessionTag) {
 		sessionTag = (uint32_t) time(NULL) * 2654435761u ^ (uint32_t) clock() ^ (uint32_t) (uintptr_t) &sessionTag;
 	}
+	return forNetplay;
 }
 
-// A state's session tag: one from another device's session, in netplay, means this device joined it.
-static void loadedTag(uint32_t tag) {
+// A state's session tag: one from another device's session, loaded by netplay, means this device
+// joined it. A state loaded by hand in netplay, from a file, keeps this device's own.
+static void loadedTag(uint32_t tag, bool byNetplay) {
+	if (netplaySeen && !byNetplay) {
+		return;
+	}
 	if (netplaySeen && tag != sessionTag && !netplayJoined) {
 		notify("Netplay: this device's saves stay as they were; the session's are kept as backups when it ends", 240);
 	}
@@ -2549,7 +2557,7 @@ bool retro_serialize(void* data, size_t size) {
 }
 
 bool retro_unserialize(const void* data, size_t size) {
-	checkNetplay();
+	bool const byNetplay = checkNetplay();
 	// A state from before Pass Around was kept is as long as this one without it.
 	size_t const buttons = sizeof(pressed) + 1, unpassed = retro_serialize_size() - sizeof(passed);
 	bool const full = size >= unpassed, older = size == unpassed - buttons, holding = size >= retro_serialize_size();
@@ -2572,7 +2580,7 @@ bool retro_unserialize(const void* data, size_t size) {
 		}
 		uint32_t tag;
 		memcpy(&tag, at, sizeof(tag));
-		loadedTag(tag);
+		loadedTag(tag, byNetplay);
 		if (holding) {
 			memcpy(&passed, at + sizeof(tag), sizeof(passed));
 		} else {
