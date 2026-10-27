@@ -1756,8 +1756,9 @@ int main(int argc, char** argv) {
 		} else if (!strcmp(argv[i], "--scale") && i + 1 < argc) {
 			int const scale = atoi(argv[++i]);
 			settings.scale = SDL_max(1, SDL_min(8, scale));
-		} else if (!strcmp(argv[i], "--host") || !strcmp(argv[i], "--host-together") || !strcmp(argv[i], "--host-separate")) {
-			hostMode = !strcmp(argv[i], "--host-separate") ? 2 : 1;
+		} else if (!strcmp(argv[i], "--host") || !strcmp(argv[i], "--host-together") || !strcmp(argv[i], "--host-separate") ||
+		           !strcmp(argv[i], "--host-single")) {
+			hostMode = !strcmp(argv[i], "--host-separate") ? 2 : !strcmp(argv[i], "--host-single") ? 3 : 1;
 		} else if (!strcmp(argv[i], "--connect") && i + 1 < argc) {
 			connectTo = argv[++i];
 		} else if (!strcmp(argv[i], "--port") && i + 1 < argc) {
@@ -1765,7 +1766,7 @@ int main(int argc, char** argv) {
 		} else if (!strcmp(argv[i], "--controllers")) {
 			listControllers = true;
 		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-separate | --connect ADDRESS] [--port N] [--controllers] [game]\n\n"
+			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-separate | --host-single | --connect ADDRESS] [--port N] [--controllers] [game]\n\n"
 			       "Esc, the controller's Guide button or a right-click opens the menu, where everything else is.\n"
 			       "Settings: ~/.config/armgba; saves, states, screenshots and cheats: ~/.local/share/armgba.\n");
 			return 0;
@@ -1837,7 +1838,7 @@ int main(int argc, char** argv) {
 	setPadForPort();
 	if (game && loadGame(game)) {
 		if (hostMode) {
-			netHost(hostMode == 1);
+			netHost(hostMode == 2 ? HOST_SEPARATE : hostMode == 3 ? HOST_SINGLE : HOST_TOGETHER);
 		} else if (connectTo) {
 			netJoin(connectTo);
 		}

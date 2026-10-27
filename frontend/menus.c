@@ -1406,8 +1406,8 @@ static void portDone(const char* text) {
 	settingsWrite();
 }
 
-// Netplay's rows: Your Name (0), hosting Together (1), the default, or Separate (2), Join (3),
-// Disconnect (4) and Port (5).
+// Netplay's rows: Your Name (0), hosting Together (1), the default, Separate (2) or Single (6),
+// Join (3), Disconnect (4) and Port (5).
 static void netAction(int which, int delta) {
 	if (delta) {
 		return;
@@ -1418,9 +1418,10 @@ static void netAction(int which, int delta) {
 		break;
 	case 1:
 	case 2:
+	case 6:
 		if (!app.loaded) {
 			osd("Netplay: load your game first");
-		} else if (netHost(which == 1)) {
+		} else if (netHost(which == 1 ? HOST_TOGETHER : which == 2 ? HOST_SEPARATE : HOST_SINGLE)) {
 			uiCloseMenu();
 		}
 		break;
@@ -1457,6 +1458,9 @@ static void netplayMenu(void) {
 		addItem("Separate", netAction, 2);
 		helpFor("Hosts the loaded game: each device runs its own console and game, joined by the link cable over the network. Two "
 		        "players.");
+		addItem("Single", netAction, 6);
+		helpFor("Hosts the loaded game as one console every player shares, with rollback: everyone's buttons at once, or passed "
+		        "around, as Core's Shared Controls says.");
 		addHeader("Join");
 		addItem("Join a Host...", netAction, 3);
 		helpFor("Type the host's name or address.");

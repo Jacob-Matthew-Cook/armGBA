@@ -177,9 +177,10 @@ in the game list L and R jump by letter; on the keyboard, typing a name's start 
 Close Game, Quit (with a game running), Reset Config and Reset Controls and Hotkeys ask for a second
 press, said at the bottom left. Netplay is armgba to armgba: Together, the default, runs every
 player's console on every device, kept in step with rollback; Separate carries the link cable
-between two devices each running its own game. `--host` (Together), `--host-separate` and `--connect
-ADDRESS` start it from the command line. Achievements need the system's libcurl, and recording its
-ffmpeg.
+between two devices each running its own game; Single is one console every player shares, as Shared
+Controls says (everyone's buttons at once if it's off). `--host` (Together), `--host-separate`,
+`--host-single` and `--connect ADDRESS` start it from the command line. Achievements need the
+system's libcurl, and recording its ffmpeg.
 
 The frontend's settings are in `~/.config/armgba/frontend.cfg`, the core's options in
 `~/.config/armgba/armgba.cfg` and the recent games in `~/.config/armgba/recent.txt`. BIOS and boot

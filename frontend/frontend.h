@@ -334,7 +334,9 @@ enum NetMode {
 extern enum NetMode netMode;
 extern bool netTogether;
 extern char netStatus[256];
-bool netHost(bool together);
+// Hosting: every player's console on every device, each device its own, or one console every player shares.
+enum { HOST_TOGETHER, HOST_SEPARATE, HOST_SINGLE };
+bool netHost(int how);
 bool netJoin(const char* address);
 void netStop(void);
 void netFrame(void);

@@ -225,13 +225,15 @@ static void closeConnection(struct Connection* c) {
 }
 
 // The netplay menu's status line.
+static const char* optionValue(const char* key);
+
 static void setStatus(void) {
 	if (netMode == NET_OFF) {
 		netStatus[0] = '\0';
 		return;
 	}
 	int const players = netPlayers();
-	const char* how = netTogether ? "Together" : "Separate";
+	const char* how = !netTogether ? "Separate" : !strcmp(optionValue("armgba_link_mode"), "off") ? "Single" : "Together";
 	if (netMode == NET_HOSTING) {
 		snprintf(netStatus, sizeof(netStatus), players > 1 ? "Hosting %s: %d players" : "Hosting %s, waiting for players", how, players);
 	} else if (!connections[0].welcomed) {
@@ -748,8 +750,9 @@ static void useSocket(struct Connection* c, int fd) {
 	c->fd = fd;
 }
 
-// Hosts the loaded game, as Together or Separate; the game restarts if the link mode must change.
-bool netHost(bool together) {
+// Hosts the loaded game, as Together, Separate or Single; the game restarts if the link mode must change.
+bool netHost(int how) {
+	bool const together = how != HOST_SEPARATE, single = how == HOST_SINGLE;
 	netStop();
 	if (!app.loaded) {
 		return false;
@@ -767,11 +770,12 @@ bool netHost(bool together) {
 	self = 0;
 	libretroSetNetplayPlayer(self);
 	resetSync();
-	// With Shared Controls, the players share the one console instead of having one each.
-	const char* const sharing = optionValue("armgba_shared_controls");
-	bool const shared = together && (!strcmp(sharing, "everyone") || !strcmp(sharing, "pass around"));
-	if (linkMode(!together ? "separate" : shared ? "off" : "together")) {
-		osd(!together ? "Restarted for the link cable" : shared ? "Restarted with one console, shared" : "Restarted with every player's console");
+	// Single: one console the players share, as Shared Controls says, or everyone's buttons at once.
+	if (single && !strcmp(optionValue("armgba_shared_controls"), "off")) {
+		setOption("armgba_shared_controls", "everyone");
+	}
+	if (linkMode(!together ? "separate" : single ? "off" : "together")) {
+		osd(!together ? "Restarted for the link cable" : single ? "Restarted with one console, shared" : "Restarted with every player's console");
 	}
 	if (together) {
 		roll.joined[0] = 0;
