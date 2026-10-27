@@ -2453,7 +2453,7 @@ static void showOptionsForNetplay(void) {
 }
 
 // A session this device joined in RetroArch ends as RetroArch stops saying which client it is. Its game,
-// the host's, closes, unless When a Joined Session Ends keeps an Off session's console going.
+// the host's, closes, unless Keep Playing on Disconnect keeps it going.
 static void watchSessionEnd(void) {
 	unsigned client = 0;
 	if (!netplayJoined || sessionOver) {
@@ -2467,8 +2467,9 @@ static void watchSessionEnd(void) {
 		return;
 	}
 	sessionOver = true;
-	if (optionIs("armgba_link_mode", "off") && optionIs("armgba_session_end", "keep off")) {
-		notify("Netplay: the session ended; play on here, its saves kept only in armGBA/Remote", 360);
+	libretroSessionEnded();
+	if (optionIs("armgba_keep_playing", "enabled")) {
+		notify("Netplay: the session ended; you can play on, but from here only armGBA/Remote keeps this game's saves", 360);
 		return;
 	}
 	notify("Netplay: the session ended, so its game closes", 240);

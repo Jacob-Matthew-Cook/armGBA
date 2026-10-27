@@ -355,7 +355,7 @@ static const char* baseName(const char* path) {
 // how the game runs, only this device's save files.
 static bool ownOption(const char* key) {
 	static const char* const own[] = {
-		"armgba_back_up_save", "armgba_load_save", "armgba_load_into", "armgba_send_save", "armgba_receive_into", "armgba_keep_progress", "armgba_session_end", "armgba_player1_saves",
+		"armgba_back_up_save", "armgba_load_save", "armgba_load_into", "armgba_send_save", "armgba_receive_into", "armgba_keep_progress", "armgba_keep_playing", "armgba_player1_saves",
 		"armgba_keep_saves", "armgba_list_saves", "armgba_safe_saves",
 	};
 	for (size_t i = 0; i < sizeof(own) / sizeof(*own); ++i) {
@@ -998,7 +998,7 @@ void netStop(void) {
 		app.hostsGame = true;
 		app.sessionEnded = netClosesOnLeaving();
 		if (!app.sessionEnded) {
-			osd("Netplay: the session ended; play on here, its saves kept only in armGBA/Remote");
+			osd("Netplay: the session ended; you can play on, but from here only armGBA/Remote keeps this game's saves");
 		}
 	}
 	for (int i = 0; i < PEERS; ++i) {
@@ -1056,7 +1056,7 @@ bool netInHostsGame(void) {
 }
 
 bool netClosesOnLeaving(void) {
-	return netInHostsGame() && (sessionLink() != LINK_OFF || strcmp(optionValue("armgba_session_end"), "keep off"));
+	return netInHostsGame() && strcmp(optionValue("armgba_keep_playing"), "enabled");
 }
 
 bool netRollingBack(void) {
