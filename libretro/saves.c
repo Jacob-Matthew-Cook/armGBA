@@ -923,10 +923,14 @@ static void keepOwnProgress(void) {
 	       360);
 }
 
+// The next session this device joins looks at its own save afresh.
 void libretroSessionEnded(void) {
 	if (netplayJoined) {
 		keepOwnProgress();
 	}
+	free(ownSave);
+	ownSave = NULL;
+	ownSaveRead = sessionSaveOurs = false;
 }
 
 static void managerReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);

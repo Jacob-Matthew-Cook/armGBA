@@ -52,7 +52,7 @@ enum {
 	CHECK_FRAMES = 180,
 	CHECKS = 8,
 	MESSAGE_MOST = 32 << 20,
-	VERSION = 2,
+	VERSION = 3,
 };
 
 enum Message {

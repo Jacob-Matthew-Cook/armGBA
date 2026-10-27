@@ -2438,10 +2438,11 @@ static void runOneAdvance(void) {
 	sendOneAdvanceSound();
 }
 
-// Load Save waits for netplay to end, its options hidden while it's on.
+// Load Save waits for netplay to end, and Back Up Save for a session this device joined, their
+// options hidden meanwhile.
 static void showOptionsForNetplay(void) {
-	static bool was;
-	bool const now = netplaySeen || linkSession();
+	static int was;
+	int const now = netplaySeen | netplayJoined << 1 | linkSession() << 2;
 	if (now != was) {
 		was = now;
 		showOptions();
@@ -2525,7 +2526,11 @@ static void loadedTag(uint32_t tag, bool byNetplay) {
 }
 
 int joinedPlayer(void) {
-	return netplayPlayer >= 0 ? netplayPlayer : netplayClient > 0 ? netplayClient : 1;
+	unsigned client = 0;
+	if (netplayPlayer >= 0) {
+		return netplayPlayer;
+	}
+	return environment(RETRO_ENVIRONMENT_GET_NETPLAY_CLIENT_INDEX, &client) && client > 0 && client < MAX_PLAYERS ? (int) client : 1;
 }
 
 static bool saveConsoles(void* data, size_t size) {
