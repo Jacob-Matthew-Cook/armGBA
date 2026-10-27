@@ -96,7 +96,8 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | Saves | Back Up Save | Both | Off, then each player |
 | | Load Save | Both | Off, then each player's current save (with two or more) and backups |
 | | Load Save Into | Both | Same Player, then each player (Together) |
-| | Send Save | Both | Off, then player 1's current save, backups, remote and received saves (Separate) |
+| | Send Save | Both | Off, then the saves found, newest first (Save Manager, with no game) |
+| | Receive Saves Into | Both | Auto (default), Your Save, Player 2's to Player 4's Save (Save Manager) |
 | Saves: Settings | New Players' Saves (applies on restart) | Both | Create New Save, Copy Player 1's Save (Together) |
 | | Player 1's Save Folder (applies when a game starts) | Both | Save Folder, armGBA/Player 1 Folder |
 | | Backups Kept | Both | 10, 5, 20, All |
@@ -341,10 +342,6 @@ boot ROM on every device, or armGBA's, which every device has.
   goes to the other person unless Load Save Into names a player: Remote Player 1 (the host) to
   player 2 here when there is one, Remote Player 2 to player 1. Hosting and joining in turn passes
   both players' saves each way.
-- In Separate, linked devices swap their current saves as they connect, and Send Save sends the
-  current save, a backup, or a remote or received save, when chosen. The other device keeps it in
-  armGBA/Received, and Load Save lists it as Received, going to player 2 when there is one, or
-  player 1.
 - Save Manager moves saves between devices with no game loaded: start the core with no game
   (RetroArch's Start Core, or the app's Start Save Manager on the Netplay page), host or join, then
   Send Save, in Saves, sends one of the saves found in the save folder and the game folders (on

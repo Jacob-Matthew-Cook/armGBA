@@ -90,7 +90,6 @@ static struct {
 	uint32_t done;
 	char game[256];
 } outgoing, incoming;
-static void (*partnerJoined)(void);
 static void (*saveArrived)(const char* game, const uint8_t* save, size_t saveSize, const uint8_t* rtc, size_t rtcSize);
 
 // The cable: this console and the other's, in the host's order, the host first.
@@ -271,9 +270,6 @@ static void announce(void) {
 	}
 	shown = state;
 	tell(text);
-	if (state == 2 && partnerJoined) {
-		partnerJoined();
-	}
 }
 
 // Still off the host's cable two seconds on: the host plays another console, or the cable is taken.
@@ -973,8 +969,7 @@ bool linkSendSave(const char* game, const void* save, size_t saveSize, const voi
 	return true;
 }
 
-void linkSetSaveHooks(void (*joined)(void), void (*arrived)(const char*, const uint8_t*, size_t, const uint8_t*, size_t)) {
-	partnerJoined = joined;
+void linkSetSaveHook(void (*arrived)(const char*, const uint8_t*, size_t, const uint8_t*, size_t)) {
 	saveArrived = arrived;
 }
 

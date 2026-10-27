@@ -6,8 +6,8 @@
 #ifndef ARMGBA_LIBRETRO_SAVEFILES_H
 #define ARMGBA_LIBRETRO_SAVEFILES_H
 
-// Where saves' files are: each game's, as RetroArch keeps them; the other players', a joined netplay
-// session's and a Separate link's received ones, in armGBA's folders; and each save's backups.
+// Where saves' files are: each game's, as RetroArch keeps them; the other players' and a joined
+// netplay session's, in armGBA's folders; and each save's backups.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -26,10 +26,6 @@ void playerSaveFilePath(const char* gamePath, int player, const char* extension,
 // with gbc's though player 1 played from gb.
 void remoteSaveFilePath(const char* gamePath, int player, const char* extension, const char* firstPath, const char* saveDirectory, char* out,
                         size_t outSize);
-// Where saves sent by the other player of a Separate link are kept: armGBA/Received, in the same
-// place as armGBA/Remote.
-void receivedSaveFilePath(const char* gamePath, const char* extension, const char* firstPath, const char* saveDirectory, char* out,
-                          size_t outSize);
 // Makes the folders a file is to go in.
 void makeFolders(const char* filePath);
 

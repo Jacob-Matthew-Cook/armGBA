@@ -676,7 +676,7 @@ static void pickerMenu(void) {
 // The options that act once chosen, then go back to Off: chosen only from their list, so a press
 // left or right doesn't load or send a save.
 static bool actsOnce(const struct Option* o) {
-	static const char* const keys[] = { "armgba_back_up_save", "armgba_load_save", "armgba_send_save", "armgba_manager_send" };
+	static const char* const keys[] = { "armgba_back_up_save", "armgba_load_save", "armgba_send_save" };
 	for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
 		if (!strcmp(o->key, keys[i])) {
 			return true;

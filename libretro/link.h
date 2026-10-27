@@ -60,9 +60,8 @@ void linkSetGbExact(bool on);
 // Sends this device's save of a game (named without its extension), and clock, to the other player,
 // a piece a frame. Returns false with no one linked.
 bool linkSendSave(const char* game, const void* save, size_t saveSize, const void* rtc, size_t rtcSize);
-// Called when the other player pairs, and when their save has arrived.
-void linkSetSaveHooks(void (*joined)(void), void (*arrived)(const char* game, const uint8_t* save, size_t saveSize, const uint8_t* rtc,
-                                                            size_t rtcSize));
+// Called when the other device's save has arrived.
+void linkSetSaveHook(void (*arrived)(const char* game, const uint8_t* save, size_t saveSize, const uint8_t* rtc, size_t rtcSize));
 // Offers RetroArch the netplay that carries the cable (Separate), or leaves it its usual netplay.
 void linkSetNetplay(bool on);
 // Game Boy: whether another Game Boy is on the cable, a transfer this one clocked (returns the byte

@@ -120,9 +120,8 @@ void fillSaveChoices(void);
 void offerSaveChoices(void);
 void readSaveActions(bool act);
 void saveOptionsChanged(void);
-// Netplay's saves: a joined session's kept for Load Save, and a Separate link's sent and received.
+// Netplay's saves: a joined session's kept for Load Save, and Save Manager's received.
 void keepSession(void);
-void sendSaveOnPairing(void);
 // Started with no game: Save Manager.
 bool noGameLoaded(void);
 void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);

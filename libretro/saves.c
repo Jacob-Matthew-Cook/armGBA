@@ -42,7 +42,6 @@ struct SaveChoices {
 	int count;
 };
 static struct SaveChoices loadChoices;
-static struct SaveChoices sendChoices;
 // Save Manager's Send Save.
 static struct SaveChoices managerChoices;
 static void fillManagerChoices(void);
@@ -240,13 +239,6 @@ static void remoteFiles(int player, char file[SAVE_PATH_SIZE], char rtcFile[SAVE
 	const char* saveDirectory = saveDirectoryFor(unsorted);
 	remoteSaveFilePath(firstPath, player, "srm", firstPath, saveDirectory, file, SAVE_PATH_SIZE);
 	remoteSaveFilePath(firstPath, player, "rtc", firstPath, saveDirectory, rtcFile, SAVE_PATH_SIZE);
-}
-
-static void receivedFiles(char file[SAVE_PATH_SIZE], char rtcFile[SAVE_PATH_SIZE]) {
-	char unsorted[PATH_SIZE];
-	const char* saveDirectory = saveDirectoryFor(unsorted);
-	receivedSaveFilePath(firstPath, "srm", firstPath, saveDirectory, file, SAVE_PATH_SIZE);
-	receivedSaveFilePath(firstPath, "rtc", firstPath, saveDirectory, rtcFile, SAVE_PATH_SIZE);
 }
 
 // Where a player's backups go: beside their save, and player 1's in the save folder's armGBA/Player
@@ -586,14 +578,6 @@ static int remoteTarget(int from) {
 	return from > 1 && saveFiles(from, file, rtcFile) ? from : 0;
 }
 
-// Where a received save goes: where Load Save Into says, or else to player 2, the other person's
-// place, when there is one, or player 1.
-static int receivedTarget(void) {
-	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE];
-	int const named = loadIntoPlayer();
-	return named >= 0 ? named : saveFiles(1, file, rtcFile) ? 1 : 0;
-}
-
 static void startChoices(struct SaveChoices* list) {
 	list->count = 0;
 	list->option->values[0] = (struct retro_core_option_value) { "off", "Off" };
@@ -627,7 +611,7 @@ static void addBackupChoices(struct SaveChoices* list, const char* file, int mos
 // Fills Back Up Save's and Load Save Into's choices with the players playing, and Load Save's and
 // Send Save's with their saves.
 void fillSaveChoices(void) {
-	if (!loadChoices.option || !sendChoices.option || !backUpOption || !loadIntoOption || !managerChoices.option) {
+	if (!loadChoices.option || !backUpOption || !loadIntoOption || !managerChoices.option) {
 		return;
 	}
 	fillManagerChoices();
@@ -639,12 +623,9 @@ void fillSaveChoices(void) {
 	char rtcFile[SAVE_PATH_SIZE];
 	bool playing[MAX_PLAYERS];
 	bool remote[MAX_PLAYERS];
-	char received[SAVE_PATH_SIZE];
 	char stamp[1][BACKUP_STAMP];
-	receivedFiles(received, rtcFile);
-	bool const anyReceived = *firstPath && backupStamps(received, stamp, 1);
 	int players = 0;
-	int groups = anyReceived;
+	int groups = 0;
 	for (int player = 0; player < MAX_PLAYERS; ++player) {
 		playing[player] = backupFiles(player, files[player], rtcFile);
 		remoteFiles(player, remotes[player], rtcFile);
@@ -660,9 +641,6 @@ void fillSaveChoices(void) {
 	backUpOption->values[0] = (struct retro_core_option_value) { "off", "Off" };
 	loadIntoOption->values[0] = (struct retro_core_option_value) { "same", "Same Player" };
 	startChoices(&loadChoices);
-	startChoices(&sendChoices);
-	addChoice(&sendChoices, "1 now", "Player 1: Now");
-	addBackupChoices(&sendChoices, files[0], each, "1", "Player 1");
 	for (int player = 0; player < MAX_PLAYERS; ++player) {
 		if (!playing[player]) {
 			continue;
@@ -687,15 +665,7 @@ void fillSaveChoices(void) {
 			snprintf(tag, sizeof(tag), "r%d", player + 1);
 			snprintf(name, sizeof(name), "Remote Player %d into Player %d", player + 1, remoteTarget(player) + 1);
 			addBackupChoices(&loadChoices, remotes[player], each, tag, name);
-			snprintf(name, sizeof(name), "Remote Player %d", player + 1);
-			addBackupChoices(&sendChoices, remotes[player], each, tag, name);
 		}
-	}
-	if (anyReceived) {
-		char name[48];
-		snprintf(name, sizeof(name), "Received into Player %d", receivedTarget() + 1);
-		addBackupChoices(&loadChoices, received, each, "x", name);
-		addBackupChoices(&sendChoices, received, each, "x", "Received");
 	}
 	backUpOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
 	loadIntoOption->values[shown + 1] = (struct retro_core_option_value) { NULL, NULL };
@@ -718,9 +688,9 @@ static bool sameSize(int from, int to) {
 	return save && toSave && size == toSize;
 }
 
-// Where Load Save takes a save from: a player's own backups or current save, a session of another
-// device's that this one joined, or the other player of a Separate link.
-enum { FROM_PLAYER, FROM_REMOTE, FROM_RECEIVED };
+// Where Load Save takes a save from: a player's own backups or current save, or a session of another
+// device's that this one joined.
+enum { FROM_PLAYER, FROM_REMOTE };
 
 // Copies player from's current save, and clock, over player to's, in memory and in to's files.
 static void copyCurrentSave(int from, int to, const char* toFile, const char* toRtc) {
@@ -762,9 +732,7 @@ static void loadedMessage(char* message, size_t size, int source, int from, int 
 		return;
 	}
 	stampLabel(stamp, when, sizeof(when));
-	if (source == FROM_RECEIVED) {
-		snprintf(message, size, "Player %d's save is now the one received %s", to + 1, when);
-	} else if (source == FROM_REMOTE) {
+	if (source == FROM_REMOTE) {
 		snprintf(message, size, "Player %d's save is now remote player %d's from %s", to + 1, from + 1, when);
 	} else if (from == to) {
 		snprintf(message, size, "Player %d's save is now the one from %s", to + 1, when);
@@ -773,7 +741,7 @@ static void loadedMessage(char* message, size_t size, int source, int from, int 
 	}
 }
 
-// Load Save: makes a backup, a player's current save ("now"), a remote or a received save player
+// Load Save: makes a backup, a player's current save ("now") or a remote save player
 // to's save, backing up the one it replaces, and restarts that console. A save given to another
 // player is copied.
 static void loadSave(int source, int from, const char* stamp, int to) {
@@ -786,8 +754,6 @@ static void loadSave(int source, int from, const char* stamp, int to) {
 	bool fromPlaying = true;
 	if (source == FROM_REMOTE) {
 		remoteFiles(from, fromBase, fromRtcBase);
-	} else if (source == FROM_RECEIVED) {
-		receivedFiles(fromBase, fromRtcBase);
 	} else {
 		fromPlaying = backupFiles(from, fromBase, fromRtcBase);
 	}
@@ -917,83 +883,14 @@ bool libretroKeepSave(int player, const char* file, const char* rtcFile) {
 	return save && size && replaceSaveFile(file, rtcFile, base, rtcBase, save, size, rtc, rtcSize);
 }
 
-// Sends player 1's save of this game to the other player of a Separate link: when chosen (asked),
-// and as the other player pairs.
-static void sendSave(bool asked) {
-	size_t size, rtcSize;
-	void* rtc;
-	void* save = liveSave(0, &size, &rtc, &rtcSize);
-	char game[1024];
-	gameName(firstPath, game, sizeof(game));
-	char const* problem = !save || !size || blankSave(save, size) ? "Send Save: nothing saved yet"
-	                    : !linkSendSave(game, save, size, rtc, rtcSize) ? "Send Save: no one is linked"
-	                                                                     : NULL;
-	if (asked) {
-		showMessage(problem ? problem : "Sent this save to the other player");
-	}
-}
-
-void sendSaveOnPairing(void) {
-	if (!noGameLoaded()) {
-		sendSave(false);
-	}
-}
-
-static void sendBackup(int source, int from, const char* stamp) {
-	char base[SAVE_PATH_SIZE], rtcBase[SAVE_PATH_SIZE], file[BACKUP_PATH_SIZE], rtcFile[BACKUP_PATH_SIZE], game[1024];
-	if (source == FROM_REMOTE) {
-		remoteFiles(from, base, rtcBase);
-	} else if (source == FROM_RECEIVED) {
-		receivedFiles(base, rtcBase);
-	} else {
-		backupFiles(0, base, rtcBase);
-	}
-	backupFilePath(base, stamp, file, sizeof(file));
-	backupFilePath(rtcBase, stamp, rtcFile, sizeof(rtcFile));
-	gameName(firstPath, game, sizeof(game));
-	size_t size, rtcSize;
-	void* save = readWholeFile(file, &size);
-	void* rtc = readWholeFile(rtcFile, &rtcSize);
-	showMessage(!save                                         ? "Send Save: that save is gone"
-	            : !linkSendSave(game, save, size, rtc, rtcSize) ? "Send Save: no one is linked"
-	                                                            : "Sent that save to the other player");
-	free(save);
-	free(rtc);
-}
-
-// A save the other player sent, of the game named, kept as a received save of that game, unless the
-// newest one received already holds it.
 static void managerReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize);
 
+// A save the other device sent: Save Manager puts it in place; a device with a game doesn't take it.
 void saveReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize) {
 	if (noGameLoaded()) {
 		managerReceived(game, save, size, rtc, rtcSize);
-		return;
-	}
-	// The game's file, for where its saves are: player 1's, a game beside it, or else beside player 1's.
-	char path[PATH_SIZE];
-	char name[1024];
-	gameName(firstPath, name, sizeof(name));
-	snprintf(path, sizeof(path), "%s", firstPath);
-	for (size_t i = 0; strcmp(name, game) && i < secondCount; ++i) {
-		gameName(secondGames[i].path, name, sizeof(name));
-		snprintf(path, sizeof(path), "%s", secondGames[i].path);
-	}
-	if (strcmp(name, game)) {
-		char const* slash = strrchr(firstPath, '/');
-		snprintf(path, sizeof(path), "%.*s%s.srm", slash ? (int) (slash - firstPath + 1) : 0, firstPath, game);
-	}
-	char unsorted[PATH_SIZE];
-	const char* saveDirectory = saveDirectoryFor(unsorted);
-	char file[SAVE_PATH_SIZE], rtcFile[SAVE_PATH_SIZE], stamp[BACKUP_STAMP];
-	receivedSaveFilePath(path, "srm", firstPath, saveDirectory, file, sizeof(file));
-	receivedSaveFilePath(path, "rtc", firstPath, saveDirectory, rtcFile, sizeof(rtcFile));
-	if (writeBackup(file, rtcFile, save, size, rtc, rtcSize, stamp) > 0) {
-		pruneBackups(file, rtcFile);
-		offerSaveChoices();
-		char message[1200];
-		snprintf(message, sizeof(message), "Received the other player's save of %s; Load Save lists it under Received", game);
-		showMessage(message);
+	} else {
+		showMessage("The other device sent a save: receiving saves needs Save Manager, the core started with no game");
 	}
 }
 
@@ -1161,7 +1058,7 @@ static bool hasFileNamed(const char* folder, const char* name) {
 // own save, else the game, else the save folder.
 static void managerReceived(const char* game, const uint8_t* save, size_t size, const uint8_t* rtc, size_t rtcSize) {
 	char message[400];
-	const char* const into = option("armgba_manager_into");
+	const char* const into = option("armgba_receive_into");
 	int player = into && into[0] >= '1' && into[0] <= '4' ? into[0] - '1' : 0;
 	if (into && !strcmp(into, "auto")) {
 		player = linkHosting() ? 1 : 0;
@@ -1223,24 +1120,8 @@ void readSaveActions(bool act) {
 	}
 	value = option("armgba_send_save");
 	if (value && strcmp(value, "off")) {
-		char send[BACKUP_STAMP + 4];
-		snprintf(send, sizeof(send), "%s", value);
-		struct retro_variable off = { "armgba_send_save", "off" };
-		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
-		if (act && !strcmp(send, "1 now")) {
-			sendSave(true);
-		} else if (act && !strncmp(send, "1 ", 2)) {
-			sendBackup(FROM_PLAYER, 0, send + 2);
-		} else if (act && send[0] == 'r' && send[1] >= '1' && send[1] <= '4' && send[2] == ' ') {
-			sendBackup(FROM_REMOTE, send[1] - '1', send + 3);
-		} else if (act && send[0] == 'x' && send[1] == ' ') {
-			sendBackup(FROM_RECEIVED, 0, send + 2);
-		}
-	}
-	value = option("armgba_manager_send");
-	if (value && strcmp(value, "off")) {
 		int const which = atoi(value);
-		struct retro_variable off = { "armgba_manager_send", "off" };
+		struct retro_variable off = { "armgba_send_save", "off" };
 		environment(RETRO_ENVIRONMENT_SET_VARIABLE, &off);
 		if (act && which >= 0 && which < managedCount) {
 			managerSend(which);
@@ -1258,8 +1139,6 @@ void readSaveActions(bool act) {
 			loadSave(FROM_PLAYER, from, load + 2, named >= 0 ? named : from);
 		} else if (act && load[0] == 'r' && load[1] >= '1' && load[1] <= '4' && load[2] == ' ') {
 			loadSave(FROM_REMOTE, load[1] - '1', load + 3, remoteTarget(load[1] - '1'));
-		} else if (act && load[0] == 'x' && load[1] == ' ') {
-			loadSave(FROM_RECEIVED, 0, load + 2, receivedTarget());
 		}
 	}
 }
@@ -1269,8 +1148,7 @@ void readSaveActions(bool act) {
 // The Saves options whose choices are filled in here.
 void findSaveOptions(void) {
 	loadChoices.option = optionDefinition("armgba_load_save");
-	sendChoices.option = optionDefinition("armgba_send_save");
-	managerChoices.option = optionDefinition("armgba_manager_send");
+	managerChoices.option = optionDefinition("armgba_send_save");
 	backUpOption = optionDefinition("armgba_back_up_save");
 	loadIntoOption = optionDefinition("armgba_load_into");
 }

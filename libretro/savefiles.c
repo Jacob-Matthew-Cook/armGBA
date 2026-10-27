@@ -132,13 +132,6 @@ void remoteSaveFilePath(const char* gamePath, int player, const char* extension,
 	armgbaSavePath(gamePath, within, extension, folder, out, outSize);
 }
 
-void receivedSaveFilePath(const char* gamePath, const char* extension, const char* firstPath, const char* saveDirectory, char* out,
-                            size_t outSize) {
-	char folder[4096];
-	gameSaveFolder(gamePath, firstPath, saveDirectory, folder, sizeof(folder));
-	armgbaSavePath(gamePath, "Received/", extension, folder, out, outSize);
-}
-
 void makeFolders(const char* filePath) {
 	char path[4096];
 	snprintf(path, sizeof(path), "%s", filePath);
