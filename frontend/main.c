@@ -217,12 +217,13 @@ void chooseGameFolders(void) {
 	tellSaveFolders();
 }
 
-// Save Manager's folders, from the app's own settings, as retroarch.cfg's are in RetroArch: armGBA's
-// save folder and a typed one, and the game folders, first when saves are kept in each game's folder.
+// Saves kept in each game's folder: In Game Folder, or Auto on ROCKNIX.
 static bool savesBesideGames(void) {
 	return !strcmp(settings.saveFolder, "beside") || (!settings.saveFolder[0] && onRocknix());
 }
 
+// Save Manager's folders, from the app's own settings, as retroarch.cfg's are in RetroArch: armGBA's
+// save folder and a typed one, and the game folders, first when saves are kept in each game's folder.
 static void tellSaveFolders(void) {
 	const char* const chosen = settings.saveFolder;
 	bool const typed = chosen[0] && strcmp(chosen, "armgba") && strcmp(chosen, "beside");

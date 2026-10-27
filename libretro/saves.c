@@ -991,8 +991,9 @@ static void addManagerFolder(const char* path) {
 	snprintf(managerFolders[managerFolderCount++], PATH_SIZE, "%s", real);
 }
 
-// A folder, or a setting, retroarch.cfg names, from the first one found where the app looks for it:
-// XDG_CONFIG_HOME's, ~/.config's, the Flatpak's. "~" is the home folder and ":" retroarch.cfg's own.
+// A folder, or a setting, RetroArch's retroarch.cfg names, from the first one found where RetroArch
+// keeps it on Linux: XDG_CONFIG_HOME's, ~/.config's, the Flatpak's. "~" is the home folder and ":"
+// retroarch.cfg's own.
 static bool retroarchFolder(const char* key, char out[PATH_SIZE]) {
 	const char* const home = getenv("HOME") ? getenv("HOME") : ".";
 	const char* const xdg = getenv("XDG_CONFIG_HOME");
@@ -1048,9 +1049,8 @@ static void addConsoleFolders(const char* folder, bool saves) {
 	}
 }
 
-// RetroArch's saves folder, as retroarch.cfg names it and as RetroArch gives it, and its ROM folder,
-// where its file browser starts, or beside the system folder, as ROCKNIX's roms/bios is; each with
-// its console folders.
+// RetroArch's saves folder, as retroarch.cfg names it and as RetroArch gives it, with its console
+// and armGBA folders.
 static void addSaveFolders(void) {
 	char folder[PATH_SIZE];
 	const char* directory = NULL;
@@ -1064,6 +1064,8 @@ static void addSaveFolders(void) {
 	}
 }
 
+// RetroArch's ROM folder, where its file browser starts, or beside the system folder, as ROCKNIX's
+// roms/bios is, with its console folders.
 static void addRomFolders(void) {
 	char folder[PATH_SIZE];
 	const char* directory = NULL;

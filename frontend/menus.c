@@ -1429,7 +1429,7 @@ static void addFolder(int which) {
 	} else if (!strcmp(setting, "beside")) {
 		snprintf(value, sizeof(value), "In Game Folder");
 	} else {
-		snprintf(value, sizeof(value), "Auto (%s)", path ? folderName(path) : "None");
+		snprintf(value, sizeof(value), path ? "Auto (%s)" : folders[which].own ? "Auto" : "Auto (None)", path ? folderName(path) : "");
 	}
 	addChoice(label, value, openFolder, which);
 	static char help[FOLDERS][PATH_SIZE + 300];
@@ -1612,8 +1612,9 @@ static void addSaveManager(void) {
 	} else {
 		addItem("Start Save Manager", netAction, 10);
 		items[itemCount - 1].confirm = app.loaded;
-		helpFor("Closes the game and starts with none, to send saves between devices: host or join here, then send and "
-		        "receive saves.");
+		helpFor(app.loaded ? "Closes the game and starts with none, to send saves between devices: host or join here, then send "
+		                     "and receive saves."
+		                   : "Starts with no game, to send saves between devices: host or join here, then send and receive saves.");
 	}
 }
 
