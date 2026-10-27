@@ -27,6 +27,10 @@ void linkSetEnvironment(retro_environment_t);
 // This device's player in the standalone frontend's netplay, which RetroArch's doesn't say; -1 when
 // not in it.
 void libretroSetNetplayPlayer(int player);
+// The firmware from the system folder the running consoles started with, Nintendo's BIOS or boot
+// ROMs, as a CRC (0 when they run armGBA's or none), and that option's name. Netplay devices running
+// every console must match.
+uint32_t libretroFirmwareCrc(const char** option);
 // The loaded console: a Game Boy Advance, a Game Boy (gba NULL), or none.
 void linkSetGba(struct GBA*);
 void linkSetGameBoy(bool loaded);

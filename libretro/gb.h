@@ -63,6 +63,9 @@ uint32_t libretroGbOffColor(void);
 uint32_t libretroGbDarkestColor(void);
 // Whether the game runs as on a Game Boy Advance, which shows it on its own larger screen.
 bool libretroGbOnAdvance(void);
+// The boot ROMs from the system folder the consoles started with, as a CRC; 0 when every one runs
+// armGBA's or none.
+uint32_t libretroGbBootCrc(void);
 // Runs a frame with the pressed buttons as KEYINPUT bits. Returns the picture in XRGB8888 and the
 // stereo samples.
 const uint32_t* libretroGbRunFrame(uint16_t keys, const int16_t** samples, size_t* frames);

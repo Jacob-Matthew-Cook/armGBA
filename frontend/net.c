@@ -66,6 +66,7 @@ enum Message {
 	MSG_PACKET,    // Separate: from, to, data
 	MSG_PING,
 	MSG_PONG,
+	MSG_FIRMWARE,  // client, Together: its system folder's firmware isn't the host's: none (0) or another (1)
 };
 
 enum NetMode netMode;
@@ -77,6 +78,8 @@ struct Connection {
 	int fd;
 	int id;
 	bool welcomed;
+	// A player whose firmware wasn't the host's, leaving.
+	bool turnedAway;
 	bool wantsState;
 	char nickname[32];
 	uint8_t* in;
@@ -973,6 +976,17 @@ bool netRollingBack(void) {
 
 // The host.
 
+// An option as the session has it: a host running armGBA's firmware, its system folder having no
+// Nintendo BIOS or boot ROM, has the players run armGBA's too.
+static const char* sessionValue(const char* key, const char* value) {
+	const char* firmware;
+	bool const own = !libretroFirmwareCrc(&firmware);
+	if (own && ((!strcmp(key, "armgba_bios") && !strcmp(value, "nintendo")) || (!strcmp(key, "armgba_gb_boot_rom") && !strcmp(value, "enabled")))) {
+		return "open-source";
+	}
+	return value;
+}
+
 // Tells a player why they can't join, then closes the connection.
 static void refuse(struct Connection* c, const char* why) {
 	sendTo(c, MSG_REFUSE, why, strlen(why) + 1);
@@ -1005,10 +1019,11 @@ static void hostHello(struct Connection* c, const uint8_t* p, size_t size) {
 	}
 	c->id = id;
 	snprintf(c->nickname, sizeof(c->nickname), "%.31s", (const char*) p + 1);
-	// Mode, id, the number of options, the game's CRC and name, then each option's key and value.
-	size_t length = 8 + strlen(baseName(app.gamePath)) + 1;
+	// Mode, id, the number of options, the game's CRC, the firmware's CRC and the game's name, then
+	// each option's key and value.
+	size_t length = 12 + strlen(baseName(app.gamePath)) + 1;
 	for (int i = 0; i < optionCount; ++i) {
-		length += strlen(options[i].key) + strlen(options[i].value) + 2;
+		length += strlen(options[i].key) + strlen(sessionValue(options[i].key, options[i].value)) + 2;
 	}
 	uint8_t* message = malloc(length);
 	if (!message) {
@@ -1019,16 +1034,21 @@ static void hostHello(struct Connection* c, const uint8_t* p, size_t size) {
 	message[1] = (uint8_t) id;
 	put16(message + 2, (unsigned) optionCount);
 	put32(message + 4, gameCrc());
-	char* at = (char*) message + 8;
+	const char* firmware;
+	put32(message + 8, libretroFirmwareCrc(&firmware));
+	char* at = (char*) message + 12;
 	at += sprintf(at, "%s", baseName(app.gamePath)) + 1;
 	for (int i = 0; i < optionCount; ++i) {
 		at += sprintf(at, "%s", options[i].key) + 1;
-		at += sprintf(at, "%s", options[i].value) + 1;
+		at += sprintf(at, "%s", sessionValue(options[i].key, options[i].value)) + 1;
 	}
 	c->welcomed = true;
 	sendTo(c, MSG_WELCOME, message, length);
 	free(message);
-	osd("%s joined", c->nickname);
+	// Together, a player has joined once their firmware is the host's and they're ready.
+	if (!netTogether) {
+		osd("%s joined", c->nickname);
+	}
 	setStatus();
 }
 
@@ -1037,13 +1057,16 @@ static void hostHello(struct Connection* c, const uint8_t* p, size_t size) {
 static void playerGone(struct Connection* c) {
 	int const id = c->id;
 	bool const welcomed = c->welcomed;
+	bool const turnedAway = c->turnedAway;
 	char name[32];
 	snprintf(name, sizeof(name), "%s", c->nickname);
 	closeConnection(c);
 	if (!welcomed) {
 		return;
 	}
-	osd("%s left", name);
+	if (!turnedAway) {
+		osd("%s left", name);
+	}
 	if (netTogether) {
 		if (roll.joined[id] != INT_MAX && roll.left[id] == INT_MAX) {
 			roll.left[id] = roll.known[id] + 1;
@@ -1100,8 +1123,8 @@ static const char* takeText(const char** at, const char* end) {
 // host's options are taken; the host's state follows. Separate, the link cable starts.
 static void clientWelcome(const uint8_t* p, size_t size) {
 	const char* const end = (const char*) p + size;
-	const char* at = (const char*) p + 8;
-	const char* const game = size >= 8 ? takeText(&at, end) : NULL;
+	const char* at = (const char*) p + 12;
+	const char* const game = size >= 12 ? takeText(&at, end) : NULL;
 	if (!game || p[1] >= PEERS) {
 		return;
 	}
@@ -1139,6 +1162,23 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 	if (netTogether) {
 		retro_reset();
 		netGameStarted();
+		// Every device runs every console, so on the same firmware: the host's Nintendo BIOS or boot
+		// ROM must be in this device's system folder too. It is never sent.
+		const char* firmware;
+		uint32_t const own = libretroFirmwareCrc(&firmware);
+		if (own != get32(p + 8)) {
+			uint8_t const other = own != 0;
+			sendTo(&connections[0], MSG_FIRMWARE, &other, 1);
+			if (other) {
+				osd("Netplay: the host's Nintendo %s isn't the same file as yours. Both can switch to armGBA's in Core > System",
+				    firmware);
+			} else {
+				osd("Netplay: the host plays with Nintendo's %s, which you don't have. The host can switch to armGBA's in Core > System",
+				    firmware);
+			}
+			netStop();
+			return;
+		}
 		sendTo(&connections[0], MSG_READY, NULL, 0);
 		osd("Joined as player %d", self + 1);
 	} else {
@@ -1175,6 +1215,20 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 			clientWelcome(p, size);
 		}
 		break;
+	case MSG_FIRMWARE:
+		if (host && size == 1) {
+			const char* firmware;
+			libretroFirmwareCrc(&firmware);
+			c->turnedAway = true;
+			if (p[0]) {
+				osd("Netplay: %s can't join: their Nintendo %s isn't the same as yours. Both can switch to armGBA's in Core > System",
+				    c->nickname, firmware);
+			} else {
+				osd("Netplay: %s can't join without your Nintendo %s. To play together, switch to armGBA's in Core > System", c->nickname,
+				    firmware);
+			}
+		}
+		break;
 	case MSG_REFUSE:
 		if (!host) {
 			osd("Netplay: %.*s", (int) strnlen((const char*) p, size), (const char*) p);
@@ -1185,6 +1239,9 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 	case MSG_RESYNC:
 		if (host && netTogether) {
 			c->wantsState = true;
+			if (type == MSG_READY) {
+				osd("%s joined", c->nickname);
+			}
 		}
 		break;
 	case MSG_STATE:
@@ -1264,14 +1321,17 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 
 // Reads what has come, and handles each whole message; false when the connection is gone.
 static bool readFrom(struct Connection* c) {
-	// No more than the longest message at once, so a sender can't keep this reading.
+	// No more than the longest message at once, so a sender can't keep this reading. Messages that came
+	// before the connection closed are still handled, as a refusal's reason.
+	bool open = true;
 	while (c->inSize < 4 + MESSAGE_MOST) {
 		if (!grow(&c->in, &c->inCap, c->inSize + 65536)) {
 			return false;
 		}
 		ssize_t const n = recv(c->fd, c->in + c->inSize, 65536, 0);
 		if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
-			return false;
+			open = false;
+			break;
 		}
 		if (n < 0) {
 			break;
@@ -1295,7 +1355,7 @@ static bool readFrom(struct Connection* c) {
 	}
 	memmove(c->in, c->in + at, c->inSize - at);
 	c->inSize -= at;
-	return true;
+	return open;
 }
 
 // Takes new players, sends what's queued and reads what's come. A client whose host left stops.

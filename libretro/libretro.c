@@ -29,6 +29,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <zlib.h>
 
 enum {
 	AUDIO_RATE = 32768,
@@ -777,6 +778,9 @@ const char* gameOf(int player) {
 }
 
 // Nintendo's gba_bios.bin from the system directory, or else armGBA's own BIOS, as BIOS picks.
+// The CRC of the BIOS read from the system folder, 0 when armGBA's runs.
+static uint32_t biosCrc;
+
 static bool loadBios(struct GBA* machine) {
 	const char* directory = NULL;
 	uint8_t bios[SIZE_BIOS];
@@ -790,11 +794,17 @@ static bool loadBios(struct GBA* machine) {
 			fclose(f);
 		}
 	}
+	biosCrc = read ? (uint32_t) crc32(0, bios, sizeof(bios)) : 0;
 	if (!read) {
 		logMessage(RETRO_LOG_INFO, "armGBA: using armGBA's BIOS");
 		return gbaLoadBios(machine, armgbaBios, SIZE_BIOS);
 	}
 	return gbaLoadBios(machine, bios, sizeof(bios));
+}
+
+uint32_t libretroFirmwareCrc(const char** option) {
+	*option = gameBoy ? "Game Boy Boot ROM" : "BIOS";
+	return gameBoy ? libretroGbBootCrc() : biosCrc;
 }
 
 static struct GBA* startAdvance(const struct retro_game_info* game) {

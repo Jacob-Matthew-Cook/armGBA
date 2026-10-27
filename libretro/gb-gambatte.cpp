@@ -99,6 +99,8 @@ unsigned long const RTC_SECOND = 0x400000;
 // on.
 struct Console {
 	gambatte::GB* gb;
+	// The CRC of the boot ROM from the system folder it started with, 0 for armGBA's or none.
+	std::uint32_t bootCrc;
 	// Whether Gambatte's serial port goes to another Game Boy.
 	bool linked;
 	unsigned loadFlags;
@@ -598,6 +600,8 @@ bool start(LibretroGbModel model, char* error, size_t errorSize) {
 	std::vector<unsigned char> const builtIn = !sachen && bootWanted != LIBRETRO_GB_BOOT_OFF && boot.empty() ? armgbaBoot(model)
 	                                                                                                       : std::vector<unsigned char>();
 	s->bootUsed = bootWanted;
+	std::vector<unsigned char> const bootBytes = boot.empty() ? std::vector<unsigned char>() : readBoot(boot);
+	s->bootCrc = bootBytes.empty() ? 0 : gambatte::crc32(0, &bootBytes[0], bootBytes.size());
 	s->loadFlags = gambatte::GB::READONLY_SAV;
 	if (model == LIBRETRO_GB_MGB) {
 		s->loadFlags |= gambatte::GB::MGB_FLAG;
@@ -791,6 +795,14 @@ uint32_t libretroGbOffColor(void) {
 
 bool libretroGbOnAdvance(void) {
 	return s->loadFlags & gambatte::GB::GBA_FLAG;
+}
+
+uint32_t libretroGbBootCrc(void) {
+	uint32_t crc = 0;
+	for (int i = 0; i < players; ++i) {
+		crc = (crc << 1 | crc >> 31) ^ consoles[i].bootCrc;
+	}
+	return crc;
 }
 
 }
