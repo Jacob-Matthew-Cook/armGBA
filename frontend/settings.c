@@ -381,6 +381,25 @@ void optionSet(struct Option* option, const char* value) {
 
 // The core's options and their categories, as it defines them, each taking its value from armgba.cfg.
 // An option defined again keeps its first definition.
+static void optionValues(struct Option* o, const struct retro_core_option_v2_definition* d) {
+	for (int v = 0; v < o->valueCount; ++v) {
+		free(o->values[v]);
+		free(o->labels[v]);
+	}
+	free(o->values);
+	free(o->labels);
+	o->valueCount = 0;
+	while (o->valueCount < RETRO_NUM_CORE_OPTION_VALUES_MAX && d->values[o->valueCount].value) {
+		++o->valueCount;
+	}
+	o->values = calloc(o->valueCount, sizeof(*o->values));
+	o->labels = calloc(o->valueCount, sizeof(*o->labels));
+	for (int v = 0; v < o->valueCount; ++v) {
+		o->values[v] = strdup(d->values[v].value);
+		o->labels[v] = strdup(d->values[v].label ? d->values[v].label : d->values[v].value);
+	}
+}
+
 void optionsDefine(const struct retro_core_options_v2* definitions) {
 	for (const struct retro_core_option_v2_category* c = definitions->categories; c && c->key && categoryCount < 32; ++c) {
 		bool known = false;
@@ -394,25 +413,23 @@ void optionsDefine(const struct retro_core_options_v2* definitions) {
 			++categoryCount;
 		}
 	}
-	for (const struct retro_core_option_v2_definition* d = definitions->definitions; d->key && optionCount < OPTIONS_MAX; ++d) {
-		if (optionFind(d->key)) {
+	for (const struct retro_core_option_v2_definition* d = definitions->definitions; d->key; ++d) {
+		struct Option* o = optionFind(d->key);
+		// Defined again: its choices, which the core fills in as it goes, such as Load Save's.
+		if (o) {
+			optionValues(o, d);
 			continue;
 		}
-		struct Option* o = &options[optionCount++];
+		if (optionCount >= OPTIONS_MAX) {
+			break;
+		}
+		o = &options[optionCount++];
 		o->key = strdup(d->key);
 		o->description = copyString(d->desc);
 		o->info = copyString(d->info);
 		o->category = copyString(d->category_key);
 		o->visible = true;
-		while (o->valueCount < RETRO_NUM_CORE_OPTION_VALUES_MAX && d->values[o->valueCount].value) {
-			++o->valueCount;
-		}
-		o->values = calloc(o->valueCount, sizeof(*o->values));
-		o->labels = calloc(o->valueCount, sizeof(*o->labels));
-		for (int v = 0; v < o->valueCount; ++v) {
-			o->values[v] = strdup(d->values[v].value);
-			o->labels[v] = strdup(d->values[v].label ? d->values[v].label : d->values[v].value);
-		}
+		optionValues(o, d);
 		o->defaultValue = copyString(d->default_value ? d->default_value : d->values[0].value);
 		o->value = copyString(o->defaultValue);
 		for (int i = 0; i < savedCount; ++i) {
