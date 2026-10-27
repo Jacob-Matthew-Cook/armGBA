@@ -197,7 +197,7 @@ struct App {
 	size_t picturePitch;
 	bool loaded;
 	// The core started with no game, a Game Boy Advance with its cartridge out.
-	bool noGamePak;
+	bool noCartridge;
 	char gamePath[PATH_SIZE];
 	char gameName[NAME_SIZE];
 	const void* gameData;
@@ -221,7 +221,7 @@ struct App {
 extern struct App app;
 
 bool loadGame(const char* path);
-bool loadNoGamePak(void);
+bool loadNoCartridge(void);
 void unloadGame(void);
 void recreateRenderer(void);
 void applyWindowSize(void);
@@ -355,7 +355,7 @@ struct NetHost {
 int netScan(const struct NetHost** hosts);
 void netScanIdle(void);
 void netScanStop(void);
-bool netJoin(const char* address, bool noGamePak);
+bool netJoin(const char* address, bool noCartridge);
 void netStop(void);
 void netFrame(void);
 bool netPacketInterface(const struct retro_netpacket_callback* callback);

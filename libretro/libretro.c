@@ -187,7 +187,7 @@ static uint16_t gbaCorrected[MAX_PLAYERS][SCREEN_WIDTH * SCREEN_HEIGHT];
 enum { SCREENS_SIDE, SCREENS_STACKED, SCREENS_ONE, SCREENS_COUNT = SCREENS_ONE + MAX_PLAYERS };
 static int screens;
 static int screensOption = -1;
-// The L2 Outside Netplay option: fast-forward, or the previous screens.
+// The L2 Button option: fast-forward, or the previous screen layout.
 static bool l2FastForward = true;
 // Screen Layout Control: in netplay, whose L2 and R2 change this device's screens, -1 for Auto.
 // Show Player Numbers: each player's number on their screen.
@@ -494,7 +494,7 @@ static void showButtons(void) {
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X, "Turbo A");
 	BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y, "Turbo B");
 	if (togetherRunning()) {
-		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, l2FastForward ? "Fast-Forward (Previous Screens in Netplay)" : "Previous Screens");
+		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, l2FastForward ? "Fast-Forward (Previous Layout in Netplay)" : "Previous Layout");
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Next Screens");
 	} else {
 		BUTTON(RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Fast-Forward");
@@ -1743,7 +1743,7 @@ static void hintSharedControls(void) {
 }
 
 // L2 or R2 held fast-forwards at RetroArch's maximum run speed; with the consoles here only L2, as
-// the L2 Outside Netplay option says. Not in netplay, where the other consoles would wait.
+// the L2 Button option says. Not in netplay, where the other consoles would wait.
 static void readFastForward(void) {
 	static bool held;
 	bool now = false;

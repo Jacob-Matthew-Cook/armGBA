@@ -917,7 +917,7 @@ static void addLcdRendering(void) {
 // emulator's own picture options are in Core > Video.
 static void videoMenu(void) {
 	char text[32];
-	addHeader("Window");
+	addHeader("Display");
 	if (!settings.fullscreen) {
 		snprintf(text, sizeof(text), "%dx", settings.scale);
 		addValue("Window Size", text, changeSetting, SET_SCALE);
@@ -925,13 +925,13 @@ static void videoMenu(void) {
 	}
 	addValue("Full Screen", onOff(settings.fullscreen), changeSetting, SET_FULLSCREEN);
 	helpFor("Fills the display. On a handheld it's on from the start.");
+	addValue("VSync", onOff(settings.vsync), changeSetting, SET_VSYNC);
+	helpFor("Shows each frame as the display refreshes, so the picture doesn't tear.");
 	addHeader("Picture");
 	addValue("Integer Scaling", onOff(settings.integerScale), changeSetting, SET_INTEGER);
 	helpFor("Scales by whole numbers only, so every pixel is the same size; leaves a border.");
 	addValue("Aspect Ratio", settings.stretch ? "Fill the Window" : "The Console's", changeSetting, SET_STRETCH);
 	helpFor("The Console's keeps the screen's shape; Fill the Window stretches it.");
-	addValue("VSync", onOff(settings.vsync), changeSetting, SET_VSYNC);
-	helpFor("Shows each frame as the display refreshes, so the picture doesn't tear.");
 	addHeader("On-Screen Display");
 	addValue("Show Frame Rate", onOff(settings.showFps), changeSetting, SET_FPS);
 	helpFor("Frames a second, at the top right.");
@@ -972,13 +972,18 @@ static void audioMenu(void) {
 	helpFor("How much sound waits to play. Less answers sooner but may crackle on a slow device.");
 }
 
+// Fast-Forward and Rewind, as RetroArch's Frame Throttle, then Run-Ahead, as its Latency.
 static void gameplayMenu(void) {
 	char text[32];
+	snprintf(text, sizeof(text), settings.fastForward ? "%dx" : "Max", settings.fastForward);
+	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
+	helpFor("How fast the Fast-Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
 	addValue("Rewind", onOff(settings.rewind), changeSetting, SET_REWIND);
 	helpFor("Hold the Rewind hotkey to go back in time.");
 	snprintf(text, sizeof(text), "%d MB", settings.rewindMegabytes);
 	addValue("Rewind Buffer", text, changeSetting, SET_REWIND_SIZE);
 	helpFor("Memory kept for rewinding: more goes further back.");
+	addHeader("Latency");
 	snprintf(text, sizeof(text), settings.runahead ? "%d %s" : "Off", settings.runahead, frames(settings.runahead));
 	addValue("Run-Ahead", text, changeSetting, SET_RUNAHEAD);
 	helpFor("Runs frames ahead and shows the last, so the game answers that many frames sooner. Costs speed.");
@@ -1074,16 +1079,12 @@ static void controlsMenu(void) {
 	helpFor("The buttons and hotkeys on a controller, the same for each player's.");
 	addItem("Keyboard...", openControlsPage, 1);
 	helpFor("The keys and hotkeys on the keyboard, which plays player 1.");
-	char text[32];
-	snprintf(text, sizeof(text), settings.fastForward ? "%dx" : "Max", settings.fastForward);
 #ifdef __ANDROID__
 	addValue("On-Screen Controls", onOff(settings.touchControls), changeSetting, SET_TOUCH);
 	helpFor("A controller on the screen, played by touch, there while no other controller is connected.");
 #endif
 	addValue("Swap A/B and X/Y", onOff(settings.swapFaceButtons), changeSetting, SET_SWAP_FACE_BUTTONS);
 	helpFor("Off: A is the right face button and B the bottom one, as on a Game Boy and in RetroArch. On: A is the bottom one and B the right; X and Y swap too. On every controller.");
-	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
-	helpFor("How fast the Fast-Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);
 	helpFor("Puts every button, key and hotkey back as it first was.");
 	items[itemCount - 1].confirm = true;
@@ -1106,7 +1107,7 @@ static void foldersMenu(void);
 
 static void openSettingsPage(int which, int delta) {
 	static void (*const pages[])(void) = { videoMenu, shadersMenu, audioMenu, controlsMenu, gameplayMenu, foldersMenu, appearanceMenu };
-	static const char* const titles[] = { "Video", "Shaders", "Audio", "Controls", "Rewind and Run-Ahead", "Saves and Folders", "Appearance" };
+	static const char* const titles[] = { "Video", "Shaders", "Audio", "Controls", "Fast-Forward and Rewind", "Saves and Folders", "Appearance" };
 	if (!delta) {
 		pushMenu(pages[which], titles[which]);
 	}
@@ -1120,9 +1121,9 @@ static void addSettingsPages(void) {
 	addItem("Audio...", openSettingsPage, 2);
 	helpFor("The volume, and how long sound waits to play.");
 	addItem("Controls...", openSettingsPage, 3);
-	helpFor("Buttons, hotkeys and fast-forward speed, for controllers and the keyboard.");
-	addItem("Rewind and Run-Ahead...", openSettingsPage, 4);
-	helpFor("Going back in time, and answering the buttons sooner.");
+	helpFor("Buttons and hotkeys, for controllers and the keyboard.");
+	addItem("Fast-Forward and Rewind...", openSettingsPage, 4);
+	helpFor("Fast-forward's speed, going back in time, and Run-Ahead, which answers the buttons sooner.");
 	addItem("Saves and Folders...", openSettingsPage, 5);
 	helpFor("Saving a state on exit, and where games, BIOS files, saves, states and screenshots are.");
 	addItem("Appearance...", openSettingsPage, 6);
@@ -1353,7 +1354,7 @@ static void foldersMenu(void) {
 	}
 }
 
-// Reset Config: the settings and the core's options as they first were, but for the RetroAchievements
+// Reset All Settings: the settings and the core's options as they first were, but for the RetroAchievements
 // login, the netplay name and host, the folders and the recent games.
 static void resetConfig(int argument, int delta) {
 	(void) argument;
@@ -1395,14 +1396,14 @@ static void nicknameDone(const char* text) {
 	settingsWrite();
 }
 
-// Join without a Game Pak: joining starts the core with no game, for a single-pak game.
-static bool joinNoGamePak;
+// Your Cartridge: Removed starts the core with no game for joining, for a single-pak game.
+static bool joinNoCartridge;
 
 // The host's address, kept for the next time.
 static void joinDone(const char* text) {
 	snprintf(settings.host, sizeof(settings.host), "%s", text);
 	settingsWrite();
-	if (netJoin(text, joinNoGamePak)) {
+	if (netJoin(text, joinNoCartridge)) {
 		uiCloseMenu();
 	}
 }
@@ -1418,10 +1419,10 @@ static void portDone(const char* text) {
 }
 
 // Netplay's rows: Your Name (0), Create a Host Session (1), Join (3), Disconnect (4), Port (5) and
-// Join without a Game Pak (7).
+// Your Cartridge (7).
 static void netAction(int which, int delta) {
 	if (which == 7) {
-		joinNoGamePak = !joinNoGamePak;
+		joinNoCartridge = !joinNoCartridge;
 		return;
 	}
 	if (delta) {
@@ -1486,8 +1487,8 @@ static void joinFound(int which, int delta) {
 	if (delta || which >= netScan(&hosts)) {
 		return;
 	}
-	if (joinNoGamePak && hosts[which].how != LINK_SEPARATE) {
-		osd("Netplay: joining without a Game Pak needs a host on Link Mode Separate");
+	if (joinNoCartridge && hosts[which].how != LINK_SEPARATE) {
+		osd("Netplay: joining with your cartridge removed needs a host on Link Mode Separate");
 		return;
 	}
 	joinDone(hosts[which].address);
@@ -1511,9 +1512,9 @@ static void netplayMenu(void) {
 		helpFor("Hosts the loaded game, linked as Core's Link Mode says. Off: one console every player shares, as Shared "
 		        "Controls says. Together: every player's console on every device. Separate: two devices, each its own.");
 		addHeader("Join");
-		addValue("Join without a Game Pak", joinNoGamePak ? "On" : "Off", netAction, 7);
-		helpFor("On: joins with no game, the console's cartridge out, for a single-pak game the host's console sends over "
-		        "the cable, as a real one does. Needs a host on Link Mode Separate. The game file is never sent.");
+		addValue("Your Cartridge", joinNoCartridge ? "Removed" : "Inserted", netAction, 7);
+		helpFor("Removed: joins with no game, for a single-pak game the host's console sends over the cable, as a real one "
+		        "does. Needs a host on Link Mode Separate. The game file is never sent.");
 		addItem("Join a Host...", netAction, 3);
 		helpFor("Type the host's name or address.");
 		const struct NetHost* hosts;
@@ -1674,7 +1675,7 @@ static void generalTab(void) {
 	helpFor("Finds a game in your folders; zip and 7z archives open too.");
 	addHeader("Settings");
 	addSettingsPages();
-	addItem("Reset Config", resetConfig, 0);
+	addItem("Reset All Settings", resetConfig, 0);
 	items[itemCount - 1].confirm = true;
 	helpFor("Puts every setting and emulator option back as it first was. Your RetroAchievements login, netplay name, folders "
 	        "and recent games stay.");
@@ -1683,7 +1684,7 @@ static void generalTab(void) {
 	helpFor("Closes armGBA; the game's save is written first.");
 }
 
-// Game: the game loaded, its states, and closing it.
+// Game: the game loaded, its states and cheats, and closing it.
 static void gameTab(void) {
 	char text[32];
 	if (!app.loaded) {
@@ -1710,10 +1711,12 @@ static void gameTab(void) {
 		addItem("Undo Load State", undoLoad, 0);
 		helpFor("Goes back to the game as it was before the last state loaded.");
 	}
+	addItem("Cheats...", openCheats, 0);
+	helpFor("This game's cheats: add codes, load RetroArch cheat files, turn them on or off.");
 	addItem("Restart", restart, 0);
 	items[itemCount - 1].confirm = true;
 	helpFor("Starts the game again from the beginning; the game's own save is kept.");
-	addItem("Screenshot", misc, 0);
+	addItem("Take Screenshot", misc, 0);
 	helpFor("Saves the game's picture as it is now, in the screenshots folder.");
 	addItem(recording() ? "Stop Recording" : "Start Recording", misc, 1);
 	helpFor("Records the game's picture and sound to a video in the screenshots folder.");
@@ -1722,12 +1725,8 @@ static void gameTab(void) {
 	helpFor("Ends the game, writing its save, and goes back to General.");
 }
 
-// Extras: cheats for the game loaded, netplay and RetroAchievements.
+// Extras: netplay and RetroAchievements.
 static void extrasTab(void) {
-	if (app.loaded) {
-		addItem("Cheats...", openCheats, 0);
-		helpFor("This game's cheats: add codes, load RetroArch cheat files, turn them on or off.");
-	}
 	addItem("Netplay...", openNetplay, 0);
 	helpFor("Play linked with another device over the network.");
 	addItem("Achievements...", openCheevos, 0);

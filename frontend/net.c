@@ -73,7 +73,7 @@ enum Message {
 enum {
 	CANT_FIRMWARE,       // Together: no Nintendo BIOS or boot ROM, the host's being
 	CANT_OTHER_FIRMWARE, // Together: another Nintendo BIOS or boot ROM file
-	CANT_NO_GAME_PAK,    // Together: joining without a Game Pak
+	CANT_NO_CARTRIDGE,    // Together: joining with no cartridge
 	CANT_GAME,           // Together: not the host's game
 };
 
@@ -807,8 +807,8 @@ bool netHost(const char* link) {
 		osd("Netplay: Link Mode can be Off, Together or Separate");
 		return false;
 	}
-	if (app.noGamePak && together) {
-		osd("Netplay: without a Game Pak, host on Link Mode Separate");
+	if (app.noCartridge && together) {
+		osd("Netplay: with no cartridge, host on Link Mode Separate");
 		return false;
 	}
 	listener = listenOn(AF_INET6);
@@ -852,11 +852,11 @@ bool netHost(const char* link) {
 }
 
 // Connects to a host, waiting up to five seconds for each address the name has, then says hello. The
-// host's welcome does the rest. Without a Game Pak, the core starts with no game first, for a host on
+// host's welcome does the rest. With no cartridge, the core starts with no game first, for a host on
 // Separate to send a single-pak game over the cable.
-bool netJoin(const char* address, bool noGamePak) {
+bool netJoin(const char* address, bool noCartridge) {
 	netStop();
-	if (noGamePak && !app.noGamePak && !loadNoGamePak()) {
+	if (noCartridge && !app.noCartridge && !loadNoCartridge()) {
 		return false;
 	}
 	if (!app.loaded) {
@@ -1148,9 +1148,9 @@ static void clientWelcome(const uint8_t* p, size_t size) {
 	self = p[1];
 	libretroSetNetplayPlayer(self);
 	// Every device runs every console in Together and Off, so each needs the game.
-	if (netTogether && app.noGamePak) {
-		cantJoin(CANT_NO_GAME_PAK, NULL);
-		osd("Netplay: joining without a Game Pak needs a host on Link Mode Separate");
+	if (netTogether && app.noCartridge) {
+		cantJoin(CANT_NO_CARTRIDGE, NULL);
+		osd("Netplay: joining with your cartridge removed needs a host on Link Mode Separate");
 		netStop();
 		return;
 	}
@@ -1244,8 +1244,8 @@ static void handle(struct Connection* c, int type, const uint8_t* p, size_t size
 			} else if (p[0] == CANT_FIRMWARE) {
 				osd("Netplay: %s can't join without your Nintendo %s. To play together, switch to armGBA's in Core > System", c->nickname,
 				    firmware);
-			} else if (p[0] == CANT_NO_GAME_PAK) {
-				osd("Netplay: %s can't join without a Game Pak: Together and Off need the game on every device", c->nickname);
+			} else if (p[0] == CANT_NO_CARTRIDGE) {
+				osd("Netplay: %s can't join with their cartridge removed: Together and Off need the game on every device", c->nickname);
 			} else {
 				osd("Netplay: %s can't join: they don't have %.*s", c->nickname, (int) SDL_min(size - 1, 100), (const char*) p + 1);
 			}

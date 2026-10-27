@@ -952,7 +952,7 @@ static void writeSave(unsigned id, int slot, const char* extension) {
 
 // The cartridge's save and its clock's.
 void writeSaves(void) {
-	if (app.loaded && !app.noGamePak) {
+	if (app.loaded && !app.noCartridge) {
 		writeSave(RETRO_MEMORY_SAVE_RAM, 0, "srm");
 		writeSave(RETRO_MEMORY_RTC, 1, "rtc");
 	}
@@ -969,7 +969,7 @@ void unloadGame(void) {
 	netStop();
 	recordStop();
 	app.fastForwardOn = false;
-	if (settings.autoState && !cheevosHardcore() && !app.noGamePak) {
+	if (settings.autoState && !cheevosHardcore() && !app.noCartridge) {
 		saveState(-1);
 	}
 	cheevosUnloadGame();
@@ -978,7 +978,7 @@ void unloadGame(void) {
 	retro_unload_game();
 	retro_deinit();
 	app.loaded = false;
-	app.noGamePak = false;
+	app.noCartridge = false;
 	free((void*) app.gameData);
 	app.gameData = NULL;
 	if (app.game) {
@@ -993,7 +993,7 @@ void unloadGame(void) {
 
 // Starts the core with no game: a Game Boy Advance with no cartridge, waiting for a single-pak game
 // another console sends over the link cable. Nothing is read or written for it.
-bool loadNoGamePak(void) {
+bool loadNoCartridge(void) {
 	unloadGame();
 	retro_set_environment(environment);
 	retro_init();
@@ -1006,13 +1006,13 @@ bool loadNoGamePak(void) {
 	retro_get_system_av_info(&av);
 	app.geometry = av.geometry;
 	app.gamePath[0] = '\0';
-	snprintf(app.gameName, sizeof(app.gameName), "No Game Pak");
+	snprintf(app.gameName, sizeof(app.gameName), "No Cartridge");
 	app.loaded = true;
-	app.noGamePak = true;
+	app.noCartridge = true;
 	app.paused = false;
 	netGameStarted();
 	rewindReset();
-	SDL_SetWindowTitle(app.window, "armGBA - No Game Pak");
+	SDL_SetWindowTitle(app.window, "armGBA - No Cartridge");
 	return true;
 }
 
@@ -1753,8 +1753,8 @@ static bool actionHeld(enum Action action) {
 int main(int argc, char** argv) {
 	const char* game = NULL;
 	const char* connectTo = NULL;
-	// --no-game-pak: no game, the core's cartridge out, for joining a host on Separate.
-	bool noGamePak = false;
+	// --no-cartridge: no game, the core's cartridge out, for joining a host on Separate.
+	bool noCartridge = false;
 	bool listControllers = false;
 	// Hosting from the command line: --host links as Link Mode says; --host-off, --host-together and
 	// --host-separate as they say.
@@ -1795,14 +1795,14 @@ int main(int argc, char** argv) {
 			hostLink = argv[i] + 7;
 		} else if (!strcmp(argv[i], "--connect") && i + 1 < argc) {
 			connectTo = argv[++i];
-		} else if (!strcmp(argv[i], "--no-game-pak")) {
-			noGamePak = true;
+		} else if (!strcmp(argv[i], "--no-cartridge")) {
+			noCartridge = true;
 		} else if (!strcmp(argv[i], "--port") && i + 1 < argc) {
 			settings.netPort = atoi(argv[++i]);
 		} else if (!strcmp(argv[i], "--controllers")) {
 			listControllers = true;
 		} else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-off | --host-together | --host-separate | --connect ADDRESS [--no-game-pak]] [--port N] [--controllers] [game]\n\n"
+			printf("usage: armgba [--fullscreen] [--scale N] [--host | --host-off | --host-together | --host-separate | --connect ADDRESS [--no-cartridge]] [--port N] [--controllers] [game]\n\n"
 			       "Esc, the controller's Guide button or a right-click opens the menu, where everything else is.\n"
 			       "Settings: ~/.config/armgba; saves, states, screenshots and cheats: ~/.local/share/armgba.\n");
 			return 0;
@@ -1872,7 +1872,7 @@ int main(int argc, char** argv) {
 	// A game given loads, and hosts or joins if asked; without one, the menu opens.
 	cheevosInit();
 	setPadForPort();
-	if (connectTo && noGamePak) {
+	if (connectTo && noCartridge) {
 		netJoin(connectTo, true);
 	} else if (game && loadGame(game)) {
 		if (host) {

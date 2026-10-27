@@ -40,7 +40,7 @@ interrupts, DMA, timers and what's on screen all happen when they would on the h
 | L, R, Start (held 1 s) | Restart that player's console (the Restart Combo option) | Same |
 
 With the consoles of a link on one device, R2 changes how the screens are shown and L2
-fast-forwards, or changes them back as the L2 Outside Netplay option says; in netplay, L2 changes
+fast-forwards, or changes them back as the L2 Button option says; in netplay, L2 changes
 them back. In netplay each device shows the screens its own way, changed by its own player's R2.
 RetroArch 1.22.2 and older don't say which player is on a device, so there the host follows player 1
 and other devices player 2, unless Screen Layout Control names the player (Show Player Numbers marks
@@ -89,7 +89,7 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Game Boy Link Timing | Game Boy | Standard, Exact (Separate) |
 | | Dolphin Address | Game Boy Advance | Find on the Network, This Device (GameCube) |
 | Link: Screens and Controllers | Screen Layout | Both | Side by Side, Top and Bottom, Player 1 Only to Player 4 Only (Together) |
-| | L2 Outside Netplay | Both | Fast-Forward, Previous Screens (Together) |
+| | L2 Button | Both | Fast-Forward, Previous Layout (Together; outside netplay) |
 | | Screen Layout Control | Both | Auto, Player 1 to Player 4 (Together) |
 | | Switch Controller Combo | Both | L + R + A + B, L3 + R3, Start + L2 + R2, Start + L3, Start + R3, Off; stick clicks it uses only switch |
 | | Show Player Numbers | Both | Off, On (default) (Together) |
@@ -178,18 +178,19 @@ The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyb
 too on a row without a value), and it opens again where it was left. General has the recent games,
 Load Game, the AppImage's own settings and Quit: Video (window, scaling, vsync, and the frame rate
 and messages on screen), Shaders for what the GPU draws (Sharp, Smooth, and its LCD grid and Game
-Boy pixel shadow), the sound's volume and latency, controls and fast-forward speed, rewind and
-run-ahead, Saves and Folders (Auto Save State, and where games, BIOS files, saves, states and
+Boy pixel shadow), the sound's volume and latency, controls, Fast-Forward and Rewind (with
+Run-Ahead), Saves and Folders (Auto Save State, and where games, BIOS files, saves, states and
 screenshots are; the Games folder is found by itself, ROCKNIX's roms or a roms folder holding gb,
 gbc or gba, and Load Game opens there with those three first), the menus' look (accent color, size,
-background), and Reset Config. Game has the loaded game's state slots (0 to 99, each with a picture)
-with Undo Load State, Restart, screenshots, recording and Close Game. Core has the core's options,
+background), and Reset All Settings. Game has the loaded game's state slots (0 to 99, each with a
+picture) with Undo Load State, its cheats (RetroArch's `.cht` files can be added), Restart, Take
+Screenshot, recording and Close Game. Core has the core's options,
 in RetroArch's categories, with LCD Rendering in Video and on Shaders to pick the CPU's grid or the
-GPU's. Extras has cheats (RetroArch's `.cht` files can be added), netplay and RetroAchievements.
+GPU's. Extras has netplay and RetroAchievements.
 Rows ending in "..." open a page; rows with a value step through it. The line under the menu says
 what the selected item does. With a controller, the buttons bound to A and B choose and go back, and
 in the game list L and R jump by letter; on the keyboard, typing a name's start finds it. Restart,
-Close Game, Quit (with a game running), Reset Config and Reset Controls and Hotkeys ask for a second
+Close Game, Quit (with a game running), Reset All Settings and Reset Controls and Hotkeys ask for a second
 press, said at the bottom left. Netplay is armgba to armgba. Its page has Link Mode and Shared
 Controls, as Core's Link page has them, and Create a Host Session links the devices as they say: Off is one console every player shares, as Shared Controls says
 (everyone's buttons at once if it's off), for up to four players; Together runs every player's
@@ -302,7 +303,7 @@ The two ways to link:
 Single-pak games, such as Super Mario Advance's Mario Bros., send a program over the cable to
 consoles with no cartridge, as the real ones do. In Separate the player without the game needs no
 game file: RetroArch's Start Core starts armGBA with no cartridge, then they join, or in the app
-Netplay's Join without a Game Pak (`--connect ADDRESS --no-game-pak`). Only what the game sends
+Netplay's Your Cartridge: Removed (`--connect ADDRESS --no-cartridge`). Only what the game sends
 over the cable crosses the network; armGBA never sends a game file, and in Together, where every
 device runs every console, each device needs the game (Player 2's Game: No Cartridge starts player
 2's console empty).
