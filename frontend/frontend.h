@@ -350,6 +350,7 @@ struct NetHost {
 	Uint32 seen;
 };
 int netScan(const struct NetHost** hosts);
+void netScanIdle(void);
 void netScanStop(void);
 bool netJoin(const char* address);
 void netStop(void);

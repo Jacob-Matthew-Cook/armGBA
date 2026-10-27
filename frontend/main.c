@@ -1867,6 +1867,7 @@ int main(int argc, char** argv) {
 		app.fastForward = actionHeld(ACT_FAST_FORWARD) || app.fastForwardOn || coreFastForward;
 		app.rewinding = settings.rewind && !cheevosHardcore() && !netRunning() && actionHeld(ACT_REWIND);
 		cheevosIdle();
+		netScanIdle();
 		// Paused, in the menus or without a game: only the picture. Netplay runs on behind the menus.
 		bool const idle = !app.loaded || ((app.paused || app.menuOpen) && !netRunning());
 		if (idle) {

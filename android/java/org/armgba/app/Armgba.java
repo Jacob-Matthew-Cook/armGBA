@@ -9,6 +9,7 @@ package org.armgba.app;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.provider.DocumentsContract;
 
 import org.libsdl.app.SDLActivity;
@@ -30,6 +31,29 @@ public class Armgba extends SDLActivity {
 				picked = "?";
 			}
 		});
+	}
+
+	// From the frontend's thread, while hosting netplay: Wi-Fi passes on the broadcasts of devices
+	// looking for hosts, which many devices drop otherwise.
+	private static WifiManager.MulticastLock broadcasts;
+
+	public static synchronized void hearBroadcasts(boolean on) {
+		final Armgba activity = (Armgba) mSingleton;
+		if (broadcasts == null && activity != null) {
+			WifiManager wifi = (WifiManager) activity.getApplicationContext().getSystemService(WIFI_SERVICE);
+			if (wifi != null) {
+				broadcasts = wifi.createMulticastLock("armgba-netplay");
+				broadcasts.setReferenceCounted(false);
+			}
+		}
+		if (broadcasts == null) {
+			return;
+		}
+		if (on) {
+			broadcasts.acquire();
+		} else if (broadcasts.isHeld()) {
+			broadcasts.release();
+		}
 	}
 
 	public static String takeFolder() {

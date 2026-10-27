@@ -1690,15 +1690,16 @@ static uint16_t readSharedKeys(bool shoulders) {
 }
 
 // With Link Mode and Shared Controls off, only player 1 plays: the first time another player
-// presses a button, says how to share the console. Their buttons are read directly, as reading them
-// as keys would step their turbo.
+// presses a button player 1 isn't pressing, says how to share the console. A second copy of
+// controller 1, as some handhelds' input services leave, presses only what player 1 does. Buttons
+// are read directly, as reading them as keys would step their turbo.
 static void hintSharedControls(void) {
 	if (!oneConsole || sharedControls != SHARED_OFF || sharedHinted || rerunning()) {
 		return;
 	}
 	for (unsigned port = 1; port < MAX_PLAYERS; ++port) {
 		for (unsigned id = 0; id <= RETRO_DEVICE_ID_JOYPAD_R; ++id) {
-			if (inputState(port, RETRO_DEVICE_JOYPAD, 0, id)) {
+			if (inputState(port, RETRO_DEVICE_JOYPAD, 0, id) && !inputState(0, RETRO_DEVICE_JOYPAD, 0, id)) {
 				char message[128];
 				snprintf(message, sizeof(message), "Player %u's buttons aren't used. To share this console, set Link > Shared Controls.", port + 1);
 				notify(message, 300);

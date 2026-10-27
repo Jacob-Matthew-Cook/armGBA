@@ -36,6 +36,10 @@
 #include <unistd.h>
 #include <zlib.h>
 
+#ifdef __ANDROID__
+#include <jni.h>
+#endif
+
 enum {
 	PEERS = 4,
 	// Frames of buttons kept, and of states for going back.
@@ -776,6 +780,7 @@ static void useSocket(struct Connection* c, int fd) {
 }
 
 static int answerOn(void);
+static void hearBroadcasts(bool on);
 
 // Hosts the loaded game, linked as Link Mode says or as given: Together, Separate, or Off for one
 // console the players share. The game restarts if it started with another link mode.
@@ -801,6 +806,7 @@ bool netHost(const char* link) {
 	}
 	netScanStop();
 	answerer = answerOn();
+	hearBroadcasts(answerer >= 0);
 	netTogether = together;
 	netMode = NET_HOSTING;
 	self = 0;
@@ -920,6 +926,7 @@ void netStop(void) {
 	if (answerer >= 0) {
 		close(answerer);
 		answerer = -1;
+		hearBroadcasts(false);
 	}
 	freeStates();
 	restoreOptions();
@@ -1351,7 +1358,27 @@ enum {
 static int scanner = -1;
 static struct NetHost found[NET_HOSTS_MOST];
 static int foundCount;
-static Uint32 probedAt;
+static Uint32 probedAt, scannedAt;
+
+// Android drops broadcasts unless the app asks for them (Armgba.java), which a host does.
+static void hearBroadcasts(bool on) {
+#ifdef __ANDROID__
+	JNIEnv* const env = SDL_AndroidGetJNIEnv();
+	jclass const armgba = env ? (*env)->FindClass(env, "org/armgba/app/Armgba") : NULL;
+	jmethodID const hear = armgba ? (*env)->GetStaticMethodID(env, armgba, "hearBroadcasts", "(Z)V") : NULL;
+	if (hear) {
+		(*env)->CallStaticVoidMethod(env, armgba, hear, (jboolean) on);
+	}
+	if (env && (*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionClear(env);
+	}
+	if (armgba) {
+		(*env)->DeleteLocalRef(env, armgba);
+	}
+#else
+	(void) on;
+#endif
+}
 
 static int udpSocket(void) {
 	int const fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -1454,6 +1481,7 @@ static void takeAnswers(Uint32 now) {
 // host not heard from in three dropped.
 int netScan(const struct NetHost** hosts) {
 	Uint32 const now = SDL_GetTicks();
+	scannedAt = now;
 	if (scanner < 0) {
 		int const yes = 1;
 		scanner = udpSocket();
@@ -1477,6 +1505,13 @@ int netScan(const struct NetHost** hosts) {
 	foundCount = kept;
 	*hosts = found;
 	return foundCount;
+}
+
+// Stops looking once the Join list hasn't been shown for two seconds.
+void netScanIdle(void) {
+	if (scanner >= 0 && SDL_GetTicks() - scannedAt > 2000) {
+		netScanStop();
+	}
 }
 
 void netScanStop(void) {
