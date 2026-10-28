@@ -33,7 +33,9 @@ if [ -z "$SDL2_SOURCE" ]; then
 fi
 
 # SDL2, then the frontend as libmain.so.
-android="-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake -DANDROID_ABI=$abi -DANDROID_PLATFORM=$api -DCMAKE_BUILD_TYPE=Release"
+# SDL2 is aligned for 16 KB memory pages as the app is (CMakeLists.txt); the libraries are extracted as
+# the app installs, so only their own alignment counts.
+android="-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake -DANDROID_ABI=$abi -DANDROID_PLATFORM=$api -DCMAKE_BUILD_TYPE=Release -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
 cmake -S "$SDL2_SOURCE" -B "$out/sdl-$abi" -G Ninja $android -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF > /dev/null
 cmake --build "$out/sdl-$abi" > "$out/sdl-$abi.log" 2>&1 || { tail -20 "$out/sdl-$abi.log"; exit 1; }
 cmake -S "$root" -B "$out/app-$abi" -G Ninja $android -DARMGBA_SDL=ON \

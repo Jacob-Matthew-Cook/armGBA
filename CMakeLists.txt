@@ -8,6 +8,11 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
+# Android: libraries aligned for 16 KB memory pages, which Android 15 devices with them need to load
+# them; they load on 4 KB devices as before.
+if(ANDROID)
+	add_link_options(-Wl,-z,max-page-size=16384)
+endif()
 
 set(CORE_SOURCES
 	src/bios-image.c
