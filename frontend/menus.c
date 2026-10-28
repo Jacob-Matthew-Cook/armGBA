@@ -964,8 +964,7 @@ static void changeSetting(int which, int delta) {
 // shadow.
 static void addLcdRendering(void) {
 	addValue("LCD Rendering", settings.lcdOnGpu ? "GPU" : "CPU", changeSetting, SET_LCD_RENDERING);
-	helpFor("Who draws the LCD grid and the Game Boy pixel shadow: the CPU (set in Core \xE2\x80\xBA Video), or the GPU at the size "
-	        "shown (set in General \xE2\x80\xBA Shaders).");
+	helpFor("Who draws the LCD grid and pixel shadow: the CPU (Core \xE2\x80\xBA Video) or the GPU (Shaders).");
 }
 
 // General > Video: the window, how the picture is scaled and shown, and what's drawn over it. The
@@ -1006,14 +1005,12 @@ static void shadersMenu(void) {
 		return;
 	}
 	addValue("LCD Grid", onOff(settings.gpuGrid), changeSetting, SET_GPU_GRID);
-	helpFor("Draws the gaps between the console screen's pixels at any size, fainter the smaller it is. On a small screen, "
-	        "the CPU's at 2x with Integer Scaling looks cleanest.");
+	helpFor("The gaps between the screen's pixels, at any size; fainter when smaller.");
 	if (settings.gpuGrid && (!app.loaded || libretroLcdShadow())) {
 		static const char* const shadows[SHADOW_TILT + 1] = { "Off", "Up", "Up Right", "Right", "Down Right", "Down", "Down Left", "Left", "Up Left", "Tilt" };
 		addValue("Game Boy Pixel Shadow", shadows[settings.shadow], changeSetting, SET_SHADOW);
-		helpFor(tiltAvailable() ? "On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls. "
-		                          "Tilt moves it as the device tilts, as light from above would."
-		                        : "On the first Game Boy and the Pocket, each pixel casts a soft shadow on the screen behind it; this is where it falls.");
+		helpFor(tiltAvailable() ? "Where the Game Boy's pixel shadow falls; Tilt moves it as the device tilts."
+		                        : "Where the Game Boy's pixel shadow falls.");
 	}
 }
 
@@ -1032,7 +1029,7 @@ static void gameplayMenu(void) {
 	char text[32];
 	snprintf(text, sizeof(text), settings.fastForward ? "%dx" : "Max", settings.fastForward);
 	addValue("Fast-Forward Speed", text, changeSetting, SET_FAST_FORWARD);
-	helpFor("How fast the Fast-Forward hotkey runs the game while it's held. Max is as fast as it goes, up to 12x.");
+	helpFor("How fast the Fast-Forward hotkey runs the game; Max is up to 12x.");
 	addValue("Rewind", onOff(settings.rewind), changeSetting, SET_REWIND);
 	helpFor("Goes back in time while the Rewind hotkey is held.");
 	snprintf(text, sizeof(text), "%d MB", settings.rewindMegabytes);
@@ -1041,7 +1038,7 @@ static void gameplayMenu(void) {
 	addHeader("Latency");
 	snprintf(text, sizeof(text), settings.runahead ? "%d %s" : "Off", settings.runahead, frames(settings.runahead));
 	addValue("Run-Ahead", text, changeSetting, SET_RUNAHEAD);
-	helpFor("Runs frames ahead and shows the last, so the game answers that many frames sooner. Costs speed.");
+	helpFor("Runs frames ahead, so the game answers sooner. Costs speed.");
 }
 
 // which: the button's or hotkey's index, plus 1000 for a controller's, plus 2000 for a hotkey.
@@ -1101,7 +1098,7 @@ static void padControlsMenu(void) {
 	}
 	addHeader("Hotkeys");
 	addChoice("Hotkey", padHotkeyName(), bind, 3000 + ACTIONS);
-	helpFor("Held with each action's button below. Auto is Home, or Select on a controller without Home, as on ROCKNIX.");
+	helpFor("Held with each hotkey's button below. Auto is Home, or Select without one.");
 	for (int i = 0; i < ACTIONS; ++i) {
 		char value[64];
 		snprintf(value, sizeof(value), "Hotkey + %s", padName(settings.padHotkeys[i]));
@@ -1168,7 +1165,7 @@ static void playersMenu(void) {
 		char label[16];
 		snprintf(label, sizeof(label), "Player %d", p + 1);
 		addValue(label, app.pads[p] ? playerPadName(p) : p ? "None" : firstAlone, choosePlayer, p);
-		helpFor("This player's controller. Left and right swap in another connected one. Remembered for when it connects again.");
+		helpFor("This player's controller; left and right swap in another. Remembered.");
 	}
 }
 
@@ -1192,7 +1189,7 @@ static void controlsMenu(void) {
 	helpFor("A controller on the screen, played by touch, there while no other controller is connected.");
 #endif
 	addValue("Swap A/B and X/Y", onOff(settings.swapFaceButtons), changeSetting, SET_SWAP_FACE_BUTTONS);
-	helpFor("Off: A is the right face button and B the bottom one, as on a Game Boy and in RetroArch. On: they swap, and X and Y too.");
+	helpFor("Off: A is the right button, as on a Game Boy. On: A and B swap, and X and Y.");
 	addItem("Reset Controls and Hotkeys", resetControls, 0);
 	helpFor("Puts every button, key and hotkey back as it first was.");
 	items[itemCount - 1].confirm = true;
@@ -1249,15 +1246,15 @@ static const struct {
 	const char* autoHelp;
 	const char* help;
 } folders[FOLDERS] = {
-	{ "Games", settings.gamesFolder, NULL, "ROCKNIX's roms folder, or a roms folder with gb, gbc or gba in it, in internal storage or on a card; else found from the last game's folder.",
+	{ "Games", settings.gamesFolder, NULL, "ROCKNIX's roms, or a roms folder with gb, gbc or gba in it.",
 	  "The folder with your games (ROMs), where Load Game opens." },
 	{ "Game Boy", settings.consoleFolders[0], NULL, "A folder in the Games folder named gb or Game Boy.", "Listed first in Load Game." },
 	{ "Game Boy Color", settings.consoleFolders[1], NULL, "A folder in the Games folder named gbc or Game Boy Color.", "Listed first in Load Game." },
 	{ "Game Boy Advance", settings.consoleFolders[2], NULL, "A folder in the Games folder named gba or Game Boy Advance.", "Listed first in Load Game." },
 	{ "BIOS", settings.biosFolder, ownSystemDirectory, "ROCKNIX's roms/bios on ROCKNIX, armGBA's own folder elsewhere.", "Read as each game loads." },
-	{ "Saves", settings.saveFolder, ownSaveDirectory, "In each game's folder on ROCKNIX, as its other emulators keep them; armGBA's own folder elsewhere.",
+	{ "Saves", settings.saveFolder, ownSaveDirectory, "Beside each game on ROCKNIX, armGBA's own folder elsewhere.",
 	  "Games' saves. Applies when a game loads." },
-	{ "States", settings.stateFolder, ownStateDirectory, "ROCKNIX's roms/savestates, a folder for each console, on ROCKNIX; armGBA's own folder elsewhere.",
+	{ "States", settings.stateFolder, ownStateDirectory, "ROCKNIX's roms/savestates on ROCKNIX, armGBA's own folder elsewhere.",
 	  "Save states. Applies when a game loads." },
 	{ "Screenshots", settings.shotFolder, ownShotDirectory, "ROCKNIX's roms/screenshots on ROCKNIX, armGBA's own folder elsewhere.", "Screenshots and recordings." },
 };
@@ -1607,12 +1604,12 @@ static void addSaveManager(void) {
 	addHeader("Save Manager");
 	if (app.noCartridge) {
 		addItem("Send and Receive Saves...", openSaves, 0);
-		helpFor("Send Save sends one of your saves to the device you're linked with; Receive Saves Into says where theirs go.");
+		helpFor("Sends a save to the linked device, and says where theirs go.");
 	} else {
 		addItem("Start Save Manager", netAction, 10);
 		items[itemCount - 1].confirm = app.loaded;
-		helpFor(app.loaded ? "Closes the game to send saves between devices: host or join here, then send and receive them."
-		                   : "Starts with no game, to send saves between devices: host or join here, then send and receive them.");
+		helpFor(app.loaded ? "Closes the game, to send saves between devices."
+		                   : "Starts with no game, to send saves between devices.");
 	}
 }
 
@@ -1687,13 +1684,12 @@ static void netplayMenu(void) {
 		if (netCanSendSave()) {
 			addItem("Send My Save", netAction, 9);
 			items[itemCount - 1].confirm = true;
-			helpFor("Puts your save of this game in your console, which restarts. With Keep My Netplay Progress on, your "
-			        "progress is saved to it as you leave.");
+			helpFor("Puts your save in your console, which restarts.");
 		}
 		addItem("Disconnect", netAction, 4);
 		items[itemCount - 1].confirm = netClosesOnLeaving();
 		helpFor(netClosesOnLeaving() ? "Leaves netplay and closes the game, which is the host's."
-		        : netInHostsGame()   ? "Leaves netplay; the host's game carries on here, and from then only armGBA/Remote keeps its saves."
+		        : netInHostsGame()   ? "Leaves netplay; the host's game carries on, saved only in armGBA/Remote."
 		                             : "Leaves netplay; the game carries on here.");
 		if (app.noCartridge) {
 			addSaveManager();
@@ -1702,15 +1698,14 @@ static void netplayMenu(void) {
 	}
 	addHeader("Host");
 	addItem("Create a Host Session", netAction, 1);
-	helpFor("Hosts the loaded game, linked as Link Mode below says. In Off and Together, each controller here is a player.");
+	helpFor("Hosts the loaded game, linked as Link Mode below says.");
 	addHeader("Join");
 	addItem("Scan for Local Hosts", netAction, 8);
-	helpFor(findingHosts ? "Clears the list below and scans again. The list also updates by itself while it shows."
-	                     : "Scans this network for sessions, and lists them below as they're found.");
+	helpFor(findingHosts ? "Scans again; the list also updates by itself while it shows."
+	                     : "Scans this network for sessions, listed below as they're found.");
 	addFoundHosts();
 	addChoice("Join a Host...", settings.host, netAction, 3);
-	helpFor("The host's name or address, with :port if it isn't the usual one. In Off and Together, your copy of the host's "
-	        "game loads by itself.");
+	helpFor("The host's name or address, with :port if it isn't the usual one.");
 	addSaveManager();
 	addNetplayLink();
 	addHeader("Settings");
@@ -1722,10 +1717,9 @@ static void netplayMenu(void) {
 	helpFor("The network port the host listens on; everyone uses the same one.");
 	snprintf(text, sizeof(text), "%d %s", settings.inputDelay, frames(settings.inputDelay));
 	addValue("Input Delay", text, changeSetting, SET_INPUT_DELAY);
-	helpFor("How long each player's buttons wait, with Link Mode Off or Together, so fewer corrections show. More suits a slow network.");
+	helpFor("How long buttons wait in Off and Together; more suits a slow network.");
 	addValue("Your Cartridge", joinNoCartridge ? "Removed" : "Inserted", netAction, 7);
-	helpFor("Removed: joins with no game, for a single-pak game the host sends over the cable. Needs a host on Link Mode "
-	        "Separate. No game file is ever sent.");
+	helpFor("Removed: joins with no game, for a single-pak game. Needs Link Mode Separate.");
 	// A joining device's own choices for when the session ends.
 	for (int i = 0; i < optionCount; ++i) {
 		if (!strcmp(options[i].key, "armgba_keep_playing") || !strcmp(options[i].key, "armgba_keep_progress")) {
@@ -1776,7 +1770,7 @@ static void cheevosMenu(void) {
 		helpFor("Your RetroAchievements name and password; only a token is kept.");
 	}
 	addValue("Hardcore Mode", onOff(settings.hardcore), changeSetting, SET_HARDCORE);
-	helpFor("Earns achievements as hardcore: save states, cheats, rewind and run-ahead are off, and turning it on restarts the game.");
+	helpFor("Achievements as hardcore: no states, cheats, rewind or run-ahead. Restarts the game.");
 	static char lines[400][160];
 	int const n = cheevosList(lines, 400);
 	if (n) {
@@ -1874,8 +1868,7 @@ static void generalTab(void) {
 	addSettingsPages();
 	addItem("Reset All Settings", resetConfig, 0);
 	items[itemCount - 1].confirm = true;
-	helpFor("Puts every setting and emulator option back as it first was. Your RetroAchievements login, netplay name, folders "
-	        "and recent games stay.");
+	helpFor("Puts every setting back; your login, name, folders and recent games stay.");
 	addItem("Quit", misc, 2);
 	items[itemCount - 1].confirm = app.loaded;
 	helpFor("Closes armGBA; the game's save is written first.");
@@ -1897,7 +1890,7 @@ static void gameTab(void) {
 	snprintf(text, sizeof(text), stateExists(app.slot) ? "%d" : "%d \xC2\xB7 Empty", app.slot);
 	addValue("State Slot", text, stateSlot, 0);
 	asState();
-	helpFor("The slot Save State and Load State use, 0 to 99; left and right change it, faster as they're held.");
+	helpFor("The slot Save State and Load State use, 0 to 99.");
 	addItem("Save State", stateItem, 0);
 	asState();
 	helpFor("Saves the game as it is now in the slot.");
