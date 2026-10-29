@@ -79,7 +79,8 @@ void settingsDefaults(void) {
 	memcpy(settings.pad, pad, sizeof(pad));
 	memcpy(settings.hotkeys, hotkeys, sizeof(hotkeys));
 	// ROCKNIX's hotkeys: with the Hotkey, X for the menu, A to pause, Start to quit, R and L to save and
-	// load a state, R2 to fast-forward, L2 to rewind, Y for the frame rate and B for a screenshot.
+	// load a state, R2 to fast-forward, L2 to rewind and Y for the frame rate; B for a screenshot, as many
+	// RetroArch setups have it.
 	settings.padHotkey = PAD_AUTO;
 	for (int i = 0; i < ACTIONS; ++i) {
 		settings.padHotkeys[i] = PAD_NONE;
