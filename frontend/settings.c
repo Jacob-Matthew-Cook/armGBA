@@ -79,7 +79,7 @@ void settingsDefaults(void) {
 	memcpy(settings.pad, pad, sizeof(pad));
 	memcpy(settings.hotkeys, hotkeys, sizeof(hotkeys));
 	// ROCKNIX's hotkeys: with the Hotkey, X for the menu, A to pause, Start to quit, R and L to save and
-	// load a state, R2 to fast-forward, L2 to rewind and Y for the frame rate.
+	// load a state, R2 to fast-forward, L2 to rewind, Y for the frame rate and B for a screenshot.
 	settings.padHotkey = PAD_AUTO;
 	for (int i = 0; i < ACTIONS; ++i) {
 		settings.padHotkeys[i] = PAD_NONE;
@@ -92,6 +92,7 @@ void settingsDefaults(void) {
 	settings.padHotkeys[ACT_FAST_FORWARD] = PAD_RIGHT_TRIGGER;
 	settings.padHotkeys[ACT_REWIND] = PAD_LEFT_TRIGGER;
 	settings.padHotkeys[ACT_FPS] = SDL_CONTROLLER_BUTTON_X;
+	settings.padHotkeys[ACT_SCREENSHOT] = SDL_CONTROLLER_BUTTON_A;
 	const char* home = getenv("HOME");
 	snprintf(settings.directory, sizeof(settings.directory), "%s", home ? home : "/");
 }

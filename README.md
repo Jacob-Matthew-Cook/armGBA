@@ -166,15 +166,16 @@ Run `armgba game.gba` (or a `.gb`, `.gbc`, `.zip` or `.7z`), or drop a game on t
 controller's Hotkey + X or a right-click opens the menu, which the keyboard, a controller or the
 mouse moves through. A controller's hotkeys are ROCKNIX's: the Hotkey (Home, or Select without it)
 with Start quits (pressed twice), A pauses, R and L save and load a state, R2 turns fast-forward on
-and off, L2 rewinds, Y shows the frame rate. Arrow keys, X = A, Z = B, A = L, S = R, Enter = Start,
-Backspace = Select, C and V turbo B and A; controllers work too, one per player. Tab fast-forwards
-while held, R rewinds, P pauses, F2 restarts, F5 and F7 save and load a state, F6 and F8 change its
-slot, F12 takes a screenshot, F9 starts and stops recording, F11 goes full screen, F3 shows the
-frame rate. While the game is paused, fast-forwarding or rewinding, a symbol shows at the top right.
-The menu changes all of these, and the Hotkey too. A controller's face buttons go by position, as
-RetroArch's RetroPad and a Game Boy have them: A on the right, B at the bottom, X at the top, Y on
-the left. Controls' Swap A/B and X/Y puts A at the bottom and B on the right on every controller.
-The controls name each button as it's printed on the controller, with where it is.
+and off, L2 rewinds, Y shows the frame rate, B takes a screenshot. Arrow keys, X = A, Z = B, A = L,
+S = R, Enter = Start, Backspace = Select, C and V turbo B and A; controllers work too, one per
+player. Tab fast-forwards while held, R rewinds, P pauses, F2 restarts, F5 and F7 save and load a
+state, F6 and F8 change its slot, F12 takes a screenshot, F9 starts and stops recording, F11 goes
+full screen, F3 shows the frame rate. While the game is paused, fast-forwarding or rewinding, a
+symbol shows at the top right. The menu changes all of these, and the Hotkey too. A controller's
+face buttons go by position, as RetroArch's RetroPad and a Game Boy have them: A on the right, B at
+the bottom, X at the top, Y on the left. Controls' Swap A/B and X/Y puts A at the bottom and B on
+the right on every controller. The controls name each button as it's printed on the controller, with
+where it is.
 
 The menu has four tabs, which L and R move between (Q and E, or Tab, on the keyboard; left and right
 too on a row without a value), and it opens again where it was left. General has the recent games,
