@@ -228,7 +228,7 @@ bool netplaySeen;
 enum { SWITCH_OFF, SWITCH_L_R_A_B, SWITCH_L3_R3, SWITCH_START_L2_R2, SWITCH_START_L3, SWITCH_START_R3 };
 static int switchController = SWITCH_L_R_A_B;
 static int controllerFocus;
-// Keep Playing on Disconnect: the session ended and the game plays on, controller 1 on this device's
+// A session this device joined ended and the game plays on, controller 1 on this device's
 // player's console, as without netplay.
 static bool playingOn;
 static bool switchStick(unsigned button);
@@ -2463,7 +2463,7 @@ static void showOptionsForNetplay(void) {
 }
 
 // A session this device joined in RetroArch ends as RetroArch stops saying which client it is. Its game,
-// the host's, closes, unless Keep Playing on Disconnect keeps it going.
+// the host's, plays on here.
 static void watchSessionEnd(void) {
 	unsigned client = 0;
 	// A session joined again, playing on after the last one, is watched in turn.
@@ -2477,13 +2477,8 @@ static void watchSessionEnd(void) {
 	}
 	sessionOver = true;
 	libretroSessionEnded();
-	if (optionIs("armgba_keep_playing", "enabled")) {
-		libretroPlayOn();
-		notify("Netplay: the session ended; you can play on, but from here only armGBA/Remote keeps this game's saves", 360);
-		return;
-	}
-	notify("Netplay: the session ended, so its game closes", 240);
-	environment(RETRO_ENVIRONMENT_SHUTDOWN, NULL);
+	libretroPlayOn();
+	notify("Netplay: the session ended; saves now go to armGBA/Remote", 360);
 }
 
 void retro_run(void) {

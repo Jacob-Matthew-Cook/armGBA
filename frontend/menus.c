@@ -1687,10 +1687,8 @@ static void netplayMenu(void) {
 			helpFor("Puts your save in your console, which restarts.");
 		}
 		addItem("Disconnect", netAction, 4);
-		items[itemCount - 1].confirm = netClosesOnLeaving();
-		helpFor(netClosesOnLeaving() ? "Leaves netplay and closes the game, which is the host's."
-		        : netInHostsGame()   ? "Leaves netplay; the host's game carries on, saved only in armGBA/Remote."
-		                             : "Leaves netplay; the game carries on here.");
+		helpFor(netInHostsGame() ? "Leaves netplay; the host's game carries on, saved only in armGBA/Remote."
+		                         : "Leaves netplay; the game carries on here.");
 		if (app.noCartridge) {
 			addSaveManager();
 		}
@@ -1720,9 +1718,9 @@ static void netplayMenu(void) {
 	helpFor("How long buttons wait in Off and Together; more suits a slow network.");
 	addValue("Your Cartridge", joinNoCartridge ? "Removed" : "Inserted", netAction, 7);
 	helpFor("Removed: joins with no game, for a single-pak game. Needs Link Mode Separate.");
-	// A joining device's own choices for when the session ends.
+	// A joining device's own choice for when the session ends.
 	for (int i = 0; i < optionCount; ++i) {
-		if (!strcmp(options[i].key, "armgba_keep_playing") || !strcmp(options[i].key, "armgba_keep_progress")) {
+		if (!strcmp(options[i].key, "armgba_keep_progress")) {
 			addOption(i);
 		}
 	}

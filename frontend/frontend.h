@@ -201,10 +201,8 @@ struct App {
 	// The core started with no game, a Game Boy Advance with its cartridge out.
 	bool noCartridge;
 	// The game ran a session this device joined in Off or Together, the host's game, so no state of it
-	// is kept on exit; and that session ended, so it closes, unless Keep Playing on Disconnect keeps it
-	// going.
+	// is kept on exit.
 	bool hostsGame;
-	bool sessionEnded;
 	char gamePath[PATH_SIZE];
 	char gameName[NAME_SIZE];
 	const void* gameData;
@@ -388,8 +386,6 @@ bool netOwnAddress(char out[64]);
 // A player's name in the session, and whether they play on this device.
 const char* netPlayerName(int player);
 bool netPlayerHere(int player);
-// Whether leaving that session closes the game, as Keep Playing on Disconnect says.
-bool netClosesOnLeaving(void);
 uint16_t netInput(unsigned port, unsigned id);
 bool netRollingBack(void);
 void netInit(void);

@@ -81,7 +81,6 @@ the Tilt and Solar Sensors only for cartridges with one, the link options only w
 | | Restart Combo | Both | L + R + Start, L + R + A + B, L3 + R3, Select + Start + A + B, Off |
 | Link | Link Mode (applies on restart) | Both | Off, Together, Separate, GameCube (Game Boy Advance) |
 | | Shared Controls (Link Mode Off) | Both | Off, Everyone (every player's buttons at once), Pass Around (one player at a time, taking over with the Switch Controller Combo) |
-| | Keep Playing on Disconnect | Both | Off (default), On |
 | Link: Players | Number of Players (applies on restart) | Both | 2, 3, 4 (Together) |
 | | Player 2's Game (applies on restart) | Both | Same Game, then the games beside player 1's (Together) |
 | Link: Connection | Cartridge (applies on restart) | Game Boy Advance | Inserted, Removed (Separate, GameCube) |
@@ -211,17 +210,15 @@ list opens to choose your copy; Separate needs your own game, or Your
 Cartridge: Removed. Join's Scan for Local Hosts lists the sessions on the local network below it,
 found by a broadcast on the netplay port and updated while shown, with each host's Link Mode and
 players; choosing it again scans afresh. Join a Host... takes an address. The page puts hosting and joining
-first and its settings last, as RetroArch's does; Settings also has Keep Playing on Disconnect and
-Keep My Netplay Progress, as Core has them. In a session it shows the players by name, and a host
-its own address for Join a Host... on another device; Disconnect asks again when it would close the
-game. In Together, a player who
+first and its settings last, as RetroArch's does; Settings also has Keep My Netplay Progress, as
+Core has it. In a session it shows the players by name, and a host
+its own address for Join a Host... on another device. In Together, a player who
 joined can Send My Save: their own save of the game goes into their console, which restarts, and
 the host backs up the one it replaces; with Keep My Netplay Progress on, their progress becomes their
-save as they leave. A device that joined Off or Together closes the game as the session ends,
-whether it leaves or the host does, since the game it ran was the host's, and keeps no state of
-it; with Link's Keep Playing on Disconnect on, the game runs on, the controller still on its player.
-In RetroArch the core does the same, closing the content when RetroArch's netplay ends (RetroArch
-newer than 1.22.2, as ROCKNIX's is). Either way the session's saves are kept in armGBA/Remote. Start Save Manager closes the game for Save Manager (see Backups); `--host
+save as they leave. A device that joined Off or Together plays on as the session ends,
+whether it leaves or the host does, the controller still on its player; the game it ran was the
+host's, so it keeps no state of it. In RetroArch the core does the same when RetroArch's netplay
+ends (RetroArch newer than 1.22.2, as ROCKNIX's is). Either way the session's saves are kept in armGBA/Remote. Start Save Manager closes the game for Save Manager (see Backups); `--host
 --no-cartridge` starts it hosting. `--host` (as
 Link Mode says), `--host-off`, `--host-together`, `--host-separate` and `--connect ADDRESS` start it
 from the command line. Achievements need the system's libcurl, and recording its ffmpeg.

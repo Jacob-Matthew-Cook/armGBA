@@ -358,7 +358,7 @@ static const char* baseName(const char* path) {
 // how the game runs, only this device's save files.
 static bool ownOption(const char* key) {
 	static const char* const own[] = {
-		"armgba_back_up_save", "armgba_load_save", "armgba_load_into", "armgba_send_save", "armgba_receive_into", "armgba_keep_progress", "armgba_keep_playing", "armgba_player1_saves",
+		"armgba_back_up_save", "armgba_load_save", "armgba_load_into", "armgba_send_save", "armgba_receive_into", "armgba_keep_progress", "armgba_player1_saves",
 		"armgba_keep_saves", "armgba_list_saves", "armgba_safe_saves",
 	};
 	for (size_t i = 0; i < sizeof(own) / sizeof(*own); ++i) {
@@ -852,7 +852,6 @@ bool netHost(const char* link) {
 	// Every device runs every console, Together's or Off's one; Separate, each device its own.
 	bool const together = !separate;
 	netStop();
-	app.sessionEnded = false;
 	if (!app.loaded) {
 		return false;
 	}
@@ -912,7 +911,6 @@ bool netHost(const char* link) {
 // Separate to send a single-pak game over the cable.
 bool netJoin(const char* address, bool noCartridge) {
 	netStop();
-	app.sessionEnded = false;
 	writeSaves();
 	if (noCartridge && !app.noCartridge && !loadNoCartridge()) {
 		return false;
@@ -999,11 +997,8 @@ void netStop(void) {
 	}
 	if (netInHostsGame() && app.loaded) {
 		app.hostsGame = true;
-		app.sessionEnded = netClosesOnLeaving();
-		if (!app.sessionEnded) {
-			libretroPlayOn();
-			osd("Netplay: the session ended; you can play on, but from here only armGBA/Remote keeps this game's saves");
-		}
+		libretroPlayOn();
+		osd("Netplay: the session ended; saves now go to armGBA/Remote");
 	}
 	for (int i = 0; i < PEERS; ++i) {
 		closeConnection(&connections[i]);
@@ -1076,10 +1071,6 @@ bool netOwnAddress(char out[64]) {
 
 bool netInHostsGame(void) {
 	return netMode == NET_JOINED && netTogether && roll.synced;
-}
-
-bool netClosesOnLeaving(void) {
-	return netInHostsGame() && strcmp(optionValue("armgba_keep_playing"), "enabled");
 }
 
 bool netRollingBack(void) {
