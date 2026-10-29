@@ -938,7 +938,9 @@ void unloadGame(void) {
 		return;
 	}
 	// The host's game from a session isn't this device's to keep a state of.
+	app.closing = true;
 	netStop();
+	app.closing = false;
 	bool const hostsGame = app.hostsGame;
 	app.hostsGame = false;
 	recordStop();

@@ -203,6 +203,8 @@ struct App {
 	// The game ran a session this device joined in Off or Together, the host's game, so no state of it
 	// is kept on exit.
 	bool hostsGame;
+	// The game is closing, so a session ending doesn't play it on.
+	bool closing;
 	char gamePath[PATH_SIZE];
 	char gameName[NAME_SIZE];
 	const void* gameData;

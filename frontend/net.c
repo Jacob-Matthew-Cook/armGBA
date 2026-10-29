@@ -997,8 +997,10 @@ void netStop(void) {
 	}
 	if (netInHostsGame() && app.loaded) {
 		app.hostsGame = true;
-		libretroPlayOn();
-		osd("Netplay: the session ended; saves now go to armGBA/Remote");
+		if (!app.closing) {
+			libretroPlayOn();
+			osd("Netplay: the session ended; saves now go to armGBA/Remote");
+		}
 	}
 	for (int i = 0; i < PEERS; ++i) {
 		closeConnection(&connections[i]);
